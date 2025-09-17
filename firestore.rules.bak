@@ -1,0 +1,203 @@
+﻿rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function myRol() {
+      return signedIn() &&
+             exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol
+        : null;
+    }
+
+    function isCliente() { return myRol() == 'cliente'; }
+    function isTaxista() { return myRol() == 'taxista'; }
+    function isAdmin()   { return myRol() == 'admin'; }
+
+    function numOrZero(m, f)   { return (f in m && m[f] is number) ? m[f] : 0; }
+    function changedOnly(allowed) {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(allowed);
+    }
+    function validLatLon(lat, lon) {
+      return (lat is number) && (lon is number) &&
+             (lat >= -90 && lat <= 90) && (lon >= -180 && lon <= 180);
+    }
+
+    function clienteIdOf(doc) {
+      return ('uidCliente' in doc) ? doc.uidCliente :
+             (('clienteId' in doc) ? doc.clienteId : null);
+    }
+    function taxistaIdOf(doc) {
+      return ('uidTaxista' in doc) ? doc.uidTaxista :
+             (('taxistaId' in doc) ? doc.taxistaId : null);
+    }
+
+    match /usuarios/{uid} {
+      allow read: if signedIn();
+
+      allow create: if isOwner(uid)
+        && (
+          !('rol' in request.resource.data) ||
+          request.resource.data.rol in ['cliente','taxista','admin']
+        );
+
+      allow update: if
+        (
+          isOwner(uid) &&
+          !('rol' in request.resource.data.diff(resource.data).changedKeys())
+        )
+        ||
+        (
+          signedIn() &&
+          !isOwner(uid) &&
+          changedOnly(['ratingSuma','ratingConteo']) &&
+          numOrZero(request.resource.data, 'ratingConteo') ==
+            numOrZero(resource.data, 'ratingConteo') + 1 &&
+          numOrZero(request.resource.data, 'ratingSuma')  >=
+            numOrZero(resource.data, 'ratingSuma') + 1   &&
+          numOrZero(request.resource.data, 'ratingSuma')  <=
+            numOrZero(resource.data, 'ratingSuma') + 5
+        );
+
+      allow delete: if false;
+    }
+
+    match /viajes/{id} {
+
+      allow create: if signedIn()
+        && isCliente()
+        && clienteIdOf(request.resource.data) == request.auth.uid
+        && (request.resource.data.estado in ['pendiente','pendiente_pago'])
+        && (taxistaIdOf(request.resource.data) == null || taxistaIdOf(request.resource.data) == '')
+        && (request.resource.data.precio is number) && request.resource.data.precio > 0
+        && validLatLon(request.resource.data.latCliente, request.resource.data.lonCliente)
+        && validLatLon(request.resource.data.latDestino, request.resource.data.lonDestino);
+
+      allow read: if signedIn() && (
+        (isCliente() && clienteIdOf(resource.data) == request.auth.uid) ||
+        (isTaxista() && (
+          (resource.data.estado == 'pendiente' &&
+           (('aceptado' in resource.data && resource.data.aceptado == false) || !('aceptado' in resource.data)) &&
+           (('rechazado' in resource.data && resource.data.rechazado == false) || !('rechazado' in resource.data)) &&
+           (('completado' in resource.data && resource.data.completado == false) || !('completado' in resource.data))
+          )
+          ||
+          (taxistaIdOf(resource.data) == request.auth.uid)
+        )) ||
+        isAdmin()
+      );
+
+      allow update: if signedIn()
+        && isCliente()
+        && clienteIdOf(resource.data) == request.auth.uid
+        && (resource.data.estado in ['pendiente','pendiente_pago','aceptado','enCaminoPickup','en_camino_pickup'])
+        && request.resource.data.estado == 'cancelado'
+        && changedOnly([
+          'estado',
+          'aceptado','rechazado',
+          'uidTaxista','taxistaId',
+          'motivoCancelacion','canceladoPor','canceladoEn',
+          'updatedAt','actualizadoEn'
+        ]);
+
+      allow update: if signedIn()
+        && isCliente()
+        && clienteIdOf(resource.data) == request.auth.uid
+        && !(resource.data.estado in ['enCurso','en_curso','completado'])
+        && request.resource.data.estado == 'pendiente'
+        && (request.resource.data.fechaHora is timestamp)
+        && changedOnly([
+          'estado',
+          'aceptado','rechazado',
+          'uidTaxista','taxistaId',
+          'fechaHora',
+          'motivoReprogramacion','reprogramadoEn',
+          'updatedAt','actualizadoEn'
+        ]);
+
+      allow update: if signedIn()
+        && isTaxista()
+        && resource.data.estado == 'pendiente'
+        && (taxistaIdOf(resource.data) == null || taxistaIdOf(resource.data) == '')
+        && (
+          request.resource.data.estado in ['aceptado','en_camino_pickup','enCaminoPickup']
+        )
+        && (
+          (('uidTaxista' in request.resource.data) && request.resource.data.uidTaxista == request.auth.uid) ||
+          (('taxistaId' in request.resource.data) && request.resource.data.taxistaId == request.auth.uid)
+        )
+        && changedOnly([
+          'uidTaxista','taxistaId','nombreTaxista',
+          'aceptado','rechazado',
+          'estado',
+          'pickupConfirmadoEn','inicioEnRutaEn','finalizadoEn','updatedAt','actualizadoEn'
+        ]);
+
+      allow update: if signedIn()
+        && isTaxista()
+        && taxistaIdOf(resource.data) == request.auth.uid
+        && changedOnly([
+          'estado','completado',
+          'precioFinal','comision','gananciaTaxista',
+          'pickupConfirmadoEn','inicioEnRutaEn','finalizadoEn','completadoEn',
+          'updatedAt','actualizadoEn'
+        ])
+        && (
+          (resource.data.estado in ['aceptado','en_camino_pickup','enCaminoPickup'] &&
+           request.resource.data.estado in ['a_bordo','aBordo','en_curso','enCurso','completado'])
+          ||
+          (resource.data.estado in ['a_bordo','aBordo'] &&
+           request.resource.data.estado in ['en_curso','enCurso','completado'])
+          ||
+          (resource.data.estado in ['en_curso','enCurso'] &&
+           request.resource.data.estado == 'completado')
+        );
+
+      allow update: if signedIn()
+        && isTaxista()
+        && taxistaIdOf(resource.data) == request.auth.uid
+        && validLatLon(request.resource.data.latTaxista, request.resource.data.lonTaxista)
+        && changedOnly(['latTaxista','lonTaxista','updatedAt','actualizadoEn']);
+
+      allow delete: if false;
+    }
+
+    match /billeteras_taxista/{uid} {
+      allow read, write: if isOwner(uid);
+      allow delete: if false;
+    }
+    match /billeteras_taxista/{uid}/liquidaciones/{liqId} {
+      allow read, create, update: if isOwner(uid);
+      allow delete: if false;
+    }
+
+    match /liquidaciones/{liqId} {
+      allow read: if signedIn()
+        && ('uidTaxista' in resource.data)
+        && resource.data.uidTaxista == request.auth.uid;
+
+      allow create: if signedIn()
+        && request.resource.data.uidTaxista == request.auth.uid
+        && request.resource.data.monto is number
+        && request.resource.data.monto > 0
+        && request.resource.data.estado is string;
+
+      allow update: if signedIn()
+        && ('uidTaxista' in resource.data)
+        && resource.data.uidTaxista == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    match /pagos/{id} {
+      allow create, read: if signedIn();
+      allow update, delete: if false;
+    }
+    match /soporte/{ticketId} {
+      allow read, create: if signedIn();
+      allow update, delete: if signedIn() && ('uid' in resource.data) && resource.data.uid == request.auth.uid;
+    }
+  }
+}

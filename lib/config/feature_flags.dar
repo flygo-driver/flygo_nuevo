@@ -1,0 +1,2 @@
+// lib/config/feature_flags.dart
+const bool kUsePlacesAutocomplete = true; // pon false para volver a tus TextField normales

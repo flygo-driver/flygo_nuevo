@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">FlyGo</string>
+    <string name="google_maps_api_key">AQUI_TU_API_KEY_REAL</string>
+</resources>

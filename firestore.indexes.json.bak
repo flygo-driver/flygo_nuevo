@@ -1,0 +1,70 @@
+﻿{
+  "indexes": [
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "aceptado", "order": "ASCENDING" },
+        { "fieldPath": "rechazado", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "fechaHora", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "aceptado", "order": "ASCENDING" },
+        { "fieldPath": "rechazado", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "rechazado", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "liquidaciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "solicitadoEn", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

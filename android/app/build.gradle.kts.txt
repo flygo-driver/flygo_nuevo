@@ -1,0 +1,106 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services")
+}
+
+val keystoreProperties = Properties()
+val keystoreFile = rootProject.file("key.properties")
+if (keystoreFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystoreFile))
+} else {
+    println("⚠️  key.properties no encontrado. Se construirá release sin firma personalizada.")
+}
+
+android {
+    namespace = "com.flygo.rd"
+    compileSdk = 35
+    ndkVersion = "26.1.10909125"
+
+    defaultConfig {
+        applicationId = "com.flygo.rd"
+        minSdk = 23
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0.0"
+        vectorDrawables { useSupportLibrary = true }
+        // multiDexEnabled = true // habilítalo si lo necesitas
+    }
+
+    signingConfigs {
+        // Lee propiedades de forma segura
+        val storeFileProp = keystoreProperties.getProperty("storeFile")
+        val storePasswordProp = keystoreProperties.getProperty("storePassword")
+        val keyAliasProp = keystoreProperties.getProperty("keyAlias")
+        val keyPasswordProp = keystoreProperties.getProperty("keyPassword")
+
+        val hasAllProps = !storeFileProp.isNullOrBlank()
+                && !storePasswordProp.isNullOrBlank()
+                && !keyAliasProp.isNullOrBlank()
+                && !keyPasswordProp.isNullOrBlank()
+
+        if (hasAllProps && file(storeFileProp!!).exists()) {
+            create("release") {
+                storeFile = file(storeFileProp)
+                storePassword = storePasswordProp
+                keyAlias = keyAliasProp
+                keyPassword = keyPasswordProp
+            }
+            println("✅ Firma release configurada (keystore: $storeFileProp, alias: $keyAliasProp)")
+        } else {
+            println("⚠️  Firma release NO configurada: faltan campos o el keystore no existe.")
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            isMinifyEnabled = false
+        }
+        getByName("release") {
+            // Asigna la firma solo si fue creada
+            signingConfigs.findByName("release")?.let { sc ->
+                signingConfig = sc
+            }
+            isMinifyEnabled = false
+            isShrinkResources = false
+            // Para publicar optimizado, luego puedes activar:
+            // isMinifyEnabled = true
+            // isShrinkResources = true
+            // proguardFiles(
+            //     getDefaultProguardFile("proguard-android-optimize.txt"),
+            //     "proguard-rules.pro"
+            // )
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    packaging {
+        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.2")
+    // implementation("androidx.multidex:multidex:2.0.1")
+}
