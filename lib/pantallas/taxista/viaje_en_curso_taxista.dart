@@ -1,4 +1,3 @@
-// lib/pantallas/taxista/viaje_en_curso_taxista.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -43,17 +42,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
   Stream<Viaje?> _stream() {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return const Stream<Viaje?>.empty();
+    // Usa booleano 'activo' para simplificar y evitar índices compuestos
     return ViajesRepo.streamViajeEnCursoPorTaxista(u.uid);
   }
 
-  void _mover(LatLng p) => _map?.animateCamera(CameraUpdate.newLatLngZoom(p, 15));
+  void _mover(LatLng p) =>
+      _map?.animateCamera(CameraUpdate.newLatLngZoom(p, 15));
 
   bool _coordsValid(double lat, double lon) =>
       !(lat == 0 && lon == 0) &&
-      lat >= -90 && lat <= 90 &&
-      lon >= -180 && lon <= 180;
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180;
 
-  // ✅ Normaliza teléfono RD para tel:/WhatsApp
   String _cleanPhone(String raw) {
     final onlyDigits = raw.replaceAll(RegExp(r'\D+'), '');
     if (onlyDigits.isEmpty) return '';
@@ -62,7 +64,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     return onlyDigits;
   }
 
-  // ==== CONTROL FINO DEL GPS ====
   Future<void> _startGpsFor(String viajeId) async {
     logDbg('_startGpsFor($viajeId)');
     if (_gpsParaViajeId == viajeId && _gpsSub != null) return;
@@ -104,7 +105,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     }
   }
 
-  // Pedir permiso solo cuando el taxista pulsa un botón
   Future<bool> _asegurarGps(String viajeId) async {
     logDbg('_asegurarGps() start (viajeId=$viajeId)');
     if (_gpsActivo && _gpsParaViajeId == viajeId) {
@@ -118,10 +118,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
       perm = await Geolocator.requestPermission();
       logDbg('Permiso solicitado → $perm');
     }
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
       if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Permiso de ubicación requerido para navegar')),
+        const SnackBar(
+            content: Text('Permiso de ubicación requerido para navegar')),
       );
       return false;
     }
@@ -133,7 +135,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     return true;
   }
 
-  // Pequeña espera tras el diálogo de permisos para evitar el "doble toque"
   Future<void> _afterPermissionUI() async {
     await Future.delayed(const Duration(milliseconds: 300));
   }
@@ -148,11 +149,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
   /* ===================== Navegación externa ===================== */
   Future<void> _abrirGoogleMapsDestino(double lat, double lon) async {
     logDbg('Abrir GoogleMaps destino: $lat,$lon');
-    final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=driving');
+    final url = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=driving');
     if (await canLaunchUrl(url)) {
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      final web = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lon');
+      final web = Uri.parse(
+          'https://www.google.com/maps/search/?api=1&query=$lat,$lon');
       await launchUrl(web, mode: LaunchMode.externalApplication);
     }
   }
@@ -181,7 +184,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     final q = Uri.encodeComponent(query);
     final url = Uri.parse('https://waze.com/ul?q=$q&navigate=yes');
     if (await canLaunchUrl(url)) {
-      await launchUrl(url, mode: LaunchMode.externalApplication);
+      await launchUrl(url);
     }
   }
 
@@ -189,16 +192,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         minimumSize: const Size(double.infinity, 52),
-        textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle:
+            const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       );
 
   ButtonStyle _btnRojo() => ElevatedButton.styleFrom(
         backgroundColor: Colors.redAccent,
         foregroundColor: Colors.white,
         minimumSize: const Size(double.infinity, 52),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle:
+            const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       );
 
   /* ===================== Acciones ===================== */
@@ -212,7 +219,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     }
     try {
       logDbg('BTN Cliente a bordo: viajeId=$viajeId');
-      await ViajesRepo.marcarClienteAbordo(viajeId: viajeId, uidTaxista: uid);
+      await ViajesRepo.marcarClienteAbordo(
+          viajeId: viajeId, uidTaxista: uid);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('✅ Cliente a bordo')),
@@ -241,13 +249,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
       return;
     }
     try {
-      logDbg('BTN Iniciar viaje: viajeId=$viajeId, destino=($lat,$lon)');
+      logDbg(
+          'BTN Iniciar viaje: viajeId=$viajeId, destino=($lat,$lon)');
       final okGps = await _asegurarGps(viajeId);
       if (!okGps) {
         _actionBusy = false;
         return;
       }
-      await ViajesRepo.iniciarViaje(viajeId: viajeId, uidTaxista: uid);
+      await ViajesRepo.iniciarViaje(
+          viajeId: viajeId, uidTaxista: uid);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('▶ Viaje iniciado')),
@@ -287,13 +297,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: Colors.black,
-            title: const Text('Finalizar viaje', style: TextStyle(color: Colors.white)),
-            content: const Text('¿Confirmas que el viaje terminó correctamente?',
+            title: const Text('Finalizar viaje',
+                style: TextStyle(color: Colors.white)),
+            content: const Text(
+                '¿Confirmas que el viaje terminó correctamente?',
                 style: TextStyle(color: Colors.white70)),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('No', style: TextStyle(color: Colors.white70))),
+                  child: const Text('No',
+                      style: TextStyle(color: Colors.white70))),
               ElevatedButton(
                   onPressed: () => Navigator.pop(ctx, true),
                   child: const Text('Sí, finalizar')),
@@ -309,7 +322,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
 
     try {
       logDbg('BTN Finalizar viaje: viajeId=${v.id}');
-      await ViajesRepo.completarViajePorTaxista(viajeId: v.id, uidTaxista: uid);
+      await ViajesRepo.completarViajePorTaxista(
+          viajeId: v.id, uidTaxista: uid);
       _stopGps();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -342,7 +356,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: Colors.black,
-            title: const Text('Cancelar viaje', style: TextStyle(color: Colors.white)),
+            title: const Text('Cancelar viaje',
+                style: TextStyle(color: Colors.white)),
             content: const Text(
               'Esta acción cancelará tu aceptación y el viaje volverá a estar disponible.',
               style: TextStyle(color: Colors.white70),
@@ -350,7 +365,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('No', style: TextStyle(color: Colors.white70))),
+                  child: const Text('No',
+                      style: TextStyle(color: Colors.white70))),
               ElevatedButton(
                   onPressed: () => Navigator.pop(ctx, true),
                   child: const Text('Sí, cancelar')),
@@ -366,11 +382,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
 
     try {
       logDbg('BTN Cancelar viaje: viajeId=${v.id}');
-      await ViajesRepo.cancelarPorTaxista(viajeId: v.id, uidTaxista: uid);
+      await ViajesRepo.cancelarPorTaxista(
+          viajeId: v.id, uidTaxista: uid);
       _stopGps();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('🚫 Cancelado. El viaje se republicó.')),
+        const SnackBar(
+            content: Text('🚫 Cancelado. El viaje se republicó.')),
       );
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const ViajeDisponible()),
@@ -394,7 +412,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     if (!mounted) return;
     await showModalBottomSheet(
       context: context,
-      isScrollControlled: true, // ✅ sin overflows
+      isScrollControlled: true,
       backgroundColor: Colors.black,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -418,11 +436,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                   return const Center(
                     child: Padding(
                       padding: EdgeInsets.all(16),
-                      child: CircularProgressIndicator(color: Colors.greenAccent),
+                      child: CircularProgressIndicator(
+                          color: Colors.greenAccent),
                     ),
                   );
                 }
-                if (snap.hasError || !snap.hasData || !snap.data!.exists) {
+                if (snap.hasError ||
+                    !snap.hasData ||
+                    !snap.data!.exists) {
                   return const Text(
                     'No se pudo cargar el cliente.',
                     style: TextStyle(color: Colors.white70),
@@ -460,9 +481,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                       ),
                       const SizedBox(height: 8),
                       Text('Nombre: $nombre',
-                          style: const TextStyle(color: Colors.white70)),
-                      Text('Teléfono: ${telefono.isEmpty ? '—' : telefono}',
-                          style: const TextStyle(color: Colors.white70)),
+                          style:
+                              const TextStyle(color: Colors.white70)),
+                      Text(
+                          'Teléfono: ${telefono.isEmpty ? '—' : telefono}',
+                          style:
+                              const TextStyle(color: Colors.white70)),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -474,10 +498,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                                       final tel = _cleanPhone(telefono);
                                       final uri = Uri.parse('tel:$tel');
                                       await launchUrl(uri,
-                                          mode: LaunchMode.platformDefault);
+                                          mode: LaunchMode
+                                              .platformDefault);
                                     },
-                              icon:
-                                  const Icon(Icons.call, color: Colors.green),
+                              icon: const Icon(Icons.call,
+                                  color: Colors.green),
                               label: const Text('Llamar'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.white,
@@ -508,7 +533,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                                                 .externalApplication);
                                       }
                                     },
-                              icon: const Icon(Icons.chat_bubble_outline,
+                              icon: const Icon(
+                                  Icons.chat_bubble_outline,
                                   color: Colors.green),
                               label: const Text('WhatsApp'),
                               style: ElevatedButton.styleFrom(
@@ -524,7 +550,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                       const SizedBox(height: 12),
                       ElevatedButton.icon(
                         onPressed: () {
-                          Navigator.of(sheetCtx).pop(); // ✅ cierra sheet
+                          Navigator.of(sheetCtx).pop();
                           if (!mounted) return;
                           Navigator.of(context).push(
                             MaterialPageRoute(
@@ -690,7 +716,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
             tooltip: 'Menú',
           ),
         ),
-        title: const Text('Mi viaje en curso', style: TextStyle(color: Colors.white)),
+        title: const Text('Mi viaje en curso',
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: const [SaldoGananciasChip()],
@@ -700,7 +727,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(
-                child: CircularProgressIndicator(color: Colors.greenAccent));
+                child: CircularProgressIndicator(
+                    color: Colors.greenAccent));
           }
           if (snap.hasError) {
             return Center(
@@ -727,7 +755,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                 ? v.estado
                 : (v.completado
                     ? EstadosViaje.completado
-                    : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+                    : (v.aceptado
+                        ? EstadosViaje.aceptado
+                        : EstadosViaje.pendiente)),
           );
 
           final markers = <Marker>{
@@ -752,7 +782,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
           }
 
           final initialTarget =
-              EstadosViaje.esAceptado(estadoBase) && _coordsValid(v.latCliente, v.lonCliente)
+              EstadosViaje.esAceptado(estadoBase) &&
+                      _coordsValid(v.latCliente, v.lonCliente)
                   ? LatLng(v.latCliente, v.lonCliente)
                   : destino;
 
@@ -801,7 +832,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                             const SizedBox(height: 8),
                             Text('💰 Total: $total',
                                 style: const TextStyle(
-                                    fontSize: 18, color: Colors.greenAccent)),
+                                    fontSize: 18,
+                                    color: Colors.greenAccent)),
                             const SizedBox(height: 8),
                             Text('📍 Estado: ${_labelEstado(estadoBase)}',
                                 style: const TextStyle(
@@ -902,7 +934,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
         ElevatedButton.icon(
           onPressed: v.completado ? null : () => _finalizarViaje(v),
           icon: const Icon(Icons.flag, color: Colors.green),
-          label: Text(v.completado ? 'Viaje completado' : 'Finalizar viaje'),
+          label:
+              Text(v.completado ? 'Viaje completado' : 'Finalizar viaje'),
           style: _btnAccion(),
         ),
       ];

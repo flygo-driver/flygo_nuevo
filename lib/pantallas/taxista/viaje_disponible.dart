@@ -1,5 +1,3 @@
-// lib/pantallas/taxista/viaje_disponible.dart
-// (SIN CAMBIOS DE LÓGICA NI ESTILO respecto a lo que pegaste)
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -73,9 +71,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   }
 
   Query<Map<String, dynamic>> basePendientes() {
+    // Pool: pendientes (incluye pendiente_pago) y sin taxista
     return FirebaseFirestore.instance
         .collection('viajes')
-        .where('estado', isEqualTo: EstadosViaje.pendiente);
+        .where('estado', whereIn: [
+          EstadosViaje.pendiente,
+          EstadosViaje.pendientePago,
+        ])
+        .where('uidTaxista', isEqualTo: '');
   }
 
   Future<void> _probarIndiceYArrancarTimbre() async {
@@ -108,6 +111,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         _ignorarPrimeraEmisionTimbre = false;
         return;
       }
+      final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
       for (final ch in snap.docChanges) {
         if (ch.type != DocumentChangeType.added) continue;
         final data = ch.doc.data();
@@ -115,6 +119,11 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
         final uidTx = (data['uidTaxista'] ?? '').toString();
         if (uidTx.isNotEmpty) continue;
+
+        // No timbrar al taxista que canceló/rechazó previamente
+        final ignorados =
+            (data['ignoradosPor'] as List?)?.cast<String>() ?? const <String>[];
+        if (myUid.isNotEmpty && ignorados.contains(myUid)) continue;
 
         final id = ch.doc.id;
         if (_vistosParaTimbre.contains(id)) continue;
@@ -134,26 +143,29 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   }
 
   Future<void> _aceptarViaje(
-    BuildContext context,
     Viaje v, {
     required bool disponible,
   }) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final nav = Navigator.of(context);
     final taxista = FirebaseAuth.instance.currentUser;
 
     if (taxista == null) {
-      messenger.showSnackBar(const SnackBar(
-        content: Text('Debes iniciar sesión.'),
-        backgroundColor: Colors.redAccent,
-      ));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Debes iniciar sesión.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
       return;
     }
     if (!disponible) {
-      messenger.showSnackBar(const SnackBar(
-        content: Text('Activa tu disponibilidad para aceptar.'),
-        backgroundColor: Colors.orangeAccent,
-      ));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Activa tu disponibilidad para aceptar.'),
+          backgroundColor: Colors.orangeAccent,
+        ),
+      );
       return;
     }
     if (_aceptandoIds.contains(v.id)) return;
@@ -171,26 +183,29 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       if (!mounted) return;
 
       if (!ok) {
-        messenger.showSnackBar(const SnackBar(
-          content: Text('Ese viaje ya fue tomado por otro taxista.'),
-          backgroundColor: Colors.redAccent,
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Ese viaje ya fue tomado por otro taxista.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
         return;
       }
 
-      messenger.showSnackBar(const SnackBar(
-        content: Text('✅ Viaje aceptado.'),
-        backgroundColor: Colors.green,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Viaje aceptado.'),
+          backgroundColor: Colors.green,
+        ),
+      );
 
-      // IMPORTANTE: Aceptar ≠ Navegar. Aquí NO se pide GPS ni se abre Maps/Waze.
-      // Solo se reclama el viaje y se va a ViajeEnCursoTaxista.
-      nav.pushReplacement(
+      // Navegar a "Mi viaje en curso"
+      Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
       );
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('❌ No se pudo aceptar: $e'),
         backgroundColor: Colors.redAccent,
       ));
@@ -244,7 +259,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
   Widget _badgeModo(DateTime fecha) {
     final esAhora = _esAhora(fecha);
-    final txt = esAhora ? 'Ahora' : 'Programado ${DateFormat('HH:mm').format(fecha)}';
+    final txt = esAhora
+        ? 'Ahora'
+        : 'Programado ${DateFormat('HH:mm').format(fecha)}';
     final color = esAhora ? Colors.greenAccent : Colors.orangeAccent;
     final icon = esAhora ? Icons.flash_on : Icons.schedule;
 
@@ -260,7 +277,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 6),
-          Text(txt, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+          Text(
+            txt,
+            style: TextStyle(color: color, fontWeight: FontWeight.w600),
+          ),
         ],
       ),
     );
@@ -338,7 +358,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       stream: query.snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
+          return const Center(
+              child: CircularProgressIndicator(color: Colors.greenAccent));
         }
         if (snapshot.hasError) {
           return Center(
@@ -351,7 +372,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         }
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return const Center(
-            child: Text('No hay viajes en este momento.', style: TextStyle(fontSize: 18, color: Colors.white70)),
+            child: Text('No hay viajes en este momento.',
+                style: TextStyle(fontSize: 18, color: Colors.white70)),
           );
         }
 
@@ -373,7 +395,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
         if (items.isEmpty) {
           return const Center(
-            child: Text('No hay viajes disponibles ahora.', style: TextStyle(fontSize: 18, color: Colors.white70)),
+            child: Text('No hay viajes disponibles ahora.',
+                style: TextStyle(fontSize: 18, color: Colors.white70)),
           );
         }
 
@@ -394,118 +417,155 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             final aceptando = _aceptandoIds.contains(v.id);
 
             final distanciaKm = DistanciaService.calcularDistancia(
-              v.latCliente, v.lonCliente, v.latDestino, v.lonDestino,
+              v.latCliente,
+              v.lonCliente,
+              v.latDestino,
+              v.lonDestino,
             );
             final precioTotal = v.precio;
-            final ganancia = (v.gananciaTaxista > 0) ? v.gananciaTaxista : (precioTotal * 0.80);
+            final ganancia = (v.gananciaTaxista > 0)
+                ? v.gananciaTaxista
+                : (precioTotal * 0.80);
 
             return Card(
               color: const Color(0xFF121212),
               margin: const EdgeInsets.symmetric(vertical: 8),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               elevation: 4,
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(
+                child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.location_on, color: Colors.greenAccent, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Tooltip(
-                          message: '${v.origen} → ${v.destino}',
-                          waitDuration: const Duration(milliseconds: 500),
-                          child: Text(
-                            "${_shortPlace(v.origen)} → ${_shortPlace(v.destino)}",
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.location_on,
+                              color: Colors.greenAccent, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Tooltip(
+                              message: '${v.origen} → ${v.destino}',
+                              waitDuration:
+                                  const Duration(milliseconds: 500),
+                              child: Text(
+                                "${_shortPlace(v.origen)} → ${_shortPlace(v.destino)}",
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          _badgeModo(fecha),
-                          const SizedBox(height: 6),
-                          _CountdownChip(fecha: fecha),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    DateFormat('EEE d MMM, HH:mm', 'es').format(fecha),
-                    style: const TextStyle(color: Colors.white38, fontSize: 12),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _chipInfo(Icons.straighten, "Dist.: ${FormatosMoneda.km(distanciaKm)}"),
-                      _chipInfo(Icons.credit_card, v.metodoPago),
-                      if (!_esAhora(fecha)) _chipInfo(Icons.event, DateFormat('dd/MM HH:mm').format(fecha)),
-                      if (v.tipoVehiculo.isNotEmpty) _chipInfo(Icons.local_taxi, v.tipoVehiculo),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text("Total", style: TextStyle(color: Colors.white54, fontSize: 12)),
-                            Text(
-                              FormatosMoneda.rd(precioTotal),
-                              style: const TextStyle(fontSize: 22, color: Colors.yellow, fontWeight: FontWeight.w800),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          const Text("Ganas", style: TextStyle(color: Colors.white54, fontSize: 12)),
-                          Text(
-                            FormatosMoneda.rd(ganancia),
-                            style: const TextStyle(
-                              fontSize: 18, color: Colors.greenAccent, fontWeight: FontWeight.w700,
-                            ),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              _badgeModo(fecha),
+                              const SizedBox(height: 6),
+                              _CountdownChip(fecha: fecha),
+                            ],
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: (aceptando || !disponible)
-                          ? null
-                          : () => _aceptarViaje(context, v, disponible: disponible),
-                      icon: aceptando
-                          ? const SizedBox(
-                              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.check_circle, size: 22, color: Colors.green),
-                      label: Text(
-                        aceptando ? "Aceptando..." : (disponible ? "Aceptar viaje" : "No disponible"),
-                        style: const TextStyle(fontSize: 16, color: Colors.green, fontWeight: FontWeight.bold),
+                      const SizedBox(height: 2),
+                      Text(
+                        DateFormat('EEE d MMM, HH:mm', 'es').format(fecha),
+                        style: const TextStyle(
+                            color: Colors.white38, fontSize: 12),
                       ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        minimumSize: const Size(double.infinity, 50),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _chipInfo(Icons.straighten,
+                              "Dist.: ${FormatosMoneda.km(distanciaKm)}"),
+                          _chipInfo(Icons.credit_card, v.metodoPago),
+                          if (!_esAhora(fecha))
+                            _chipInfo(Icons.event,
+                                DateFormat('dd/MM HH:mm').format(fecha)),
+                          if (v.tipoVehiculo.isNotEmpty)
+                            _chipInfo(Icons.local_taxi, v.tipoVehiculo),
+                        ],
                       ),
-                    ),
-                  ),
-                ]),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text("Total",
+                                    style: TextStyle(
+                                        color: Colors.white54, fontSize: 12)),
+                                Text(
+                                  FormatosMoneda.rd(precioTotal),
+                                  style: const TextStyle(
+                                      fontSize: 22,
+                                      color: Colors.yellow,
+                                      fontWeight: FontWeight.w800),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              const Text("Ganas",
+                                  style: TextStyle(
+                                      color: Colors.white54, fontSize: 12)),
+                              Text(
+                                FormatosMoneda.rd(ganancia),
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.greenAccent,
+                                  fontWeight: FontWeight.w700),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: (aceptando || !disponible)
+                              ? null
+                              : () => _aceptarViaje(v, disponible: disponible),
+                          icon: aceptando
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                )
+                              : const Icon(Icons.check_circle,
+                                  size: 22, color: Colors.green),
+                          label: Text(
+                            aceptando
+                                ? "Aceptando..."
+                                : (disponible
+                                    ? "Aceptar viaje"
+                                    : "No disponible"),
+                            style: const TextStyle(
+                                fontSize: 16,
+                                color: Colors.green,
+                                fontWeight: FontWeight.bold),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            minimumSize: const Size(double.infinity, 50),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                        ),
+                      ),
+                    ]),
               ),
             );
           },
@@ -529,11 +589,13 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         backgroundColor: Colors.black,
         appBar: AppBar(
           backgroundColor: Colors.black,
-          title: const Text('Viajes Disponibles', style: TextStyle(color: Colors.white)),
+          title: const Text('Viajes Disponibles',
+              style: TextStyle(color: Colors.white)),
           centerTitle: true,
         ),
         body: const Center(
-          child: Text('Inicia sesión', style: TextStyle(color: Colors.white70)),
+          child:
+              Text('Inicia sesión', style: TextStyle(color: Colors.white70)),
         ),
       );
     }
@@ -554,7 +616,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           ),
           title: const Text(
             'Viajes Disponibles',
-            style: TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.w700),
+            style: TextStyle(
+                fontSize: 24, color: Colors.white, fontWeight: FontWeight.w700),
           ),
           centerTitle: true,
           iconTheme: const IconThemeData(color: Colors.white),
@@ -626,7 +689,8 @@ class _CountdownChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
             color: Colors.cyanAccent.withValues(alpha: 0.12),
-            border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.7)),
+            border:
+                Border.all(color: Colors.cyanAccent.withValues(alpha: 0.7)),
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(

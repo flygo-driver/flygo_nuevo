@@ -1,4 +1,3 @@
-// lib/utils/calculos/estados.dart
 class EstadosViaje {
   // ====== Estados base ======
   static const String pendiente = 'pendiente';
@@ -13,7 +12,7 @@ class EstadosViaje {
   static const String enCaminoPickup = 'en_camino_pickup';
   static const String aBordo = 'a_bordo';
 
-  // Aliases que aún pueden aparecer en código o BD
+  // Aliases
   static const Set<String> _aliasEnCaminoPickup = {
     'en_camino_pickup',
     'encaminopickup',
@@ -40,17 +39,16 @@ class EstadosViaje {
     'en_curso',
     'encurso',
     'en curso',
-    'encurZo' // por si acaso alguien tipeó raro 😅
+    'encurzo',
   };
 
+  // SOLO estados realmente activos
   static const Set<String> activos = {
-    pendiente,
-    pendientePago,
     aceptado,
     enCaminoPickup,
     aBordo,
     enCurso,
-    // por compatibilidad si llegan “crudos” sin normalizar
+    // compat aliases
     'abordo',
     'encaminopickup',
     'encurso',
@@ -82,7 +80,6 @@ class EstadosViaje {
       case pendientePago:
         return pendientePago;
       default:
-        // ante algo desconocido, regrésalo a pendiente para no romper flujos
         return pendiente;
     }
   }

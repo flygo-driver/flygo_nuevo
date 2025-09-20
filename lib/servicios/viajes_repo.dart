@@ -1,4 +1,3 @@
-// lib/servicios/viajes_repo.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 
@@ -8,9 +7,6 @@ class ViajesRepo {
       _db.collection('viajes');
 
   /// Crea un viaje (ahora o programado).
-  /// - Si método = 'Tarjeta' -> 'pendiente_pago', si no -> 'pendiente'.
-  /// - Programados: pool 5h antes (publishAt) y aceptar 2h antes (acceptAfter).
-  /// - Ventana de arranque 45 min (startWindowAt).
   static Future<String> crearViajePendiente({
     required String uidCliente,
     required String origen,
@@ -34,7 +30,8 @@ class ViajesRepo {
     bool _outOfRange(double lat, double lon) =>
         lat < -90 || lat > 90 || lon < -180 || lon > 180;
 
-    if (_outOfRange(latOrigen, lonOrigen) || _outOfRange(latDestino, lonDestino)) {
+    if (_outOfRange(latOrigen, lonOrigen) ||
+        _outOfRange(latDestino, lonDestino)) {
       throw ArgumentError('Coordenadas fuera de rango');
     }
     if (precio.isNaN || precio.isInfinite || precio <= 0) {
@@ -52,7 +49,8 @@ class ViajesRepo {
     const int kReadyMinutesBefore = 45;
 
     final DateTime now = DateTime.now();
-    final bool esAhora = fechaHora.isBefore(now.add(const Duration(minutes: 15)));
+    final bool esAhora =
+        fechaHora.isBefore(now.add(const Duration(minutes: 15)));
 
     final DateTime publishDT =
         esAhora ? now : fechaHora.subtract(const Duration(hours: kPoolHoursBefore));
@@ -61,15 +59,19 @@ class ViajesRepo {
     final DateTime startWindowDT =
         esAhora ? now : fechaHora.subtract(const Duration(minutes: kReadyMinutesBefore));
 
-    List<Map<String, dynamic>>? _sanitize(List<Map<String, dynamic>>? wps) {
+    List<Map<String, dynamic>>? _sanitize(
+        List<Map<String, dynamic>>? wps) {
       if (wps == null) return null;
       final out = <Map<String, dynamic>>[];
       for (final w in wps) {
-        final lat = (w['lat'] is num) ? (w['lat'] as num).toDouble() : null;
-        final lon = (w['lon'] is num) ? (w['lon'] as num).toDouble() : null;
+        final double? lat =
+            (w['lat'] is num) ? (w['lat'] as num).toDouble() : null;
+        final double? lon =
+            (w['lon'] is num) ? (w['lon'] as num).toDouble() : null;
         if (lat == null || lon == null) continue;
         if (_outOfRange(lat, lon)) continue;
-        out.add({'lat': lat, 'lon': lon, 'label': (w['label'] ?? '').toString()});
+        out.add(
+            {'lat': lat, 'lon': lon, 'label': (w['label'] ?? '').toString()});
       }
       return out.isEmpty ? null : out;
     }
@@ -113,6 +115,8 @@ class ViajesRepo {
       'aceptado': false,
       'rechazado': false,
       'completado': false,
+      'activo': false,            // ← usado por el stream del taxista
+      'ignoradosPor': <String>[], // ← silencio para quien cancele
 
       // precios
       'precio': precioCents / 100.0,
@@ -145,7 +149,7 @@ class ViajesRepo {
     return doc.id;
   }
 
-  /// Reclamar viaje del pool → `aceptado` (anti doble) + bloqueo por taxista.
+  /// Reclamar viaje del pool → `aceptado`
   static Future<bool> claimTrip({
     required String viajeId,
     required String uidTaxista,
@@ -157,7 +161,7 @@ class ViajesRepo {
     final ref = _col.doc(viajeId);
     final uRef = _db.collection('usuarios').doc(uidTaxista);
 
-    return _db.runTransaction((tx) async {
+    final bool ok = await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe');
       final data = snap.data()!;
@@ -167,7 +171,8 @@ class ViajesRepo {
           ((data['uidTaxista'] ?? '') as String).isNotEmpty ||
           ((data['taxistaId'] ?? '') as String).isNotEmpty;
 
-      final estadoPermitido = (estado == 'pendiente' || estado == 'pendiente_pago');
+      final bool estadoPermitido =
+          (estado == 'pendiente' || estado == 'pendiente_pago');
       if (!estadoPermitido || yaAsignado) return false;
 
       // Gate de tiempo para programados
@@ -183,10 +188,15 @@ class ViajesRepo {
       final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
       if (viajeActivoId.isNotEmpty) return false;
 
-      // Congelar ficha mínima del taxista
-      final _tel  = (telefono.isNotEmpty ? telefono : (uData['telefono'] ?? '')).toString();
-      final _plac = (placa.isNotEmpty ? placa : (uData['placa'] ?? '')).toString();
-      final _tipo = (tipoVehiculo.isNotEmpty ? tipoVehiculo : (uData['tipoVehiculo'] ?? '')).toString();
+      final String _tel =
+          (telefono.isNotEmpty ? telefono : (uData['telefono'] ?? ''))
+              .toString();
+      final String _plac =
+          (placa.isNotEmpty ? placa : (uData['placa'] ?? '')).toString();
+      final String _tipo = (tipoVehiculo.isNotEmpty
+              ? tipoVehiculo
+              : (uData['tipoVehiculo'] ?? ''))
+          .toString();
 
       // Asignar viaje
       tx.update(ref, {
@@ -199,7 +209,8 @@ class ViajesRepo {
         'estado': 'aceptado',
         'aceptado': true,
         'rechazado': false,
-        'aceptadoEn': FieldValue.serverTimestamp(), // <- recomendado por reglas
+        'activo': true, // ← pasa a activo
+        'aceptadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
@@ -213,9 +224,14 @@ class ViajesRepo {
 
       return true;
     });
+
+    if (ok) {
+      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+    }
+    return ok;
   }
 
-  /* ==================== ACCIONES DE ESTADO (TRANSACCIONES) ==================== */
+  /* ==================== ACCIONES DE ESTADO ==================== */
 
   static Future<void> marcarClienteAbordo({
     required String viajeId,
@@ -229,17 +245,20 @@ class ViajesRepo {
       if ((d['uidTaxista'] ?? '') != uidTaxista) {
         throw Exception('No autorizado');
       }
-      final estado = (d['estado'] ?? '').toString();
+      final String estado = (d['estado'] ?? '').toString();
       if (estado != 'aceptado') {
         throw Exception('Estado inválido para marcar a bordo');
       }
       tx.update(ref, {
         'estado': 'a_bordo',
+        'activo': true,
         'pickupConfirmadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
     });
+
+    await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
   }
 
   static Future<void> iniciarViaje({
@@ -254,12 +273,11 @@ class ViajesRepo {
       if ((d['uidTaxista'] ?? '') != uidTaxista) {
         throw Exception('No autorizado');
       }
-      final estado = (d['estado'] ?? '').toString();
+      final String estado = (d['estado'] ?? '').toString();
       if (estado != 'a_bordo') {
         throw Exception('Primero marca "Cliente a bordo".');
       }
-      // Respetar startWindowAt si existe (a menos que sea "ahora")
-      final esAhora = (d['esAhora'] == true);
+      final bool esAhora = (d['esAhora'] == true);
       final tsStart = d['startWindowAt'];
       if (!esAhora && tsStart is Timestamp) {
         if (DateTime.now().isBefore(tsStart.toDate())) {
@@ -268,11 +286,14 @@ class ViajesRepo {
       }
       tx.update(ref, {
         'estado': 'en_curso',
+        'activo': true,
         'inicioEnRutaEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
     });
+
+    await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
   }
 
   static Future<void> completarViajePorTaxista({
@@ -289,7 +310,7 @@ class ViajesRepo {
       if ((d['uidTaxista'] ?? '') != uidTaxista) {
         throw Exception('No autorizado');
       }
-      final estado = (d['estado'] ?? '').toString();
+      final String estado = (d['estado'] ?? '').toString();
       if (estado != 'en_curso' && estado != 'a_bordo') {
         throw Exception('Estado inválido para finalizar.');
       }
@@ -297,6 +318,7 @@ class ViajesRepo {
       tx.update(ref, {
         'estado': 'completado',
         'completado': true,
+        'activo': false,
         'finalizadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
@@ -309,6 +331,8 @@ class ViajesRepo {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
+
+    await _limpiarOtrosActivosDelTaxista(uidTaxista);
   }
 
   static Future<void> cancelarPorTaxista({
@@ -326,9 +350,10 @@ class ViajesRepo {
       if ((d['uidTaxista'] ?? '') != uidTaxista) {
         throw Exception('No autorizado');
       }
-      final estado = (d['estado'] ?? '').toString();
-      // Alinear con reglas: permitido en aceptado / enCaminoPickup / en_camino_pickup
-      if (!(estado == 'aceptado' || estado == 'enCaminoPickup' || estado == 'en_camino_pickup')) {
+      final String estado = (d['estado'] ?? '').toString();
+      if (!(estado == 'aceptado' ||
+          estado == 'enCaminoPickup' ||
+          estado == 'en_camino_pickup')) {
         throw Exception('No se puede cancelar en este estado.');
       }
 
@@ -344,12 +369,14 @@ class ViajesRepo {
       } else {
         fh = DateTime.now();
       }
-      final esAhora = !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+      final bool esAhora =
+          !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
 
       tx.update(ref, {
         'estado': 'pendiente',
         'aceptado': false,
         'rechazado': false,
+        'activo': false,
         'uidTaxista': '',
         'taxistaId': '',
         'nombreTaxista': '',
@@ -361,6 +388,11 @@ class ViajesRepo {
         'esAhora': esAhora,
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
+        // Limpia timestamps de estados previos por si acaso
+        'pickupConfirmadoEn': FieldValue.delete(),
+        'inicioEnRutaEn': FieldValue.delete(),
+        'finalizadoEn': FieldValue.delete(),
+        'ignoradosPor': FieldValue.arrayUnion([uidTaxista]), // ← clave
       });
 
       // liberar bloqueo
@@ -370,6 +402,8 @@ class ViajesRepo {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
+
+    await _limpiarOtrosActivosDelTaxista(uidTaxista);
   }
 
   static Future<void> cancelarPorCliente({
@@ -384,23 +418,26 @@ class ViajesRepo {
       if (!snap.exists) throw Exception('El viaje no existe');
 
       final d = snap.data()!;
-      if ((d['uidCliente'] ?? d['clienteId']) != uidCliente) {
+      final String cliente =
+          (d['uidCliente'] ?? d['clienteId']).toString();
+      if (cliente != uidCliente) {
         throw Exception('No autorizado');
       }
-      final estado = (d['estado'] ?? '').toString();
+      final String estado = (d['estado'] ?? '').toString();
       if (estado == 'completado' || estado == 'cancelado') {
         throw Exception('El viaje ya está cerrado.');
       }
 
       // si había taxista, también liberar su bloqueo
-      final uidTaxista = (d['uidTaxista'] ?? '').toString();
+      final String uidTaxista = (d['uidTaxista'] ?? '').toString();
 
       tx.update(ref, {
         'estado': 'cancelado',
         'aceptado': false,
         'rechazado': true,
-        'uidTaxista': '',          // recomendado: limpiar asignación
-        'taxistaId': '',           // recomendado
+        'activo': false,
+        'uidTaxista': '',
+        'taxistaId': '',
         'nombreTaxista': '',
         'telefono': '',
         'placa': '',
@@ -422,14 +459,13 @@ class ViajesRepo {
     });
   }
 
-  /* ==================== STREAMS CONVENIENCIA ==================== */
+  /* ==================== STREAMS ==================== */
 
-  /// Activo para taxista (aceptado/a_bordo/en_curso) → 1 doc más reciente.
+  /// Activo para taxista (usamos booleano `activo`) → 1 doc
   static Stream<Viaje?> streamViajeEnCursoPorTaxista(String uidTaxista) {
     return _col
         .where('uidTaxista', isEqualTo: uidTaxista)
-        .where('estado', whereIn: ['aceptado', 'a_bordo', 'en_curso'])
-        .orderBy('updatedAt', descending: true)
+        .where('activo', isEqualTo: true)
         .limit(1)
         .snapshots()
         .map((q) {
@@ -439,11 +475,12 @@ class ViajesRepo {
     });
   }
 
-  /// Estado actual para cliente → 1 doc (pendiente/pendiente_pago/aceptado/a_bordo/en_curso).
+  /// Estado actual para cliente (pendiente / pendiente_pago / aceptado / a_bordo / en_curso).
   static Stream<Viaje?> streamEstadoViajePorCliente(String uidCliente) {
     return _col
         .where('uidCliente', isEqualTo: uidCliente)
-        .where('estado', whereIn: ['pendiente', 'pendiente_pago', 'aceptado', 'a_bordo', 'en_curso'])
+        .where('estado',
+            whereIn: ['pendiente', 'pendiente_pago', 'aceptado', 'a_bordo', 'en_curso'])
         .orderBy('updatedAt', descending: true)
         .limit(1)
         .snapshots()
@@ -456,7 +493,6 @@ class ViajesRepo {
 
   /* ==================== POOL / LISTADOS ==================== */
 
-  /// Pool "AHORA": pendientes publicados y sin taxista.
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamPoolAhora() {
     return _col
         .where('estado', whereIn: ['pendiente', 'pendiente_pago'])
@@ -467,7 +503,6 @@ class ViajesRepo {
         .snapshots();
   }
 
-  /// Pool "PROGRAMADOS": publicados 5h antes y sin taxista.
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamPoolProgramados() {
     return _col
         .where('estado', whereIn: ['pendiente', 'pendiente_pago'])
@@ -478,7 +513,6 @@ class ViajesRepo {
         .snapshots();
   }
 
-  /// Programados aceptados por el taxista (futuros).
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamProgramadosAceptadosTaxista(
     String uidTaxista,
   ) {
@@ -490,15 +524,50 @@ class ViajesRepo {
         .snapshots();
   }
 
-  /// Activos del taxista (aceptado “listo”, a_bordo, en_curso) → 1 doc.
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamActivosTaxistaRaw(
     String uidTaxista,
   ) {
     return _col
         .where('uidTaxista', isEqualTo: uidTaxista)
-        .where('estado', whereIn: ['aceptado', 'a_bordo', 'en_curso'])
-        .orderBy('updatedAt', descending: true)
+        .where('activo', isEqualTo: true)
         .limit(1)
         .snapshots();
+  }
+
+  /* ==================== LIMPIEZA DEFENSIVA ==================== */
+
+  static Future<void> _limpiarOtrosActivosDelTaxista(
+    String uidTaxista, {
+    String? exceptoId,
+  }) async {
+    final qs = await _col
+        .where('uidTaxista', isEqualTo: uidTaxista)
+        .where('activo', isEqualTo: true)
+        .get();
+
+    if (qs.docs.isEmpty) return;
+
+    final batch = _db.batch();
+    for (final d in qs.docs) {
+      if (exceptoId != null && d.id == exceptoId) continue;
+      batch.update(d.reference, {
+        'estado': 'pendiente',
+        'aceptado': false,
+        'rechazado': false,
+        'activo': false,
+        'uidTaxista': '',
+        'taxistaId': '',
+        'nombreTaxista': '',
+        'telefono': '',
+        'placa': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+        // limpia timestamps de estados previos
+        'pickupConfirmadoEn': FieldValue.delete(),
+        'inicioEnRutaEn': FieldValue.delete(),
+        'finalizadoEn': FieldValue.delete(),
+      });
+    }
+    await batch.commit();
   }
 }
