@@ -1,40 +1,59 @@
+// lib/pantallas/cliente/programar_viaje.dart
+// ProgramarViaje — estilo FlyGo, tipo inDrive (autocomplete + mapa tiempo real)
+// ignore_for_file: prefer_const_constructors, prefer_const_literals_to_create_immutables
+
 import 'dart:async';
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' as fs;
 import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
-// 👇 todos a package: para evitar rutas relativas frágiles
+// 🔰 IMPORT para ir al viaje en curso (opcional si usas ClienteTripRouter)
+import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+
+// Tus servicios/componentes
 import 'package:flygo_nuevo/widgets/cliente_drawer.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/permisos_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
-import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart'; // DetalleLugar
 import 'package:flygo_nuevo/servicios/directions_service.dart';
+import 'package:flygo_nuevo/servicios/roles_service.dart';
 
-// ===== Flags / Reglas de negocio =====
+// ===== Flags / Reglas =====
 const bool kUsePlacesAutocomplete = true;
 const bool kUseDirectionsForDistance = true;
-const int  kAhoraUmbralMin = 10;
-// ⬇️ Ventana máxima de programación (producción)
-const int  kMaxDiasProgramacion = 90;
+const int kAhoraUmbralMin = 10; // minutos
+const int kMaxDiasProgramacion = 90; // días
+
+// Ventana para liberar programados (debe coincidir con lo que espera tu app)
+const int kAcceptLeadMinutes = 120; // 2 horas antes
+
+// ===== Snackbars =====
+const String kMsgLogin = 'Debes iniciar sesión para continuar.';
+const String kMsgCalcFirst = 'Debes calcular el precio primero.';
+const String kMsgMaxFuture = 'Solo puedes programar hasta 90 días en el futuro.';
+const String kMsgMinFuture =
+    'Selecciona una hora al menos ${kAhoraUmbralMin + 1} minutos en el futuro.';
 
 class ProgramarViaje extends StatefulWidget {
-  final bool modoAhora;
+  final bool modoAhora; // true = Solicitar ahora, false = Programar
   const ProgramarViaje({super.key, required this.modoAhora});
 
   @override
   State<ProgramarViaje> createState() => _ProgramarViajeState();
 }
 
-class _ProgramarViajeState extends State<ProgramarViaje> {
+class _ProgramarViajeState extends State<ProgramarViaje>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
 
   // ---- Form
@@ -44,7 +63,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
   String tipoVehiculo = 'Carro';
   String metodoPago = 'Efectivo';
   bool idaYVuelta = false;
-  bool usarOrigenManual = false;
+  bool usarOrigenManual = false; // Para programar fuera del país
 
   // ---- Coords
   double? latCliente;
@@ -55,9 +74,10 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
   // ---- Textos
   String origenTexto = '';
   String destinoTexto = '';
+
   double distanciaKm = 0.0;
 
-  // ---- UI
+  // ---- UI (precios)
   double precioCalculado = 0.0;
   double comisionCalculada = 0.0;
   double gananciaTaxistaCalculada = 0.0;
@@ -74,6 +94,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
   LatLng? _origenMap;
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
+
   bool _locPermDeniedForever = false;
   bool _cargandoUbicacion = true;
 
@@ -81,28 +102,72 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
   StreamSubscription<Position>? _posSub;
   bool _didCenterOnce = false;
 
+  // ===== Panel deslizante
+  final DraggableScrollableController _sheetCtrl =
+      DraggableScrollableController();
+
+  // Flecha “nudge”
+  late final AnimationController _nudgeCtrl =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+  late final Animation<Offset> _nudgeOffset = Tween<Offset>(
+    begin: const Offset(0, .15),
+    end: const Offset(0, -0.05),
+  ).animate(CurvedAnimation(parent: _nudgeCtrl, curve: Curves.easeInOut));
+  Timer? _nudgeTimer;
+
   @override
   void initState() {
     super.initState();
+
     if (widget.modoAhora) {
       usarOrigenManual = false;
       fechaHora = DateTime.now();
     } else {
       fechaHora = DateTime.now().add(const Duration(minutes: 20));
     }
+
     _initUbicacionParaMapa();
+
+    // Auto-subir el panel y nudge
+    WidgetsBinding.instance.addPostFrameCallback((_) => _expandSheet());
+    _nudgeCtrl.repeat(reverse: true);
+    _nudgeTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) _nudgeCtrl.stop();
+    });
   }
 
   @override
   void dispose() {
     _posSub?.cancel();
+    _nudgeTimer?.cancel();
+    _nudgeCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _expandSheet() async {
+    final target = (widget.modoAhora ? 0.86 : 0.88).clamp(0.26, 0.88);
+    try {
+      await _sheetCtrl.animateTo(
+        target,
+        duration: const Duration(milliseconds: 380),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _expandToMax() async {
+    try {
+      await _sheetCtrl.animateTo(
+        0.88,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOut,
+      );
+    } catch (_) {}
   }
 
   // ====== UBICACIÓN/MAPA ======
   Future<void> _initUbicacionParaMapa() async {
     setState(() => _cargandoUbicacion = true);
-
     LocationPermission perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
@@ -116,30 +181,27 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
     }
 
     try {
-      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+      );
       final here = LatLng(pos.latitude, pos.longitude);
       _origenMap = here;
       _updateOrigenMarker(here);
 
       setState(() => _cargandoUbicacion = false);
 
-      // Centrado suave (cuando el mapa ya exista, si no, no hace nada).
-      await _map?.animateCamera(
-        CameraUpdate.newCameraPosition(
-          const CameraPosition(target: LatLng(0, 0), zoom: 1),
-        ),
-      );
       await _map?.animateCamera(
         CameraUpdate.newCameraPosition(
           CameraPosition(target: here, zoom: 15),
         ),
       );
-
       _didCenterOnce = true;
 
-      // Seguimiento en tiempo real
       _posSub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 8),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 8,
+        ),
       ).listen((p) {
         final ll = LatLng(p.latitude, p.longitude);
         _origenMap = ll;
@@ -147,7 +209,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         if (_map != null && _didCenterOnce) {
           _map!.animateCamera(CameraUpdate.newLatLng(ll));
         }
-        setState(() {});
+        if (mounted) setState(() {});
       });
     } catch (_) {
       setState(() => _cargandoUbicacion = false);
@@ -161,6 +223,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         markerId: const MarkerId('origen'),
         position: pos,
         infoWindow: const InfoWindow(title: 'Origen'),
+        zIndexInt: 2,
       ),
     );
   }
@@ -182,6 +245,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         position: p,
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
         infoWindow: const InfoWindow(title: 'Destino'),
+        zIndexInt: 1,
       ),
     );
 
@@ -193,20 +257,18 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
     _destinoDet = null;
 
     if (_origenMap != null) {
-      _polylines
-        ..clear()
-        ..add(
-          Polyline(
-            polylineId: const PolylineId('ruta'),
-            points: [_origenMap!, p],
-            width: 4,
-            color: const Color(0xFF49F18B),
-            geodesic: true,
-          ),
-        );
+      await _dibujarRutaReal(
+        oLat: _origenMap!.latitude,
+        oLon: _origenMap!.longitude,
+        dLat: p.latitude,
+        dLon: p.longitude,
+        previewOnly: true,
+      );
+    } else {
+      _polylines.clear();
     }
 
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   // ====== HELPERS GEOCODING ======
@@ -263,8 +325,10 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
     ].where((s) => s.isNotEmpty).join(' ').trim();
 
     final sector = (p.subLocality ?? '').trim();
-    final ciudad =
-        ((p.locality ?? '').trim().isNotEmpty ? p.locality!.trim() : (p.subAdministrativeArea ?? '').trim()).trim();
+    final ciudad = ((p.locality ?? '').trim().isNotEmpty
+            ? p.locality!.trim()
+            : (p.subAdministrativeArea ?? '').trim())
+        .trim();
     final prov = (p.administrativeArea ?? '').trim();
     final pais = (p.country ?? '').trim();
 
@@ -292,22 +356,23 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
     destino = destino.trim();
     if (usarOrigenManual) origenManual = origenManual.trim();
 
-    // Para programados, origen debe ser explícito
     if (!widget.modoAhora) {
-      final tieneOrigenExplicito = (usarOrigenManual && (_origenDetManual != null || origenManual.isNotEmpty));
+      final tieneOrigenExplicito =
+          (usarOrigenManual && (_origenDetManual != null || origenManual.isNotEmpty));
       if (!tieneOrigenExplicito) {
         _snack("❌ Para programar, indica un origen (campo 'Origen' o autocompletar).");
         return;
       }
     }
-
-    if (destino.isEmpty && (latDestino == null || lonDestino == null) && _destinoDet == null) {
+    if (destino.isEmpty &&
+        latDestino == null &&
+        lonDestino == null &&
+        _destinoDet == null) {
       _snack("❌ Indica un destino (buscador o toque prolongado en el mapa).");
       return;
     }
 
     setState(() => _cargando = true);
-
     try {
       double origenLat = 0, origenLon = 0;
       String origenLegible = '';
@@ -332,7 +397,6 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
           origenLegible = origenManual;
         }
       } else {
-        // modo "Ahora": se permite ubicación actual
         final ok = await PermisosService.ensureUbicacion(context);
         if (!ok) {
           setState(() => _cargando = false);
@@ -346,9 +410,10 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         }
         origenLat = posicion.latitude;
         origenLon = posicion.longitude;
-
         final placemarks = await _safePlacemark(origenLat, origenLon);
-        origenLegible = placemarks.isNotEmpty ? _direccionBonitaRD(placemarks.first) : "Ubicación actual";
+        origenLegible = placemarks.isNotEmpty
+            ? _direccionBonitaRD(placemarks.first)
+            : "Ubicación actual";
       }
 
       // DESTINO
@@ -376,11 +441,11 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         destinoLegible = dPlacemarks.isNotEmpty ? _direccionBonitaRD(dPlacemarks.first) : destino;
       }
 
-      // Distancia
+      // Distancia / ruta
       double dist = DistanciaService.calcularDistancia(origenLat, origenLon, dLat, dLon);
-
+      DirectionsResult? dir;
       if (kUseDirectionsForDistance) {
-        final dir = await DirectionsService.drivingDistanceKm(
+        dir = await DirectionsService.drivingDistanceKm(
           originLat: origenLat,
           originLon: origenLon,
           destLat: dLat,
@@ -390,17 +455,20 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         );
         if (dir != null && dir.km > 0) dist = dir.km;
       }
-
       if (dist <= 0) {
         _snack("❌ No se pudo calcular una distancia válida.");
         setState(() => _cargando = false);
         return;
       }
 
+      // Precio (con comisiones)
       final precioDouble = DistanciaService.calcularPrecio(dist, idaYVuelta: idaYVuelta);
       final int precioCents = (precioDouble * 100).round();
       final int comisionCents = ((precioCents * 20) + 50) ~/ 100;
       final int gananciaCents = precioCents - comisionCents;
+
+      // Polyline
+      final List<LatLng> routeLatLng = dir?.path ?? const <LatLng>[];
 
       setState(() {
         latCliente = origenLat;
@@ -409,20 +477,16 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         lonDestino = dLon;
 
         _origenMap = LatLng(origenLat, origenLon);
-
         origenTexto = origenLegible;
         destinoTexto = destinoLegible;
 
         distanciaKm = dist;
-
         precioCalculado = precioCents / 100.0;
         comisionCalculada = comisionCents / 100.0;
         gananciaTaxistaCalculada = gananciaCents / 100.0;
-
         ubicacionObtenida = true;
 
         _updateOrigenMarker(LatLng(origenLat, origenLon));
-
         _markers
           ..removeWhere((m) => m.markerId.value == 'destino')
           ..add(
@@ -431,12 +495,23 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
               position: LatLng(dLat, dLon),
               icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
               infoWindow: const InfoWindow(title: 'Destino'),
+              zIndexInt: 1,
             ),
           );
 
-        _polylines
-          ..clear()
-          ..add(
+        _polylines.clear();
+        if (routeLatLng.isNotEmpty) {
+          _polylines.add(
+            Polyline(
+              polylineId: const PolylineId('ruta'),
+              points: routeLatLng,
+              width: 5,
+              color: const Color(0xFF49F18B),
+              geodesic: true,
+            ),
+          );
+        } else {
+          _polylines.add(
             Polyline(
               polylineId: const PolylineId('ruta'),
               points: [LatLng(origenLat, origenLon), LatLng(dLat, dLon)],
@@ -445,14 +520,23 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
               geodesic: true,
             ),
           );
-
-        _map?.animateCamera(
-          CameraUpdate.newLatLngBounds(
-            _boundsFrom(LatLng(origenLat, origenLon), LatLng(dLat, dLon)),
-            80,
-          ),
-        );
+        }
       });
+
+      if (_map != null) {
+        if (routeLatLng.length >= 2) {
+          await _map!.animateCamera(
+            CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
+          );
+        } else {
+          await _map!.animateCamera(
+            CameraUpdate.newLatLngBounds(
+              _boundsFrom(LatLng(origenLat, origenLon), LatLng(dLat, dLon)),
+              80,
+            ),
+          );
+        }
+      }
     } catch (e) {
       _snack("❌ Error al calcular distancia: $e");
     } finally {
@@ -460,10 +544,86 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
     }
   }
 
+  // Dibujo de ruta al seleccionar destino (preview sin precios)
+  Future<void> _dibujarRutaReal({
+    required double oLat,
+    required double oLon,
+    required double dLat,
+    required double dLon,
+    bool previewOnly = false,
+  }) async {
+    try {
+      final dir = await DirectionsService.drivingDistanceKm(
+        originLat: oLat,
+        originLon: oLon,
+        destLat: dLat,
+        destLon: dLon,
+        withTraffic: true,
+        region: 'do',
+      );
+      if (dir == null) return;
+
+      final List<LatLng> pts = dir.path ?? const <LatLng>[];
+      setState(() {
+        _polylines
+          ..clear()
+          ..add(
+            Polyline(
+              polylineId: const PolylineId('ruta'),
+              points: pts.isNotEmpty ? pts : [LatLng(oLat, oLon), LatLng(dLat, dLon)],
+              width: 5,
+              color: const Color(0xFF49F18B),
+              geodesic: true,
+            ),
+          );
+      });
+
+      if (_map != null) {
+        if (pts.length >= 2) {
+          await _map!.animateCamera(
+            CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
+          );
+        } else {
+          await _map!.animateCamera(
+            CameraUpdate.newLatLngBounds(
+              _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
+              80,
+            ),
+          );
+        }
+      }
+
+      if (previewOnly && dir.km > 0) {
+        setState(() => distanciaKm = dir.km);
+      }
+    } catch (_) {}
+  }
+
   LatLngBounds _boundsFrom(LatLng a, LatLng b) {
-    final southWest = LatLng(math.min(a.latitude, b.latitude), math.min(a.longitude, b.longitude));
-    final northEast = LatLng(math.max(a.latitude, b.latitude), math.max(a.longitude, b.longitude));
+    final southWest = LatLng(
+      math.min(a.latitude, b.latitude),
+      math.min(a.longitude, b.longitude),
+    );
+    final northEast = LatLng(
+      math.max(a.latitude, b.latitude),
+      math.max(a.longitude, b.longitude),
+    );
     return LatLngBounds(southwest: southWest, northeast: northEast);
+  }
+
+  LatLngBounds _boundsFromList(List<LatLng> pts) {
+    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
+    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    return LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
   }
 
   // ====== FECHA/HORA ======
@@ -475,49 +635,51 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
       context: context,
       initialDate: now.add(const Duration(minutes: 5)),
       firstDate: now,
-      lastDate: last, // límite de 90 días
+      lastDate: last,
       builder: (context, child) {
-        final base = ThemeData.dark();
+        final theme = Theme.of(context);
         return Theme(
-          data: base.copyWith(
-  colorScheme: const ColorScheme.dark(primary: Colors.greenAccent),
-  dialogTheme: const DialogThemeData(backgroundColor: Colors.black), // ✅
-),
-
-          child: child!,
-        );
-      },
-    );
-
-    if (!mounted || fecha == null) return;
-
-    final hora = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (context, child) {
-        final base = ThemeData.dark();
-        return Theme(
-          data: base.copyWith(
-            colorScheme: const ColorScheme.dark(primary: Colors.greenAccent),
-            timePickerTheme: const TimePickerThemeData(
-              backgroundColor: Colors.black,
-              dialHandColor: Colors.greenAccent,
+          data: theme.copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Colors.greenAccent,
+              surface: Colors.black,
+              onSurface: Colors.white,
             ),
           ),
           child: child!,
         );
       },
     );
+    if (!mounted || fecha == null) return;
 
+    final hora = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+      builder: (context, child) {
+        final theme = Theme.of(context);
+        return Theme(
+          data: theme.copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Colors.greenAccent,
+              surface: Colors.black,
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
     if (!mounted || hora == null) return;
+
     setState(() {
-      fechaHora = DateTime(fecha.year, fecha.month, fecha.day, hora.hour, hora.minute);
+      fechaHora = DateTime(
+        fecha.year, fecha.month, fecha.day, hora.hour, hora.minute,
+      );
     });
   }
 
   Future<void> _elegirMetodoPago() async {
     if (_cargando) return;
-
     final elegido = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: Colors.black,
@@ -527,18 +689,23 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
       builder: (ctx) {
         Widget item(String label) => ListTile(
               title: Text(label, style: const TextStyle(color: Colors.white)),
-              trailing: label == metodoPago ? const Icon(Icons.check, color: Colors.greenAccent) : null,
+              trailing: label == metodoPago
+                  ? const Icon(Icons.check, color: Colors.greenAccent)
+                  : null,
               onTap: () => Navigator.pop(ctx, label),
             );
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: [
+            children: <Widget>[
               const SizedBox(height: 8),
               Container(
                 height: 4,
                 width: 48,
-                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
               const SizedBox(height: 8),
               const Text('Método de pago', style: TextStyle(color: Colors.white70)),
@@ -551,68 +718,75 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         );
       },
     );
-
     if (!mounted) return;
     if (elegido != null && elegido.trim().isNotEmpty) {
       setState(() => metodoPago = elegido);
     }
   }
 
+  // ====== BLOQUEO SOLO SI EL ROL EXPLÍCITO ES TAXISTA/ADMIN ======
+  Future<bool> _bloquearSiTaxista() async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) return true; // sin login → bloquea
+    try {
+      final rol = (await RolesService.getRol(u.uid))?.toLowerCase();
+      if (rol == Roles.taxista || rol == Roles.admin) {
+        _snack('Esta cuenta es de $rol.');
+        return true;
+      }
+    } catch (_) {
+      // si falla, no bloqueamos: tratamos como cliente
+    }
+    return false;
+  }
+
   // ====== CONFIRMAR ======
-  Future<void> _programarViaje(ScaffoldMessengerState messenger, NavigatorState nav) async {
+  Future<void> _programarViaje(
+    ScaffoldMessengerState messenger,
+    NavigatorState nav,
+  ) async {
     if (_cargando) return;
     if (!_formKey.currentState!.validate()) return;
 
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) {
-      messenger.showSnackBar(const SnackBar(content: Text("Debes iniciar sesión para continuar.")));
+      messenger.showSnackBar(const SnackBar(content: Text(kMsgLogin)));
       return;
     }
-
     if (!ubicacionObtenida || latCliente == null || latDestino == null) {
-      messenger.showSnackBar(const SnackBar(content: Text("Debes calcular el precio primero.")));
+      messenger.showSnackBar(const SnackBar(content: Text(kMsgCalcFirst)));
       return;
     }
-
-    // Validaciones de ventana temporal (producción)
     if (!widget.modoAhora) {
       final now = DateTime.now();
       final minFuturo = now.add(const Duration(minutes: kAhoraUmbralMin + 1));
       final maxFuturo = now.add(const Duration(days: kMaxDiasProgramacion));
-
       if (fechaHora.isBefore(minFuturo)) {
-        messenger.showSnackBar(
-          SnackBar(content: Text("Selecciona una hora al menos ${kAhoraUmbralMin + 1} minutos en el futuro.")),
-        );
+        messenger.showSnackBar(const SnackBar(content: Text(kMsgMinFuture)));
         return;
       }
       if (fechaHora.isAfter(maxFuturo)) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text("Solo puedes programar hasta 90 días en el futuro.")),
-        );
+        messenger.showSnackBar(const SnackBar(content: Text(kMsgMaxFuture)));
         return;
       }
     }
 
-    setState(() => _cargando = true);
+    // Bloqueo real: sólo si el rol explícito es taxista/admin
+    if (await _bloquearSiTaxista()) return;
 
+    setState(() => _cargando = true);
     try {
       await u.getIdToken(true);
-      await RolesService.ensureUserDoc(u.uid, defaultRol: Roles.cliente);
-      final rol = await RolesService.getRol(u.uid);
-      if ((rol ?? '').toLowerCase() != 'cliente') {
-        messenger.showSnackBar(const SnackBar(content: Text("Esta cuenta no es de cliente.")));
-        return;
-      }
 
       final origenLegible =
           (origenTexto.isNotEmpty) ? origenTexto : (usarOrigenManual ? origenManual : "Ubicación actual");
       final destinoLegible = (destinoTexto.isNotEmpty) ? destinoTexto : destino;
 
-      // Guardamos fecha en UTC para estabilidad backend
-      final DateTime fechaParaGuardarUtc =
-          widget.modoAhora ? DateTime.now().toUtc() : fechaHora.toUtc();
+      // Fechas en UTC
+      final DateTime nowUtc = DateTime.now().toUtc();
+      final DateTime fechaProgramadaUtc = widget.modoAhora ? nowUtc : fechaHora.toUtc();
 
+      // 1) Crear viaje pendiente en 'viajes'
       final id = await ViajesRepo.crearViajePendiente(
         uidCliente: u.uid,
         origen: origenLegible,
@@ -621,29 +795,40 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
         lonOrigen: lonCliente!,
         latDestino: latDestino!,
         lonDestino: lonDestino!,
-        fechaHora: fechaParaGuardarUtc, // UTC
+        fechaHora: fechaProgramadaUtc, // UTC
         precio: precioCalculado,
         metodoPago: metodoPago,
         tipoVehiculo: tipoVehiculo,
         idaYVuelta: idaYVuelta,
+        distanciaKm: distanciaKm > 0 ? distanciaKm : null,
       );
 
       final accion = widget.modoAhora ? 'solicitado exitosamente' : 'programado exitosamente';
-      messenger.showSnackBar(SnackBar(content: Text("✅ Viaje $accion — #${id.substring(0, 6)}")));
+      messenger.showSnackBar(
+        SnackBar(content: Text("✅ Viaje $accion — #${id.substring(0, 6)}")),
+      );
 
-      if (mounted && Navigator.canPop(context)) {
-        nav.pop(id);
+      // 2) Ir directo a "Viaje en curso" del cliente (o deja que tu Router lo haga)
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
+        );
       }
-    } on FirebaseException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('❌ Firestore (${e.code}): ${e.message ?? e}')));
+    } on fs.FirebaseException catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('❌ Firestore (${e.code}): ${e.message ?? e}')),
+      );
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('❌ Error al guardar el viaje: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('❌ Error al guardar el viaje: $e')),
+      );
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
   }
 
-  // ====== UI ======
+  // ===== UI =====
   Widget _tabsModo() {
     final ahora = widget.modoAhora;
     Widget tab(String text, bool active, VoidCallback onTap) {
@@ -656,9 +841,8 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
               color: active ? const Color(0xFF1E1E1E) : Colors.transparent,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: active ? const Color(0xFF49F18B) : Colors.white24,
-                width: active ? 2 : 1,
-              ),
+                  color: active ? const Color(0xFF49F18B) : Colors.white24,
+                  width: active ? 2 : 1),
             ),
             alignment: Alignment.center,
             child: Text(
@@ -676,11 +860,17 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
     return Row(
       children: [
         tab('Solicitar ahora', ahora, () {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProgramarViaje(modoAhora: true)));
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const ProgramarViaje(modoAhora: true)),
+          );
         }),
         const SizedBox(width: 10),
         tab('Programar viaje', !ahora, () {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProgramarViaje(modoAhora: false)));
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const ProgramarViaje(modoAhora: false)),
+          );
         }),
       ],
     );
@@ -688,9 +878,6 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
 
   @override
   Widget build(BuildContext context) {
-    final formato = DateFormat('dd/MM/yyyy - HH:mm');
-    final canConfirm = ubicacionObtenida && precioCalculado > 0;
-
     return Scaffold(
       backgroundColor: Colors.black,
       drawer: const ClienteDrawer(),
@@ -703,7 +890,6 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
             onPressed: () => Scaffold.of(ctx).openDrawer(),
           ),
         ),
-        // 🎨 Logo en AppBar (diseño)
         title: Image.asset(
           'assets/icon/logo_flygo.png',
           height: 28,
@@ -720,7 +906,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
               absorbing: _cargandoUbicacion,
               child: GoogleMap(
                 initialCameraPosition: const CameraPosition(
-                  target: LatLng(18.4861, -69.9312),
+                  target: LatLng(18.4861, -69.9312), // SDQ fallback
                   zoom: 12,
                 ),
                 myLocationEnabled: true,
@@ -749,7 +935,10 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
               top: MediaQuery.of(context).padding.top + 8,
               left: 16,
               right: 16,
-              child: const _Banner(text: 'Activa la ubicación en Ajustes del sistema.', icon: Icons.location_off),
+              child: const _Banner(
+                text: 'Activa la ubicación en Ajustes del sistema.',
+                icon: Icons.location_off,
+              ),
             ),
 
           // FAB centrar
@@ -766,9 +955,12 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
 
           // ===== Bottom sheet =====
           DraggableScrollableSheet(
+            controller: _sheetCtrl,
             minChildSize: 0.26,
             maxChildSize: 0.88,
             initialChildSize: 0.36,
+            snap: true,
+            snapSizes: const [0.34, 0.86, 0.88],
             builder: (context, controller) {
               return Container(
                 decoration: const BoxDecoration(
@@ -783,16 +975,40 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                     child: ListView(
                       controller: controller,
                       children: [
-                        Center(
-                          child: Container(
-                            width: 44,
-                            height: 5,
-                            decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)),
+                        // Handle + flechita animada
+                        GestureDetector(
+                          onTap: _expandToMax,
+                          child: Column(
+                            children: [
+                              Container(
+                                width: 44,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color: Colors.white24,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              SlideTransition(
+                                position: _nudgeOffset,
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.keyboard_double_arrow_up, size: 18, color: Colors.white54),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'Desliza o toca para ver todo',
+                                      style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 12),
 
-                        // Tabs modo (enmarcados)
+                        // Tabs modo
                         _tabsModo(),
                         const SizedBox(height: 12),
 
@@ -843,7 +1059,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                           const SizedBox(height: 8),
                         ],
 
-                        // ===== DESTINO con overlay clickeable sobre la LUPA =====
+                        // ===== DESTINO
                         if (kUsePlacesAutocomplete)
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -853,14 +1069,35 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                                   CampoLugarAutocomplete(
                                     label: 'Destino',
                                     hint: '¿A dónde vas?',
-                                    onPlaceSelected: (det) {
+                                    onPlaceSelected: (det) async {
                                       _destinoDet = det;
                                       destino = det.displayLabel;
                                       destinoTexto = det.displayLabel;
                                       latDestino = det.lat;
                                       lonDestino = det.lon;
-                                      _onLongPressMap(LatLng(det.lat, det.lon)); // pinta en mapa + línea
+
+                                      final p = LatLng(det.lat, det.lon);
+                                      _markers.removeWhere((m) => m.markerId.value == 'destino');
+                                      _markers.add(
+                                        Marker(
+                                          markerId: const MarkerId('destino'),
+                                          position: p,
+                                          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+                                          infoWindow: const InfoWindow(title: 'Destino'),
+                                          zIndexInt: 1,
+                                        ),
+                                      );
                                       setState(() {});
+
+                                      if (_origenMap != null) {
+                                        await _dibujarRutaReal(
+                                          oLat: _origenMap!.latitude,
+                                          oLon: _origenMap!.longitude,
+                                          dLat: det.lat,
+                                          dLon: det.lon,
+                                          previewOnly: true,
+                                        );
+                                      }
                                     },
                                     onTextChanged: (t) {
                                       destino = t;
@@ -868,6 +1105,8 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                                       lonDestino = null;
                                     },
                                   ),
+
+                                  // Tap en lupa → calcular directo
                                   Positioned.fill(
                                     child: Align(
                                       alignment: Alignment.centerRight,
@@ -904,8 +1143,13 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                             children: [
                               const Icon(Icons.swap_horiz, color: Colors.white70),
                               const SizedBox(width: 10),
-                              const Expanded(child: Text('¿Ida y vuelta?', style: TextStyle(color: Colors.white))),
-                              Switch.adaptive(value: idaYVuelta, onChanged: (v) => setState(() => idaYVuelta = v)),
+                              const Expanded(
+                                child: Text('¿Ida y vuelta?', style: TextStyle(color: Colors.white)),
+                              ),
+                              Switch.adaptive(
+                                value: idaYVuelta,
+                                onChanged: (v) => setState(() => idaYVuelta = v),
+                              ),
                             ],
                           ),
                         ),
@@ -923,16 +1167,12 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                                 value: tipoVehiculo,
                                 dropdownColor: const Color(0xFF1A1A1A),
                                 underline: const SizedBox(),
-                                items: const [
-                                  'Carro',
-                                  'Jeepeta',
-                                  'Minibús',
-                                  'Minivan',
-                                  'Autobús/Guagua',
-                                ].map((e) => DropdownMenuItem(
-                                      value: e,
-                                      child: Text(e, style: const TextStyle(color: Colors.white)),
-                                    )).toList(),
+                                items: const ['Carro', 'Jeepeta', 'Minibús', 'Minivan', 'Autobús/Guagua']
+                                    .map((e) => DropdownMenuItem(
+                                          value: e,
+                                          child: Text(e, style: const TextStyle(color: Colors.white)),
+                                        ))
+                                    .toList(),
                                 onChanged: (v) => setState(() => tipoVehiculo = v ?? 'Carro'),
                               ),
                             ],
@@ -950,8 +1190,10 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                                 child: TextButton.icon(
                                   onPressed: _elegirMetodoPago,
                                   icon: const Icon(Icons.account_balance_wallet_outlined),
-                                  label: Text('Elegir método de pago',
-                                      style: TextStyle(color: Colors.green.shade300, fontWeight: FontWeight.w700)),
+                                  label: Text(
+                                    'Elegir método de pago',
+                                    style: TextStyle(color: Colors.green.shade300, fontWeight: FontWeight.w700),
+                                  ),
                                 ),
                               ),
                               Container(
@@ -978,8 +1220,10 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                             label: const Text("Seleccionar Fecha y Hora"),
                             style: _botonEstilo(),
                           ),
-                          Text("Programado para: ${formato.format(fechaHora)}",
-                              style: const TextStyle(color: Colors.greenAccent)),
+                          Text(
+                            "Programado para: ${DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora)}",
+                            style: const TextStyle(color: Colors.greenAccent),
+                          ),
                           const SizedBox(height: 12),
                         ],
 
@@ -995,6 +1239,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                         ),
                         const SizedBox(height: 8),
 
+                        // Resumen
                         if (precioCalculado > 0)
                           _Caja(
                             child: Column(
@@ -1002,24 +1247,25 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                               children: [
                                 const Text('Resumen', style: TextStyle(color: Colors.white70)),
                                 const SizedBox(height: 6),
-                                Text('Distancia estimada: ${FormatosMoneda.km(distanciaKm)}',
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                                Text(
+                                  'Distancia estimada: ${FormatosMoneda.km(distanciaKm)}',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                ),
                                 const SizedBox(height: 4),
-                                Text('Total estimado: ${FormatosMoneda.rd(precioCalculado)}',
-                                    style: const TextStyle(
-                                        color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.w900)),
-                                const SizedBox(height: 4),
-                                Text('Ganancia taxista aprox.: ${FormatosMoneda.rd(gananciaTaxistaCalculada)}',
-                                    style: const TextStyle(color: Colors.white70)),
+                                Text(
+                                  'Total estimado: ${FormatosMoneda.rd(precioCalculado)}',
+                                  style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.w900),
+                                ),
                               ],
                             ),
                           ),
-
                         const SizedBox(height: 12),
+
+                        // Confirmar
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
-                            onPressed: canConfirm
+                            onPressed: (ubicacionObtenida && precioCalculado > 0)
                                 ? () => _programarViaje(ScaffoldMessenger.of(context), Navigator.of(context))
                                 : null,
                             icon: const Icon(Icons.check_circle_outline),
@@ -1028,15 +1274,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
                           ),
                         ),
 
-                        if (latCliente != null && latDestino != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: Text(
-                              "Desde: ${origenTexto.isNotEmpty ? origenTexto : (usarOrigenManual ? origenManual : 'Ubicación actual')}\n"
-                              "Hasta: ${destinoTexto.isNotEmpty ? destinoTexto : destino}",
-                              style: const TextStyle(color: Colors.white70, fontSize: 13),
-                            ),
-                          ),
+                        if (latCliente != null && latDestino != null) const SizedBox(height: 12),
                       ],
                     ),
                   ),
@@ -1049,6 +1287,7 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
     );
   }
 
+  // ===== Helpers UI (text fields / botones) =====
   Widget _campoTexto(
     String label,
     Function(String) onSaved, {
@@ -1068,11 +1307,12 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Colors.greenAccent),
           ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+          focusedBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+            borderSide: BorderSide(color: Colors.greenAccent, width: 2),
           ),
         ),
+        onTap: _expandToMax,
         onSaved: (val) => onSaved(val ?? ''),
         validator: validator,
       ),
@@ -1094,7 +1334,6 @@ class _ProgramarViajeState extends State<ProgramarViaje> {
 class _Caja extends StatelessWidget {
   final Widget child;
   const _Caja({required this.child});
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1113,7 +1352,6 @@ class _Banner extends StatelessWidget {
   final String text;
   final IconData icon;
   const _Banner({required this.text, required this.icon});
-
   @override
   Widget build(BuildContext context) {
     return Container(

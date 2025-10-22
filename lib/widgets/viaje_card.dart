@@ -14,7 +14,7 @@ class ViajeCard extends StatelessWidget {
   final bool programado;         // true = PROGRAMADO, false = AHORA
   final String? estado;          // opcional: aceptado / en_curso...
   final VoidCallback? onTap;
-  final bool showAceptar;
+  final bool showAceptar;        // ← en vistas de taxista suele venir true
   final VoidCallback? onAceptar;
   final Widget? trailing;
 
@@ -71,7 +71,6 @@ class ViajeCard extends StatelessWidget {
     // Normalizaciones útiles
     final low = s.toLowerCase();
     if (low.contains('aeropuerto') && (low.contains('las america') || low.contains('aila'))) {
-      // Detecta AILA
       final ciudad = _extraerCiudad(s);
       final right = ciudad.isEmpty ? '' : ' • $ciudad';
       return 'Aeropuerto Las Américas (AILA)$right';
@@ -80,16 +79,12 @@ class ViajeCard extends StatelessWidget {
     // Quitar “Santo Domingo D.N.” variantes
     s = s.replaceAll(RegExp(r'Santo Domingo\s*D\.?N\.?', caseSensitive: false), 'Santo Domingo');
 
-    // Partes por coma
     final partes = s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     if (partes.isEmpty) return '—';
 
-    // principal: lo primero “informativo”
     var principal = partes.first;
-    // secundaria: la ciudad/municipio (última parte no vacía)
     var secundaria = _extraerCiudad(s);
 
-    // Limita longitud para no romper layout
     principal = _ellipsis(principal, 30);
     secundaria = _ellipsis(secundaria, 22);
 
@@ -100,8 +95,6 @@ class ViajeCard extends StatelessWidget {
   String _extraerCiudad(String s) {
     final partes = s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     if (partes.isEmpty) return '';
-
-    // Toma la última parte que no sea extremadamente genérica
     for (var i = partes.length - 1; i >= 0; i--) {
       final p = partes[i];
       final l = p.toLowerCase();
@@ -141,7 +134,12 @@ class ViajeCard extends StatelessWidget {
         : Colors.white;
 
     final precioTxt = _rd(precio);
-    final ganaTxt = (gananciaTaxista != null && gananciaTaxista! > 0) ? _rd(gananciaTaxista!) : null;
+    final ganaTxt = (gananciaTaxista != null && gananciaTaxista! > 0)
+        ? _rd(gananciaTaxista!)
+        : null;
+
+    // Vista TAXISTA (donde se acepta): ocultar TOTAL y mostrar SOLO ganancia
+    final bool vistaTaxista = showAceptar && ganaTxt != null;
 
     return Material(
       color: Colors.transparent,
@@ -173,15 +171,17 @@ class ViajeCard extends StatelessWidget {
                       children: [
                         const Icon(Icons.schedule, size: 16, color: Colors.white70),
                         const SizedBox(width: 6),
-                        Text(_fecha(fechaHora),
-                            style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                        Text(
+                          _fecha(fechaHora),
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
                       ],
                     ),
                 ],
               ),
               const SizedBox(height: 12),
 
-              // Bloque direcciones (una línea cada una + ellipsis)
+              // Bloque direcciones
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -224,8 +224,10 @@ class ViajeCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
                       ),
-                      child: Text(_km(distanciaKm),
-                          style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      child: Text(
+                        _km(distanciaKm),
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
                     ),
                   ],
                 ),
@@ -240,27 +242,47 @@ class ViajeCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   _pill(icon: _iconoPago(metodoPago), text: metodoPago),
                   const Spacer(),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        precioTxt,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.2,
+
+                  // ===== SOLO cambio aquí =====
+                  if (!vistaTaxista) ...[
+                    // Vista normal (cliente / listas): Total visible
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          precioTxt,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.2,
+                          ),
                         ),
-                      ),
-                      if (ganaTxt != null)
-                        Text('Gana: $ganaTxt',
-                            style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                    ],
-                  ),
+                        if (ganaTxt != null)
+                          Text(
+                            'Gana: $ganaTxt',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                      ],
+                    ),
+                  ] else ...[
+                   // Vista taxista (showAceptar=true): SOLO ganancia en super grande
+Text(
+  ganaTxt, // ← quita el '!'
+  textAlign: TextAlign.right,
+  style: const TextStyle(
+    color: Color(0xFF49F18B),
+    fontSize: 40,
+    fontWeight: FontWeight.w900,
+    letterSpacing: -0.5,
+  ),
+),
+ ],
+
                   if (trailing != null) ...[
                     const SizedBox(width: 8),
                     trailing!,
-                  ]
+                  ],
                 ],
               ),
 

@@ -1,13 +1,22 @@
 // lib/pantallas/cliente/viajes_tabs_page.dart
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' as fs;
 
-import '../../servicios/viajes_repo_streams.dart';
 import '../../widgets/viaje_card.dart';
 import '../../servicios/distancia_service.dart';
 
 const int kAhoraUmbralMin = 10;
+
+// Estados activos del cliente (excluye completado/cancelado)
+const List<String> _kEstadosActivos = <String>[
+  'pendiente',
+  'pendiente_pago',
+  'pendientePago',
+  'aceptado',
+  'a_bordo',
+  'en_curso',
+];
 
 class ViajesTabsPage extends StatelessWidget {
   const ViajesTabsPage({super.key});
@@ -57,17 +66,39 @@ class _ListaViajes extends StatelessWidget {
   final bool programados;
   const _ListaViajes({required this.uid, required this.programados});
 
+  // Query base: trae los viajes del cliente (uidCliente o legacy clienteId)
+  fs.Query<Map<String, dynamic>> _qCliente(String uid) {
+    final col = fs.FirebaseFirestore.instance.collection('viajes');
+    // Igualdad pura → sin orderBy para evitar necesidad de índice compuesto;
+    // ordenamos/filtramos en memoria.
+    return col.where(
+      fs.Filter.or(
+        fs.Filter('uidCliente', isEqualTo: uid),
+        fs.Filter('clienteId', isEqualTo: uid),
+      ),
+    );
+  }
+
+  bool _esAhora(DateTime fecha) =>
+      !fecha.isAfter(DateTime.now().add(const Duration(minutes: kAhoraUmbralMin)));
+
   @override
   Widget build(BuildContext context) {
-    final Stream<QuerySnapshot<Map<String, dynamic>>> stream = programados
-        ? ViajesRepoStreams.streamViajesProgramados(uid, umbralMin: kAhoraUmbralMin)
-        : ViajesRepoStreams.streamViajesAhora(uid, umbralMin: kAhoraUmbralMin);
+    final stream = _qCliente(uid).snapshots();
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
       stream: stream,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
+        }
+        if (snap.hasError) {
+          return Center(
+            child: Text(
+              'Error: ${snap.error}',
+              style: const TextStyle(color: Colors.redAccent),
+            ),
+          );
         }
         if (!snap.hasData || snap.data!.docs.isEmpty) {
           return Center(
@@ -78,7 +109,33 @@ class _ListaViajes extends StatelessWidget {
           );
         }
 
-        final docs = snap.data!.docs;
+        // Filtrar por estados activos y dividir por tiempo (ahora/programados)
+        final docs = snap.data!.docs.where((d) {
+          final data = d.data();
+          final estado = (data['estado'] ?? '').toString();
+          if (!_kEstadosActivos.contains(estado)) return false;
+
+          final fecha = _readDate(data['fechaHora']) ?? DateTime.now();
+          final vaEnAhora = _esAhora(fecha);
+          return programados ? !vaEnAhora : vaEnAhora;
+        }).toList();
+
+        if (docs.isEmpty) {
+          return Center(
+            child: Text(
+              programados ? 'No hay viajes programados' : 'No hay viajes ahora mismo',
+              style: const TextStyle(color: Colors.white70),
+            ),
+          );
+        }
+
+        // Orden: AHORA (desc por fecha) / PROGRAMADOS (asc por fecha)
+        docs.sort((a, b) {
+          final fa = _readDate(a.data()['fechaHora']) ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final fb = _readDate(b.data()['fechaHora']) ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return programados ? fa.compareTo(fb) : fb.compareTo(fa);
+        });
+
         return ListView.builder(
           padding: const EdgeInsets.only(bottom: 24),
           itemCount: docs.length,
@@ -91,13 +148,12 @@ class _ListaViajes extends StatelessWidget {
             final String veh = (d['tipoVehiculo'] ?? 'Carro').toString();
 
             final double precio = _readDouble(d['precio']) ?? 0.0;
-
             final DateTime fecha = _readDate(d['fechaHora']) ?? DateTime.now();
 
             final double? km = _readDouble(d['distanciaKm']) ??
                 _calcKmFromCoords(
-                  la: d['latCliente'],
-                  lo: d['lonCliente'],
+                  la: d['latCliente'] ?? d['latOrigen'],
+                  lo: d['lonCliente'] ?? d['lonOrigen'],
                   l2a: d['latDestino'],
                   l2o: d['lonDestino'],
                 );
@@ -114,8 +170,8 @@ class _ListaViajes extends StatelessWidget {
               metodoPago: metodo,
               tipoVehiculo: veh,
               programado: programados,
-              onTap: () {},         // Si tienes detalle, navega aquí
-              showAceptar: false,   // true si fuese vista de taxista
+              onTap: () {},       // si tienes detalle del viaje, navega aquí
+              showAceptar: false, // vista de cliente → no mostrar botón Aceptar
               onAceptar: null,
             );
           },
@@ -124,6 +180,7 @@ class _ListaViajes extends StatelessWidget {
     );
   }
 
+  // ===== Helpers lectura segura =====
   static double? _readDouble(dynamic v) {
     if (v == null) return null;
     if (v is num) return v.toDouble();
@@ -133,7 +190,7 @@ class _ListaViajes extends StatelessWidget {
 
   static DateTime? _readDate(dynamic v) {
     if (v == null) return null;
-    if (v is Timestamp) return v.toDate();
+    if (v is fs.Timestamp) return v.toDate();
     if (v is DateTime) return v;
     if (v is String) {
       try {
@@ -155,5 +212,5 @@ class _ListaViajes extends StatelessWidget {
     final d = _readDouble(l2o);
     if (a == null || b == null || c == null || d == null) return null;
     return DistanciaService.calcularDistancia(a, b, c, d);
-  }
+    }
 }

@@ -1,6 +1,11 @@
+// Pega este archivo COMPLETO si aún no tienes la versión con avatar + cuenta.
+// Si ya pegaste mi versión anterior, no hace falta cambiar nada.
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flygo_nuevo/utils/estilos.dart';
 import 'package:flygo_nuevo/servicios/billetera_service.dart';
@@ -11,7 +16,6 @@ import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 
 class BilleteraTaxista extends StatefulWidget {
   const BilleteraTaxista({super.key});
-
   @override
   State<BilleteraTaxista> createState() => _BilleteraTaxistaState();
 }
@@ -26,7 +30,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       case 'rechazado':
         return Colors.redAccent;
       default:
-        return Colors.orangeAccent; // pendiente
+        return Colors.orangeAccent;
     }
   }
 
@@ -38,47 +42,30 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
     if (!mounted) return;
 
     final ctrl = TextEditingController();
-
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: EstilosFlyGo.fondoOscuro,
-          title: const Text(
-            'Solicitar retiro',
-            style: TextStyle(color: EstilosFlyGo.textoBlanco),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Saldo disponible: ${FormatosMoneda.rd(saldoActual)}',
-                style: const TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: ctrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Monto en RD\$',
-                  hintText: 'Ej: 1500.00',
-                ),
-                style: const TextStyle(color: Colors.white),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: _enviando ? null : () => Navigator.pop(ctx, false),
-              child: const Text('Cancelar'),
-            ),
-            ElevatedButton(
-              onPressed: _enviando ? null : () => Navigator.pop(ctx, true),
-              child: const Text('Solicitar'),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: EstilosFlyGo.fondoOscuro,
+        title: const Text('Solicitar retiro', style: TextStyle(color: EstilosFlyGo.textoBlanco)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Saldo disponible: ${FormatosMoneda.rd(saldoActual)}',
+                style: const TextStyle(color: Colors.white70)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Monto en RD\$', hintText: 'Ej: 1500.00'),
+              style: const TextStyle(color: Colors.white),
             ),
           ],
-        );
-      },
+        ),
+        actions: [
+          TextButton(onPressed: _enviando ? null : () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          ElevatedButton(onPressed: _enviando ? null : () => Navigator.pop(ctx, true), child: const Text('Solicitar')),
+        ],
+      ),
     );
 
     if (ok != true) return;
@@ -88,16 +75,12 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
 
     if (monto <= 0) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Monto inválido.')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Monto inválido.')));
       return;
     }
     if (monto > saldoActual) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El monto excede el saldo disponible.')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('El monto excede el saldo disponible.')));
       return;
     }
 
@@ -105,14 +88,10 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       setState(() => _enviando = true);
       await BilleteraService.solicitarRetiro(uidTaxista: u.uid, monto: monto);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ Solicitud enviada.')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Solicitud enviada.')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ Error: $e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ Error: $e')));
     } finally {
       if (mounted) setState(() => _enviando = false);
     }
@@ -134,10 +113,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
             tooltip: 'Menú',
           ),
         ),
-        title: const Text(
-          "Mi Billetera",
-          style: TextStyle(color: EstilosFlyGo.textoBlanco),
-        ),
+        title: const Text("Mi Billetera", style: TextStyle(color: EstilosFlyGo.textoBlanco)),
         centerTitle: true,
         iconTheme: const IconThemeData(color: EstilosFlyGo.textoBlanco),
         actions: [
@@ -150,12 +126,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
         ],
       ),
       body: u == null
-          ? const Center(
-              child: Text(
-                'Inicia sesión',
-                style: TextStyle(color: EstilosFlyGo.textoBlanco),
-              ),
-            )
+          ? const Center(child: Text('Inicia sesión', style: TextStyle(color: EstilosFlyGo.textoBlanco)))
           : RefreshIndicator(
               onRefresh: () async => setState(() {}),
               color: EstilosFlyGo.textoVerde,
@@ -163,20 +134,12 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  // ====== Resumen (EN VIVO: saldo / totales) ======
+                  _HeaderTaxista(uid: u.uid),
+                  const SizedBox(height: 18),
+
                   StreamBuilder<ResumenBilleteraLive>(
                     stream: BilleteraService.streamResumenBilletera(u.uid),
                     builder: (context, snap) {
-                      if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(vertical: 40),
-                            child: CircularProgressIndicator(
-                              color: EstilosFlyGo.textoVerde,
-                            ),
-                          ),
-                        );
-                      }
                       final r = snap.data ??
                           const ResumenBilleteraLive(
                             saldoDisponible: 0,
@@ -184,55 +147,36 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                             comisionTotal: 0,
                             viajesCompletados: 0,
                           );
+                      if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(vertical: 40),
+                            child:
+                                CircularProgressIndicator(color: EstilosFlyGo.textoVerde),
+                          ),
+                        );
+                      }
 
                       return Column(
                         children: [
-                          _infoBox(
-                            "Saldo disponible",
-                            FormatosMoneda.rd(r.saldoDisponible),
-                            EstilosFlyGo.textoVerde,
-                          ),
+                          _infoBox("Saldo disponible", FormatosMoneda.rd(r.saldoDisponible), EstilosFlyGo.textoVerde),
                           const SizedBox(height: 16),
-                          _infoBox(
-                            "Ganancia Total",
-                            FormatosMoneda.rd(r.gananciaTotal),
-                            Colors.green,
-                          ),
+                          _infoBox("Ganancia Total", FormatosMoneda.rd(r.gananciaTotal), Colors.green),
                           const SizedBox(height: 16),
-                          _infoBox(
-                            "Comisión acumulada (FlyGo)",
-                            FormatosMoneda.rd(r.comisionTotal),
-                            Colors.redAccent,
-                          ),
+                          _infoBox("Comisión acumulada (FlyGo)", FormatosMoneda.rd(r.comisionTotal), Colors.redAccent),
                           const SizedBox(height: 16),
-                          _infoBox(
-                            "Viajes Completados",
-                            "${r.viajesCompletados}",
-                            Colors.blueAccent,
-                          ),
+                          _infoBox("Viajes Completados", "${r.viajesCompletados}", Colors.blueAccent),
                           const SizedBox(height: 20),
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton.icon(
                               onPressed: _enviando ? null : _solicitarRetiroDialog,
                               icon: _enviando
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
+                                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                                   : const Icon(Icons.account_balance_wallet, color: EstilosFlyGo.textoVerde),
-                              label: Text(
-                                _enviando ? 'Enviando...' : 'Solicitar retiro',
-                                style: const TextStyle(
-                                  color: EstilosFlyGo.textoVerde,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.white,
-                                minimumSize: const Size(double.infinity, 50),
-                              ),
+                              label: Text(_enviando ? 'Enviando...' : 'Solicitar retiro',
+                                  style: const TextStyle(color: EstilosFlyGo.textoVerde, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.white, minimumSize: const Size(double.infinity, 50)),
                             ),
                           ),
                         ],
@@ -240,18 +184,18 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                     },
                   ),
 
+                  const SizedBox(height: 24),
+                  const _CuentaEmpresaCard(), // datos bancarios empresa
+
                   const SizedBox(height: 28),
-                  const Text(
-                    "Historial de liquidaciones",
-                    style: TextStyle(
-                      fontSize: EstilosFlyGo.tamanioLetraGrande,
-                      fontWeight: FontWeight.bold,
-                      color: EstilosFlyGo.textoBlanco,
-                    ),
-                  ),
+                  const Text("Historial de liquidaciones",
+                      style: TextStyle(
+                        fontSize: EstilosFlyGo.tamanioLetraGrande,
+                        fontWeight: FontWeight.bold,
+                        color: EstilosFlyGo.textoBlanco,
+                      )),
                   const SizedBox(height: 10),
 
-                  // ====== Stream de liquidaciones ======
                   StreamBuilder<List<Liquidacion>>(
                     stream: BilleteraService.streamLiquidacionesPorTaxista(u.uid),
                     builder: (context, liqSnap) {
@@ -259,23 +203,17 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                         return const Center(
                           child: Padding(
                             padding: EdgeInsets.symmetric(vertical: 20),
-                            child: CircularProgressIndicator(
-                              color: EstilosFlyGo.textoVerde,
-                            ),
+                            child: CircularProgressIndicator(color: EstilosFlyGo.textoVerde),
                           ),
                         );
                       }
 
                       final items = liqSnap.data ?? [];
                       if (items.isEmpty) {
-                        return const Text(
-                          'Sin liquidaciones aún.',
-                          style: TextStyle(color: Colors.white70),
-                        );
+                        return const Text('Sin liquidaciones aún.', style: TextStyle(color: Colors.white70));
                       }
 
                       final formatoFecha = DateFormat('dd/MM/yyyy HH:mm');
-
                       return ListView.separated(
                         physics: const NeverScrollableScrollPhysics(),
                         shrinkWrap: true,
@@ -293,9 +231,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                             decoration: BoxDecoration(
                               color: Colors.grey[900],
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: color.withValues(alpha: 0.4), // ✅ sin withOpacity
-                              ),
+                              border: Border.all(color: color.withValues(alpha: 0.4)),
                             ),
                             child: Row(
                               children: [
@@ -303,41 +239,23 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        FormatosMoneda.rd(l.monto),
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
+                                      Text(FormatosMoneda.rd(l.monto),
+                                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
                                       const SizedBox(height: 4),
-                                      Text(
-                                        'Solicitado: $fecha',
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 12,
-                                        ),
-                                      ),
+                                      Text('Solicitado: $fecha',
+                                          style: const TextStyle(color: Colors.white70, fontSize: 12)),
                                     ],
                                   ),
                                 ),
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                   decoration: BoxDecoration(
-                                    color: color.withValues(alpha: 0.15), // ✅ sin withOpacity
+                                    color: color.withValues(alpha: 0.15),
                                     borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: color.withValues(alpha: 0.6), // ✅ sin withOpacity
-                                    ),
+                                    border: Border.all(color: color.withValues(alpha: 0.6)),
                                   ),
-                                  child: Text(
-                                    l.estado.toUpperCase(),
-                                    style: TextStyle(
-                                      color: color,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
+                                  child: Text(l.estado.toUpperCase(),
+                                      style: TextStyle(color: color, fontWeight: FontWeight.w700)),
                                 ),
                               ],
                             ),
@@ -348,14 +266,12 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                   ),
 
                   const SizedBox(height: 30),
-                  const Text(
-                    "¿Cómo funciona?",
-                    style: TextStyle(
-                      fontSize: EstilosFlyGo.tamanioLetraGrande,
-                      fontWeight: FontWeight.bold,
-                      color: EstilosFlyGo.textoBlanco,
-                    ),
-                  ),
+                  const Text("¿Cómo funciona?",
+                      style: TextStyle(
+                        fontSize: EstilosFlyGo.tamanioLetraGrande,
+                        fontWeight: FontWeight.bold,
+                        color: EstilosFlyGo.textoBlanco,
+                      )),
                   const SizedBox(height: 8),
                   const Text(
                     "• Recibes el 80% de cada viaje completado.\n"
@@ -363,11 +279,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                     "• Las solicitudes de retiro descuentan tu saldo disponible.\n"
                     "• Cuando una liquidación se aprueba, queda reflejada en el historial.\n"
                     "• Próximamente podrás recibir transferencias automáticas.",
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
-                      height: 1.35,
-                    ),
+                    style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.35),
                   ),
                 ],
               ),
@@ -387,20 +299,121 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            titulo,
-            style: TextStyle(
-              fontSize: 18,
-              color: color,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+          Text(titulo, style: TextStyle(fontSize: 18, color: color, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          Text(
-            valor,
-            style: const TextStyle(fontSize: 24, color: Colors.white),
-          ),
+          Text(valor, style: const TextStyle(fontSize: 24, color: Colors.white)),
         ],
+      ),
+    );
+  }
+}
+
+// ===== extras: avatar + cuenta empresa =====
+class _HeaderTaxista extends StatelessWidget {
+  final String uid;
+  const _HeaderTaxista({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = FirebaseFirestore.instance.collection('usuarios').doc(uid);
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: ref.snapshots(),
+      builder: (context, snap) {
+        final d = snap.data?.data() ?? {};
+        final nombre = (d['nombre'] ?? d['displayName'] ?? '').toString();
+        final foto = (d['fotoUrl'] ?? d['avatarUrl'] ?? '').toString();
+
+        return Row(
+          children: [
+            CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.white10,
+              backgroundImage: (foto.isNotEmpty) ? NetworkImage(foto) : null,
+              child: (foto.isEmpty)
+                  ? const Icon(Icons.person, color: Colors.white70, size: 28)
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                nombre.isEmpty ? 'Conductor' : nombre,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CuentaEmpresaCard extends StatelessWidget {
+  const _CuentaEmpresaCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = FirebaseFirestore.instance.collection('config').doc('empresa');
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: ref.snapshots(),
+      builder: (context, snap) {
+        final m = snap.data?.data() ?? {};
+        final titular = (m['titular'] ?? 'FlyGo, SRL').toString();
+        final banco = (m['banco'] ?? 'Banco Ejemplo').toString();
+        final tipo = (m['tipo'] ?? 'Cuenta Corriente').toString();
+        final cuenta = (m['cuenta'] ?? '000-0000000-0').toString();
+
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.grey[900],
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Datos para transferencia',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+              const SizedBox(height: 10),
+              _kv('Titular', titular),
+              _kv('Banco', banco),
+              _kv('Tipo', tipo),
+              Row(
+                children: [
+                  Expanded(child: _kv('Cuenta', cuenta)),
+                  IconButton(
+                    tooltip: 'Copiar cuenta',
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: cuenta));
+                      // ignore: use_build_context_synchronously
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Número de cuenta copiado')),
+                      );
+                    },
+                    icon: const Icon(Icons.copy, color: Colors.greenAccent),
+                  )
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _kv(String k, String v) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: RichText(
+        text: TextSpan(
+          text: '$k: ',
+          style: const TextStyle(color: Colors.white70),
+          children: [
+            TextSpan(text: v, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     );
   }

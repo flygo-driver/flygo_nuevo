@@ -1,3 +1,4 @@
+// lib/modelo/viaje.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../utils/calculos/estados.dart';
 
@@ -41,7 +42,7 @@ class Viaje {
   final String placa;
 
   // Estado
-  final String estado;              // 'pendiente' | 'aceptado' | 'a_bordo' | 'en_curso' | 'completado' | 'cancelado'
+  final String estado;              // normalizado
   final bool aceptado;
   final bool rechazado;
   final bool completado;
@@ -53,6 +54,12 @@ class Viaje {
 
   // Fecha/hora del servicio
   final DateTime fechaHora;
+
+  // Programados
+  final bool esAhora;               // calculado al crear
+  final bool programado;            // !esAhora
+  final DateTime? acceptAfter;      // desde cuándo se puede aceptar (ej. 2h antes)
+  final DateTime? startWindowAt;    // ventana para iniciar el viaje (ej. 45m antes)
 
   Viaje({
     this.id = '',
@@ -89,15 +96,72 @@ class Viaje {
     this.calificacion = 0.0,
     this.comentario = '',
     DateTime? fechaHora,
+
+    // nuevos
+    this.esAhora = false,
+    this.programado = false,
+    this.acceptAfter,
+    this.startWindowAt,
   }) : fechaHora = fechaHora ?? DateTime.now();
 
-  // ---- Helpers ----
+  // === Getters de compatibilidad para la UI (parches mínimos) ===
+  String get telefonoTaxista => telefono; // alias esperado por algunas vistas
+  double get driverLat => latTaxista;     // alias
+  double get driverLon => lonTaxista;     // alias
+
+  // === Getters de utilidad ===
+  bool get tienePickup => _validCoord(latCliente, lonCliente);
+  bool get tieneDestino => _validCoord(latDestino, lonDestino);
+  bool get esActivo => EstadosViaje.esActivo(estado);
+  bool get esTerminal => EstadosViaje.esTerminal(estado);
+
+  bool esProgramadoLiberable(DateTime now) {
+    if (acceptAfter == null) return true;
+    return !now.isBefore(acceptAfter!);
+  }
+
+  // === Helpers de presentación / disponibilidad ===
+  bool get hasTelefono => telefono.trim().isNotEmpty;
+  bool get hasPickup => _validCoord(latCliente, lonCliente);
+  bool get hasDestino => _validCoord(latDestino, lonDestino);
+  bool get hasDriverPos => _validCoord(latTaxista, lonTaxista);
+
+  /// Resumen listo para pintar en la tarjeta de la UI
+  String get vehiculoResumen {
+    final partes = <String>[
+      if (tipoVehiculo.trim().isNotEmpty) tipoVehiculo.trim(),
+      if (marca.trim().isNotEmpty) marca.trim(),
+      if (modelo.trim().isNotEmpty) modelo.trim(),
+      if (color.trim().isNotEmpty) 'Color: ${color.trim()}',
+      if (placa.trim().isNotEmpty) 'Placa: ${placa.trim()}',
+    ];
+    return partes.isEmpty ? '—' : partes.join(' · ');
+  }
+
+  /// Teléfono visible normalizado (p. ej. +18095551212) o '—'
+  String get telefonoVisible {
+    final raw = telefono.trim();
+    final digits = raw.replaceAll(RegExp(r'\D+'), '');
+    if (digits.isEmpty) return '—';
+    final norma = digits.startsWith('1') ? digits : (digits.length == 10 ? '1$digits' : digits);
+    return '+$norma';
+  }
+
+  // ---- Helpers de parseo/validación ----
   static String _asString(dynamic v) => (v ?? '').toString();
 
   static double _asDouble(dynamic v) {
     if (v == null) return 0.0;
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v) ?? 0.0;
+    if (v is num) {
+      final d = v.toDouble();
+      if (d.isNaN || d.isInfinite) return 0.0;
+      return d;
+    }
+    if (v is String) {
+      final d = double.tryParse(v) ?? 0.0;
+      if (d.isNaN || d.isInfinite) return 0.0;
+      return d;
+    }
     return 0.0;
   }
 
@@ -116,18 +180,53 @@ class Viaje {
     if (v is Timestamp) return v.toDate();
     if (v is DateTime) return v;
     if (v is String) {
-      try {
-        return DateTime.parse(v);
-      } catch (_) {
-        return DateTime.fromMillisecondsSinceEpoch(0);
-      }
+      try { return DateTime.parse(v); } catch (_) { return DateTime.fromMillisecondsSinceEpoch(0); }
     }
     if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
+  static DateTime? _asDateOrNull(dynamic v) {
+    if (v == null) return null;
+    if (v is Timestamp) return v.toDate();
+    if (v is DateTime) return v;
+    if (v is String) {
+      try { return DateTime.parse(v); } catch (_) { return null; }
+    }
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+    return null;
+  }
+
+  static bool _validCoord(double lat, double lon) {
+    if (lat.isNaN || lon.isNaN) return false;
+    if (!lat.isFinite || !lon.isFinite) return false;
+    if (lat == 0 && lon == 0) return false;
+    return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+  }
+
   // ---- Factory/serialización ----
   factory Viaje.fromMap(String id, Map<String, dynamic> data) {
+    // Fallbacks de pickup por compat (latOrigen/lonOrigen)
+    final double latCli = _asDouble(data['latCliente']);
+    final double lonCli = _asDouble(data['lonCliente']);
+    final bool cliOk = _validCoord(latCli, lonCli);
+    final double latOri = _asDouble(data['latOrigen']);
+    final double lonOri = _asDouble(data['lonOrigen']);
+
+    final String rawEstado = _asString(data['estado']);
+    final bool acept = _asBool(data['aceptado']);
+    final bool comp  = _asBool(data['completado']);
+
+    final String estadoNorm = EstadosViaje.normalizar(
+      rawEstado.isEmpty
+          ? (comp ? EstadosViaje.completado : (acept ? EstadosViaje.aceptado : EstadosViaje.pendiente))
+          : rawEstado,
+    );
+
+    // driverLat/driverLon compat
+    final double latDrv = _asDouble(data['latTaxista'] ?? data['driverLat']);
+    final double lonDrv = _asDouble(data['lonTaxista'] ?? data['driverLon']);
+
     return Viaje(
       id: id,
       clienteId: _asString(data['clienteId']),
@@ -137,44 +236,37 @@ class Viaje {
       nombreTaxista: _asString(data['nombreTaxista']),
       origen: _asString(data['origen']),
       destino: _asString(data['destino']),
-      latCliente: _asDouble(data['latCliente']),
-      lonCliente: _asDouble(data['lonCliente']),
+      // usa los valores ya parseados (evita doble parseo)
+      latCliente: cliOk ? latCli : latOri,
+      lonCliente: cliOk ? lonCli : lonOri,
       latDestino: _asDouble(data['latDestino']),
       lonDestino: _asDouble(data['lonDestino']),
-      latTaxista: _asDouble(data['latTaxista']),
-      lonTaxista: _asDouble(data['lonTaxista']),
+      latTaxista: latDrv,
+      lonTaxista: lonDrv,
       precio: _asDouble(data['precio']),
       precioFinal: _asDouble(data['precioFinal']),
       comision: _asDouble(data['comision']),
       gananciaTaxista: _asDouble(data['gananciaTaxista']),
-      metodoPago: _asString(data['metodoPago']).isEmpty
-          ? 'Efectivo'
-          : _asString(data['metodoPago']),
-      tipoVehiculo: _asString(data['tipoVehiculo']).isEmpty
-          ? 'Carro'
-          : _asString(data['tipoVehiculo']),
+      metodoPago: _asString(data['metodoPago']).isEmpty ? 'Efectivo' : _asString(data['metodoPago']),
+      tipoVehiculo: _asString(data['tipoVehiculo']).isEmpty ? 'Carro' : _asString(data['tipoVehiculo']),
       marca: _asString(data['marca']),
       modelo: _asString(data['modelo']),
       color: _asString(data['color']),
       idaYVuelta: _asBool(data['idaYVuelta']),
       telefono: _asString(data['telefono']),
       placa: _asString(data['placa']),
-      estado: EstadosViaje.normalizar(
-        _asString(data['estado']).isEmpty
-            ? (_asBool(data['completado'])
-                ? EstadosViaje.completado
-                : (_asBool(data['aceptado'])
-                    ? EstadosViaje.aceptado
-                    : EstadosViaje.pendiente))
-            : _asString(data['estado']),
-      ),
-      aceptado: _asBool(data['aceptado']),
+      estado: estadoNorm,
+      aceptado: acept,
       rechazado: _asBool(data['rechazado']),
-      completado: _asBool(data['completado']),
+      completado: comp,
       calificado: _asBool(data['calificado']),
       calificacion: _asDouble(data['calificacion']),
       comentario: _asString(data['comentario']),
       fechaHora: _asDate(data['fechaHora']),
+      esAhora: _asBool(data['esAhora']),
+      programado: _asBool(data['programado']),
+      acceptAfter: _asDateOrNull(data['acceptAfter']),
+      startWindowAt: _asDateOrNull(data['startWindowAt']),
     );
   }
 
@@ -191,8 +283,11 @@ class Viaje {
       'lonCliente': lonCliente,
       'latDestino': latDestino,
       'lonDestino': lonDestino,
+      // compat driver
       'latTaxista': latTaxista,
       'lonTaxista': lonTaxista,
+      'driverLat': latTaxista,
+      'driverLon': lonTaxista,
       'precio': precio,
       'precioFinal': precioFinal,
       'comision': comision,
@@ -213,24 +308,66 @@ class Viaje {
       'calificacion': calificacion,
       'comentario': comentario,
       'fechaHora': Timestamp.fromDate(fechaHora),
+
+      // programados
+      'esAhora': esAhora,
+      'programado': programado,
+      if (acceptAfter != null) 'acceptAfter': Timestamp.fromDate(acceptAfter!),
+      if (startWindowAt != null) 'startWindowAt': Timestamp.fromDate(startWindowAt!),
     };
   }
 
-  /// Mapa recomendado para **CREAR** en Firestore
+  /// Mapa recomendado para CREAR en Firestore (coincide con ViajesRepo)
   Map<String, dynamic> toCreateMap() {
+    final now = DateTime.now();
+
+    // Ventanas de negocio (mismas que usa el repo)
+    const int kAcceptHoursBefore = 2;    // reclamar programados desde 2h antes
+    const int kReadyMinutesBefore = 45;  // ventana de inicio 45 min antes
+
+    // AHORA si la hora es dentro de 15 minutos
+    final bool esAhoraCalc = fechaHora.isBefore(now.add(const Duration(minutes: 15)));
+
+    final DateTime acceptAfterDT =
+        esAhoraCalc ? now : fechaHora.subtract(const Duration(hours: kAcceptHoursBefore));
+    final DateTime startWindowDT =
+        esAhoraCalc ? now : fechaHora.subtract(const Duration(minutes: kReadyMinutesBefore));
+
+    // Estado inicial según método de pago (compat con reglas)
+    final String estadoInicial = (metodoPago.toLowerCase().trim() == 'tarjeta')
+        ? EstadosViaje.pendientePago
+        : EstadosViaje.pendiente;
+
     return {
       'uidCliente': uidCliente.isNotEmpty ? uidCliente : clienteId,
       'clienteId': clienteId.isNotEmpty ? clienteId : uidCliente,
-      'estado': EstadosViaje.pendiente,
+
+      // Estado inicial y flags de visibilidad
+      'estado': estadoInicial,
       'aceptado': false,
       'rechazado': false,
+      'completado': false,
+      'activo': esAhoraCalc, // ahora = activo; programado = no activo hasta ventana
+      'esAhora': esAhoraCalc,
+      'programado': !esAhoraCalc,
+      'acceptAfter': Timestamp.fromDate(acceptAfterDT),
+      'startWindowAt': Timestamp.fromDate(startWindowDT),
+
+      // Trayecto
       'origen': origen,
       'destino': destino,
       'latCliente': latCliente,
       'lonCliente': lonCliente,
       'latDestino': latDestino,
       'lonDestino': lonDestino,
+      // compat
+      'latOrigen': latCliente,
+      'lonOrigen': lonCliente,
+
+      // Fecha/hora del servicio
       'fechaHora': Timestamp.fromDate(fechaHora),
+
+      // Pago / vehículo
       'precio': precio,
       'metodoPago': metodoPago,
       'tipoVehiculo': tipoVehiculo,
@@ -238,14 +375,34 @@ class Viaje {
       if (modelo.isNotEmpty) 'modelo': modelo,
       if (color.isNotEmpty) 'color': color,
       'idaYVuelta': idaYVuelta,
+
+      // Aún sin taxista
       'uidTaxista': '',
       'taxistaId': '',
+      'nombreTaxista': '',
+      'telefono': '',
+      'placa': '',
+
+      // Pool
+      'reservadoPor': '',
+      'reservadoHasta': null,
+      'ignoradosPor': <String>[],
+
+      // Tracking inicial
+      'latTaxista': 0.0,
+      'lonTaxista': 0.0,
+      'driverLat': 0.0,
+      'driverLon': 0.0,
+
+      // Scheduling de visibilidad en pools
+      // 👇 Publicamos YA para que los programados salgan en “Programados” sin esperar acceptAfter
+      'publishAt': Timestamp.fromDate(now),
+
+      // Timestamps
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
       'creadoEn': FieldValue.serverTimestamp(),
       'actualizadoEn': FieldValue.serverTimestamp(),
-      'latOrigen': latCliente,
-      'lonOrigen': lonCliente,
     };
   }
 
@@ -284,6 +441,12 @@ class Viaje {
     double? calificacion,
     String? comentario,
     DateTime? fechaHora,
+
+    // nuevos
+    bool? esAhora,
+    bool? programado,
+    DateTime? acceptAfter,
+    DateTime? startWindowAt,
   }) {
     return Viaje(
       id: id ?? this.id,
@@ -320,6 +483,12 @@ class Viaje {
       calificacion: calificacion ?? this.calificacion,
       comentario: comentario ?? this.comentario,
       fechaHora: fechaHora ?? this.fechaHora,
+
+      // nuevos
+      esAhora: esAhora ?? this.esAhora,
+      programado: programado ?? this.programado,
+      acceptAfter: acceptAfter ?? this.acceptAfter,
+      startWindowAt: startWindowAt ?? this.startWindowAt,
     );
   }
 }

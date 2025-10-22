@@ -26,6 +26,7 @@
     <string>LaunchScreen</string>
     <key>UIMainStoryboardFile</key>
     <string>Main</string>
+
     <key>UISupportedInterfaceOrientations</key>
     <array>
       <string>UIInterfaceOrientationPortrait</string>
@@ -38,6 +39,17 @@
       <string>UIInterfaceOrientationPortraitUpsideDown</string>
       <string>UIInterfaceOrientationLandscapeLeft</string>
       <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <!-- Esquema para Google Sign-In (REVERSED_CLIENT_ID) -->
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>com.googleusercontent.apps.237301602510-quegdvajgftlg7hl0hc70voqs4665kjv</string>
+        </array>
+      </dict>
     </array>
 
     <key>LSApplicationQueriesSchemes</key>
@@ -59,6 +71,7 @@
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>Necesitamos tu ubicación para mostrar el mapa y calcular rutas.</string>
 
+    <!-- Reemplaza con tu clave real de Maps SDK para iOS -->
     <key>GMSApiKey</key>
     <string>TU_API_KEY_DE_GOOGLE_MAPS</string>
 

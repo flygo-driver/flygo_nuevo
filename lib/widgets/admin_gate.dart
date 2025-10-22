@@ -1,8 +1,11 @@
+// lib/widgets/admin_gate.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-// Importa SOLO aquí el admin_home para evitar ciclos.
+// Importa el panel admin desde donde realmente está en tu proyecto.
+// Si tu AdminHome vive en lib/pantallas/admin/admin_home.dart,
+// este import relativo es correcto:
 import '../pantallas/admin/admin_home.dart';
 
 class AdminGate extends StatelessWidget {
@@ -11,30 +14,49 @@ class AdminGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
-      return const _NoAuth();
-    }
+    if (uid == null) return const _NoAuth();
 
-    final docRef =
-        FirebaseFirestore.instance.collection('usuarios').doc(uid);
+    final refUsuario = FirebaseFirestore.instance.collection('usuarios').doc(uid);
+    final refRol     = FirebaseFirestore.instance.collection('roles').doc(uid);
 
+    // 1er stream: usuarios/{uid}
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: docRef.snapshots(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
+      stream: refUsuario.snapshots(),
+      builder: (context, snapUser) {
+        if (snapUser.connectionState == ConnectionState.waiting) {
           return const _Cargando();
         }
-        if (snap.hasError) {
-          return _Error(msg: 'Error: ${snap.error}');
+        if (snapUser.hasError) {
+          return _Error(msg: 'Error usuarios: ${snapUser.error}');
         }
-        final data = snap.data?.data();
-        final rol = (data?['rol'] ?? '').toString();
 
-        if (rol == 'admin') {
-          // ✅ Si es admin, entra directo al panel
+        final rolUsuario = (snapUser.data?.data()?['rol'] ?? '').toString().trim().toLowerCase();
+
+        // Si ya es admin en usuarios → pasa de una
+        if (rolUsuario == 'admin') {
           return const AdminHome();
         }
-        return const _SinPermisos();
+
+        // 2do stream (fallback): roles/{uid}
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: refRol.snapshots(),
+          builder: (context, snapRol) {
+            if (snapRol.connectionState == ConnectionState.waiting) {
+              return const _Cargando();
+            }
+            if (snapRol.hasError) {
+              return _Error(msg: 'Error roles: ${snapRol.error}');
+            }
+
+            final rolDoc = (snapRol.data?.data()?['rol'] ?? '').toString().trim().toLowerCase();
+            if (rolDoc == 'admin') {
+              return const AdminHome();
+            }
+
+            // Ninguna fuente dijo admin
+            return const _SinPermisos();
+          },
+        );
       },
     );
   }

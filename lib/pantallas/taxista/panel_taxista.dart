@@ -153,6 +153,7 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
 
   Future<bool> _ensurePhotoPermissions() async {
     final camera = await Permission.camera.request();
+    // En iOS se usa `photos`. En Android, `storage` cubre la galería (según versión).
     final photos = await Permission.photos.request().onError((_, __) async {
       return PermissionStatus.granted;
     });
@@ -296,7 +297,6 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
       if (kDebugMode) debugPrint('[TEST][Error] $e');
       _toast('Test error: $e');
     } finally {
-      // ❌ no returns en finally; sólo actualiza estado si el widget sigue montado
       if (mounted) {
         setState(() => _subiendo = false);
       }

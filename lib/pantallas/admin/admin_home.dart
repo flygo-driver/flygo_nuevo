@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../utils/estilos.dart';
 import '../../utils/formatos_moneda.dart';
 import '../../modelo/liquidacion.dart';
 import '../../servicios/admin_service.dart';
 
-// Usar rutas relativas (NO package:) porque el archivo vive junto a admin_home.dart
+// relativo porque este archivo vive junto a panel_finanzas.dart
 import '../../widgets/comision_global_chip.dart';
+import '../../widgets/admin_drawer.dart'; // ⬅️ NUEVO
 import 'panel_finanzas.dart';
 
 class AdminHome extends StatefulWidget {
@@ -16,8 +18,7 @@ class AdminHome extends StatefulWidget {
   State<AdminHome> createState() => _AdminHomeState();
 }
 
-class _AdminHomeState extends State<AdminHome>
-    with SingleTickerProviderStateMixin {
+class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMixin {
   late final TabController _tab;
   final _buscador = TextEditingController();
 
@@ -38,6 +39,7 @@ class _AdminHomeState extends State<AdminHome>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: EstilosFlyGo.fondoOscuro,
+      drawer: const AdminDrawer(), // ⬅️ Drawer con “Cerrar sesión”
       appBar: AppBar(
         backgroundColor: EstilosFlyGo.fondoOscuro,
         title: const Text(
@@ -57,9 +59,7 @@ class _AdminHomeState extends State<AdminHome>
           ],
         ),
         actions: [
-          // Comisión global en vivo (plataforma)
           const ComisionGlobalChip(),
-          // Panel de finanzas
           IconButton(
             tooltip: 'Ver finanzas (en vivo)',
             onPressed: () {
@@ -183,45 +183,70 @@ class _LiquidacionTile extends StatelessWidget {
     final color = _chipColor(l.estado);
     final fecha = l.solicitadoEn?.toLocal().toString().substring(0, 16) ?? '—';
 
+    final usuarioRef =
+        FirebaseFirestore.instance.collection('usuarios').doc(l.uidTaxista);
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(14),
-        // was: color.withOpacity(0.45)
         border: Border.all(color: color.withValues(alpha: 0.45)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // fila principal
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'UID: ${l.uidTaxista}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
+          // Header con nombre/email (fallback a UID)
+          StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: usuarioRef.snapshots(),
+            builder: (context, snap) {
+              final data = snap.data?.data();
+              final nombre = (data?['nombre'] ?? '').toString().trim();
+              final email  = (data?['email']  ?? '').toString().trim();
+              final titulo = (nombre.isNotEmpty) ? nombre : l.uidTaxista;
+
+              return Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          titulo,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          email.isNotEmpty ? email : 'UID: ${l.uidTaxista}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  // was: color.withOpacity(0.15)
-                  color: color.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(20),
-                  // was: color.withOpacity(0.6)
-                  border: Border.all(color: color.withValues(alpha: 0.6)),
-                ),
-                child: Text(
-                  l.estado.toUpperCase(),
-                  style: TextStyle(color: color, fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: color.withValues(alpha: 0.6)),
+                    ),
+                    child: Text(
+                      l.estado.toUpperCase(),
+                      style: TextStyle(color: color, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
+
           const SizedBox(height: 6),
           Text(
             'Monto: ${FormatosMoneda.rd(l.monto)}',
@@ -265,7 +290,7 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.black,
         title: Text(
-          (nuevoEstado == 'aprobado') ? 'Aprobar retiro' : 'Rechazar retiro',
+          (nuevoEstado == 'aprobado') ? 'Aprobar liquidación' : 'Rechazar liquidación',
           style: const TextStyle(color: Colors.white),
         ),
         content: TextField(
@@ -274,7 +299,7 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
             labelText: 'Nota (opcional)',
-            hintText: 'Ej: Transferencia enviada, Ref #12345',
+            hintText: 'Ej: Transferencia verificada, Ref #12345',
           ),
         ),
         actions: [
@@ -301,16 +326,11 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            (nuevoEstado == 'aprobado') ? '✅ Aprobada' : '❌ Rechazada',
-          ),
-        ),
+        SnackBar(content: Text((nuevoEstado == 'aprobado') ? '✅ Aprobada' : '❌ Rechazada')),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -352,8 +372,7 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -372,11 +391,7 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
             child: ElevatedButton.icon(
               onPressed: _busy ? null : () => _resolver('aprobado'),
               icon: _busy
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.check_circle, color: Colors.green),
               label: const Text('Aprobar'),
               style: ElevatedButton.styleFrom(
@@ -391,11 +406,7 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
             child: ElevatedButton.icon(
               onPressed: _busy ? null : () => _resolver('rechazado'),
               icon: _busy
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.cancel, color: Colors.redAccent),
               label: const Text('Rechazar'),
               style: ElevatedButton.styleFrom(
@@ -409,13 +420,8 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
             child: OutlinedButton.icon(
               onPressed: _busy ? null : _revertir,
               icon: const Icon(Icons.undo, color: Colors.white70),
-              label: const Text(
-                'Revertir a pendiente',
-                style: TextStyle(color: Colors.white),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.white30),
-              ),
+              label: const Text('Revertir a pendiente', style: TextStyle(color: Colors.white)),
+              style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.white30)),
             ),
           ),
       ],

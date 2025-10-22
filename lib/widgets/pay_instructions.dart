@@ -44,9 +44,9 @@ class PayInstructions extends StatelessWidget {
           const SizedBox(height: 8),
           _row(context, 'Referencia', referencia, copy: true),
           const SizedBox(height: 10),
-          Text(
+          const Text(
             PayConfig.instrucciones,
-            style: const TextStyle(color: Colors.white70),
+            style: TextStyle(color: Colors.white70),
           ),
           if (showEfectivoNote) ...[
             const SizedBox(height: 8),

@@ -1,10 +1,18 @@
-// lib/auth/login_taxista.dart
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/servicios/auth_service.dart';
 import 'package:flygo_nuevo/servicios/google_auth.dart';
+
+/// ================== FLAGS QA (modo flexible) ==================
+const bool kQaFlexibleAccess =
+    bool.fromEnvironment('QA_FLEX', defaultValue: !kReleaseMode);
+const bool kQaAllowAnonOnCollision =
+    bool.fromEnvironment('QA_ALLOW_ANON', defaultValue: !kReleaseMode);
+const bool kQaAllowAnonOnAuthError =
+    bool.fromEnvironment('QA_ALLOW_ANON_ERR', defaultValue: !kReleaseMode);
 
 class LoginTaxista extends StatefulWidget {
   const LoginTaxista({super.key});
@@ -53,40 +61,24 @@ class _LoginTaxistaState extends State<LoginTaxista> {
     }
   }
 
-  Future<bool> _enforceTaxistaAfterEmailLogin() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return false;
+  Future<void> _loginAnonTaxista() async {
+    final cred = await FirebaseAuth.instance.signInAnonymously();
+    final uid = cred.user!.uid;
+    await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+      'uid': uid,
+      'rol': 'taxista',
+      'email': _email.text.trim(),
+      'nombre': '',
+      'telefono': '',
+      'disponible': true, // para poder aceptar en QA
+      'docsEstado': 'pendiente',
+      'documentosCompletos': false,
+      'fechaRegistro': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
 
-    final ref = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-    final snap = await ref.get();
-
-    if (!snap.exists) {
-      await ref.set({
-        'uid': uid,
-        'rol': 'taxista',
-        'fechaRegistro': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      return true;
-    }
-
-    final data = snap.data() ?? <String, dynamic>{};
-    final rolActual = (data['rol'] ?? '').toString().trim().toLowerCase();
-
-    if (rolActual.isEmpty) {
-      await ref.set({'rol': 'taxista', 'actualizadoEn': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-      return true;
-    }
-
-    if (rolActual != 'taxista') {
-      await FirebaseAuth.instance.signOut();
-      if (!mounted) return false;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Esta cuenta está registrada como "$rolActual". Entra por "Login Cliente".')),
-      );
-      return false;
-    }
-    return true;
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
   }
 
   Future<void> _loginEmail() async {
@@ -99,12 +91,73 @@ class _LoginTaxistaState extends State<LoginTaxista> {
     try {
       await AuthService().loginUser(email, pass);
 
-      final ok = await _enforceTaxistaAfterEmailLogin();
-      if (!mounted || !ok) return;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        final ref = FirebaseFirestore.instance.collection('usuarios').doc(uid);
+        final snap = await ref.get();
+        final nowTs = FieldValue.serverTimestamp();
 
+        if (!snap.exists) {
+          // CREATE: se permite poner rol/email/etc.
+          await ref.set({
+            'uid': uid,
+            'rol': 'taxista',
+            'email': email,
+            'disponible': true,
+            'docsEstado': 'pendiente',
+            'documentosCompletos': false,
+            'fechaRegistro': nowTs,
+            'actualizadoEn': nowTs,
+          }, SetOptions(merge: true));
+        } else {
+          // UPDATE: cumplir reglas (NO tocar email/docsEstado/documentosCompletos aquí)
+          final data = snap.data() ?? <String, dynamic>{};
+          final rolActual = (data['rol'] ?? '').toString().trim().toLowerCase();
+
+          // Si no tenía rol, solo 'rol' + timestamps (regla especial)
+          if (rolActual.isEmpty) {
+            await ref.set(
+              {
+                'rol': 'taxista',
+                'updatedAt': nowTs,
+                'actualizadoEn': nowTs,
+              },
+              SetOptions(merge: true),
+            );
+          }
+
+          // Campos permitidos en update
+          await ref.set(
+            {
+              'disponible': true,
+              'lastLogin': nowTs,
+              'updatedAt': nowTs,
+              'actualizadoEn': nowTs,
+            },
+            SetOptions(merge: true),
+          );
+        }
+      }
+
+      if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
+
+      // Modo flexible: pase anónimo ante errores frecuentes
+      if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
+        const codesForAnon = {
+          'user-not-found',
+          'wrong-password',
+          'invalid-credential',
+          'too-many-requests',
+          'network-request-failed',
+        };
+        if (codesForAnon.contains(e.code)) {
+          await _loginAnonTaxista();
+          return;
+        }
+      }
 
       if (e.code == 'wrong-password' || e.code == 'invalid-credential') {
         await showDialog(
@@ -112,7 +165,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
           builder: (_) => AlertDialog(
             title: const Text('Credenciales incorrectas'),
             content: Text(
-              'Si te registraste con Google para $email, usa el botón "Continuar con Google". '
+              'Si te registraste con Google para $email, usa "Continuar con Google". '
               'También puedes restablecer tu contraseña.',
             ),
             actions: [
@@ -142,12 +195,18 @@ class _LoginTaxistaState extends State<LoginTaxista> {
         'user-disabled' => 'Cuenta deshabilitada.',
         'user-not-found' => 'No existe una cuenta con ese correo.',
         'too-many-requests' => 'Demasiados intentos. Intenta más tarde.',
+        'role-mismatch' => e.message ?? 'Rol no coincide.',
         _ => 'Error al iniciar sesión.',
       };
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (err) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error inesperado: $err')));
+        if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
+          await _loginAnonTaxista();
+          return;
+        }
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error inesperado: $err')));
       }
     } finally {
       if (mounted) setState(() => _loadingEmail = false);
@@ -161,22 +220,48 @@ class _LoginTaxistaState extends State<LoginTaxista> {
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid != null) {
+        final nowTs = FieldValue.serverTimestamp();
         await FirebaseFirestore.instance.collection('usuarios').doc(uid).set(
-          {'rol': 'taxista', 'actualizadoEn': FieldValue.serverTimestamp()},
+          {
+            // En UPDATE solo lo permitido:
+            'disponible': true,
+            'updatedAt': nowTs,
+            'actualizadoEn': nowTs,
+          },
           SetOptions(merge: true),
         );
       }
       if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
     } on FirebaseAuthException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message ?? 'No se pudo iniciar con Google')),
-        );
+      // Manejo claro para rol distinto
+      if (e.code == 'role-mismatch') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message ?? 'Rol no coincide.')),
+          );
+        }
+      } else {
+        // Fallback anónimo si está permitido en QA
+        if (kQaFlexibleAccess && kQaAllowAnonOnCollision) {
+          await _loginAnonTaxista();
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('No se pudo iniciar con Google (${e.code}).')),
+            );
+          }
+        }
       }
     } catch (err) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error (Firestore/Conexión): $err')));
+      if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
+        await _loginAnonTaxista();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error (Firestore/Conexión): $err')),
+          );
+        }
       }
     } finally {
       if (mounted) setState(() => _loadingGoogle = false);
@@ -274,6 +359,16 @@ class _LoginTaxistaState extends State<LoginTaxista> {
                   child: const Text('¿Olvidaste tu contraseña?'),
                 ),
               ),
+
+              // 🔰 Botón QA visible en debug (flex)
+              if (kQaFlexibleAccess) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: _loginAnonTaxista,
+                  child: const Text('Entrar rápido (QA)'),
+                ),
+              ],
+
               const SizedBox(height: 8),
               _loadingEmail
                   ? const Center(child: CircularProgressIndicator(color: Colors.greenAccent))

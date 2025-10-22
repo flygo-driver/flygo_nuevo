@@ -1,18 +1,23 @@
+// lib/utils/calculos/estados.dart
 class EstadosViaje {
-  // ====== Estados base ======
+  // ====== Estados base (normalizados) ======
   static const String pendiente = 'pendiente';
+  static const String pendientePago = 'pendiente_pago';
+  static const String aceptado = 'aceptado';
+  static const String enCaminoPickup = 'en_camino_pickup';
+  static const String aBordo = 'a_bordo';
   static const String enCurso = 'en_curso';
   static const String completado = 'completado';
   static const String cancelado = 'cancelado';
   static const String rechazado = 'rechazado';
-  static const String pendientePago = 'pendiente_pago';
 
-  // ====== Flujo ampliado ======
-  static const String aceptado = 'aceptado';
-  static const String enCaminoPickup = 'en_camino_pickup';
-  static const String aBordo = 'a_bordo';
+  // ====== Compatibilidad con variantes antiguas ======
+  // 'asignado' del flujo viejo se trata como 'aceptado'
+  static const Set<String> _aliasAceptado = {
+    'aceptado',
+    'asignado',
+  };
 
-  // Aliases
   static const Set<String> _aliasEnCaminoPickup = {
     'en_camino_pickup',
     'encaminopickup',
@@ -42,24 +47,25 @@ class EstadosViaje {
     'encurzo',
   };
 
-  // SOLO estados realmente activos
+  // ====== Conjuntos útiles ======
   static const Set<String> activos = {
     aceptado,
     enCaminoPickup,
     aBordo,
     enCurso,
-    // compat aliases
-    'abordo',
-    'encaminopickup',
-    'encurso',
   };
 
-  static const Set<String> terminales = {completado, cancelado, rechazado};
+  static const Set<String> terminales = {
+    completado,
+    cancelado,
+    rechazado,
+  };
 
   // ====== Normalización ======
   static String normalizar(String estado) {
     final s = (estado.isEmpty ? '' : estado.trim().toLowerCase());
 
+    if (_aliasAceptado.contains(s)) return aceptado;
     if (_aliasEnCaminoPickup.contains(s)) return enCaminoPickup;
     if (_aliasABordo.contains(s)) return aBordo;
     if (_aliasEnCurso.contains(s)) return enCurso;
@@ -67,8 +73,14 @@ class EstadosViaje {
     switch (s) {
       case pendiente:
         return pendiente;
+      case pendientePago:
+        return pendientePago;
       case aceptado:
         return aceptado;
+      case enCaminoPickup:
+        return enCaminoPickup;
+      case aBordo:
+        return aBordo;
       case enCurso:
         return enCurso;
       case completado:
@@ -77,14 +89,13 @@ class EstadosViaje {
         return cancelado;
       case rechazado:
         return rechazado;
-      case pendientePago:
-        return pendientePago;
       default:
+        // Fallback seguro para no romper la UI
         return pendiente;
     }
   }
 
-  // ====== Helpers ======
+  // ====== Helpers booleanos ======
   static bool esPendiente(String e) => normalizar(e) == pendiente;
   static bool esPendientePago(String e) => normalizar(e) == pendientePago;
   static bool esAceptado(String e) => normalizar(e) == aceptado;
@@ -98,7 +109,7 @@ class EstadosViaje {
   static bool esActivo(String e) => activos.contains(normalizar(e));
   static bool esTerminal(String e) => terminales.contains(normalizar(e));
 
-  // Transiciones válidas (normalizadas)
+  // ====== Transiciones válidas ======
   static const Map<String, List<String>> _transiciones = {
     pendiente: [aceptado, enCaminoPickup, cancelado, pendientePago],
     pendientePago: [pendiente, cancelado],
@@ -118,14 +129,17 @@ class EstadosViaje {
     return lista != null && lista.contains(to);
   }
 
+  // ====== Texto para UI ======
   static String descripcion(String estado) {
     switch (normalizar(estado)) {
       case pendiente:
         return 'Pendiente';
+      case pendientePago:
+        return 'Pendiente de pago';
       case aceptado:
         return 'Aceptado';
       case enCaminoPickup:
-        return 'Conductor en camino a recogerte';
+        return 'Ir a buscar cliente';
       case aBordo:
         return 'Cliente a bordo';
       case enCurso:
@@ -136,8 +150,6 @@ class EstadosViaje {
         return 'Cancelado';
       case rechazado:
         return 'Rechazado';
-      case pendientePago:
-        return 'Pendiente de pago';
       default:
         return 'Estado desconocido';
     }

@@ -1,4 +1,3 @@
-// lib/widgets/campo_lugar_autocomplete.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../servicios/lugares_service.dart';
@@ -6,21 +5,13 @@ import '../servicios/lugares_service.dart';
 class CampoLugarAutocomplete extends StatefulWidget {
   final String label;
   final String? hint;
-
-  /// Texto inicial opcional (no dispara sugerencias hasta que el usuario edite)
   final String? initialText;
-
-  /// Filtros/sesgos opcionales
-  final String? country; // ej: 'DO'
+  final String? country; // 'DO'
   final double? biasLat;
   final double? biasLon;
-
-  /// Callbacks
   final ValueChanged<DetalleLugar> onPlaceSelected;
   final ValueChanged<String>? onTextChanged;
-
-  /// Config
-  final int minChars; // mínimo de letras para sugerir (por defecto: 2)
+  final int minChars;
 
   const CampoLugarAutocomplete({
     super.key,
@@ -53,73 +44,50 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete> {
     super.initState();
     final init = (widget.initialText ?? '').trim();
     if (init.isNotEmpty) _controller.text = init;
-
     _focus.addListener(() {
-      if (!_focus.hasFocus && mounted) {
-        // Oculta lista al perder foco
-        setState(() => _sugs = const []);
-      }
+      if (!_focus.hasFocus && mounted) setState(() => _sugs = const []);
     });
   }
 
   @override
   void dispose() {
-    _debounce?.cancel();
-    _controller.dispose();
-    _focus.dispose();
-    super.dispose();
+    _debounce?.cancel(); _controller.dispose(); _focus.dispose(); super.dispose();
   }
 
   void _onChanged(String text) {
     widget.onTextChanged?.call(text);
-
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 220), () async {
       final q = text.trim();
-      // No mostrar nada si no hay suficientes letras o no hay foco
       if (q.length < widget.minChars || !_focus.hasFocus) {
         if (mounted) setState(() => _sugs = const []);
         return;
       }
-
       if (mounted) setState(() => _loading = true);
-
       final sugs = await _svc.autocompletar(
         q,
         biasLat: widget.biasLat,
         biasLon: widget.biasLon,
         country: widget.country ?? 'DO',
       );
-
       if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _sugs = sugs;
-      });
+      setState(() { _loading = false; _sugs = sugs; });
     });
   }
 
   Future<void> _selectPrediction(PrediccionLugar p) async {
-    setState(() {
-      _sugs = const [];
-      _loading = true;
-    });
-
+    setState(() { _sugs = const []; _loading = true; });
     final det = await _svc.detalle(p.placeId);
-
     if (!mounted) return;
     setState(() => _loading = false);
-
     if (det != null) {
-      _controller.text = det.displayLabel; // nombre/dir bonita
+      _controller.text = det.displayLabel;
       widget.onTextChanged?.call(det.displayLabel);
       widget.onPlaceSelected(det);
-      _focus.unfocus(); // cerrar teclado
+      _focus.unfocus();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No se pudo obtener el detalle del lugar.'),
-        ),
+        const SnackBar(content: Text('No se pudo obtener el detalle del lugar.')),
       );
     }
   }
@@ -143,7 +111,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete> {
             hintText: widget.hint ?? 'Escribe para buscar…',
             labelStyle: const TextStyle(color: Colors.white70),
             filled: true,
-            fillColor: Colors.grey[900],
+            fillColor: Colors.black,
             border: border,
             enabledBorder: border,
             focusedBorder: border.copyWith(
@@ -153,8 +121,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete> {
                 ? const Padding(
                     padding: EdgeInsets.all(12),
                     child: SizedBox(
-                      width: 16,
-                      height: 16,
+                      width: 16, height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   )
@@ -162,13 +129,11 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete> {
           ),
           onChanged: _onChanged,
         ),
-
-        // Lista de sugerencias: SOLO aparece si hay foco y resultados
         if (_focus.hasFocus && _sugs.isNotEmpty)
           Container(
             margin: const EdgeInsets.only(top: 6),
             decoration: BoxDecoration(
-              color: Colors.grey[900],
+              color: Colors.black,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: Colors.white24),
             ),
@@ -177,23 +142,14 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete> {
               padding: EdgeInsets.zero,
               shrinkWrap: true,
               itemCount: _sugs.length,
-              separatorBuilder: (_, __) =>
-                  const Divider(height: 1, color: Colors.white12),
+              separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
               itemBuilder: (ctx, i) {
                 final p = _sugs[i];
                 final subtitle = (p.secondary ?? '').trim();
                 return ListTile(
                   dense: true,
-                  title: Text(
-                    p.primary,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  subtitle: subtitle.isNotEmpty
-                      ? Text(
-                          subtitle,
-                          style: const TextStyle(color: Colors.white54),
-                        )
-                      : null,
+                  title: Text(p.primary, style: const TextStyle(color: Colors.white)),
+                  subtitle: subtitle.isNotEmpty ? Text(subtitle, style: const TextStyle(color: Colors.white54)) : null,
                   onTap: () => _selectPrediction(p),
                 );
               },

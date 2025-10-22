@@ -166,8 +166,7 @@ class ClienteDrawer extends StatelessWidget {
                                     color: const Color(0xFF1E1E1E),
                                     borderRadius: BorderRadius.circular(999),
                                     border: Border.all(
-                                      // ~50% alpha de verde (sin withOpacity)
-                                      color: const Color(0x7FFFEB3B),
+                                      color: const Color(0x7FFFEB3B), // ~50% alpha
                                     ),
                                   ),
                                   child: const Text(

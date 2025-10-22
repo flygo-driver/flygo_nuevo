@@ -1,4 +1,6 @@
 // lib/data/viaje_data.dart
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -7,24 +9,21 @@ import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 
 class ViajeData {
+  // ---------- Firestore ----------
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
   static final CollectionReference<Map<String, dynamic>> _viajes =
       _db.collection('viajes');
 
-  // Estados activos que hacen que el viaje "exista" para cliente y taxista.
-  static const List<String> _activosCliente = [
-    'pendiente',
+  // ---------- Estados canónicos (snake_case) ----------
+  // Lista usada por taxista en whereIn
+  static const List<String> _activosTaxista = <String>[
     'aceptado',
+    'en_camino_pickup',
     'a_bordo',
-    'en_curso'
-  ];
-  static const List<String> _activosTaxista = [
-    'aceptado',
-    'a_bordo',
-    'en_curso'
+    'en_curso',
   ];
 
-  // ----------------------- Helpers generales -----------------------
+  // ---------- Helpers generales ----------
   static double _asDouble(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
@@ -32,6 +31,10 @@ class ViajeData {
     return 0.0;
   }
 
+  // Precisión GPS ~6 decimales
+  static double _round6(num v) => double.parse(v.toStringAsFixed(6));
+
+  // Solo para dinero
   static double _round2(num v) => double.parse(v.toStringAsFixed(2));
 
   static DateTime _asDate(dynamic v) {
@@ -50,51 +53,57 @@ class ViajeData {
   }
 
   static DateTime _createdOf(Map<String, dynamic> data) {
-    final creadoEn = _asDate(data['creadoEn']);
+    final DateTime creadoEn = _asDate(data['creadoEn']);
     if (creadoEn.millisecondsSinceEpoch > 0) return creadoEn;
 
-    final fechaCreacion = _asDate(data['fechaCreacion']);
+    final DateTime fechaCreacion = _asDate(data['fechaCreacion']);
     if (fechaCreacion.millisecondsSinceEpoch > 0) return fechaCreacion;
 
-    final fechaHora = _asDate(data['fechaHora']);
-    return fechaHora.millisecondsSinceEpoch > 0
+    final DateTime fechaHora = _asDate(data['fechaHora']);
+    return (fechaHora.millisecondsSinceEpoch > 0)
         ? fechaHora
         : DateTime.fromMillisecondsSinceEpoch(0);
   }
 
+  // ===== Normalización fuerte de tipos para lat/lon y dinero =====
   static Map<String, dynamic> _normalize(Map<String, dynamic> data) {
-    return {
+    double d(dynamic v) => _asDouble(v);
+    double r6(dynamic v) => _round6(_asDouble(v));
+
+    return <String, dynamic>{
       ...data,
-      'precio': _asDouble(data['precio']),
-      'gananciaTaxista': _asDouble(data['gananciaTaxista']),
-      'comision': _asDouble(data['comision']),
-      'latCliente': _asDouble(data['latCliente']),
-      'lonCliente': _asDouble(data['lonCliente']),
-      'latDestino': _asDouble(data['latDestino']),
-      'lonDestino': _asDouble(data['lonDestino']),
-      'latTaxista': _asDouble(data['latTaxista']),
-      'lonTaxista': _asDouble(data['lonTaxista']),
+      'precio': d(data['precio']),
+      'gananciaTaxista': d(data['gananciaTaxista']),
+      'comision': d(data['comision']),
+      'latCliente': r6(data['latCliente']),
+      'lonCliente': r6(data['lonCliente']),
+      'latDestino': r6(data['latDestino']),
+      'lonDestino': r6(data['lonDestino']),
+      'latTaxista': r6(data['latTaxista']),
+      'lonTaxista': r6(data['lonTaxista']),
     };
   }
 
   static int _toCents(num v) => (v * 100).round();
   static double _fromCents(int c) => c / 100.0;
-  static int _comision20Cents(int precioCents) =>
-      ((precioCents * 20) + 50) ~/ 100;
+  static int _comision20Cents(int precioCents) => ((precioCents * 20) + 50) ~/ 100;
 
   static Map<String, int> _partidasCentsDesdePrecio(num precioDbl) {
-    final pCents = _toCents(precioDbl);
-    final cCents = _comision20Cents(pCents);
-    final gCents = pCents - cCents;
-    return {
+    final int pCents = _toCents(precioDbl);
+    final int cCents = _comision20Cents(pCents);
+    final int gCents = pCents - cCents;
+    return <String, int>{
       'precio_cents': pCents,
       'comision_cents': cCents,
       'ganancia_cents': gCents,
     };
   }
 
-  // ----------------------- Helpers de cancelación -----------------------
-  static const List<String> _motivosProtegidos = [
+  // Fuerza estado canónico al ESCRIBIR en DB
+  static String _estadoCanon(String estado) => EstadosViaje.normalizar(estado);
+
+  // ---------- Helpers cancelación ----------
+  static const List<String> _motivosProtegidos = <String>[
     'vehículo no coincide',
     'vehiculo no coincide',
     'seguridad',
@@ -105,29 +114,80 @@ class ViajeData {
   ];
 
   static bool _esMotivoProtegido(String? motivo) {
-    final m = motivo?.toLowerCase().trim() ?? '';
+    final String m = motivo?.toLowerCase().trim() ?? '';
     if (m.isEmpty) return false;
-    return _motivosProtegidos.any((x) => m.contains(x));
+    return _motivosProtegidos.any((String x) => m.contains(x));
   }
 
-  static int _minsDesdeTs(dynamic ts) {
-    if (ts is Timestamp) return DateTime.now().difference(ts.toDate()).inMinutes;
-    if (ts is DateTime) return DateTime.now().difference(ts).inMinutes;
-    return 0;
+  // ===== Helpers de comparación con tolerancia (para evitar parpadeos) =====
+  static bool _approxEq(double a, double b, [double eps = 0.0001]) =>
+      (a - b).abs() <= eps;
+
+  static bool _viajeIgualAprox(Viaje a, Viaje b) {
+    return a.id == b.id &&
+        EstadosViaje.normalizar(a.estado) == EstadosViaje.normalizar(b.estado) &&
+        _approxEq(a.latTaxista, b.latTaxista) &&
+        _approxEq(a.lonTaxista, b.lonTaxista) &&
+        _approxEq(a.latCliente, b.latCliente) &&
+        _approxEq(a.lonCliente, b.lonCliente) &&
+        _approxEq(a.latDestino, b.latDestino) &&
+        _approxEq(a.lonDestino, b.lonDestino);
   }
 
-  // --------------------- Crear ---------------------
+  // ===== Throttle básico para suavizar snapshots ruidosos =====
+  static StreamTransformer<T, T> _throttleDistinct<T>(Duration window) {
+    Timer? t;
+    T? pending;
+    bool hasPending = false;
+    bool isClosed = false;
+    late StreamController<T> ctrl;
+
+    void emitPending() {
+      if (hasPending && !isClosed) {
+        ctrl.add(pending as T);
+        hasPending = false;
+      }
+    }
+
+    return StreamTransformer<T, T>.fromBind((input) {
+      ctrl = StreamController<T>(onCancel: () {
+        t?.cancel();
+      });
+
+      input.listen((event) {
+        if (t == null || !t!.isActive) {
+          ctrl.add(event);
+          t = Timer(window, () {
+            emitPending();
+          });
+        } else {
+          pending = event;
+          hasPending = true;
+        }
+      }, onError: ctrl.addError, onDone: () {
+        emitPending();
+        isClosed = true;
+        ctrl.close();
+      });
+
+      return ctrl.stream;
+    });
+  }
+
+  // ===================================================================
+  //                              CREAR
+  // ===================================================================
   static Future<void> agregarViaje(Viaje viaje) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) throw Exception('No autenticado');
 
-    final partidas = _partidasCentsDesdePrecio(viaje.precio);
+    final Map<String, int> partidas = _partidasCentsDesdePrecio(viaje.precio);
 
-    final Map<String, dynamic> base = {
+    final Map<String, dynamic> base = <String, dynamic>{
       ...viaje.toMap(),
-      'estado': (viaje.estado.isNotEmpty)
-          ? viaje.estado
-          : EstadosViaje.pendiente,
+      'estado': _estadoCanon(
+        (viaje.estado.isNotEmpty) ? viaje.estado : EstadosViaje.pendiente,
+      ),
       'aceptado': viaje.aceptado,
       'rechazado': viaje.rechazado,
       'completado': viaje.completado,
@@ -148,8 +208,11 @@ class ViajeData {
       'updatedAt': FieldValue.serverTimestamp(),
     };
 
-    final doc = await _viajes.add(base);
-    await doc.update({'id': doc.id, 'updatedAt': FieldValue.serverTimestamp()});
+    final DocumentReference<Map<String, dynamic>> doc = await _viajes.add(base);
+    await doc.update(<String, dynamic>{
+      'id': doc.id,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   static Future<String> crearViajeCliente({
@@ -162,13 +225,13 @@ class ViajeData {
     required double precio,
     required String metodoPago,
   }) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) throw Exception('No autenticado');
 
-    final partidas = _partidasCentsDesdePrecio(precio);
+    final Map<String, int> partidas = _partidasCentsDesdePrecio(precio);
 
-    final ref = _viajes.doc();
-    await ref.set({
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc();
+    await ref.set(<String, dynamic>{
       'id': ref.id,
       'clienteId': uid,
       'uidCliente': uid,
@@ -176,10 +239,10 @@ class ViajeData {
       'taxistaId': '',
       'origen': origen,
       'destino': destino,
-      'latCliente': latCliente,
-      'lonCliente': lonCliente,
-      'latDestino': latDestino,
-      'lonDestino': lonDestino,
+      'latCliente': _round6(latCliente),
+      'lonCliente': _round6(lonCliente),
+      'latDestino': _round6(latDestino),
+      'lonDestino': _round6(lonDestino),
       'precio': _fromCents(partidas['precio_cents']!),
       'metodoPago': metodoPago,
       'gananciaTaxista': _fromCents(partidas['ganancia_cents']!),
@@ -187,7 +250,9 @@ class ViajeData {
       ...partidas,
       'latTaxista': 0.0,
       'lonTaxista': 0.0,
-      'estado': EstadosViaje.pendiente,
+      'driverLat': 0.0,
+      'driverLon': 0.0,
+      'estado': _estadoCanon(EstadosViaje.pendiente),
       'aceptado': false,
       'rechazado': false,
       'completado': false,
@@ -198,14 +263,112 @@ class ViajeData {
     return ref.id;
   }
 
-  // --------------------- Update ---------------------
+  // --- V2 recomendado (programados/ahora con ventanas) ---
+  static Future<String> crearViajeClienteV2({
+    required String origen,
+    required String destino,
+    required double latCliente,
+    required double lonCliente,
+    required double latDestino,
+    required double lonDestino,
+    required double precio,
+    required String metodoPago,
+    String tipoVehiculo = 'Carro',
+    bool idaYVuelta = false,
+    DateTime? fechaHoraLocal,
+  }) async {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) throw Exception('No autenticado');
+
+    final DateTime now = DateTime.now();
+    final DateTime fhLocal = fechaHoraLocal ?? now;
+    final bool esAhoraCalc = fhLocal.isBefore(now.add(const Duration(minutes: 15)));
+
+    const int kAcceptHoursBefore = 2;
+    const int kReadyMinutesBefore = 45;
+    final DateTime acceptAfterDT =
+        esAhoraCalc ? now : fhLocal.subtract(const Duration(hours: kAcceptHoursBefore));
+    final DateTime startWindowDT =
+        esAhoraCalc ? now : fhLocal.subtract(const Duration(minutes: kReadyMinutesBefore));
+
+    final Map<String, int> partidas = _partidasCentsDesdePrecio(precio);
+
+    final String estadoInicial = (metodoPago.toLowerCase().trim() == 'tarjeta')
+        ? EstadosViaje.pendientePago
+        : EstadosViaje.pendiente;
+
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc();
+    await ref.set(<String, dynamic>{
+      'id': ref.id,
+      'clienteId': uid,
+      'uidCliente': uid,
+      'uidTaxista': '',
+      'taxistaId': '',
+      'nombreTaxista': '',
+      'telefono': '',
+      'placa': '',
+      'origen': origen,
+      'destino': destino,
+      'latCliente': _round6(latCliente),
+      'lonCliente': _round6(lonCliente),
+      'latDestino': _round6(latDestino),
+      'lonDestino': _round6(lonDestino),
+      'latOrigen': _round6(latCliente),
+      'lonOrigen': _round6(lonCliente),
+      'fechaHora': Timestamp.fromDate(fhLocal),
+      'estado': _estadoCanon(estadoInicial),
+      'aceptado': false,
+      'rechazado': false,
+      'completado': false,
+      'calificado': false,
+      'activo': false,
+      'esAhora': esAhoraCalc,
+      'programado': !esAhoraCalc,
+      'acceptAfter': Timestamp.fromDate(acceptAfterDT),
+      'startWindowAt': Timestamp.fromDate(startWindowDT),
+      'publishAt': Timestamp.fromDate(acceptAfterDT),
+      'precio': _fromCents(partidas['precio_cents']!),
+      'metodoPago': metodoPago,
+      'tipoVehiculo': tipoVehiculo,
+      'idaYVuelta': idaYVuelta,
+      'gananciaTaxista': _fromCents(partidas['ganancia_cents']!),
+      'comision': _fromCents(partidas['comision_cents']!),
+      ...partidas,
+      'latTaxista': 0.0,
+      'lonTaxista': 0.0,
+      'driverLat': 0.0,
+      'driverLon': 0.0,
+      'reservadoPor': '',
+      'reservadoHasta': null,
+      'ignoradosPor': <String>[],
+      'creadoEn': FieldValue.serverTimestamp(),
+      'fechaCreacion': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
+    });
+
+    try {
+      await _db.collection('usuarios').doc(uid).set(<String, dynamic>{
+        'siguienteViajeId': ref.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
+
+    return ref.id;
+  }
+
+  // ===================================================================
+  //                              UPDATE
+  // ===================================================================
   static Future<void> actualizarViaje(Viaje viaje) async {
     if (viaje.id.isEmpty) {
       throw Exception('actualizarViaje: id vacío');
     }
-    final partidas = _partidasCentsDesdePrecio(viaje.precio);
-    final data = {
+    final Map<String, int> partidas = _partidasCentsDesdePrecio(viaje.precio);
+    final Map<String, dynamic> data = <String, dynamic>{
       ...viaje.toMap(),
+      'estado': _estadoCanon(viaje.estado),
       'precio': _fromCents(partidas['precio_cents']!),
       'gananciaTaxista': _fromCents(partidas['ganancia_cents']!),
       'comision': _fromCents(partidas['comision_cents']!),
@@ -220,20 +383,23 @@ class ViajeData {
     required double lat,
     required double lon,
   }) async {
-    final qs = await _viajes
+    final QuerySnapshot<Map<String, dynamic>> qs = await _viajes
         .where('uidTaxista', isEqualTo: uidTaxista)
         .where('completado', isEqualTo: false)
         .get();
 
     if (qs.docs.isEmpty) return;
 
-    final docs = [...qs.docs];
+    final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+        <QueryDocumentSnapshot<Map<String, dynamic>>>[...qs.docs];
     docs.sort((a, b) => _createdOf(b.data()).compareTo(_createdOf(a.data())));
-    final ref = docs.first.reference;
+    final DocumentReference<Map<String, dynamic>> ref = docs.first.reference;
 
-    await ref.update({
-      'latTaxista': _round2(lat),
-      'lonTaxista': _round2(lon),
+    await ref.update(<String, dynamic>{
+      'latTaxista': _round6(lat),
+      'lonTaxista': _round6(lon),
+      'driverLat': _round6(lat),
+      'driverLon': _round6(lon),
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
@@ -243,26 +409,64 @@ class ViajeData {
     required double lat,
     required double lon,
   }) async {
-    final ref = _viajes.doc(viajeId);
-    await ref.update({
-      'latTaxista': _round2(lat),
-      'lonTaxista': _round2(lon),
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
+    await ref.update(<String, dynamic>{
+      'latTaxista': _round6(lat),
+      'lonTaxista': _round6(lon),
+      'driverLat': _round6(lat),
+      'driverLon': _round6(lon),
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
-  // --------------------- Streams ---------------------
+  // ===================================================================
+  //                              STREAMS
+  // ===================================================================
   static Stream<Viaje?> streamEstadoViajePorCliente(String uidCliente) {
-    return _viajes
+    // Priorizamos un único viaje ACTIVO; evitamos cancelados/completados
+    const prioridad = <String, int>{
+      'en_curso': 100,
+      'a_bordo': 90,
+      'en_camino_pickup': 80,
+      'aceptado': 70,
+      'pendiente': 10,
+      'pendiente_pago': 9,
+    };
+
+    final q = _viajes
         .where('uidCliente', isEqualTo: uidCliente)
-        .where('estado', whereIn: _activosCliente)
-        .orderBy('updatedAt', descending: true)
-        .limit(1)
-        .snapshots()
-        .map((s) => s.docs.isEmpty
-            ? null
-            : Viaje.fromMap(
-                s.docs.first.id, _normalize(s.docs.first.data())));
+        .where('completado', isEqualTo: false);
+
+    return q.snapshots().map((QuerySnapshot<Map<String, dynamic>> snap) {
+      if (snap.docs.isEmpty) return null;
+
+      final todos = snap.docs.map((d) {
+        final data = _normalize(d.data());
+        return Viaje.fromMap(d.id, data);
+      }).where((v) {
+        final e = EstadosViaje.normalizar(v.estado);
+        return EstadosViaje.esActivo(e) && e != EstadosViaje.cancelado;
+      }).toList();
+
+      if (todos.isEmpty) return null;
+
+      todos.sort((a, b) {
+        final pa = prioridad[EstadosViaje.normalizar(a.estado)] ?? 0;
+        final pb = prioridad[EstadosViaje.normalizar(b.estado)] ?? 0;
+        if (pa != pb) return pb.compareTo(pa);
+        return b.fechaHora.compareTo(a.fechaHora);
+      });
+
+      return todos.first;
+    })
+    // Ignora microcambios por tolerancia en coordenadas/estado
+    .distinct((prev, next) {
+      if (prev == null && next == null) return true;
+      if (prev == null || next == null) return false;
+      return _viajeIgualAprox(prev, next);
+    })
+    // Suaviza frecuencia de emisiones para evitar rebuilds/parpadeos
+    .transform(_throttleDistinct(const Duration(milliseconds: 350)));
   }
 
   static Stream<Viaje?> streamViajeEnCursoPorTaxista(String uidTaxista) {
@@ -272,23 +476,57 @@ class ViajeData {
         .orderBy('updatedAt', descending: true)
         .limit(1)
         .snapshots()
-        .map((s) => s.docs.isEmpty
-            ? null
-            : Viaje.fromMap(
-                s.docs.first.id, _normalize(s.docs.first.data())));
+        .map((QuerySnapshot<Map<String, dynamic>> s) {
+      if (s.docs.isEmpty) return null;
+      final QueryDocumentSnapshot<Map<String, dynamic>> d = s.docs.first;
+      return Viaje.fromMap(d.id, _normalize(d.data()));
+    });
+  }
+
+  // “Seguro” para navegar aunque el estado cambie rápido
+  static Stream<Viaje?> streamViajeActivoPorTaxistaSeguro(String uidTaxista) {
+    return _viajes
+        .where('uidTaxista', isEqualTo: uidTaxista)
+        .where('completado', isEqualTo: false)
+        .snapshots()
+        .map((QuerySnapshot<Map<String, dynamic>> snap) {
+          if (snap.docs.isEmpty) return null;
+
+          final List<Map<String, dynamic>> docs = snap.docs.map((d) {
+            final Map<String, dynamic> data = _normalize(d.data());
+            final DateTime updatedAt = (d.data()['updatedAt'] is Timestamp)
+                ? (d.data()['updatedAt'] as Timestamp).toDate()
+                : _createdOf(d.data());
+            return <String, dynamic>{'id': d.id, 'data': data, 'updatedAt': updatedAt};
+          }).toList();
+
+          docs.sort((a, b) => (b['updatedAt'] as DateTime).compareTo(a['updatedAt'] as DateTime));
+
+          for (final Map<String, dynamic> it in docs) {
+            final String estado =
+                EstadosViaje.normalizar((it['data'] as Map<String, dynamic>)['estado']?.toString() ?? '');
+            if (EstadosViaje.esActivo(estado)) {
+              return Viaje.fromMap(
+                it['id'] as String,
+                it['data'] as Map<String, dynamic>,
+              );
+            }
+          }
+
+          final Map<String, dynamic> top = docs.first;
+          return Viaje.fromMap(top['id'] as String, top['data'] as Map<String, dynamic>);
+        });
   }
 
   static Stream<List<Viaje>> streamViajesPorCliente(String uidCliente) {
-    return _viajes
-        .where('clienteId', isEqualTo: uidCliente)
-        .snapshots()
-        .map((s) {
-      final list = s.docs
-          .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
-          .toList();
-      list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
-      return list;
-    });
+    return _viajes.where('clienteId', isEqualTo: uidCliente).snapshots().map(
+      (QuerySnapshot<Map<String, dynamic>> s) {
+        final List<Viaje> list =
+            s.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+        list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
+        return list;
+      },
+    );
   }
 
   static Stream<List<Viaje>> streamHistorialCliente(String clienteId) {
@@ -296,108 +534,104 @@ class ViajeData {
         .where('clienteId', isEqualTo: clienteId)
         .where('completado', isEqualTo: true)
         .snapshots()
-        .map((s) {
-      final list = s.docs
-          .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
-          .toList();
+        .map((QuerySnapshot<Map<String, dynamic>> s) {
+      final List<Viaje> list =
+          s.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
       list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
       return list;
     });
   }
 
-  static Stream<List<Viaje>> streamHistorialClienteTodosEstados(
-    String clienteId,
-  ) {
-    return _viajes
-        .where('clienteId', isEqualTo: clienteId)
-        .snapshots()
-        .map((s) {
-      final list = s.docs
-          .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
-          .toList();
-      list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
-      return list;
-    });
+  static Stream<List<Viaje>> streamHistorialClienteTodosEstados(String clienteId) {
+    return _viajes.where('clienteId', isEqualTo: clienteId).snapshots().map(
+      (QuerySnapshot<Map<String, dynamic>> s) {
+        final List<Viaje> list =
+            s.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+        list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
+        return list;
+      },
+    );
   }
 
-  // --------------------- Consultas ---------------------
+  // ===================================================================
+  //                              QUERIES
+  // ===================================================================
   static Future<Viaje?> obtenerViajeEnCurso(String emailTaxista) async {
-    final snapshot = await _viajes
+    final QuerySnapshot<Map<String, dynamic>> snapshot = await _viajes
         .where('nombreTaxista', isEqualTo: emailTaxista)
         .where('aceptado', isEqualTo: true)
         .where('completado', isEqualTo: false)
         .get();
 
     if (snapshot.docs.isEmpty) return null;
-    final doc = snapshot.docs.first;
+    final QueryDocumentSnapshot<Map<String, dynamic>> doc = snapshot.docs.first;
     return Viaje.fromMap(doc.id, _normalize(doc.data()));
   }
 
   static Future<List<Viaje>> obtenerViajesPorCliente(String clienteId) async {
-    final snapshot =
+    final QuerySnapshot<Map<String, dynamic>> snapshot =
         await _viajes.where('clienteId', isEqualTo: clienteId).get();
-    final list = snapshot.docs
-        .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
-        .toList();
+    final List<Viaje> list =
+        snapshot.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
     return list;
   }
 
   static Future<List<Viaje>> obtenerHistorialCliente(String clienteId) async {
-    final snapshot = await _viajes
+    final QuerySnapshot<Map<String, dynamic>> snapshot = await _viajes
         .where('clienteId', isEqualTo: clienteId)
         .where('completado', isEqualTo: true)
         .get();
-    final list = snapshot.docs
-        .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
-        .toList();
+    final List<Viaje> list =
+        snapshot.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
     return list;
   }
 
   static Future<List<Viaje>> obtenerHistorialTaxista(String emailTaxista) async {
-    final snapshot = await _viajes
+    final QuerySnapshot<Map<String, dynamic>> snapshot = await _viajes
         .where('nombreTaxista', isEqualTo: emailTaxista)
         .where('completado', isEqualTo: true)
         .get();
-    final list = snapshot.docs
-        .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
-        .toList();
+    final List<Viaje> list =
+        snapshot.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
     return list;
   }
 
-  // --------------------- Estados / completar ---------------------
+  // ===================================================================
+  //                         ESTADOS / COMPLETAR
+  // ===================================================================
   static Future<void> marcarViajeComoCompletado(Viaje viaje) async {
     await completarViaje(viaje.id);
   }
 
   static Future<void> completarViaje(String viajeId) async {
-    final ref = _viajes.doc(viajeId);
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
 
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe.');
-      final data = snap.data() as Map<String, dynamic>;
+      final Map<String, dynamic> data = snap.data()!;
 
       final bool yaCompletado =
-          (data['completado'] ?? false) == true ||
-              (data['estado']?.toString() == EstadosViaje.completado);
+          (data['completado'] == true) ||
+          (EstadosViaje.normalizar(data['estado']?.toString() ?? '') == EstadosViaje.completado);
       if (yaCompletado) return;
 
-      final double precioBase = _asDouble(
-        data['precioFinal'] ?? data['precio'],
-      );
+      final double precioBase = _asDouble(data['precioFinal'] ?? data['precio']);
 
-      final int precioCents =
-          (data['precio_cents'] as int?) ?? _toCents(precioBase);
+      final int precioCents = (data['precio_cents'] as int?) ?? _toCents(precioBase);
       final int comisionCents =
           (data['comision_cents'] as int?) ?? _comision20Cents(precioCents);
       final int gananciaCents =
           (data['ganancia_cents'] as int?) ?? (precioCents - comisionCents);
 
-      tx.update(ref, {
-        'estado': EstadosViaje.completado,
+      // limpiar viajeActivoId del taxista al completar
+      final String uidTaxista = (data['uidTaxista'] ?? '').toString();
+
+      tx.update(ref, <String, dynamic>{
+        'estado': _estadoCanon(EstadosViaje.completado),
         'completado': true,
         'precioFinal': _fromCents(precioCents),
         'comision': _fromCents(comisionCents),
@@ -407,102 +641,222 @@ class ViajeData {
         'ganancia_cents': gananciaCents,
         'finalizadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
+
+      if (uidTaxista.isNotEmpty) {
+        final refTax = _db.collection('usuarios').doc(uidTaxista);
+        // Las rules exigen poner '' (no delete) y solo esas keys.
+        tx.set(refTax, {
+          'viajeActivoId': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
     });
 
-    // Registrar movimiento de billetera (80/20)
     try {
-      final d = await _viajes.doc(viajeId).get();
+      final DocumentSnapshot<Map<String, dynamic>> d = await _viajes.doc(viajeId).get();
       if (d.exists) {
-        final v = Viaje.fromMap(d.id, _normalize(d.data()!));
+        final Viaje v = Viaje.fromMap(d.id, _normalize(d.data()!));
         await PagoData.registrarMovimientoPorViaje(v);
       }
     } catch (_) {}
   }
 
   static Future<void> cancelarViaje(Viaje viaje) async {
-    await _viajes.doc(viaje.id).update({
+    await _viajes.doc(viaje.id).update(<String, dynamic>{
       'aceptado': false,
       'rechazado': true,
-      'estado': EstadosViaje.cancelado,
+      'estado': _estadoCanon(EstadosViaje.cancelado),
       'uidTaxista': '',
       'taxistaId': '',
       'updatedAt': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
     });
+
+    // Limpia viajeActivoId si existía taxista (solo si las reglas lo permiten)
+    if (viaje.uidTaxista.isNotEmpty) {
+      try {
+        await _db.collection('usuarios').doc(viaje.uidTaxista).set({
+          'viajeActivoId': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    }
   }
 
-  // --------------------- Cancelación por cliente (PRO) ---------------------
+  // ---------------- Cancelación por cliente (reglas estrictas) ----------------
   static Future<void> cancelarViajePorCliente({
     required String viajeId,
     required String uidCliente,
     String? motivo,
   }) async {
-    final ref = _viajes.doc(viajeId);
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
 
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe.');
-      final Map<String, dynamic> d = snap.data() as Map<String, dynamic>;
+      final Map<String, dynamic> d = snap.data()!;
 
-      // Autorización
-      final String clienteId = (d['clienteId'] ?? '').toString();
-      if (clienteId != uidCliente) {
+      final String ownerA = (d['clienteId'] ?? '').toString();
+      final String ownerB = (d['uidCliente'] ?? '').toString();
+      if (ownerA != uidCliente && ownerB != uidCliente) {
         throw Exception('No puedes cancelar este viaje.');
       }
 
-      // Estado actual
-      final String estado = (d['estado'] ?? '').toString();
+      final String estado = EstadosViaje.normalizar((d['estado'] ?? '').toString());
       final bool completado = (d['completado'] ?? false) == true;
 
       if (completado || estado == EstadosViaje.completado) {
         throw Exception('El viaje ya fue completado.');
       }
       if (estado == EstadosViaje.cancelado) {
-        return; // idempotente
+        return;
       }
 
-      // Reglas (notar que las reglas de seguridad actuales NO permiten guardar fees aquí)
-      final DateTime fh = _asDate(d['fechaHora']);
-      final bool esProgramadoFuturo =
-          fh.isAfter(DateTime.now().add(const Duration(minutes: 15)));
-
+      // Reglas de negocio adicionales (no cambian llaves)
       final bool protegido = _esMotivoProtegido(motivo);
-      // int feeCents = 0; // si quieres persistir fee, añade las claves a las reglas
-
-      if (estado == EstadosViaje.pendiente) {
-        // feeCents = 0;
-      } else if (estado == EstadosViaje.aceptado) {
-        final int mins = _minsDesdeTs(d['aceptadoEn']);
-        final bool dentroDeGracia = mins <= 2;
-        if (esProgramadoFuturo || protegido || dentroDeGracia) {
-          // feeCents = 0;
-        } else {
-          // feeCents = 50 * 100;
-        }
-      } else if (estado == EstadosViaje.aBordo) {
-        if (!protegido) {
-          throw Exception(
-              'No puedes cancelar en este estado. Si hay problema de seguridad o el vehículo no coincide, selecciona ese motivo.');
-        }
-        // feeCents = 0;
-      } else if (estado == EstadosViaje.enCurso) {
+      if (estado == EstadosViaje.aBordo && !protegido) {
         throw Exception(
-            'El viaje ya inició. Solicita una finalización anticipada con el conductor.');
+          'No puedes cancelar en este estado. Si hay un problema de seguridad, indica ese motivo.',
+        );
+      }
+      if (estado == EstadosViaje.enCurso) {
+        throw Exception('El viaje ya inició.');
       }
 
-      tx.update(ref, {
-        'estado': EstadosViaje.cancelado,
+      // ⬇️ SOLO llaves permitidas por tus rules (changedOnly([...]))
+      tx.update(ref, <String, dynamic>{
+        'estado': _estadoCanon(EstadosViaje.cancelado),
         'aceptado': false,
         'rechazado': true,
+        'activo': false,
         'uidTaxista': '',
         'taxistaId': '',
+        'nombreTaxista': '',
+        'telefono': '',
+        'placa': '',
         if (motivo != null && motivo.isNotEmpty) 'motivoCancelacion': motivo,
         'canceladoPor': 'cliente',
-        'canceladoEn': FieldValue.serverTimestamp(),
+        'canceladoClienteEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
-      // Para guardar fee/cancelacionProtegida añade esas claves a changedOnly[] en tus reglas.
+
+      // ⚠️ NO tocar /usuarios/{uidTaxista} aquí: cliente no es owner -> rules lo bloquearían.
     });
+  }
+
+  // ===== NUEVO: Cancelación "siempre" por cliente con limpieza del vínculo =====
+  static Future<void> cancelarCualquierEstadoPorClienteTx({
+    required String viajeId,
+    required String uidCliente,
+    String? motivo,
+  }) async {
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
+    String uidTaxistaParaLimpiar = '';
+
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
+      if (!snap.exists) throw Exception('El viaje no existe.');
+      final Map<String, dynamic> d = snap.data()!;
+
+      final String ownerA = (d['clienteId'] ?? '').toString();
+      final String ownerB = (d['uidCliente'] ?? '').toString();
+      if (ownerA != uidCliente && ownerB != uidCliente) {
+        throw Exception('No puedes cancelar este viaje.');
+      }
+
+      // Si ya está completado, no hacemos nada
+      final bool completado = (d['completado'] ?? false) == true;
+      if (completado) return;
+
+      uidTaxistaParaLimpiar = (d['uidTaxista'] ?? '').toString();
+
+      tx.update(ref, <String, dynamic>{
+        'estado': _estadoCanon(EstadosViaje.cancelado),
+        'aceptado': false,
+        'rechazado': true,
+        'activo': false,
+        'uidTaxista': '',
+        'taxistaId': '',
+        'nombreTaxista': '',
+        'telefono': '',
+        'placa': '',
+        if (motivo != null && motivo.isNotEmpty) 'motivoCancelacion': motivo,
+        'canceladoPor': 'cliente',
+        'canceladoClienteEn': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      });
+    });
+
+    // Limpieza del viajeActivoId del taxista (si las rules lo permiten)
+    if (uidTaxistaParaLimpiar.isNotEmpty) {
+      try {
+        await _db.collection('usuarios').doc(uidTaxistaParaLimpiar).set(
+          <String, dynamic>{
+            'viajeActivoId': '',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      } catch (_) {
+        // Si no permite, al menos el viaje quedó cancelado.
+      }
+    }
+  }
+
+  // ===== NUEVO: Cancelar el viaje ACTIVO más reciente de un cliente =====
+  static Future<bool> cancelarViajeActivoDeCliente({
+    required String uidCliente,
+    String? motivo,
+  }) async {
+    final QuerySnapshot<Map<String, dynamic>> qs = await _viajes
+        .where('uidCliente', isEqualTo: uidCliente)
+        .where('completado', isEqualTo: false)
+        .get();
+
+    if (qs.docs.isEmpty) return false;
+
+    final docs = qs.docs.toList()
+      ..sort((a, b) {
+        DateTime ua;
+        final da = a.data();
+        if (da['updatedAt'] is Timestamp) {
+          ua = (da['updatedAt'] as Timestamp).toDate();
+        } else {
+          ua = _createdOf(da);
+        }
+
+        DateTime ub;
+        final db = b.data();
+        if (db['updatedAt'] is Timestamp) {
+          ub = (db['updatedAt'] as Timestamp).toDate();
+        } else {
+          ub = _createdOf(db);
+        }
+        return ub.compareTo(ua);
+      });
+
+    for (final d in docs) {
+      final data = d.data();
+      final estado = EstadosViaje.normalizar((data['estado'] ?? '').toString());
+      final bool esActivo = EstadosViaje.esActivo(estado) && estado != EstadosViaje.cancelado;
+      if (esActivo) {
+        await cancelarCualquierEstadoPorClienteTx(
+          viajeId: d.id,
+          uidCliente: uidCliente,
+          motivo: motivo,
+        );
+        return true;
+      }
+    }
+
+    return false;
   }
 
   static Future<void> reprogramarViajePorCliente({
@@ -511,17 +865,17 @@ class ViajeData {
     required DateTime nuevaFechaHora,
     String? motivo,
   }) async {
-    final ref = _viajes.doc(viajeId);
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
 
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe.');
-      final Map<String, dynamic> data = snap.data() as Map<String, dynamic>;
+      final Map<String, dynamic> data = snap.data()!;
       if ((data['clienteId'] ?? '') != uidCliente) {
         throw Exception('No puedes reprogramar este viaje.');
       }
 
-      final String estado = (data['estado'] ?? '').toString();
+      final String estado = EstadosViaje.normalizar((data['estado'] ?? '').toString());
       final bool completado = (data['completado'] ?? false) == true;
 
       if (completado || estado == EstadosViaje.completado) {
@@ -531,8 +885,8 @@ class ViajeData {
         throw Exception('El viaje en curso no se puede reprogramar.');
       }
 
-      tx.update(ref, {
-        'estado': EstadosViaje.pendiente,
+      tx.update(ref, <String, dynamic>{
+        'estado': _estadoCanon(EstadosViaje.pendiente),
         'aceptado': false,
         'rechazado': false,
         'uidTaxista': '',
@@ -541,30 +895,36 @@ class ViajeData {
         if (motivo != null && motivo.isNotEmpty) 'motivoReprogramacion': motivo,
         'reprogramadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
     });
   }
 
-  // --------------------- Aceptación / flujo del taxista ---------------------
+  // ===================================================================
+  //                      ACEPTACIÓN / FLUJO TAXISTA
+  // ===================================================================
   static Future<void> aceptarViajeTransaccional({
     required String viajeId,
     required String uidTaxista,
     required String nombreTaxista,
   }) async {
-    final viajesRef = _db.collection('viajes').doc(viajeId);
-    final userRef = _db.collection('usuarios').doc(uidTaxista);
+    final DocumentReference<Map<String, dynamic>> viajesRef =
+        _db.collection('viajes').doc(viajeId);
+    final DocumentReference<Map<String, dynamic>> userRef =
+        _db.collection('usuarios').doc(uidTaxista);
 
-    await _db.runTransaction((tx) async {
-      final viajeSnap = await tx.get(viajesRef);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> viajeSnap = await tx.get(viajesRef);
       if (!viajeSnap.exists) throw Exception('El viaje no existe.');
-      final d = viajeSnap.data()!;
-      final estado = (d['estado'] ?? '').toString();
-      final aceptado = (d['aceptado'] ?? false) == true;
-      final rechazado = (d['rechazado'] ?? false) == true;
-      final completado = (d['completado'] ?? false) == true;
-      final yaAsignado =
+      final Map<String, dynamic> d = viajeSnap.data()!;
+
+      final String estado = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final bool aceptado = (d['aceptado'] ?? false) == true;
+      final bool rechazado = (d['rechazado'] ?? false) == true;
+      final bool completado = (d['completado'] ?? false) == true;
+      final bool yaAsignado =
           ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
-              ((d['taxistaId'] ?? '') as String).isNotEmpty;
+          ((d['taxistaId'] ?? '') as String).isNotEmpty;
 
       if (estado != EstadosViaje.pendiente ||
           aceptado ||
@@ -574,31 +934,33 @@ class ViajeData {
         throw Exception('Este viaje ya no está disponible.');
       }
 
-      final userSnap = await tx.get(userRef);
+      final DocumentSnapshot<Map<String, dynamic>> userSnap = await tx.get(userRef);
       if (!userSnap.exists) throw Exception('Taxista no encontrado.');
-      final u = userSnap.data()!;
-      final disponible = (u['disponible'] ?? false) == true;
+      final Map<String, dynamic> u = userSnap.data()!;
+      final bool disponible = (u['disponible'] ?? false) == true;
       if (!disponible) throw Exception('No disponible para aceptar viajes.');
-      final docsEstado =
-          (u['docsEstado'] ?? '').toString().toLowerCase().trim();
-      final documentosCompletos = (u['documentosCompletos'] ?? false) == true;
-      final aprobado = documentosCompletos ||
-          docsEstado == 'aprobado' ||
-          docsEstado == 'verificado' ||
-          docsEstado == 'ok';
+      final String docsEstado = (u['docsEstado'] ?? '').toString().toLowerCase().trim();
+      final bool documentosCompletos = (u['documentosCompletos'] ?? false) == true;
+      final bool aprobado =
+          documentosCompletos || docsEstado == 'aprobado' || docsEstado == 'verificado' || docsEstado == 'ok';
       if (!aprobado) throw Exception('Documentos pendientes.');
 
-      // ⚠ IMPORTANTE: no escribir 'aceptadoEn' aquí porque tus reglas actuales no lo permiten.
-      tx.update(viajesRef, {
+      tx.update(viajesRef, <String, dynamic>{
         'taxistaId': uidTaxista,
         'uidTaxista': uidTaxista,
         'nombreTaxista': nombreTaxista,
         'aceptado': true,
         'rechazado': false,
-        'estado': EstadosViaje.aceptado,
+        'estado': _estadoCanon(EstadosViaje.aceptado),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
+
+      tx.set(userRef, <String, dynamic>{
+        'viajeActivoId': viajeId,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     });
   }
 
@@ -606,16 +968,16 @@ class ViajeData {
     required String viajeId,
     required String uidTaxista,
   }) async {
-    final ref = _viajes.doc(viajeId);
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe.');
-      final Map<String, dynamic> d = snap.data() as Map<String, dynamic>;
+      final Map<String, dynamic> d = snap.data()!;
       if ((d['uidTaxista'] ?? '') != uidTaxista) {
         throw Exception('No autorizado');
       }
 
-      final String estadoActual = (d['estado'] ?? '').toString();
+      final String estadoActual = EstadosViaje.normalizar((d['estado'] ?? '').toString());
       final bool completado = (d['completado'] ?? false) == true;
       if (completado ||
           estadoActual == EstadosViaje.completado ||
@@ -623,10 +985,11 @@ class ViajeData {
         throw Exception('Estado inválido');
       }
 
-      tx.update(ref, {
-        'estado': EstadosViaje.aBordo,
+      tx.update(ref, <String, dynamic>{
+        'estado': _estadoCanon(EstadosViaje.aBordo),
         'pickupConfirmadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
     });
   }
@@ -635,24 +998,25 @@ class ViajeData {
     required String viajeId,
     required String uidTaxista,
   }) async {
-    final ref = _viajes.doc(viajeId);
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe.');
-      final Map<String, dynamic> d = snap.data() as Map<String, dynamic>;
+      final Map<String, dynamic> d = snap.data()!;
       if ((d['uidTaxista'] ?? '') != uidTaxista) {
         throw Exception('No autorizado');
       }
 
-      final String estadoActual = (d['estado'] ?? '').toString();
+      final String estadoActual = EstadosViaje.normalizar((d['estado'] ?? '').toString());
       if (estadoActual != EstadosViaje.aBordo) {
         throw Exception('Primero marca "Cliente a bordo".');
       }
 
-      tx.update(ref, {
-        'estado': EstadosViaje.enCurso,
+      tx.update(ref, <String, dynamic>{
+        'estado': _estadoCanon(EstadosViaje.enCurso),
         'inicioEnRutaEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
     });
   }
@@ -661,23 +1025,24 @@ class ViajeData {
     required String viajeId,
     required String uidTaxista,
   }) async {
-    final ref = _viajes.doc(viajeId);
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
+    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe');
-      final d = snap.data()!;
+      final Map<String, dynamic> d = snap.data()!;
       if ((d['uidTaxista'] ?? '') != uidTaxista) {
         throw Exception('No autorizado');
       }
 
-      final estadoActual = (d['estado'] ?? '').toString();
-      final permitido = (estadoActual == EstadosViaje.aceptado);
+      final String estadoActual = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final bool permitido =
+          (estadoActual == EstadosViaje.aceptado || estadoActual == EstadosViaje.enCaminoPickup);
       if (!permitido) {
         throw Exception('No se puede cancelar en este estado.');
       }
 
       DateTime fh;
-      final ts = d['fechaHora'];
+      final dynamic ts = d['fechaHora'];
       if (ts is Timestamp) {
         fh = ts.toDate();
       } else if (ts is DateTime) {
@@ -687,11 +1052,10 @@ class ViajeData {
       } else {
         fh = DateTime.now();
       }
-      final esAhora =
-          !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+      final bool esAhora = !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
 
-      tx.update(ref, {
-        'estado': EstadosViaje.pendiente,
+      tx.update(ref, <String, dynamic>{
+        'estado': _estadoCanon(EstadosViaje.pendiente),
         'aceptado': false,
         'rechazado': false,
         'uidTaxista': '',
@@ -704,62 +1068,73 @@ class ViajeData {
         'canceladoTaxistaEn': FieldValue.serverTimestamp(),
         'esAhora': esAhora,
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
+
+      final refTax = _db.collection('usuarios').doc(uidTaxista);
+      tx.set(refTax, {
+        'viajeActivoId': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     });
   }
 
-  // --------------------- Ganancias ---------------------
+  // ===================================================================
+  //                            GANANCIAS
+  // ===================================================================
   static Future<Map<String, dynamic>> calcularGananciasTaxista(
-    String emailTaxista,
-  ) async {
-    final snapshot = await _viajes
+      String emailTaxista) async {
+    final QuerySnapshot<Map<String, dynamic>> snapshot = await _viajes
         .where('nombreTaxista', isEqualTo: emailTaxista)
         .where('completado', isEqualTo: true)
         .get();
 
     double gananciaTotal = 0.0;
-    for (final doc in snapshot.docs) {
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in snapshot.docs) {
       gananciaTotal += _asDouble(doc.data()['gananciaTaxista']);
     }
 
-    return {
+    return <String, dynamic>{
       'ganancia': _round2(gananciaTotal),
       'viajesCompletados': snapshot.docs.length,
     };
   }
 
   static Future<Map<String, dynamic>> calcularGananciasTaxistaPorUid(
-    String uidTaxista,
-  ) async {
-    final snapshot = await _viajes
+      String uidTaxista) async {
+    final QuerySnapshot<Map<String, dynamic>> snapshot = await _viajes
         .where('uidTaxista', isEqualTo: uidTaxista)
         .where('completado', isEqualTo: true)
         .get();
 
     double gananciaTotal = 0.0;
-    for (final doc in snapshot.docs) {
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in snapshot.docs) {
       gananciaTotal += _asDouble(doc.data()['gananciaTaxista']);
     }
 
-    return {
+    return <String, dynamic>{
       'ganancia': _round2(gananciaTotal),
       'viajesCompletados': snapshot.docs.length,
     };
   }
 
-  // --------------------- Calificación ---------------------
+  // ===================================================================
+  //                           CALIFICACIÓN
+  // ===================================================================
   static Future<void> marcarComoCalificado(
     Viaje viaje,
     num calificacion,
     String comentario,
   ) async {
     final double cal = calificacion.toDouble();
-    await _viajes.doc(viaje.id).update({
+    await _viajes.doc(viaje.id).update(<String, dynamic>{
       'calificado': true,
       'calificacion': cal,
       'comentario': comentario,
       'calificadoEn': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
     });
   }
 
@@ -769,12 +1144,12 @@ class ViajeData {
     required num calificacion,
     String? comentario,
   }) async {
-    final refViaje = _viajes.doc(viajeId);
+    final DocumentReference<Map<String, dynamic>> refViaje = _viajes.doc(viajeId);
 
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(refViaje);
+    await _db.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(refViaje);
       if (!snap.exists) throw Exception('El viaje no existe.');
-      final Map<String, dynamic> data = snap.data() as Map<String, dynamic>;
+      final Map<String, dynamic> data = snap.data()!;
 
       final String clienteId = (data['clienteId'] ?? '').toString();
       if (clienteId != uidCliente) {
@@ -791,22 +1166,27 @@ class ViajeData {
 
       final double cal = calificacion.toDouble();
 
-      tx.update(refViaje, {
+      tx.update(refViaje, <String, dynamic>{
         'calificado': true,
         'calificacion': cal,
-        if (comentario != null && comentario.isNotEmpty)
-          'comentario': comentario,
+        if (comentario != null && comentario.isNotEmpty) 'comentario': comentario,
         'calificadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
 
       final String uidTaxista = (data['uidTaxista'] ?? '').toString();
       if (uidTaxista.isNotEmpty) {
-        final refTaxista = _db.collection('usuarios').doc(uidTaxista);
-        tx.set(refTaxista, {
-          'ratingSuma': FieldValue.increment(cal),
-          'ratingConteo': FieldValue.increment(1),
-        }, SetOptions(merge: true));
+        final DocumentReference<Map<String, dynamic>> refTaxista =
+            _db.collection('usuarios').doc(uidTaxista);
+        tx.set(
+          refTaxista,
+          <String, dynamic>{
+            'ratingSuma': FieldValue.increment(cal),
+            'ratingConteo': FieldValue.increment(1),
+          },
+          SetOptions(merge: true),
+        );
       }
     });
   }
@@ -817,12 +1197,10 @@ class ViajeData {
 
     final Map<String, dynamic> data = u.data() ?? <String, dynamic>{};
 
-    final double suma = (data['ratingSuma'] is num)
-        ? (data['ratingSuma'] as num).toDouble()
-        : 0.0;
-    final double conteo = (data['ratingConteo'] is num)
-        ? (data['ratingConteo'] as num).toDouble()
-        : 0.0;
+    final double suma =
+        (data['ratingSuma'] is num) ? (data['ratingSuma'] as num).toDouble() : 0.0;
+    final double conteo =
+        (data['ratingConteo'] is num) ? (data['ratingConteo'] as num).toDouble() : 0.0;
 
     if (conteo <= 0) return 0.0;
     return _round2(suma / conteo);

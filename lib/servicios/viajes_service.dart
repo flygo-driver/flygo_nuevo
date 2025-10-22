@@ -1,9 +1,10 @@
+// lib/servicios/viajes_service.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 /// Servicio centralizado para mutar el estado de un Viaje
-/// compatible con tus reglas de seguridad actuales.
+/// (compatible con tus reglas).
 class ViajesService {
   final _db = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
@@ -27,6 +28,8 @@ class ViajesService {
         if (nombreTaxista != null && nombreTaxista.isNotEmpty)
           'nombreTaxista': nombreTaxista,
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+        'activo': true,
       });
     } on FirebaseException catch (e) {
       debugPrint('Firestore error(confirmarViaje): ${e.code} - ${e.message}');
@@ -41,6 +44,8 @@ class ViajesService {
         'estado': 'a_bordo',
         'pickupConfirmadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+        'activo': true,
       });
     } on FirebaseException catch (e) {
       debugPrint('Firestore error(marcarABordo): ${e.code} - ${e.message}');
@@ -55,6 +60,8 @@ class ViajesService {
         'estado': 'en_curso',
         'inicioEnRutaEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+        'activo': true,
       });
     } on FirebaseException catch (e) {
       debugPrint('Firestore error(marcarEnCurso): ${e.code} - ${e.message}');
@@ -75,6 +82,8 @@ class ViajesService {
       'finalizadoEn': FieldValue.serverTimestamp(),
       'completadoEn': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
+      'activo': false,
     };
     if (precioFinal != null) data['precioFinal'] = precioFinal;
     if (comision != null) data['comision'] = comision;
@@ -99,6 +108,7 @@ class ViajesService {
         'latTaxista': lat,
         'lonTaxista': lon,
         'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
       });
     } on FirebaseException catch (e) {
       debugPrint(

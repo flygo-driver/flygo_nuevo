@@ -1,4 +1,3 @@
-// lib/pantallas/common/configuracion_perfil.dart
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,7 +18,7 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
   final _picker = ImagePicker();
   final _nombreCtrl = TextEditingController();
 
-  // ✅ Forzamos el bucket correcto
+  // ✅ Forzamos el bucket correcto (ajústalo si tu bucket es distinto)
   final FirebaseStorage _storage =
       FirebaseStorage.instanceFor(bucket: 'gs://flygo-rd.firebasestorage.app');
 
@@ -144,7 +143,6 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
         SnackBar(content: Text('❌ Error: $e')),
       );
     } finally {
-      // ❌ sin returns en finally
       if (mounted) {
         setState(() => _subiendo = false);
       }

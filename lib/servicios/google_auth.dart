@@ -1,29 +1,45 @@
+// lib/servicios/google_auth.dart
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class GoogleAuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  /// Login ESTRICTO con Google:
-  /// - Si el doc NO existe: lo crea con el rol de la pantalla (cliente/taxista)
-  /// - Si existe SIN 'rol': fija el rol de la pantalla
-  /// - Si existe CON otro rol ≠ entrada -> signOut() y lanza FirebaseAuthException('role-mismatch')
-  /// - Si coincide el rol -> OK
-  static Future<void> signInWithGoogleStrict({
+  /// Login estricto con Google:
+  /// - Crea /usuarios/{uid} con el rol indicado si no existe.
+  /// - Si existe y no tiene 'rol', lo fija al rol indicado.
+  /// - Si existe con otro rol, cierra sesión y lanza 'role-mismatch'.
+  static Future<UserCredential> signInWithGoogleStrict({
     required String entradaRol, // 'cliente' | 'taxista'
   }) async {
-    final rolEntrada = (entradaRol == 'taxista') ? 'taxista' : 'cliente';
+    final rolEntrada =
+        (entradaRol.trim().toLowerCase() == 'taxista') ? 'taxista' : 'cliente';
 
-    // 1) Autenticación Google
-    final provider = GoogleAuthProvider();
     UserCredential cred;
+
     if (kIsWeb) {
-      provider.setCustomParameters({'prompt': 'select_account'});
+      final provider = GoogleAuthProvider()
+        ..addScope('email')
+        ..addScope('profile');
       cred = await _auth.signInWithPopup(provider);
     } else {
-      cred = await _auth.signInWithProvider(provider);
+      final googleSignIn = GoogleSignIn(scopes: const ['email']);
+      final GoogleSignInAccount? gUser = await googleSignIn.signIn();
+      if (gUser == null) {
+        throw FirebaseAuthException(
+          code: 'aborted-by-user',
+          message: 'Inicio de sesión cancelado.',
+        );
+      }
+      final gAuth = await gUser.authentication;
+      final oauth = GoogleAuthProvider.credential(
+        accessToken: gAuth.accessToken,
+        idToken: gAuth.idToken,
+      );
+      cred = await _auth.signInWithCredential(oauth);
     }
 
     final user = cred.user;
@@ -34,55 +50,68 @@ class GoogleAuthService {
       );
     }
 
-    // 2) Documento /usuarios/{uid}
-    final ref = _db.collection('usuarios').doc(user.uid);
+    final uid = user.uid;
+    final ref = _db.collection('usuarios').doc(uid);
     final snap = await ref.get();
+    final nowTs = FieldValue.serverTimestamp();
 
-    final baseMerge = <String, dynamic>{
-      'uid': user.uid,
-      'email': user.email ?? '',
-      'nombre': user.displayName ?? '',
-      'telefono': user.phoneNumber ?? '',
-      'fotoUrl': user.photoURL ?? '',
-      'proveedor': 'google',
-      'actualizadoEn': FieldValue.serverTimestamp(),
-    };
-
-    // 3) Crear si no existe -> con rol de la pantalla
     if (!snap.exists) {
       await ref.set({
-        ...baseMerge,
+        'uid': uid,
+        'email': user.email ?? '',
+        'nombre': user.displayName ?? '',
+        'telefono': user.phoneNumber ?? '',
+        'fotoUrl': user.photoURL ?? '',
+        'proveedor': 'google',
         'rol': rolEntrada,
-        'fechaRegistro': FieldValue.serverTimestamp(),
-        'phoneVerified': false,
+        'fechaRegistro': nowTs,
+        'actualizadoEn': nowTs,
       });
-      return;
+      return cred;
     }
 
-    // 4) Existe: validar rol
     final data = snap.data() ?? <String, dynamic>{};
     final rolActual = (data['rol'] ?? '').toString().trim().toLowerCase();
 
     if (rolActual.isEmpty) {
-      await ref.set({
-        ...baseMerge,
-        'rol': rolEntrada,
-      }, SetOptions(merge: true));
-      return;
-    }
-
-    if (rolActual != rolEntrada) {
-      await _auth.signOut();
+      await ref.set(
+        {
+          'rol': rolEntrada,
+          'updatedAt': nowTs,
+          'actualizadoEn': nowTs,
+        },
+        SetOptions(merge: true),
+      );
+    } else if (rolActual != rolEntrada) {
+      await signOut();
       throw FirebaseAuthException(
         code: 'role-mismatch',
         message: 'Esta cuenta está registrada como "$rolActual". Entra por "$rolActual".',
       );
     }
 
-    await ref.set(baseMerge, SetOptions(merge: true));
+    await ref.set(
+      {
+        'nombre': user.displayName ?? (data['nombre'] ?? ''),
+        'fotoUrl': user.photoURL ?? (data['fotoUrl'] ?? ''),
+        'updatedAt': nowTs,
+        'actualizadoEn': nowTs,
+      },
+      SetOptions(merge: true),
+    );
+
+    return cred;
   }
 
+  /// Cierre de sesión “limpio”: sale de Google (móvil) y de Firebase.
   static Future<void> signOut() async {
-    await _auth.signOut();
+    try {
+      // En Android/iOS, cierra sesión del proveedor Google para forzar el selector de cuentas
+      await GoogleSignIn().signOut();
+    } catch (_) {
+      // Ignorar si no aplica (web) o si no estaba conectado por Google
+    }
+
+    await FirebaseAuth.instance.signOut();
   }
 }

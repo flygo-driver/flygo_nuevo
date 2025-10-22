@@ -8,6 +8,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/places_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/keys.dart' as app_keys; // Para API key del PlacesService
 
 class _LugarSel {
   final String label;
@@ -447,19 +448,13 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   const SizedBox(height: 4),
                   Row(
                     children: <Widget>[
-                      Expanded(
+                      const Expanded(
                         child: Text(
                           'Total estimado',
-                          style: TextStyle(
-                            color: Colors.greenAccent.withValues(alpha: 0.9),
-                          ),
+                          style: TextStyle(color: Colors.greenAccent),
                         ),
                       ),
-                      const Text(
-                        // Formato RD$ y estilo destacado
-                        '',
-                        // (Este const Text vacío evita mover layout; el valor real está abajo)
-                      ),
+                      const Text(''),
                       Text(
                         FormatosMoneda.rd(_precio),
                         style: const TextStyle(
@@ -510,23 +505,32 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     return InkWell(
       onTap: onTap,
       child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: label,
+        decoration: const InputDecoration(
+          labelText: ' ',
           filled: true,
-          fillColor: const Color(0xFF1A1A1A),
-          border: const OutlineInputBorder(
+          fillColor: Color(0xFF1A1A1A),
+          border: OutlineInputBorder(
             borderRadius: BorderRadius.all(Radius.circular(12)),
           ),
         ),
-        child: Text(
-          (value == null || value.trim().isEmpty)
-              ? 'Tocar para buscar…'
-              : value,
-          style: TextStyle(
-            color: (value == null || value.isEmpty)
-                ? Colors.white54
-                : Colors.white,
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    color: Colors.white70, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Text(
+              (value == null || value.trim().isEmpty)
+                  ? 'Tocar para buscar…'
+                  : value,
+              style: TextStyle(
+                color: (value == null || value.isEmpty)
+                    ? Colors.white54
+                    : Colors.white,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -548,6 +552,11 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
   bool _loading = false;
   List<PlacePrediction> _preds = const <PlacePrediction>[];
 
+  // Instancia local de PlacesService (métodos de instancia)
+  late final PlacesService _places =
+      PlacesService(app_keys.kGooglePlacesApiKey,
+          language: 'es', components: const ['country:do']);
+
   @override
   void dispose() {
     _deb?.cancel();
@@ -559,9 +568,14 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
     _deb?.cancel();
     _deb = Timer(const Duration(milliseconds: 350), () async {
       if (!mounted) return;
+      final q = v.trim();
+      if (q.isEmpty) {
+        setState(() => _preds = const <PlacePrediction>[]);
+        return;
+      }
       setState(() => _loading = true);
       try {
-        final r = await PlacesService.autocomplete(v);
+        final r = await _places.autocomplete(q); // instancia ✅
         if (!mounted) return;
         setState(() => _preds = r);
       } finally {
@@ -574,13 +588,24 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final det = await PlacesService.details(p.placeId);
+      final det = await _places.details(p.placeId); // instancia ✅
       if (!mounted) return;
-      if (det == null) return;
-      if (!mounted) return;
+
+      // Manejo seguro por si details devuelve null
+      if (det == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No se pudo obtener el detalle del lugar.')),
+        );
+        return;
+      }
+
       Navigator.pop(
         context,
-        _LugarSel(label: det.address, lat: det.lat, lon: det.lon),
+        _LugarSel(
+          label: det.address,                 // address NO nulo en nuestro servicio
+          lat: det.latLng.latitude,           // latLng NO nulo
+          lon: det.latLng.longitude,
+        ),
       );
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -632,9 +657,15 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                     const Divider(color: Colors.white12, height: 1),
                 itemBuilder: (_, i) {
                   final p = _preds[i];
+                  final full = (p.fullDescription).trim();
+                  final pri = (p.primary).trim();
+                  final sec = (p.secondary ?? '').trim();
+                  final line = full.isNotEmpty
+                      ? full
+                      : [pri, sec].where((s) => s.isNotEmpty).join(', ');
                   return ListTile(
                     title: Text(
-                      p.description,
+                      line.isNotEmpty ? line : 'Lugar',
                       style: const TextStyle(color: Colors.white),
                     ),
                     onTap: () => _select(p),

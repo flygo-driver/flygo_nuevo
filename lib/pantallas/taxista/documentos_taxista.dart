@@ -1,4 +1,3 @@
-// lib/pantallas/taxista/documentos_taxista.dart
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';

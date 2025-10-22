@@ -1,86 +1,179 @@
-// lib/auth/auth_check.dart
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-// Destinos según rol (SOLO importamos, no definimos nada aquí)
+// Destinos existentes en tu app
 import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
 import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 
-// Flujo de selección / login
+// Flujo selección / login
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/auth/login_cliente.dart';
 
-// Gate de verificación de correo (está en widgets)
-import 'package:flygo_nuevo/widgets/verify_email_gate.dart';
+/// ================== FLAGS QA (modo flexible) ==================
+const bool kQaFlexibleAccess =
+    bool.fromEnvironment('QA_FLEX', defaultValue: !kReleaseMode);
+const bool kQaAllowAnonOnCollision =
+    bool.fromEnvironment('QA_ALLOW_ANON', defaultValue: !kReleaseMode);
+const bool kQaAllowAnonOnAuthError =
+    bool.fromEnvironment('QA_ALLOW_ANON_ERR', defaultValue: !kReleaseMode);
 
 class AuthCheck extends StatefulWidget {
   const AuthCheck({super.key});
-
   @override
   State<AuthCheck> createState() => _AuthCheckState();
 }
 
 class _AuthCheckState extends State<AuthCheck> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
-
-  bool _navigated = false; // evita dobles navegaciones
+  final _auth = FirebaseAuth.instance;
+  final _db = FirebaseFirestore.instance;
+  bool _navigated = false;
 
   @override
   void initState() {
     super.initState();
-    // Espera al primer frame para tener un context estable
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _verificarUsuario();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _cargarYRedirigir());
   }
 
   void _go(Widget page) {
     if (_navigated || !mounted) return;
     _navigated = true;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => page),
-    );
+    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => page));
   }
 
-  Future<void> _verificarUsuario() async {
+  void _goAdminNamedOrFallback() {
+    if (_navigated || !mounted) return;
+    try {
+      Navigator.of(context).pushReplacementNamed('/admin');
+      _navigated = true;
+    } catch (_) {
+      _go(const ClienteHome());
+    }
+  }
+
+  Future<void> _cargarYRedirigir() async {
     try {
       final user = _auth.currentUser;
 
-      // 1) Sin sesión ➜ selección de tipo de usuario
       if (user == null) {
         _go(const SeleccionUsuario());
         return;
       }
 
-      // 2) Cargamos rol desde Firestore
-      final doc = await _db.collection('usuarios').doc(user.uid).get();
+      final rol = await _resolveAndEnsureRol(user);
       if (!mounted) return;
 
-      final data = doc.data();
-      final rol = (data?['rol'] ?? '').toString().toLowerCase().trim();
-
-      // 3) Rutas según rol (gatea por verificación de correo)
-      if (rol == 'cliente') {
-        _go(const VerifyEmailGate(childWhenVerified: ClienteHome()));
-        return;
+      if (rol == 'admin') {
+        _goAdminNamedOrFallback();
+      } else if (rol == 'taxista') {
+        _go(const TaxistaEntry());
+      } else {
+        _go(const ClienteHome()); // 👈 SIEMPRE HOME DEL CLIENTE
       }
-
-      if (rol == 'taxista') {
-        _go(const VerifyEmailGate(childWhenVerified: TaxistaEntry()));
-        return;
-      }
-
-      // 4) Rol desconocido ➜ vuelve a selección
-      _go(const SeleccionUsuario());
     } catch (e) {
+      if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
+        try {
+          final cred = await _auth.signInAnonymously();
+          final u = cred.user!;
+          await _ensureUsuarioDoc(
+            u.uid,
+            preferRol: 'cliente',
+            email: u.email,
+            displayName: u.displayName,
+            phone: u.phoneNumber,
+          );
+          if (!mounted) return;
+          _go(const ClienteHome());
+          return;
+        } catch (_) {}
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error al verificar usuario: $e')),
       );
-      // fallback seguro
       _go(const LoginCliente());
+    }
+  }
+
+  Future<String> _resolveAndEnsureRol(User user) async {
+    final uid = user.uid;
+
+    final uRef = _db.collection('usuarios').doc(uid);
+    final uSnap = await uRef.get();
+    String rolActual = '';
+    if (uSnap.exists) {
+      rolActual = (uSnap.data()?['rol'] ?? '').toString().trim().toLowerCase();
+      if (rolActual.isNotEmpty) {
+        await uRef.set(
+          {
+            'lastLogin': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+        return rolActual;
+      }
+    }
+
+    String? rolRoles;
+    final rRef = _db.collection('roles').doc(uid);
+    final rSnap = await rRef.get();
+    if (rSnap.exists) {
+      rolRoles = (rSnap.data()?['rol'] as String?)?.toLowerCase().trim();
+    }
+
+    final rolFinal = (rolRoles?.isNotEmpty ?? false) ? rolRoles! : 'cliente';
+
+    await _ensureUsuarioDoc(
+      uid,
+      preferRol: rolFinal,
+      email: user.email,
+      displayName: user.displayName,
+      phone: user.phoneNumber,
+    );
+
+    return rolFinal;
+  }
+
+  Future<void> _ensureUsuarioDoc(
+    String uid, {
+    required String preferRol,
+    String? email,
+    String? displayName,
+    String? phone,
+  }) async {
+    final ref = _db.collection('usuarios').doc(uid);
+    final snap = await ref.get();
+    final now = FieldValue.serverTimestamp();
+
+    if (!snap.exists) {
+      await ref.set({
+        'uid': uid,
+        'email': email ?? '',
+        'nombre': displayName ?? '',
+        'telefono': phone ?? '',
+        'rol': preferRol,
+        'fechaRegistro': now,
+        'actualizadoEn': now,
+      });
+      return;
+    }
+
+    final data = snap.data() ?? <String, dynamic>{};
+    final hadRol = (data['rol'] ?? '').toString().trim().isNotEmpty;
+
+    if (!hadRol) {
+      await ref.set(
+        {'rol': preferRol, 'updatedAt': now, 'actualizadoEn': now},
+        SetOptions(merge: true),
+      );
+    } else {
+      await ref.set(
+        {'lastLogin': now, 'updatedAt': now, 'actualizadoEn': now},
+        SetOptions(merge: true),
+      );
     }
   }
 
@@ -88,7 +181,7 @@ class _AuthCheckState extends State<AuthCheck> {
   Widget build(BuildContext context) {
     return const Scaffold(
       backgroundColor: Colors.black,
-      body: Center(child: CircularProgressIndicator()),
+      body: Center(child: CircularProgressIndicator(color: Colors.greenAccent)),
     );
   }
 }

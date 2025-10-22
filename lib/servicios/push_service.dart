@@ -1,10 +1,10 @@
-// lib/servicios/push_service.dart
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:firebase_core/firebase_core.dart'; // ✅ init en BG
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flygo_nuevo/firebase_options.dart';
 
 class PushService {
   PushService._();
@@ -13,12 +13,12 @@ class PushService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
   static final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  /// Compatibilidad con tu código viejo: puedes seguir llamando a este.
+  /// Compat con tu código viejo:
   static Future<void> ensureInitedAndSaved() => initAndRegisterToken();
 
   /// Llamar al arrancar (si hay sesión) y justo después de iniciar sesión.
   static Future<void> initAndRegisterToken() async {
-    // Permisos y presentación en foreground (Android/iOS)
+    // Permisos/presentación (Android/iOS)
     if (!kIsWeb) {
       await _requestPermissionsMobile();
       await _fm.setForegroundNotificationPresentationOptions(
@@ -44,7 +44,7 @@ class PushService {
     });
   }
 
-  /// Quita el token actual del usuario (llámalo en logout).
+  /// Quita el token actual del usuario (logout).
   static Future<void> removeCurrentToken() async {
     final u = _auth.currentUser;
     if (u == null) return;
@@ -64,12 +64,11 @@ class PushService {
       announcement: false, carPlay: false, criticalAlert: false, provisional: false,
     );
     if (settings.authorizationStatus == AuthorizationStatus.denied) {
-      // Si el usuario niega, simplemente no guardamos token.
-      return;
+      return; // si niega, no guardamos token
     }
   }
 
-  /// Guarda tokens en /push_tokens/{uid} (array multi-dispositivo).
+  /// Guarda tokens en /push_tokens/{uid}
   static Future<void> _saveToken(String uid, String token) async {
     final ref = _db.collection('push_tokens').doc(uid);
     await ref.set({
@@ -80,9 +79,16 @@ class PushService {
   }
 }
 
-/// Handler de mensajes en background (regístralo en main.dart)
+/// Handler BG (REGÍSTRALO en main.dart con FirebaseMessaging.onBackgroundMessage)
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  try { await Firebase.initializeApp(); } catch (_) {}
-  // Aquí puedes hacer logging o prefetch si lo necesitas.
+  // Importante: inicializar con opciones en el isolate de background, de forma idempotente
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    }
+  } catch (_) {
+    // ya estaba inicializado en este isolate
+  }
+  // …tu lógica opcional
 }

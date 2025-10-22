@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
+// 🔁 antes importabas DocumentosTaxista; para QA vamos directo al panel:
+import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 
 class RegistroTaxista extends StatefulWidget {
   const RegistroTaxista({super.key});
@@ -72,14 +73,14 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
       final user = cred.user!;
       await user.updateDisplayName(_nombre.text.trim());
 
-      // 🔔 Enviar verificación de correo (no bloquea si falla)
+      // Enviamos verificación (solo informativo; no bloquea el flujo)
       try {
         await user.sendEmailVerification();
       } catch (_) {}
 
       final uid = user.uid;
 
-      // 2) Guardar perfil
+      // 2) Guardar perfil (⚠ para QA: documentos “aprobados”)
       final marca = _marca.text.trim();
       final modelo = _modelo.text.trim();
       final color  = _color.text.trim();
@@ -92,8 +93,10 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
         'rol': 'taxista',
 
         'disponible': false,
-        'docsEstado': 'pendiente',
-        'documentosCompletos': false,
+
+        // ✅ Claves para no bloquear el acceso durante pruebas:
+        'docsEstado': 'aprobado',
+        'documentosCompletos': true,
 
         'placa': _placa.text.trim(),
         'tipoVehiculo': _tipoVehiculo,
@@ -130,15 +133,14 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
 
       if (!mounted) return;
 
-      // Aviso opcional: correo de verificación enviado
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Te enviamos un correo para verificar tu cuenta.')),
+        const SnackBar(content: Text('Cuenta creada. ¡Bienvenido a FlyGo!')),
       );
 
-      // 3) Ir a Documentos para completar verificación
+      // 3) ✅ Ir directo al panel del taxista (sin paso de documentos)
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const DocumentosTaxista()),
+        MaterialPageRoute(builder: (_) => const TaxistaEntry()),
         (_) => false,
       );
     } on FirebaseAuthException catch (e) {

@@ -1,11 +1,10 @@
-// lib/servicios/pago_data.dart
+// lib/data/pago_data.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/pagos/payment_gateway.dart' as pg;
 import 'package:flygo_nuevo/modelo/viaje.dart';
 
 /// Persistencia de pagos (cliente/taxista) + actualización de estado en viajes.
-/// 100% compatible con PaymentGateway (autorizar/capturar/cancelar) y
-/// mantiene registrarMovimientoPorViaje para billetera del taxista.
+/// Solo efectivo y transferencia. Deja hooks listos para gateway real (opcional).
 class PagoData {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -13,10 +12,11 @@ class PagoData {
   static final CollectionReference<Map<String, dynamic>> _pagos =
       _db.collection('pagos');
 
-  /// Inyectable (mock por defecto). Sustituye en runtime por tu gateway real.
+  /// Inyectable (mock por defecto). Si más adelante usas un gateway real,
+  /// podrás asignarlo desde main: PagoData.gateway = TuGateway();
   static pg.PaymentGateway gateway = pg.MockPaymentGateway();
 
-  // ----------- Helpers -----------
+  // ----------------- Helpers -----------------
   static double _asDouble(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
@@ -24,11 +24,13 @@ class PagoData {
     return 0.0;
   }
 
+  static double _round2(double v) => double.parse(v.toStringAsFixed(2));
+  static int _toCents(double v) => (v * 100).round();
   static String _isoNow() => DateTime.now().toIso8601String();
 
-  // ======================================================================
-  // AUTORIZAR TARJETA (cliente)
-  // ======================================================================
+  // ──────────────────────────────────────────────────────────────────────────
+  // TARJETA (opcional/futuro) — lo dejamos por si luego activas gateway real
+  // ──────────────────────────────────────────────────────────────────────────
   static Future<void> autorizarPago({
     required String viajeId,
     required String clienteId,
@@ -36,7 +38,6 @@ class PagoData {
     required double montoDop,
     String? emailCliente,
   }) async {
-    // 1) Autorización en el gateway (mock/real)
     await gateway.autorizarPago(
       viajeId: viajeId,
       clienteId: clienteId,
@@ -44,7 +45,6 @@ class PagoData {
       montoDop: montoDop,
     );
 
-    // 2) Guardar estado de pago en el viaje
     final provider = gateway.providerId;
     final paymentIntentId = gateway.buildPaymentIntentId(viajeId);
 
@@ -57,13 +57,12 @@ class PagoData {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // 3) Asiento del historial del cliente
     await _pagos.add({
       'tipo': 'cliente',
       'viajeId': viajeId,
       'clienteId': clienteId,
       'emailCliente': emailCliente,
-      'monto': double.parse(montoDop.toStringAsFixed(2)),
+      'monto': _round2(montoDop),
       'metodo': 'Tarjeta',
       'estado': 'autorizado',
       'fecha': _isoNow(),
@@ -72,9 +71,6 @@ class PagoData {
     });
   }
 
-  // ======================================================================
-  // CAPTURAR TARJETA (al completar)
-  // ======================================================================
   static Future<void> capturarPago({
     required String viajeId,
     required String paymentIntentId,
@@ -85,31 +81,27 @@ class PagoData {
     String? emailTaxista,
     String metodoLiquidacion = 'transfer',
   }) async {
-    // 1) Captura en el gateway
     await gateway.capturarPago(
       viajeId: viajeId,
       paymentIntentId: paymentIntentId,
       montoFinalDop: montoFinalDop,
     );
 
-    // 2) Marcar el viaje como capturado y programar liquidación
     await _db.collection('viajes').doc(viajeId).update({
       'payment.status': 'captured',
       'payment.capturedAt': FieldValue.serverTimestamp(),
-      'settlement.commission': double.parse(comision.toStringAsFixed(2)),
-      'settlement.driverAmount':
-          double.parse(gananciaTaxista.toStringAsFixed(2)),
-      'settlement.status': 'scheduled', // la liquidación se hace luego
+      'settlement.commission': _round2(comision),
+      'settlement.driverAmount': _round2(gananciaTaxista),
+      'settlement.status': 'scheduled',
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // 3) Asiento a favor del taxista (por liquidar)
     await _pagos.add({
       'tipo': 'taxista',
       'viajeId': viajeId,
       'uidTaxista': uidTaxista,
       'emailTaxista': emailTaxista,
-      'monto': double.parse(gananciaTaxista.toStringAsFixed(2)),
+      'monto': _round2(gananciaTaxista),
       'metodo': metodoLiquidacion,
       'estado': 'por_liquidar',
       'fecha': _isoNow(),
@@ -118,9 +110,6 @@ class PagoData {
     });
   }
 
-  // ======================================================================
-  // CANCELAR PAGO (opcional)
-  // ======================================================================
   static Future<void> cancelarPago({
     required String viajeId,
     required String paymentIntentId,
@@ -136,7 +125,6 @@ class PagoData {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // Asiento histórico (opcional)
     await _pagos.add({
       'tipo': 'cliente',
       'viajeId': viajeId,
@@ -149,56 +137,198 @@ class PagoData {
     });
   }
 
-  // ======================================================================
-  // EFECTIVO: registrar comisión pendiente (cobrado al taxista luego)
-  // ======================================================================
+  // ──────────────────────────────────────────────────────────────────────────
+  // EFECTIVO: cliente paga al taxista; el taxista nos debe la comisión (20%)
+  // ──────────────────────────────────────────────────────────────────────────
   static Future<void> registrarComisionCash({
     required String viajeId,
     required String taxistaId,
     required double comision,
   }) async {
-    final billeteraRef = _db.collection('billeteras_taxista').doc(taxistaId);
+    final viajeRef = _db.collection('viajes').doc(viajeId);
 
-    // 1) Acumular comisión pendiente en billetera_taxista
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(billeteraRef);
-      final data = snap.data() ?? <String, dynamic>{};
-      final double pendiente = _asDouble(data['comisionPendiente']);
+    // Hacemos todo en transacción + idempotencia (si ya está pagoRegistrado, salimos)
+    final bool actualizado = await _db.runTransaction<bool>((tx) async {
+      final snap = await tx.get(viajeRef);
+      final m = snap.data() ?? <String, dynamic>{};
 
-      tx.set(billeteraRef, {
-        'comisionPendiente': double.parse(
-          (pendiente + comision.abs()).toStringAsFixed(2),
-        ),
+      if (m['pagoRegistrado'] == true) {
+        // Ya registrado → no duplicar
+        return false;
+      }
+
+      double total = _asDouble(m['precioFinal'] ?? m['precio']);
+      if (total <= 0) {
+        // Si no tenemos total en el documento, derivamos desde la comisión (20%)
+        total = (comision > 0) ? (comision / 0.20) : 0.0;
+      }
+
+      final totalCents = _toCents(total);
+      final comisionCents = _toCents(comision);
+      final ganancia = (total - comision).clamp(0.0, double.infinity);
+      final gananciaCents = _toCents(ganancia);
+
+      // 1) Actualizar billetera del taxista: comisionPendiente
+      final billeteraRef = _db.collection('billeteras_taxista').doc(taxistaId);
+      final billeSnap = await tx.get(billeteraRef);
+      final b = billeSnap.data() ?? <String, dynamic>{};
+      final double pendiente = _asDouble(b['comisionPendiente']);
+
+      tx.set(
+        billeteraRef,
+        {
+          'comisionPendiente': _round2(pendiente + comision.abs()),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      // 2) Marcar el viaje con método efectivo + partidas + flags
+      tx.update(viajeRef, {
+        'metodoPago': 'Efectivo',
+        'payment.status': 'cash_collected',
+        'payment.provider': 'cash',
+        'payment.updatedAt': FieldValue.serverTimestamp(),
+
+        // Partidas "en dólares" (double)
+        'total': _round2(total),
+        'comision': _round2(comision),
+        'comisionFlygo': _round2(comision),
+        'gananciaTaxista': _round2(ganancia),
+
+        // Partidas en centavos (para cálculos exactos)
+        'total_cents': totalCents,
+        'comision_cents': comisionCents,
+        'ganancia_cents': gananciaCents,
+
+        // Estado de liquidación a la empresa: aún NO liquidado
+        'pagoRegistrado': true,
+        'liquidado': false,
+
+        // Info extra
+        'pagoDetalle': {
+          'taxistaId': taxistaId,
+          'metodo': 'efectivo',
+          'total_cents': totalCents,
+          'comision_cents': comisionCents,
+          'ganancia_cents': gananciaCents,
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+
+        // Compat con settlement existente
+        'settlement.commission': _round2(comision),
+        'settlement.driverAmount': _round2(ganancia),
+        'settlement.status': 'pending',
+
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
+
+      return true;
     });
 
-    // 2) Marcar el viaje con estado de cobro cash
-    await _db.collection('viajes').doc(viajeId).update({
-      'payment.status': 'cash_collected',
-      'settlement.commission': double.parse(comision.toStringAsFixed(2)),
-      'settlement.driverAmount': null,
-      'settlement.status': 'pending',
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
-    // 3) Asiento histórico (negativo = deuda/retención)
-    await _pagos.add({
-      'tipo': 'taxista',
-      'viajeId': viajeId,
-      'uidTaxista': taxistaId,
-      'monto': -double.parse(comision.abs().toStringAsFixed(2)),
-      'metodo': 'efectivo',
-      'estado': 'comision_pendiente',
-      'fecha': _isoNow(),
-      'provider': 'cash',
-    });
+    // 3) Asiento histórico (solo si actualizamos)
+    if (actualizado) {
+      await _pagos.add({
+        'tipo': 'taxista',
+        'viajeId': viajeId,
+        'uidTaxista': taxistaId,
+        'monto': -_round2(comision.abs()), // negativo = deuda del taxista
+        'metodo': 'efectivo',
+        'estado': 'comision_pendiente',
+        'fecha': _isoNow(),
+        'provider': 'cash',
+      });
+    }
   }
 
-  // ======================================================================
+  // ──────────────────────────────────────────────────────────────────────────
+  // TRANSFERENCIA: cliente transfiere al taxista; marcamos partidas del viaje
+  // ──────────────────────────────────────────────────────────────────────────
+  static Future<void> registrarTransferenciaCliente({
+    required String viajeId,
+    required String uidTaxista,
+    required double montoFinalDop,
+    required double comision,
+    required double gananciaTaxista,
+    String metodoLiquidacion = 'transferencia',
+  }) async {
+    final viajeRef = _db.collection('viajes').doc(viajeId);
+
+    final bool actualizado = await _db.runTransaction<bool>((tx) async {
+      final snap = await tx.get(viajeRef);
+      final m = snap.data() ?? <String, dynamic>{};
+
+      if (m['pagoRegistrado'] == true) {
+        return false; // idempotencia
+      }
+
+      final total = (montoFinalDop > 0) ? montoFinalDop : _asDouble(m['precioFinal'] ?? m['precio']);
+      final totalCents = _toCents(total);
+      final comisionCents = _toCents(comision);
+      final gananciaCents = _toCents(gananciaTaxista);
+
+      // OJO: para transferencia NO tocamos billetera.comisionPendiente.
+      // La "pendiente" se calcula desde los viajes con liquidado==false.
+
+      tx.update(viajeRef, {
+        'metodoPago': 'Transferencia',
+        'payment.status': 'bank_transfer_received',
+        'payment.provider': 'transfer',
+        'payment.updatedAt': FieldValue.serverTimestamp(),
+
+        // Partidas double
+        'total': _round2(total),
+        'comision': _round2(comision),
+        'comisionFlygo': _round2(comision),
+        'gananciaTaxista': _round2(gananciaTaxista),
+
+        // Partidas en centavos
+        'total_cents': totalCents,
+        'comision_cents': comisionCents,
+        'ganancia_cents': gananciaCents,
+
+        // Flags
+        'pagoRegistrado': true,
+        'liquidado': false,
+
+        'pagoDetalle': {
+          'taxistaId': uidTaxista,
+          'metodo': 'transferencia',
+          'total_cents': totalCents,
+          'comision_cents': comisionCents,
+          'ganancia_cents': gananciaCents,
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+
+        // Compat settlement
+        'settlement.commission': _round2(comision),
+        'settlement.driverAmount': _round2(gananciaTaxista),
+        'settlement.status': 'scheduled',
+
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      return true;
+    });
+
+    if (actualizado) {
+      // Asiento histórico a favor del taxista (por liquidar)
+      await _pagos.add({
+        'tipo': 'taxista',
+        'viajeId': viajeId,
+        'uidTaxista': uidTaxista,
+        'monto': _round2(gananciaTaxista),
+        'metodo': metodoLiquidacion,
+        'estado': 'por_liquidar',
+        'fecha': _isoNow(),
+        'provider': 'transfer',
+      });
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // HISTORIALES
-  // ======================================================================
-  /// Para "HistorialPagosCliente"
+  // ──────────────────────────────────────────────────────────────────────────
   static Future<List<Map<String, dynamic>>> obtenerPagosPorCliente(
     String emailCliente,
   ) async {
@@ -211,7 +341,6 @@ class PagoData {
     return snap.docs.map((d) => d.data()).toList();
   }
 
-  /// Para "PagoTaxista"
   static Future<List<Map<String, dynamic>>> obtenerPagosTaxista(
     String emailTaxista,
   ) async {
@@ -224,24 +353,19 @@ class PagoData {
     return snap.docs.map((d) => d.data()).toList();
   }
 
-  // ======================================================================
-  // MOVIMIENTO EN BILLETERA DEL TAXISTA POR VIAJE (COMPAT)
-  // ======================================================================
-  /// Mantengo tu método previo para registrar movimiento del viaje en la
-  /// billetera del taxista. Lo hago idempotente para no duplicar si ya existe.
+  // ──────────────────────────────────────────────────────────────────────────
+  // COMPAT: movimiento por viaje en billetera (tu método previo)
+  // ──────────────────────────────────────────────────────────────────────────
   static Future<void> registrarMovimientoPorViaje(Viaje v) async {
-    final total = (v.precio > 0)
-        ? v.precio
-        : (v.precioFinal > 0 ? v.precioFinal : 0.0);
+    final total = (v.precio > 0) ? v.precio : (v.precioFinal > 0 ? v.precioFinal : 0.0);
     final comision = (v.comision > 0) ? v.comision : (total * 0.20);
-    final ganancia =
-        (v.gananciaTaxista > 0) ? v.gananciaTaxista : (total - comision);
+    final ganancia = (v.gananciaTaxista > 0) ? v.gananciaTaxista : (total - comision);
 
     final String taxistaId = (v.uidTaxista.isNotEmpty)
         ? v.uidTaxista
         : (v.taxistaId.isNotEmpty ? v.taxistaId : '');
 
-    if (taxistaId.isEmpty) return; // nada que abonar
+    if (taxistaId.isEmpty) return;
 
     // Idempotencia: ¿ya existe algún pago para este viaje y taxista?
     final ya = await _db
@@ -260,9 +384,9 @@ class PagoData {
         'viajeId': v.id,
         'taxistaId': taxistaId,
         'uidTaxista': taxistaId,
-        'montoTotal': double.parse(total.toStringAsFixed(2)),
-        'comisionFlygo': double.parse(comision.toStringAsFixed(2)),
-        'gananciaTaxista': double.parse(ganancia.toStringAsFixed(2)),
+        'montoTotal': _round2(total),
+        'comisionFlygo': _round2(comision),
+        'gananciaTaxista': _round2(ganancia),
         'estado': 'pendiente_liquidacion',
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -272,12 +396,8 @@ class PagoData {
       tx.set(
         billeRef,
         {
-          'saldoAcumulado': FieldValue.increment(
-            double.parse(ganancia.toStringAsFixed(2)),
-          ),
-          'comisionPendiente': FieldValue.increment(
-            double.parse(comision.toStringAsFixed(2)),
-          ),
+          'saldoAcumulado': FieldValue.increment(_round2(ganancia)),
+          'comisionPendiente': FieldValue.increment(_round2(comision)),
           'updatedAt': FieldValue.serverTimestamp(),
         },
         SetOptions(merge: true),

@@ -1,16 +1,9 @@
 import 'package:flutter/material.dart';
 import '../servicios/wallet_service.dart';
+import '../utils/formatos_moneda.dart';
 
 class ComisionGlobalChip extends StatelessWidget {
   const ComisionGlobalChip({super.key});
-
-  String _rd(double v) {
-    final s = v.toStringAsFixed(2);
-    final parts = s.split('.');
-    final re = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
-    final intPart = parts.first.replaceAllMapped(re, (m) => '${m[1]},');
-    return 'RD\$ $intPart.${parts.last}';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +28,7 @@ class ComisionGlobalChip extends StatelessWidget {
               const Icon(Icons.trending_up, color: Color(0xFFFFC107), size: 20),
               const SizedBox(width: 6),
               Text(
-                _rd(rd),
+                FormatosMoneda.rd(rd),
                 style: const TextStyle(
                   color: Color(0xFFFFC107),
                   fontWeight: FontWeight.w800,
@@ -47,10 +40,7 @@ class ComisionGlobalChip extends StatelessWidget {
           ),
         );
 
-        return Tooltip(
-          message: 'Comisión total (en vivo)',
-          child: child,
-        );
+        return Tooltip(message: 'Comisión total (en vivo)', child: child);
       },
     );
   }

@@ -1,4 +1,175 @@
 ﻿{
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"programado","order":"ASCENDING"},
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"publishAt","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"programado","order":"ASCENDING"},
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"publishAt","order":"ASCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"programado","order":"ASCENDING"},
+        {"fieldPath":"publishAt","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"esAhora","order":"ASCENDING"},
+        {"fieldPath":"acceptAfter","order":"ASCENDING"},
+        {"fieldPath":"publishAt","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"fechaHora","order":"ASCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"fechaHora","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"updatedAt","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidCliente","order":"ASCENDING"},
+        {"fieldPath":"completado","order":"ASCENDING"},
+        {"fieldPath":"finalizadoEn","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidCliente","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"finalizadoEn","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidCliente","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"fechaHora","order":"ASCENDING"}
+      ]
+    },
+    {
+      "collectionId": "pagos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"fecha","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "pagos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"fecha","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "pagos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"tipo","order":"ASCENDING"},
+        {"fieldPath":"fecha","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "pagos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"tipo","order":"ASCENDING"},
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"fecha","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "pagos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"tipo","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"fecha","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "liquidaciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"resueltoEn","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "liquidaciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"resueltoEn","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "liquidaciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"solicitadoEn","order":"DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "liquidaciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath":"uidTaxista","order":"ASCENDING"},
+        {"fieldPath":"estado","order":"ASCENDING"},
+        {"fieldPath":"solicitadoEn","order":"DESCENDING"}
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

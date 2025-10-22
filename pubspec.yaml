@@ -29,6 +29,10 @@ dependencies:
 
   # REST / Autocomplete
   http: ^1.5.0
+  uuid: ^4.5.1
+
+  # Google Places SDK
+  flutter_google_places_sdk: ^0.3.2
 
   # Utilidades
   shared_preferences: ^2.2.0
@@ -40,9 +44,13 @@ dependencies:
   permission_handler: ^11.3.1
   google_sign_in: ^6.2.1
 
-  # (Opcional) Mapas alternativos
+  # Mapas alternativos (opcional)
   flutter_map: ^8.2.1
   latlong2: ^0.9.1
+
+  # Timbre + info del paquete
+  audioplayers: ^5.2.1
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:
@@ -54,13 +62,11 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    # APK + Splash usarán el padded
     - assets/icon/icon_foreground_padded.png
-    # Bienvenida: paracaídas + logo de la palabra
     - assets/icon/paracaida_color.png
     - assets/icon/logo_flygo.png
 
-# ---------- Icono APK (sin zoom/recorte) ----------
+# ---------- Icono APK ----------
 flutter_launcher_icons:
   android: true
   ios: false
@@ -69,7 +75,7 @@ flutter_launcher_icons:
   image_path: assets/icon/icon_foreground_padded.png
   min_sdk_android: 21
 
-# ---------- Splash al abrir (mismo logo padded del APK) ----------
+# ---------- Splash ----------
 flutter_native_splash:
   color: "#000000"
   image: assets/icon/icon_foreground_padded.png

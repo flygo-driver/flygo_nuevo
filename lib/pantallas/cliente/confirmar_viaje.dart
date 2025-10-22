@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart'; // Para FirebaseException
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -66,6 +67,16 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
       firstDate: now,
       lastDate: now.add(const Duration(days: 365)),
       helpText: 'Selecciona la fecha',
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: Colors.greenAccent,
+            surface: Colors.black,
+            onSurface: Colors.white,
+          ),
+        ),
+        child: child!,
+      ),
     );
     if (!mounted || pickedDate == null) return;
 
@@ -75,6 +86,16 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
         _fechaHora.isAfter(now) ? _fechaHora : now,
       ),
       helpText: 'Selecciona la hora',
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: Colors.greenAccent,
+            surface: Colors.black,
+            onSurface: Colors.white,
+          ),
+        ),
+        child: child!,
+      ),
     );
     if (!mounted || pickedTime == null) return;
 
@@ -117,25 +138,26 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
 
     setState(() => _cargando = true);
     try {
-      // 1) Asegura doc de usuario y rol por defecto
+      // 1) Asegura doc de usuario con rol por defecto cliente (si no existe)
       await RolesService.ensureUserDoc(u.uid, defaultRol: Roles.cliente);
       if (!mounted) return;
 
-      // 2) Verifica que realmente es cliente (lo que revisan tus reglas myRol())
-      final esCliente = await RolesService.isCliente(u.uid);
+      // 2) Verifica ROL explícito: solo clientes pueden confirmar
+      final rol = (await RolesService.getRol(u.uid))?.toLowerCase().trim();
       if (!mounted) return;
-      if (!esCliente) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Tu cuenta no es de cliente. Cambia de cuenta para solicitar viajes.',
-            ),
-          ),
-        );
+      if (rol != Roles.cliente) {
+        // Mensaje claro y sin confundir
+        final msg = (rol == Roles.taxista || rol == Roles.admin)
+            ? 'Esta cuenta es de $rol. Usa una cuenta de cliente para solicitar viajes.'
+            : 'Tu cuenta no es de cliente. Cambia de cuenta para solicitar viajes.';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
         return;
       }
 
-      // 3) Escribir el viaje (cumple reglas: estado, lat/lon, sin taxista asignado, etc.)
+      // 3) Fecha en UTC para guardar (consistente con ProgramarViaje)
+      final DateTime fechaUtc = _fechaHora.toUtc();
+
+      // 4) Crear viaje pendiente
       final id = await ViajesRepo.crearViajePendiente(
         uidCliente: u.uid,
         origen: widget.origenTexto,
@@ -144,7 +166,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
         lonOrigen: widget.lonOrigen,
         latDestino: widget.latDestino,
         lonDestino: widget.lonDestino,
-        fechaHora: _fechaHora,
+        fechaHora: fechaUtc,
         precio: widget.precioCalculado,
         metodoPago: _metodoPago,
         tipoVehiculo: _tipoVehiculo,
@@ -153,12 +175,11 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Viaje confirmado: ${id.substring(0, 6)}...')),
+        SnackBar(content: Text('✅ Viaje confirmado: ${id.substring(0, 6)}…')),
       );
       Navigator.of(context).pop(true);
     } on FirebaseException catch (e) {
       if (!mounted) return;
-      // Muestra código exacto para diagnóstico (permission-denied, etc.)
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('❌ Firestore (${e.code}): ${e.message ?? e}')),
       );
