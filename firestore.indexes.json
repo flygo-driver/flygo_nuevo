@@ -1,175 +1,1342 @@
-﻿{
-  "indexes": [
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"programado","order":"ASCENDING"},
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"publishAt","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"programado","order":"ASCENDING"},
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"publishAt","order":"ASCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"programado","order":"ASCENDING"},
-        {"fieldPath":"publishAt","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"esAhora","order":"ASCENDING"},
-        {"fieldPath":"acceptAfter","order":"ASCENDING"},
-        {"fieldPath":"publishAt","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"fechaHora","order":"ASCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"fechaHora","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"updatedAt","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidCliente","order":"ASCENDING"},
-        {"fieldPath":"completado","order":"ASCENDING"},
-        {"fieldPath":"finalizadoEn","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidCliente","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"finalizadoEn","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "viajes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidCliente","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"fechaHora","order":"ASCENDING"}
-      ]
-    },
-    {
-      "collectionId": "pagos",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"fecha","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "pagos",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"fecha","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "pagos",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"tipo","order":"ASCENDING"},
-        {"fieldPath":"fecha","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "pagos",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"tipo","order":"ASCENDING"},
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"fecha","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "pagos",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"tipo","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"fecha","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "liquidaciones",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"resueltoEn","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "liquidaciones",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"resueltoEn","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "liquidaciones",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"solicitadoEn","order":"DESCENDING"}
-      ]
-    },
-    {
-      "collectionId": "liquidaciones",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {"fieldPath":"uidTaxista","order":"ASCENDING"},
-        {"fieldPath":"estado","order":"ASCENDING"},
-        {"fieldPath":"solicitadoEn","order":"DESCENDING"}
-      ]
-    }
-  ],
-  "fieldOverrides": []
+{
+    "apiVersion":  2,
+    "indexes":  [
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "activo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "completado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "resueltoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "resueltoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "solicitadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "solicitadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "usuarios",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "docsEstado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "docsEnviadosEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "usuarios",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "docsEstado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "actualizadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "pagos_taxista",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "createdAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "resueltoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "solicitadoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "resueltoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "liquidaciones",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "solicitadoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "pagos",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "pagos_taxista",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "createdAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "usuarios",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "docsEstado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "actualizadoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "usuarios",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "docsEstado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "docsEnviadosEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "completado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "completado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "activo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    },
+                    {
+                        "collectionGroup":  "viajes",
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "__name__",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ],
+                        "density":  "SPARSE_ALL"
+                    }
+                ],
+    "fieldOverrides":  [
+
+                       ]
 }
