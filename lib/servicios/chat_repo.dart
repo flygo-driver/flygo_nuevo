@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 class ChatRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -72,10 +73,27 @@ class ChatRepo {
       );
     }
 
+    // Mismo id que [ViajesRepo._ensureChatForTrip]: chats/{viajeId}
+    if (v.isNotEmpty) {
+      await ViajesRepo.ensureChatDocForViaje(v);
+      try {
+        await _tryTouch(v);
+        debugPrint('[CHAT] using trip chat doc: $v');
+        return v;
+      } on FirebaseException catch (e) {
+        debugPrint('[CHAT] touch trip chat "$v": ${e.code}');
+        try {
+          await _tryRepair(cid: v, uidA: uidA, uidB: uidB, viajeId: v);
+          return v;
+        } on FirebaseException catch (e2) {
+          debugPrint('[CHAT] repair trip chat denied: ${e2.code}');
+          rethrow;
+        }
+      }
+    }
+
     final pair = _pairId(uidA, uidB);
     final candidates = <String>[
-      if (v.isNotEmpty) 'ride_${v}_$pair',
-      if (v.isNotEmpty) 'ride_$v',
       'dm_$pair',
       pair,
     ];

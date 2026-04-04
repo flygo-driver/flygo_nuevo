@@ -1,4 +1,3 @@
-// lib/pantallas/cliente/metodos_pago.dart
 import 'package:flutter/material.dart';
 import 'historial_pagos_cliente.dart';
 

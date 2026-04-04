@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tus colores -->
+    <color name="notification_color">#49F18B</color>
+    <color name="ic_launcher_background">#000000</color>
+
+    <!-- Colores base -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- Los que suelen pedir templates/Manifest -->
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+
+    <!-- Útiles comunes -->
+    <color name="colorPrimary">#FF6200EE</color>
+    <color name="colorPrimaryDark">#FF3700B3</color>
+    <color name="colorAccent">#FF03DAC5</color>
+
+    <!-- Splash/background por si se usa en estilos/manifest -->
+    <color name="launch_background">#FF000000</color>
+
+    <!-- Paleta FlyGo opcional -->
+    <color name="flygo_green">#00C853</color>
+    <color name="flygo_dark">#101010</color>
+</resources>

@@ -1,8 +1,14 @@
 // lib/pantallas/cliente/programar_viaje_logic.dart
+//
+// Nota de producción:
+// Este archivo mantiene una implementación "logic" alternativa/legacy.
+// El flujo principal debería preferir los controladores/servicios centrales
+// (p.ej. `ViajesRepo`/widgets actuales) para evitar incoherencias.
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 class ProgramarViajeLogic {
   static Future<void> programar({
@@ -19,12 +25,14 @@ class ProgramarViajeLogic {
         (metodo == 'tarjeta') ? EstadosViaje.pendientePago : EstadosViaje.pendiente;
 
     // Flags de “ahora” vs “programado”
+    final DateTime now = DateTime.now();
     final bool esAhora = viaje.fechaHora.isBefore(
-      DateTime.now().add(const Duration(minutes: 15)),
+      now.add(const Duration(minutes: 15)),
     );
-    final Timestamp publishAt = esAhora
-        ? Timestamp.fromDate(DateTime.now())
-        : Timestamp.fromDate(viaje.fechaHora.subtract(const Duration(minutes: 30)));
+    final DateTime publishInstant = esAhora
+        ? now
+        : ViajesRepo.poolOpensAtForScheduledPickup(viaje.fechaHora, now);
+    final Timestamp publishAt = Timestamp.fromDate(publishInstant);
 
     final data = viaje
         .copyWith(
@@ -39,7 +47,9 @@ class ProgramarViajeLogic {
       ..addAll({
         'programado': !esAhora,
         'esAhora': esAhora,
+        if (!esAhora) 'poolOpeningPushSent': false,
         'publishAt': publishAt,
+        'acceptAfter': publishAt,
         // sin taxista asignado
         'uidTaxista': '',
         'taxistaId': '',

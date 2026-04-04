@@ -4,9 +4,8 @@ class PromocionReservaService {
   const PromocionReservaService();
 
   /// Devuelve el id del viaje promovido a "aceptado",
-  /// o null si no había reserva válida.
+  /// o null si no había cola válida (reserva formal o encolado legado).
   Future<String?> promoverSiExiste({required String uidTaxista}) {
-    // ✅ Llamada estática al repo
-    return ViajesRepo.promoverReservaAlCompletar(uidTaxista: uidTaxista);
+    return ViajesRepo.promoverColaTrasFinalizarTaxista(uidTaxista: uidTaxista);
   }
 }

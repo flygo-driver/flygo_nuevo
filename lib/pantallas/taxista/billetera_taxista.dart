@@ -354,52 +354,51 @@ class _CuentaEmpresaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ref = FirebaseFirestore.instance.collection('config').doc('empresa');
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: ref.snapshots(),
-      builder: (context, snap) {
-        final m = snap.data?.data() ?? {};
-        final titular = (m['titular'] ?? 'FlyGo, SRL').toString();
-        final banco = (m['banco'] ?? 'Banco Ejemplo').toString();
-        final tipo = (m['tipo'] ?? 'Cuenta Corriente').toString();
-        final cuenta = (m['cuenta'] ?? '000-0000000-0').toString();
+    // Valores fijos para que el taxista tenga siempre los datos correctos
+    // de transferencia (independiente de `config/empresa`).
+    const String titular = 'Open ASK Service SRL';
+    const String banco = 'Banco Popular';
+    const String tipo = 'Cuenta Corriente';
+    const String cuenta = '787726249';
 
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.grey[900],
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white24),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Datos para transferencia',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 16,
+              )),
+          const SizedBox(height: 10),
+          _kv('Titular', titular),
+          _kv('Banco', banco),
+          _kv('Tipo', tipo),
+          Row(
             children: [
-              const Text('Datos para transferencia',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
-              const SizedBox(height: 10),
-              _kv('Titular', titular),
-              _kv('Banco', banco),
-              _kv('Tipo', tipo),
-              Row(
-                children: [
-                  Expanded(child: _kv('Cuenta', cuenta)),
-                  IconButton(
-                    tooltip: 'Copiar cuenta',
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: cuenta));
-                      // ignore: use_build_context_synchronously
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Número de cuenta copiado')),
-                      );
-                    },
-                    icon: const Icon(Icons.copy, color: Colors.greenAccent),
-                  )
-                ],
-              ),
+              Expanded(child: _kv('Cuenta', cuenta)),
+              IconButton(
+                tooltip: 'Copiar cuenta',
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: cuenta));
+                  // ignore: use_build_context_synchronously
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Número de cuenta copiado')),
+                  );
+                },
+                icon: const Icon(Icons.copy, color: Colors.greenAccent),
+              )
             ],
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 

@@ -16,7 +16,7 @@ Future<void> guardarViajeCliente({
   required double lonDestino,
   required String metodoPago,
   DateTime? fechaHora, // (no lo usa ViajeData.crearViajeCliente)
-  bool idaYVuelta = false,
+  // bool idaYVuelta = false,  // ❌ ELIMINADO - No se usa en ViajeData.crearViajeCliente
 }) async {
   // ⚠️ Captura referencias sincronas (no dependen de await)
   final messenger = ScaffoldMessenger.of(context);
@@ -30,14 +30,14 @@ Future<void> guardarViajeCliente({
     return;
   }
 
-  // Distancia y precio
+  // Distancia y precio (SIN ida y vuelta porque no se soporta)
   final km = DistanciaService.calcularDistancia(
     latCliente,
     lonCliente,
     latDestino,
     lonDestino,
   );
-  final precio = DistanciaService.calcularPrecio(km, idaYVuelta: idaYVuelta);
+  final precio = DistanciaService.calcularPrecio(km); // ← SIN idaYVuelta
 
   try {
     final id = await ViajeData.crearViajeCliente(
@@ -49,7 +49,6 @@ Future<void> guardarViajeCliente({
       lonDestino: lonDestino,
       precio: precio,
       metodoPago: metodoPago,
-      // (esta función no recibe fechaHora ni idaYVuelta)
     );
 
     // Si la vista fue desmontada mientras esperábamos, salimos

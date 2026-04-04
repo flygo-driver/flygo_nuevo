@@ -5,9 +5,15 @@ class TerminosCondicionesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(title: const Text('Condiciones de uso')),
+      backgroundColor: cs.surface,
+      appBar: AppBar(
+        title: const Text('Condiciones de uso'),
+        backgroundColor: cs.surface,
+        foregroundColor: cs.onSurface,
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: const [
@@ -29,9 +35,15 @@ class PoliticaPrivacidadPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(title: const Text('Política de privacidad')),
+      backgroundColor: cs.surface,
+      appBar: AppBar(
+        title: const Text('Política de privacidad'),
+        backgroundColor: cs.surface,
+        foregroundColor: cs.onSurface,
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: const [
@@ -56,12 +68,14 @@ class _H extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Padding(
       padding: const EdgeInsets.only(top: 18, bottom: 8),
       child: Text(
         t,
-        style: const TextStyle(
-          color: Colors.white,
+        style: TextStyle(
+          color: cs.onSurface,
           fontSize: 18,
           fontWeight: FontWeight.w800,
         ),
@@ -76,11 +90,12 @@ class _P extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Text(
       t,
-      style: const TextStyle(
-        // 0.85 de opacidad => 217
-        color: Color.fromARGB(217, 255, 255, 255),
+      style: TextStyle(
+        color: cs.onSurface.withOpacity(0.85),
         fontSize: 14.5,
         height: 1.4,
       ),

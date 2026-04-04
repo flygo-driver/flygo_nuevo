@@ -2,7 +2,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PoolReservasService {
-  static final _pools = FirebaseFirestore.instance.collection('pools');
+  static final _pools = FirebaseFirestore.instance.collection('viajes_pool');
 
   /// Crea una reserva del cliente con verificación de cupo.
   /// Devuelve el ID de la reserva.

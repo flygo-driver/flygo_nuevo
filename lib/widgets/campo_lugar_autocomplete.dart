@@ -1,5 +1,7 @@
+// lib/widgets/campo_lugar_autocomplete.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../servicios/lugares_service.dart';
 
 class CampoLugarAutocomplete extends StatefulWidget {
@@ -12,6 +14,8 @@ class CampoLugarAutocomplete extends StatefulWidget {
   final ValueChanged<DetalleLugar> onPlaceSelected;
   final ValueChanged<String>? onTextChanged;
   final int minChars;
+  final bool showQuickSuggestions; // NUEVO: mostrar sugerencias rápidas
+  final bool showCategories; // NUEVO: mostrar categorías
 
   const CampoLugarAutocomplete({
     super.key,
@@ -23,139 +27,728 @@ class CampoLugarAutocomplete extends StatefulWidget {
     this.biasLat,
     this.biasLon,
     this.onTextChanged,
-    this.minChars = 2,
+    this.minChars = 1,
+    this.showQuickSuggestions = true, // Activado por defecto
+    this.showCategories = true, // Activado por defecto
   });
 
   @override
   State<CampoLugarAutocomplete> createState() => _CampoLugarAutocompleteState();
 }
 
-class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete> {
+class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
+    with WidgetsBindingObserver {
   final _controller = TextEditingController();
   final _focus = FocusNode();
   final _svc = LugaresService.instance;
 
+  final LayerLink _layerLink = LayerLink();
+  final GlobalKey _fieldKey = GlobalKey();
+
+  OverlayEntry? _entry;
   List<PrediccionLugar> _sugs = const [];
   Timer? _debounce;
   bool _loading = false;
 
+  // Evita que una respuesta anterior (petición atrasada) sobrescriba
+  // el estado actual cuando el usuario escribe rápido.
+  int _autocompleteSeq = 0;
+
+  // NUEVO: lugares recientes
+  List<String> _recientes = [];
+  static const int _maxRecientes = 5;
+
+  // NUEVO: lugares populares de RD
+  final List<Map<String, dynamic>> _lugaresPopulares = [
+    {'nombre': 'Santo Domingo', 'icon': Icons.location_city, 'color': Colors.blue},
+    {'nombre': 'Santiago', 'icon': Icons.location_city, 'color': Colors.indigo},
+    {'nombre': 'Punta Cana', 'icon': Icons.beach_access, 'color': Colors.amber},
+    {'nombre': 'Puerto Plata', 'icon': Icons.beach_access, 'color': Colors.orange},
+    {'nombre': 'La Romana', 'icon': Icons.location_city, 'color': Colors.purple},
+    {'nombre': 'Bávaro', 'icon': Icons.beach_access, 'color': Colors.teal},
+    {'nombre': 'Jarabacoa', 'icon': Icons.terrain, 'color': Colors.green},
+    {'nombre': 'Constanza', 'icon': Icons.terrain, 'color': Colors.lightGreen},
+  ];
+
+  // NUEVO: categorías de búsqueda
+  final List<Map<String, dynamic>> _categorias = [
+    {'nombre': 'Restaurantes', 'tipo': 'restaurant', 'icon': Icons.restaurant, 'color': Colors.red},
+    {'nombre': 'Hoteles', 'tipo': 'lodging', 'icon': Icons.hotel, 'color': Colors.purple},
+    {'nombre': 'Aeropuerto', 'tipo': 'airport', 'icon': Icons.local_airport, 'color': Colors.blue},
+    {'nombre': 'Hospital', 'tipo': 'hospital', 'icon': Icons.local_hospital, 'color': Colors.redAccent},
+    {'nombre': 'Supermercado', 'tipo': 'supermarket', 'icon': Icons.shopping_cart, 'color': Colors.green},
+    {'nombre': 'Farmacia', 'tipo': 'pharmacy', 'icon': Icons.local_pharmacy, 'color': Colors.cyan},
+    {'nombre': 'Gasolinera', 'tipo': 'gas_station', 'icon': Icons.local_gas_station, 'color': Colors.orange},
+    {'nombre': 'Banco', 'tipo': 'bank', 'icon': Icons.account_balance, 'color': Colors.brown},
+  ];
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final init = (widget.initialText ?? '').trim();
     if (init.isNotEmpty) _controller.text = init;
+
     _focus.addListener(() {
-      if (!_focus.hasFocus && mounted) setState(() => _sugs = const []);
+      if (!_focus.hasFocus) {
+        _clearSugsAndOverlay();
+      } else {
+        if (_sugs.isNotEmpty) _showOverlay();
+      }
+    });
+
+    _cargarRecientes();
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    setState(() {});
+    if (_entry != null) _refreshOverlay();
+  }
+
+  // NUEVO: cargar lugares recientes
+  Future<void> _cargarRecientes() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _recientes = prefs.getStringList('lugares_recientes') ?? [];
+    });
+  }
+
+  // NUEVO: guardar lugar reciente
+  Future<void> _guardarReciente(String lugar) async {
+    final prefs = await SharedPreferences.getInstance();
+    var recientes = List<String>.from(_recientes);
+    
+    // Eliminar si ya existe
+    recientes.remove(lugar);
+    // Agregar al inicio
+    recientes.insert(0, lugar);
+    // Limitar tamaño
+    if (recientes.length > _maxRecientes) {
+      recientes = recientes.sublist(0, _maxRecientes);
+    }
+    
+    await prefs.setStringList('lugares_recientes', recientes);
+    setState(() {
+      _recientes = recientes;
     });
   }
 
   @override
   void dispose() {
-    _debounce?.cancel(); _controller.dispose(); _focus.dispose(); super.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _debounce?.cancel();
+    _removeOverlay();
+    _controller.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _entry?.remove();
+    _entry = null;
+  }
+
+  void _clearSugsAndOverlay() {
+    if (mounted) setState(() => _sugs = const []);
+    _removeOverlay();
+  }
+
+  void _showOverlay() {
+    if (!mounted) return;
+    _removeOverlay();
+
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final scheme = theme.colorScheme;
+    final overlayBg = isDark ? const Color(0xFF121212) : scheme.surface;
+    final overlayBorder =
+        isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.35);
+    final dividerColor =
+        isDark ? Colors.white12 : scheme.outline.withValues(alpha: 0.2);
+    final titleStyle = TextStyle(
+      color: isDark ? Colors.white : scheme.onSurface,
+      fontWeight: FontWeight.w600,
+      fontSize: 15,
+    );
+    final subtitleStyle = TextStyle(
+      color: isDark ? Colors.white54 : scheme.onSurface.withValues(alpha: 0.62),
+      fontSize: 12,
+    );
+    final placeIconColor =
+        isDark ? Colors.greenAccent : const Color(0xFF059669);
+
+    _entry = OverlayEntry(
+      builder: (overlayCtx) {
+        final box = _fieldKey.currentContext?.findRenderObject() as RenderBox?;
+        final fieldSize = box?.size ?? const Size(300, 56);
+        final mq = MediaQuery.of(overlayCtx);
+        final kb = mq.viewInsets.bottom;
+        double spaceBelow = 400;
+        double spaceAbove = 200;
+        if (box != null && box.hasSize) {
+          final topLeft = box.localToGlobal(Offset.zero);
+          final screenH = mq.size.height;
+          spaceBelow = screenH - kb - (topLeft.dy + fieldSize.height) - 12;
+          spaceAbove = topLeft.dy - mq.padding.top - 8;
+        }
+        const minComfort = 168.0;
+        final openUpward =
+            spaceBelow < minComfort && spaceAbove >= 120 && spaceAbove >= spaceBelow - 40;
+        final maxListH = (openUpward ? spaceAbove : spaceBelow).clamp(140.0, 340.0);
+
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () {
+                  _focus.unfocus();
+                  _clearSugsAndOverlay();
+                },
+              ),
+            ),
+
+            CompositedTransformFollower(
+              link: _layerLink,
+              showWhenUnlinked: false,
+              targetAnchor:
+                  openUpward ? Alignment.topLeft : Alignment.bottomLeft,
+              followerAnchor:
+                  openUpward ? Alignment.bottomLeft : Alignment.topLeft,
+              offset: Offset(0, openUpward ? -8 : 8),
+              child: Material(
+                color: Colors.transparent,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: fieldSize.width,
+                    maxHeight: maxListH,
+                  ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: overlayBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: overlayBorder),
+                      boxShadow: [
+                        BoxShadow(
+                          color: isDark
+                              ? Colors.black54
+                              : Colors.black.withValues(alpha: 0.12),
+                          blurRadius: 18,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Scrollbar(
+                      thumbVisibility: _sugs.length > 5,
+                      child: ListView.separated(
+                        padding: EdgeInsets.zero,
+                        shrinkWrap: true,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: _sugs.length,
+                        separatorBuilder: (_, __) =>
+                            Divider(height: 1, color: dividerColor),
+                        itemBuilder: (_, i) {
+                          final p = _sugs[i];
+                          final subtitle = (p.secondary ?? '').trim();
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(Icons.place,
+                                color: placeIconColor, size: 20),
+                            title: Text(p.primary, style: titleStyle),
+                            subtitle: subtitle.isNotEmpty
+                                ? Text(subtitle, style: subtitleStyle)
+                                : null,
+                            onTap: () => _selectPrediction(p),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    overlay.insert(_entry!);
+  }
+
+  void _refreshOverlay() {
+    if (_entry == null) return;
+    _entry!.markNeedsBuild();
+  }
+
+  String _norm(String s) {
+    final v = s.toLowerCase().trim();
+    return v
+        .replaceAll('á', 'a')
+        .replaceAll('é', 'e')
+        .replaceAll('í', 'i')
+        .replaceAll('ó', 'o')
+        .replaceAll('ú', 'u')
+        .replaceAll('ñ', 'n')
+        .replaceAll('ü', 'u')
+        .replaceAll('à', 'a')
+        .replaceAll('è', 'e')
+        .replaceAll('ì', 'i')
+        .replaceAll('ò', 'o')
+        .replaceAll('ù', 'u')
+        .replaceAll('ä', 'a')
+        .replaceAll('ë', 'e')
+        .replaceAll('ï', 'i')
+        .replaceAll('ö', 'o')
+        .replaceAll('Ä', 'a')
+        .replaceAll('Ë', 'e')
+        .replaceAll('Ï', 'i')
+        .replaceAll('Ö', 'o')
+        .replaceAll('Á', 'a')
+        .replaceAll('É', 'e')
+        .replaceAll('Í', 'i')
+        .replaceAll('Ó', 'o')
+        .replaceAll('Ú', 'u')
+        .replaceAll('Ñ', 'n')
+        .replaceAll('Ü', 'u');
+  }
+
+  List<PrediccionLugar> _rankPredictions(
+    List<PrediccionLugar> preds,
+    String q,
+  ) {
+    final nq = _norm(q);
+    if (nq.isEmpty) return preds;
+
+    final scored = preds.map((p) {
+      final primary = _norm(p.primary);
+      final secondary = _norm(p.secondary ?? '');
+
+      int score = 0;
+      if (primary.startsWith(nq)) score += 120;
+      if (secondary.isNotEmpty && secondary.contains(nq)) score += 40;
+      if (primary.contains(nq)) score += 20;
+
+      return MapEntry(p, score);
+    }).toList();
+
+    scored.sort((a, b) => b.value.compareTo(a.value));
+    return scored.map((e) => e.key).toList(growable: false);
   }
 
   void _onChanged(String text) {
     widget.onTextChanged?.call(text);
+
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 220), () async {
+    _debounce = Timer(const Duration(milliseconds: 180), () async {
       final q = text.trim();
       if (q.length < widget.minChars || !_focus.hasFocus) {
-        if (mounted) setState(() => _sugs = const []);
+        _clearSugsAndOverlay();
         return;
       }
+
+      final int seq = ++_autocompleteSeq;
       if (mounted) setState(() => _loading = true);
+
       final sugs = await _svc.autocompletar(
         q,
         biasLat: widget.biasLat,
         biasLon: widget.biasLon,
         country: widget.country ?? 'DO',
       );
+
       if (!mounted) return;
-      setState(() { _loading = false; _sugs = sugs; });
+      if (seq != _autocompleteSeq) return;
+      if (_controller.text.trim() != q) return;
+
+      setState(() {
+        _loading = false;
+        _sugs = _rankPredictions(sugs, q);
+      });
+
+      if (_sugs.isEmpty) {
+        _removeOverlay();
+      } else {
+        if (_focus.hasFocus) {
+          if (_entry == null) {
+            _showOverlay();
+          } else {
+            _refreshOverlay();
+          }
+        }
+      }
     });
   }
 
   Future<void> _selectPrediction(PrediccionLugar p) async {
-    setState(() { _sugs = const []; _loading = true; });
+    if (mounted) setState(() => _loading = true);
+    _removeOverlay();
+
     final det = await _svc.detalle(p.placeId);
+
     if (!mounted) return;
     setState(() => _loading = false);
+
     if (det != null) {
       _controller.text = det.displayLabel;
       widget.onTextChanged?.call(det.displayLabel);
+      
+      // Guardar en recientes
+      await _guardarReciente(det.displayLabel);
+      
       widget.onPlaceSelected(det);
       _focus.unfocus();
+      _clearSugsAndOverlay();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo obtener el detalle del lugar.')),
+        const SnackBar(
+          content: Text('No se pudo obtener el detalle del lugar.'),
+        ),
       );
+    }
+  }
+
+  // NUEVO: seleccionar lugar popular
+  Future<void> _seleccionarPopular(String lugar) async {
+    _controller.text = lugar;
+    widget.onTextChanged?.call(lugar);
+    
+    final sugs = await _svc.autocompletar(
+      lugar,
+      biasLat: widget.biasLat,
+      biasLon: widget.biasLon,
+      country: widget.country ?? 'DO',
+    );
+    
+    if (sugs.isNotEmpty && mounted) {
+      await _selectPrediction(sugs.first);
+    }
+  }
+
+  // NUEVO: seleccionar categoría
+  Future<void> _seleccionarCategoria(String tipo, String nombre) async {
+    _controller.text = nombre;
+    widget.onTextChanged?.call(nombre);
+    
+    // Buscar lugares de esa categoría cerca
+    if (widget.biasLat != null && widget.biasLon != null) {
+      // Aquí podrías implementar búsqueda por categoría
+      // Por ahora, buscamos lugares cercanos
+      final sugs = await _svc.autocompletar(
+        nombre,
+        biasLat: widget.biasLat,
+        biasLon: widget.biasLon,
+        country: widget.country ?? 'DO',
+      );
+      
+      if (sugs.isNotEmpty && mounted) {
+        await _selectPrediction(sugs.first);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final accent = isDark ? Colors.greenAccent : const Color(0xFF7C3AED);
     final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: const BorderSide(color: Colors.greenAccent),
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: accent.withValues(alpha: isDark ? 0.9 : 0.55)),
     );
+    final textColor = isDark ? Colors.white : scheme.onSurface;
+    final labelColor =
+        isDark ? Colors.white70 : scheme.onSurface.withValues(alpha: 0.72);
+    final hintColor =
+        isDark ? Colors.white38 : scheme.onSurface.withValues(alpha: 0.45);
+    final fillColor =
+        isDark ? Colors.grey[900]! : const Color(0xFFF5F3FF);
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        TextFormField(
-          controller: _controller,
-          focusNode: _focus,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            labelText: widget.label,
-            hintText: widget.hint ?? 'Escribe para buscar…',
-            labelStyle: const TextStyle(color: Colors.white70),
-            filled: true,
-            fillColor: Colors.black,
-            border: border,
-            enabledBorder: border,
-            focusedBorder: border.copyWith(
-              borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+    final kbInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: kbInset),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CompositedTransformTarget(
+            link: _layerLink,
+            child: TextFormField(
+              key: _fieldKey,
+              controller: _controller,
+              focusNode: _focus,
+              style: TextStyle(color: textColor, fontSize: 16),
+              scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 320),
+              decoration: InputDecoration(
+                labelText: widget.label,
+                hintText: widget.hint ?? 'Ej: Santo Domingo, Punta Cana...',
+                labelStyle: TextStyle(color: labelColor),
+                hintStyle: TextStyle(color: hintColor),
+                filled: true,
+                fillColor: fillColor,
+                prefixIcon: Icon(Icons.search_rounded, color: accent),
+                suffixIcon: _loading
+                    ? Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: accent,
+                          ),
+                        ),
+                      )
+                    : (_controller.text.isNotEmpty
+                        ? IconButton(
+                            icon: Icon(
+                              Icons.clear_rounded,
+                              color: isDark
+                                  ? Colors.white54
+                                  : scheme.onSurface.withValues(alpha: 0.45),
+                            ),
+                            onPressed: () {
+                              _controller.clear();
+                              widget.onTextChanged?.call('');
+                              _clearSugsAndOverlay();
+                            },
+                          )
+                        : null),
+                border: border,
+                enabledBorder: border,
+                focusedBorder: border.copyWith(
+                  borderSide: BorderSide(color: accent, width: 2),
+                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              ),
+              onChanged: _onChanged,
+              onTap: () {
+                if (_sugs.isNotEmpty && _focus.hasFocus) _showOverlay();
+              },
             ),
-            suffixIcon: _loading
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(
-                      width: 16, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : const Icon(Icons.search, color: Colors.white70),
           ),
-          onChanged: _onChanged,
-        ),
-        if (_focus.hasFocus && _sugs.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(top: 6),
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white24),
+
+          const SizedBox(height: 8),
+
+          if (widget.showQuickSuggestions &&
+              _controller.text.isEmpty &&
+              _focus.hasFocus)
+            _buildQuickSuggestions(),
+
+          if (widget.showCategories &&
+              _controller.text.isEmpty &&
+              _focus.hasFocus)
+            _buildCategoriesSection(),
+
+          if (_recientes.isNotEmpty &&
+              _controller.text.isEmpty &&
+              _focus.hasFocus)
+            _buildRecientesSection(),
+        ],
+      ),
+    );
+  }
+
+  // NUEVO: sugerencias rápidas (lugares populares)
+  Widget _buildQuickSuggestions() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final headerColor =
+        isDark ? Colors.white70 : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(
+              'Lugares populares',
+              style: TextStyle(
+                color: headerColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-            constraints: const BoxConstraints(maxHeight: 260),
-            child: ListView.separated(
-              padding: EdgeInsets.zero,
-              shrinkWrap: true,
-              itemCount: _sugs.length,
-              separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
-              itemBuilder: (ctx, i) {
-                final p = _sugs[i];
-                final subtitle = (p.secondary ?? '').trim();
-                return ListTile(
-                  dense: true,
-                  title: Text(p.primary, style: const TextStyle(color: Colors.white)),
-                  subtitle: subtitle.isNotEmpty ? Text(subtitle, style: const TextStyle(color: Colors.white54)) : null,
-                  onTap: () => _selectPrediction(p),
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _lugaresPopulares.map((lugar) {
+              return InkWell(
+                onTap: () => _seleccionarPopular(lugar['nombre']),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: (lugar['color'] as Color).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: lugar['color']),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(lugar['icon'], color: lugar['color'], size: 16),
+                      const SizedBox(width: 6),
+                      Text(
+                        lugar['nombre'],
+                        style: TextStyle(
+                          color: lugar['color'],
+                          fontWeight: FontWeight.w500,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  // NUEVO: categorías de búsqueda
+  Widget _buildCategoriesSection() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final headerColor =
+        isDark ? Colors.white70 : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(
+              'Buscar por categoría',
+              style: TextStyle(
+                color: headerColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          SizedBox(
+            height: 90,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: _categorias.length,
+              itemBuilder: (context, index) {
+                final cat = _categorias[index];
+                return Container(
+                  width: 80,
+                  margin: const EdgeInsets.only(right: 8),
+                  child: InkWell(
+                    onTap: () => _seleccionarCategoria(cat['tipo'], cat['nombre']),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: (cat['color'] as Color).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: cat['color']),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(cat['icon'], color: cat['color'], size: 28),
+                          const SizedBox(height: 4),
+                          Text(
+                            cat['nombre'],
+                            style: TextStyle(
+                              color: cat['color'],
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 );
               },
             ),
           ),
-      ],
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  // NUEVO: lugares recientes
+  Widget _buildRecientesSection() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final scheme = theme.colorScheme;
+    final headerColor =
+        isDark ? Colors.white70 : scheme.onSurface.withValues(alpha: 0.65);
+    final chipBg =
+        isDark ? Colors.grey[800]! : scheme.surfaceContainerHighest;
+    final chipBorder =
+        isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.28);
+    final chipText =
+        isDark ? Colors.white70 : scheme.onSurface.withValues(alpha: 0.85);
+    final iconColor =
+        isDark ? Colors.white54 : scheme.onSurface.withValues(alpha: 0.5);
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(
+              'Recientes',
+              style: TextStyle(
+                color: headerColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _recientes.map((lugar) {
+              return InkWell(
+                onTap: () => _seleccionarPopular(lugar),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: chipBg,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: chipBorder),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.history, color: iconColor, size: 14),
+                      const SizedBox(width: 6),
+                      Text(
+                        lugar.length > 20 ? '${lugar.substring(0, 18)}...' : lugar,
+                        style: TextStyle(
+                          color: chipText,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
     );
   }
 }

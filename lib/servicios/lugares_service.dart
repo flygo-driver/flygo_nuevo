@@ -159,6 +159,69 @@ class LugaresService {
 
   static List<PrediccionLugar> get sugerenciasRapidasDO => _quickChips();
 
+  // Cuando el usuario escribe una dirección "larga" tipo:
+  // "calle 15 sector villa maria numero 45 santo domingo..."
+  // Google puede devolver ZERO_RESULTS para ese input completo.
+  // Generamos variantes más cortas para aumentar tasa de acierto.
+  List<String> _buildAddressVariants(String input) {
+    final q = input.trim();
+    if (q.isEmpty) return const <String>[];
+
+    final lower = q.toLowerCase();
+
+    final calleMatch = RegExp(
+      r'\b(?:calle|av\.|avenida|av)\s*#?\s*(\d{1,6})\b',
+      caseSensitive: false,
+    ).firstMatch(lower);
+
+    final numeroMatch = RegExp(
+      r'\b(?:n[uú]mero|numero|#)\s*#?\s*(\d{1,6})\b',
+      caseSensitive: false,
+    ).firstMatch(lower);
+
+    final sectorMatch = RegExp(
+      r'\bsector\s+([a-z0-9áéíóúñ\s-]{2,50}?)(?=\s+(?:n[uú]mero|numero|#|calle|av\.|avenida|av|santo\s+domingo|sdq|sd)\b|\s*,|$)',
+      caseSensitive: false,
+    ).firstMatch(lower);
+
+    final hasSantoDomingo = RegExp(r'\bsanto\s+domingo\b|\bsdq\b|\bsd\b', caseSensitive: false)
+        .hasMatch(lower);
+
+    final calleNum = calleMatch?.group(1);
+    final numeroNum = numeroMatch?.group(1);
+    final sector = sectorMatch?.group(1)?.trim();
+
+    final variants = <String>[q];
+
+    if (sector != null && sector.isNotEmpty) {
+      variants.add('sector $sector');
+    }
+
+    if (calleNum != null && sector != null && sector.isNotEmpty) {
+      final v = 'calle $calleNum sector $sector';
+      if (v.toLowerCase() != q.toLowerCase()) variants.add(v);
+    }
+
+    if (calleNum != null && numeroNum != null && hasSantoDomingo) {
+      final v = 'calle $calleNum numero $numeroNum santo domingo';
+      if (v.toLowerCase() != q.toLowerCase()) variants.add(v);
+    } else if (calleNum != null && numeroNum != null) {
+      final v = 'calle $calleNum numero $numeroNum';
+      if (v.toLowerCase() != q.toLowerCase()) variants.add(v);
+    }
+
+    // Quitar duplicados preservando orden
+    final seen = <String>{};
+    final out = <String>[];
+    for (final v in variants) {
+      final k = v.toLowerCase();
+      if (seen.contains(k)) continue;
+      seen.add(k);
+      out.add(v);
+    }
+    return out;
+  }
+
   Future<List<PrediccionLugar>> autocompletar(
     String query, { String? country, double? biasLat, double? biasLon }
   ) async {
@@ -186,67 +249,98 @@ class LugaresService {
     }
 
     try {
-      final params = <String, String>{
-        'input': q,
+      // Sin `types`: cobertura tipo buscador de Google (sectores, barrios, villas,
+      // calles, puntos de interés), no solo direcciones con número.
+      final baseParams = <String, String>{
         'key': app_keys.kGooglePlacesApiKey,
         'language': 'es',
       };
       if (country != null && country.trim().isNotEmpty) {
-        params['components'] = 'country:${country.trim()}';
+        baseParams['components'] = 'country:${country.trim()}';
       }
       if (biasLat != null && biasLon != null) {
-        params['location'] = '${biasLat.toStringAsFixed(6)},${biasLon.toStringAsFixed(6)}';
-        params['radius'] = '50000';
+        baseParams['location'] =
+            '${biasLat.toStringAsFixed(6)},${biasLon.toStringAsFixed(6)}';
+        // Sesgo amplio (RD); no restringe fuera del radio, solo prioriza la zona.
+        baseParams['radius'] = '150000';
       }
 
-      final uri = Uri.https('maps.googleapis.com','/maps/api/place/autocomplete/json',params);
-      final json = await _getJson(uri);
+      final variants = _buildAddressVariants(q);
+      final expanded = <String>{...variants};
+      final cq = q.trim();
+      if (country != null &&
+          country.trim().isNotEmpty &&
+          cq.isNotEmpty &&
+          !RegExp(
+            r'república|republica|dominicana|dominican|\b(rd|do)\b',
+            caseSensitive: false,
+          ).hasMatch(cq)) {
+        expanded.add('$cq, República Dominicana');
+        expanded.add('$cq, Dominican Republic');
+      }
+
       final remotes = <PrediccionLugar>[];
+      final seenIds = <String>{};
 
-      if (json != null) {
+      void parseAndAdd(Map<String, dynamic>? json) {
+        if (json == null) return;
         final status = (json['status'] ?? '').toString();
-        if (status == 'OK' || status == 'ZERO_RESULTS') {
-          final List list = (json['predictions'] as List?) ?? const [];
-          for (final e in list) {
-            final m = e as Map<String, dynamic>;
-            final placeId = (m['place_id'] ?? '').toString();
-            final desc = (m['description'] ?? '').toString();
+        if (status != 'OK' && status != 'ZERO_RESULTS') return;
+        final List list = (json['predictions'] as List?) ?? const [];
+        for (final e in list) {
+          final m = e as Map<String, dynamic>;
+          final placeId = (m['place_id'] ?? '').toString();
+          if (placeId.isEmpty) continue;
+          if (!seenIds.add(placeId)) continue;
 
-            String primary = desc;
-            String? secondary;
-            final sf = m['structured_formatting'] as Map<String, dynamic>?;
-            final mainText = sf?['main_text']?.toString();
-            final secText = sf?['secondary_text']?.toString();
-            if ((mainText ?? '').trim().isNotEmpty) {
-              primary = mainText!.trim();
-              secondary = (secText ?? '').trim().isEmpty ? null : secText!.trim();
-            } else {
-              final parts = desc.split(',').map((s)=>s.trim()).toList();
-              if (parts.length > 1) {
-                primary = parts.first;
-                secondary = parts.sublist(1).join(', ');
-              }
+          final desc = (m['description'] ?? '').toString();
+          String primary = desc;
+          String? secondary;
+          final sf = m['structured_formatting'] as Map<String, dynamic>?;
+          final mainText = sf?['main_text']?.toString();
+          final secText = sf?['secondary_text']?.toString();
+          if ((mainText ?? '').trim().isNotEmpty) {
+            primary = mainText!.trim();
+            secondary =
+                (secText ?? '').trim().isEmpty ? null : secText!.trim();
+          } else {
+            final parts = desc.split(',').map((s) => s.trim()).toList();
+            if (parts.length > 1) {
+              primary = parts.first;
+              secondary = parts.sublist(1).join(', ');
             }
-            remotes.add(PrediccionLugar(
-              placeId: placeId.isNotEmpty? placeId : desc,
-              primary: primary.isNotEmpty? primary : desc,
-              secondary: secondary,
-            ));
           }
+
+          remotes.add(PrediccionLugar(
+            placeId: placeId,
+            primary: primary.isNotEmpty ? primary : desc,
+            secondary: secondary,
+          ));
         }
+      }
+
+      for (final v in expanded) {
+        if (v.trim().isEmpty) continue;
+        final params = <String, String>{...baseParams, 'input': v.trim()};
+        final uri = Uri.https(
+          'maps.googleapis.com',
+          '/maps/api/place/autocomplete/json',
+          params,
+        );
+        parseAndAdd(await _getJson(uri));
+        if (remotes.length >= 15) break;
       }
 
       final out = <PrediccionLugar>[];
-      final seen = <String>{};
+      final seenPrimary = <String>{};
       for (final p in [...locals, ...remotes]) {
-        final k = p.primary.toLowerCase();
-        if (seen.contains(k)) {
-          continue;
-        }
-        seen.add(k);
+        final k = '${p.placeId}|${_norm(p.primary)}';
+        if (seenPrimary.contains(k)) continue;
+        seenPrimary.add(k);
         out.add(p);
       }
-      if (out.isEmpty || _norm(q).length >= 2) {
+      // Solo ofrecer texto libre si Google no devolvió sugerencias (evita duplicar la lista).
+      if (remotes.isEmpty && cq.length >= 2) {
         out.add(PrediccionLugar(placeId: q, primary: q, secondary: country));
       }
       return out;

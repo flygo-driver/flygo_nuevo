@@ -1,0 +1,870 @@
+﻿[
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "activo",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "updatedAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLjyn4wJ",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "resueltoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/liquidaciones/indexes/CICAgPi9ipAJ",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "tipo",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "emailCliente",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fecha",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos/indexes/CICAgNj4jYAK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidCliente",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "completado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "finalizadoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgITszIAK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "esAhora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgJjU-YAK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "esAhora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgITO7YIK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fechaHora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgPiftYMK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "resueltoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/liquidaciones/indexes/CICAgLjy1YQK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "programado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLiTzYUK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fecha",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos/indexes/CICAgJil0IYK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "programado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgPjg7IcK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "esAhora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "acceptAfter",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgNja0ogK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidCliente",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "finalizadoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgPjC9ogK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fechaHora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgJiHgokK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fechaHora",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgPi97okK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fecha",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos/indexes/CICAgOi39IkK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "esAhora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fechaHora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLjRh4oK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidCliente",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fechaHora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgJjFvYoK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "solicitadoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/liquidaciones/indexes/CICAgNjp84oK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "programado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLjyn4wK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidCliente",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "updatedAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLiT_JAK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "updatedAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLiIjZIK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "tipo",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "emailTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fecha",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos/indexes/CICAgPifq5IK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "esAhora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "acceptAfter",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLjRnZMK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "createdAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos_taxista/indexes/CICAgLiT25QK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "tipo",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fecha",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos/indexes/CICAgLjyi5UK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "docsEstado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "docsEnviadosEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/usuarios/indexes/CICAgJiHlpgK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "esAhora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "acceptAfter",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgLiTsZgK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "esAhora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "acceptAfter",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fechaHora",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgPi9-ZgK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "solicitadoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/liquidaciones/indexes/CICAgLjywZkK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "uidCliente",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "completado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "finalizadoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgPjgiJoK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "tipo",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fecha",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos/indexes/CICAgJjFx5sK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "docsEstado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "actualizadoEn",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/usuarios/indexes/CICAgNj4kZ4K",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "uidTaxista",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "publishAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/viajes/indexes/CICAgJjU7p4K",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  {
+    "density": "SPARSE_ALL",
+    "fields": [
+      {
+        "fieldPath": "tipo",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "estado",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "fecha",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "name": "projects/flygo-rd/databases/(default)/collectionGroups/pagos/indexes/CICAgPi9ipAL",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  }
+]

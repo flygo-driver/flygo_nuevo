@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 import '../../widgets/cliente_drawer.dart';
+import '../../widgets/rai_app_bar.dart';
 import '../../modelo/viaje.dart';
 import '../../data/viaje_data.dart';
 import '../../utils/calculos/estados.dart';
@@ -19,21 +20,8 @@ class HistorialViajesCliente extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.black,
       drawer: const ClienteDrawer(),
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
-            tooltip: 'Menú',
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-          ),
-        ),
-        title: const Text(
-          'Historial de viajes',
-          style: TextStyle(color: Colors.white),
-        ),
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.white),
+      appBar: const RaiAppBar(
+        title: 'Historial de viajes',
       ),
       body: user == null
           ? const Center(

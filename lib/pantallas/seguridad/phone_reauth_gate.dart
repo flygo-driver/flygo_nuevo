@@ -1,3 +1,4 @@
+// lib/pantallas/auth/phone_reauth_gate.dart  (ruta de ejemplo)
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -181,7 +182,7 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
       'actualizadoEn': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // 🔐 Además guarda sello de reauth y vigencia en /seguridad/{uid} (para el gate por caducidad)
+    // 🔐 Además guarda sello de reauth y vigencia en /seguridad/{uid}
     final segRef = FirebaseFirestore.instance.collection('seguridad').doc(user.uid);
     await segRef.set({
       'telefono': phone,
@@ -201,6 +202,7 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
         destino = const TaxistaEntry();
         break;
       default:
+        // 👉 AQUÍ: usamos la clase que SÍ existe
         destino = const ClienteHome();
     }
 

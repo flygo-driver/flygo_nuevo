@@ -1,11 +1,11 @@
 {
-    "name": "flygo_nuevo",
-    "short_name": "flygo_nuevo",
+    "name": "RAI Driver",
+    "short_name": "RAI Driver",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "RAI Driver — movilidad.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

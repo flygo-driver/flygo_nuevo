@@ -74,43 +74,56 @@ class _HistorialPagosClienteState extends State<HistorialPagosCliente> {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
+    final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: cs.surface,
       drawer: const ClienteDrawer(),
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: cs.surface,
+        foregroundColor: cs.onSurface,
+        surfaceTintColor: cs.surfaceTint,
+        elevation: 0,
+        scrolledUnderElevation: 1,
         leading: Builder(
           builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
-            tooltip: 'Menú',
+            icon: Icon(Icons.menu, color: cs.onSurface),
             onPressed: () => Scaffold.of(ctx).openDrawer(),
           ),
         ),
-        title: const Text('Mis pagos', style: TextStyle(color: Colors.white)),
+        title: Text(
+          'Mis pagos',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: cs.onSurface,
+          ),
+        ),
         centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: user == null
-          ? const Center(
+          ? Center(
               child: Text(
                 'Debes iniciar sesión para ver tus pagos',
-                style: TextStyle(color: Colors.white),
+                style: TextStyle(color: cs.onSurfaceVariant),
               ),
             )
           : RefreshIndicator(
-              color: Colors.greenAccent,
-              backgroundColor: Colors.black,
+              color: cs.primary,
+              backgroundColor: cs.surface,
               onRefresh: _cargarPagos,
-              child: _buildBody(),
+              child: _buildBody(context),
             ),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     if (_cargando) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.greenAccent),
+      return Center(
+        child: CircularProgressIndicator(color: cs.primary),
       );
     }
     if (_error != null) {
@@ -122,7 +135,7 @@ class _HistorialPagosClienteState extends State<HistorialPagosCliente> {
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Text(
               'Error al cargar tus pagos.\n$_error',
-              style: const TextStyle(color: Colors.white70),
+              style: TextStyle(color: cs.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
           ),
@@ -130,16 +143,16 @@ class _HistorialPagosClienteState extends State<HistorialPagosCliente> {
           Center(
             child: OutlinedButton.icon(
               onPressed: _cargarPagos,
-              icon: const Icon(Icons.refresh, color: Colors.greenAccent),
-              label: const Text(
+              icon: Icon(Icons.refresh, color: cs.primary),
+              label: Text(
                 'Reintentar',
                 style: TextStyle(
-                  color: Colors.greenAccent,
+                  color: cs.primary,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.greenAccent),
+                side: BorderSide(color: cs.primary),
               ),
             ),
           ),
@@ -149,12 +162,15 @@ class _HistorialPagosClienteState extends State<HistorialPagosCliente> {
     if (_pagos.isEmpty) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        children: const [
-          SizedBox(height: 60),
+        children: [
+          const SizedBox(height: 60),
           Center(
             child: Text(
               'No tienes pagos registrados.',
-              style: TextStyle(color: Colors.white, fontSize: 18),
+              style: TextStyle(
+                color: cs.onSurfaceVariant,
+                fontSize: 18,
+              ),
             ),
           ),
         ],
@@ -174,16 +190,28 @@ class _HistorialPagosClienteState extends State<HistorialPagosCliente> {
         final estado = '${pago['estado'] ?? ''}';
 
         return Card(
-          color: Colors.grey[900],
+          color: cs.surfaceContainerHighest.withValues(
+            alpha: isDark ? 0.5 : 0.72,
+          ),
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          elevation: isDark ? 1 : 0.5,
+          shadowColor: cs.shadow.withValues(alpha: 0.12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: cs.outlineVariant),
+          ),
           child: ListTile(
             title: Text(
               "RD\$${monto.toStringAsFixed(2)}",
-              style: const TextStyle(color: Colors.white, fontSize: 18),
+              style: TextStyle(
+                color: cs.onSurface,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             subtitle: Text(
               "${fecha.day}/${fecha.month}/${fecha.year} • $metodo${estado.isNotEmpty ? ' • $estado' : ''}",
-              style: const TextStyle(color: Colors.greenAccent),
+              style: TextStyle(color: cs.primary),
             ),
           ),
         );

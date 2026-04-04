@@ -12,9 +12,16 @@ import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 
 /// Firestore:
 /// usuarios/{uid} {
-///   docs: { licenciaUrl?, matriculaUrl?, seguroUrl?, updatedAt },
+///   docs: {
+///     licenciaUrl?,
+///     matriculaUrl?,
+///     seguroUrl?,
+///     fotoVehiculoUrl?,
+///     placaUrl?,
+///     updatedAt
+///   },
 ///   docsEstado: 'pendiente' | 'en_revision' | 'aprobado' | 'rechazado',
-///   documentosCompletos: bool,
+///   documentosCompletos: bool,   // solo admin modifica
 ///   docsComentarioAdmin?: string
 /// }
 /// Storage:
@@ -38,6 +45,8 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
   String? licenciaUrl;
   String? matriculaUrl;
   String? seguroUrl;
+  String? fotoVehiculoUrl;
+  String? placaUrl;
 
   @override
   void initState() {
@@ -53,11 +62,18 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         return;
       }
 
+      // Forzar refresco del token
+      await u.getIdToken(true);
+
       final snap =
           await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).get();
       final data = (snap.data() ?? <String, dynamic>{});
       final docs = (data['docs'] as Map?) ?? {};
-      final estado = (data['docsEstado'] as String?)?.toLowerCase() ?? 'pendiente';
+      final rawEstado = (data['docsEstado'] ?? data['estadoDocumentos'] ?? 'pendiente')
+          .toString()
+          .trim();
+      final estado =
+          rawEstado.isEmpty ? 'pendiente' : rawEstado.toLowerCase();
 
       if (!mounted) return;
       setState(() {
@@ -66,6 +82,8 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         licenciaUrl = (docs['licenciaUrl'] as String?);
         matriculaUrl = (docs['matriculaUrl'] as String?);
         seguroUrl = (docs['seguroUrl'] as String?);
+        fotoVehiculoUrl = (docs['fotoVehiculoUrl'] as String?);
+        placaUrl = (docs['placaUrl'] as String?);
         _cargando = false;
       });
     } catch (e) {
@@ -77,12 +95,15 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
     }
   }
 
-  Future<void> _tomarFotoYSubir(String tipo) async {
+  Future<void> _seleccionarFotoYSubir(String tipo, ImageSource source) async {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return;
 
+    // Forzar refresco del token
+    await u.getIdToken(true);
+
     final XFile? img = await _picker.pickImage(
-      source: ImageSource.camera,
+      source: source,
       imageQuality: 85,
       preferredCameraDevice: CameraDevice.rear,
     );
@@ -110,15 +131,18 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       );
       final url = await ref.getDownloadURL();
 
-      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).set({
-        'docs': {
-          '${tipo}Url': url,
-          'updatedAt': FieldValue.serverTimestamp(),
-        },
-        if (docsEstado == 'aprobado') 'docsEstado': 'pendiente',
-        'documentosCompletos': false, // se habilita SOLO al aprobar
+      final Map<String, dynamic> updateData = {
+        'docs.${tipo}Url': url,
+        'docs.updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+      // Si el estado estaba aprobado, lo ponemos en pendiente (para nueva revisión)
+      if (docsEstado == 'aprobado') {
+        updateData['docsEstado'] = 'pendiente';
+        updateData['estadoDocumentos'] = 'pendiente';
+      }
+
+      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).update(updateData);
 
       await _cargar();
 
@@ -126,6 +150,13 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('✅ $tipo subido.')),
       );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      String msg = '❌ Error subiendo $tipo: ${e.message}';
+      if (e.code == 'permission-denied') {
+        msg = 'No tienes permisos para subir documentos. Contacta al soporte.';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -134,6 +165,54 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
     } finally {
       if (mounted) setState(() => _subiendo = false);
     }
+  }
+
+  Future<void> _elegirFuenteYSubir(String tipo) async {
+    if (_subiendo) return;
+    final ImageSource? source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1C),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Selecciona fuente',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.photo_camera, color: Colors.white),
+                title: const Text('Cámara', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Colors.white),
+                title: const Text('Galería', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (source == null) return;
+    await _seleccionarFotoYSubir(tipo, source);
   }
 
   Future<void> _eliminar(String tipo, String? url) async {
@@ -164,21 +243,28 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       final ref = FirebaseStorage.instance.refFromURL(url);
       await ref.delete();
 
-      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).set({
-        'docs': {
-          '${tipo}Url': FieldValue.delete(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        },
-        if (docsEstado == 'aprobado') 'docsEstado': 'pendiente',
-        'documentosCompletos': false,
+      final Map<String, dynamic> updateData = {
+        'docs.${tipo}Url': FieldValue.delete(),
+        'docs.updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+      if (docsEstado == 'aprobado') {
+        updateData['docsEstado'] = 'pendiente';
+        updateData['estadoDocumentos'] = 'pendiente';
+      }
+
+      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).update(updateData);
 
       await _cargar();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('🗑️ $tipo eliminado.')),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('❌ No se pudo eliminar $tipo: ${e.message}')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -192,32 +278,46 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return;
 
-    final tiene3 = (licenciaUrl?.isNotEmpty == true) &&
+    // Verificar que los 5 documentos estén subidos
+    final tiene5 = (licenciaUrl?.isNotEmpty == true) &&
         (matriculaUrl?.isNotEmpty == true) &&
-        (seguroUrl?.isNotEmpty == true);
+        (seguroUrl?.isNotEmpty == true) &&
+        (fotoVehiculoUrl?.isNotEmpty == true) &&
+        (placaUrl?.isNotEmpty == true);
 
-    if (!tiene3) {
+    if (!tiene5) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sube los 3 documentos antes de enviar.')),
+        const SnackBar(content: Text('Sube los 5 documentos antes de enviar.')),
       );
       return;
     }
 
+    // Forzar refresco del token
+    await u.getIdToken(true);
+
     try {
-      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).set({
+      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).update({
         'docsEstado': 'en_revision',
-        'documentosCompletos': false, // SOLO al aprobar
-        'docsComentarioAdmin': FieldValue.delete(),
+        'estadoDocumentos': 'en_revision',
         'docsEnviadosEn': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
 
       await _cargar();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('📨 Enviado a revisión.')),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      String msg = '❌ Error al enviar: ${e.message}';
+      if (e.code == 'permission-denied') {
+        msg = 'No tienes permisos para modificar el estado. Verifica las reglas de Firestore.';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -274,7 +374,6 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
-                          // ✅ sin deprecated: usamos withValues
                           color: colorEstado.withValues(alpha: 0.12),
                           border: Border.all(color: colorEstado.withValues(alpha: 0.65)),
                           borderRadius: BorderRadius.circular(24),
@@ -327,7 +426,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                     _DocItem(
                       nombre: 'Licencia de conducir',
                       url: licenciaUrl,
-                      onSubirCamara: () => _tomarFotoYSubir('licencia'),
+                      onSubir: () => _elegirFuenteYSubir('licencia'),
                       onEliminar: () => _eliminar('licencia', licenciaUrl),
                     ),
                     const SizedBox(height: 12),
@@ -335,7 +434,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                     _DocItem(
                       nombre: 'Matrícula del vehículo',
                       url: matriculaUrl,
-                      onSubirCamara: () => _tomarFotoYSubir('matricula'),
+                      onSubir: () => _elegirFuenteYSubir('matricula'),
                       onEliminar: () => _eliminar('matricula', matriculaUrl),
                     ),
                     const SizedBox(height: 12),
@@ -343,8 +442,24 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                     _DocItem(
                       nombre: 'Seguro',
                       url: seguroUrl,
-                      onSubirCamara: () => _tomarFotoYSubir('seguro'),
+                      onSubir: () => _elegirFuenteYSubir('seguro'),
                       onEliminar: () => _eliminar('seguro', seguroUrl),
+                    ),
+                    const SizedBox(height: 12),
+
+                    _DocItem(
+                      nombre: 'Foto del vehículo',
+                      url: fotoVehiculoUrl,
+                      onSubir: () => _elegirFuenteYSubir('fotoVehiculo'),
+                      onEliminar: () => _eliminar('fotoVehiculo', fotoVehiculoUrl),
+                    ),
+                    const SizedBox(height: 12),
+
+                    _DocItem(
+                      nombre: 'Foto de la placa',
+                      url: placaUrl,
+                      onSubir: () => _elegirFuenteYSubir('placa'),
+                      onEliminar: () => _eliminar('placa', placaUrl),
                     ),
 
                     const SizedBox(height: 16),
@@ -386,13 +501,13 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
 class _DocItem extends StatelessWidget {
   final String nombre;
   final String? url;
-  final VoidCallback onSubirCamara;
+  final VoidCallback onSubir;
   final VoidCallback onEliminar;
 
   const _DocItem({
     required this.nombre,
     required this.url,
-    required this.onSubirCamara,
+    required this.onSubir,
     required this.onEliminar,
   });
 
@@ -465,11 +580,11 @@ class _DocItem extends StatelessWidget {
 
             const SizedBox(width: 8),
 
-            // Acción: SOLO Cámara
+            // Acción: Cámara o Galería
             ElevatedButton.icon(
-              onPressed: onSubirCamara,
-              icon: const Icon(Icons.photo_camera, size: 18),
-              label: const Text('Cámara'),
+              onPressed: onSubir,
+              icon: const Icon(Icons.upload_file, size: 18),
+              label: const Text('Subir'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.green,

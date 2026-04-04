@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FlyGo</string>
+
+    <!-- 🔑 Maps SDK for Android -->
+    <string name="google_maps_api_key">AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w</string>
+
+    <!-- 🔔 TODO usa el canal con sonido FlyGo (debe coincidir con _channelId) -->
+    <string name="default_notification_channel_id">flygo_offers_v11</string>
+
+    <!-- 🛈 Textos de permisos -->
+    <string name="permiso_gps">Se requiere acceso a la ubicación para mostrar el mapa.</string>
+    <string name="permiso_camara">Se requiere acceso a la cámara para subir documentos.</string>
+</resources>

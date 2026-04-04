@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
+import 'package:flygo_nuevo/pantallas/cliente/reportar_viaje.dart';
 
 class CalificarServicio extends StatefulWidget {
   final Viaje viaje;
@@ -70,21 +71,30 @@ class _CalificarServicioState extends State<CalificarServicio> {
   Widget build(BuildContext context) {
     final v = widget.viaje;
     final yaCalificado = v.calificado == true;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final onSurface = cs.onSurface;
+    final muted = onSurface.withValues(alpha: 0.72);
+    final hint = onSurface.withValues(alpha: 0.45);
+    final fieldFill = isDark ? (Colors.grey[900] ?? const Color(0xFF212121)) : const Color(0xFFF1F5F9);
 
     return PopScope(
       // Bloquea el "atrás" mientras está guardando
       canPop: !_cargando,
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: theme.scaffoldBackgroundColor,
         appBar: AppBar(
-          backgroundColor: Colors.black,
-          iconTheme: const IconThemeData(color: Colors.white),
-          title: const Text(
+          backgroundColor: theme.appBarTheme.backgroundColor,
+          foregroundColor: theme.appBarTheme.foregroundColor,
+          iconTheme: IconThemeData(color: theme.appBarTheme.foregroundColor),
+          elevation: theme.appBarTheme.elevation ?? 0,
+          title: Text(
             'Calificar Servicio',
             style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.bold,
-              color: Colors.greenAccent,
+              color: cs.primary,
             ),
           ),
         ),
@@ -97,8 +107,8 @@ class _CalificarServicioState extends State<CalificarServicio> {
                 if (v.origen.isNotEmpty || v.destino.isNotEmpty) ...[
                   Text(
                     '🧭 ${v.origen} → ${v.destino}',
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: onSurface,
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                     ),
@@ -108,17 +118,17 @@ class _CalificarServicioState extends State<CalificarServicio> {
                 if (v.precio > 0) ...[
                   Text(
                     '💰 Total: RD\$${v.precio.toStringAsFixed(2)}',
-                    style: const TextStyle(color: Colors.white70),
+                    style: TextStyle(color: muted),
                   ),
                   const SizedBox(height: 16),
                 ],
 
-                const Text(
+                Text(
                   '¿Qué te pareció el servicio?',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                    color: onSurface,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -133,7 +143,7 @@ class _CalificarServicioState extends State<CalificarServicio> {
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: Icon(
                           filled ? Icons.star : Icons.star_border,
-                          color: Colors.greenAccent,
+                          color: cs.primary,
                           size: 32,
                         ),
                       ),
@@ -144,7 +154,7 @@ class _CalificarServicioState extends State<CalificarServicio> {
                 const SizedBox(height: 8),
                 Text(
                   '${_calificacion.toInt()} ${_calificacion.toInt() == 1 ? 'estrella' : 'estrellas'}',
-                  style: const TextStyle(color: Colors.white70),
+                  style: TextStyle(color: muted),
                 ),
 
                 const SizedBox(height: 16),
@@ -155,8 +165,8 @@ class _CalificarServicioState extends State<CalificarServicio> {
                   min: 1,
                   max: 5,
                   divisions: 4,
-                  activeColor: Colors.greenAccent,
-                  inactiveColor: Colors.white24,
+                  activeColor: cs.primary,
+                  inactiveColor: cs.outline.withValues(alpha: isDark ? 0.45 : 0.35),
                   label: '${_calificacion.toInt()}',
                   onChanged: yaCalificado
                       ? null
@@ -166,31 +176,31 @@ class _CalificarServicioState extends State<CalificarServicio> {
                 ),
 
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'Comentario (opcional)',
-                  style: TextStyle(color: Colors.white70),
+                  style: TextStyle(color: muted),
                 ),
                 const SizedBox(height: 8),
 
                 TextField(
                   controller: _comentarioController,
                   enabled: !yaCalificado,
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  style: TextStyle(color: onSurface, fontSize: 16),
                   maxLines: 3,
                   maxLength: _maxComentario,
                   decoration: InputDecoration(
-                    counterStyle: const TextStyle(color: Colors.white54),
+                    counterStyle: TextStyle(color: hint),
                     hintText: 'Escribe algo…',
-                    hintStyle: const TextStyle(color: Colors.white30),
+                    hintStyle: TextStyle(color: hint),
                     filled: true,
-                    fillColor: Colors.grey[900],
+                    fillColor: fieldFill,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Colors.greenAccent),
+                      borderSide: BorderSide(color: cs.primary.withValues(alpha: 0.65)),
                     ),
                     focusedBorder: OutlineInputBorder(
-                      borderSide: const BorderSide(
-                        color: Colors.greenAccent,
+                      borderSide: BorderSide(
+                        color: cs.primary,
                         width: 2,
                       ),
                       borderRadius: BorderRadius.circular(12),
@@ -201,9 +211,9 @@ class _CalificarServicioState extends State<CalificarServicio> {
                 const SizedBox(height: 24),
 
                 _cargando
-                    ? const Center(
+                    ? Center(
                         child: CircularProgressIndicator(
-                          color: Colors.greenAccent,
+                          color: cs.primary,
                         ),
                       )
                     : SizedBox(
@@ -217,8 +227,9 @@ class _CalificarServicioState extends State<CalificarServicio> {
                           ),
                           onPressed: yaCalificado ? null : _guardarCalificacion,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.green,
+                            backgroundColor: cs.primary,
+                            foregroundColor:
+                                isDark ? Colors.black87 : Colors.white,
                             minimumSize: const Size(double.infinity, 55),
                             textStyle: const TextStyle(
                               fontSize: 18,
@@ -230,11 +241,30 @@ class _CalificarServicioState extends State<CalificarServicio> {
                           ),
                         ),
                       ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ReportarViaje(viaje: widget.viaje),
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: cs.primary,
+                      side: BorderSide(color: cs.primary.withValues(alpha: 0.55)),
+                    ),
+                    icon: const Icon(Icons.flag_outlined),
+                    label: const Text('Reportar problema de este viaje'),
+                  ),
+                ),
                 if (yaCalificado) ...[
                   const SizedBox(height: 10),
-                  const Text(
+                  Text(
                     'Este viaje ya fue calificado. ¡Gracias!',
-                    style: TextStyle(color: Colors.white54),
+                    style: TextStyle(color: hint),
                   ),
                 ],
               ],

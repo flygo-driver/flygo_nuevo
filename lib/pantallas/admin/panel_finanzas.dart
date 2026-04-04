@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../servicios/wallet_service.dart';
-import '../../utils/estilos.dart';
 import '../../widgets/admin_drawer.dart'; // ⬅️ NUEVO (para cerrar sesión desde el drawer)
+import 'admin_ui_theme.dart';
 
 class PanelFinanzasAdmin extends StatefulWidget {
   const PanelFinanzasAdmin({super.key});
@@ -107,21 +107,36 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
     final ctrl = TextEditingController(text: _filtro);
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.black,
+      backgroundColor: AdminUi.sheetSurface(context),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      builder: (_) => Padding(
+      builder: (sheetCtx) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Filtros', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+            Text('Filtros', style: TextStyle(color: AdminUi.onCard(sheetCtx), fontSize: 16, fontWeight: FontWeight.w700)),
             const SizedBox(height: 12),
             TextField(
               controller: ctrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
+              style: TextStyle(color: AdminUi.onCard(sheetCtx)),
+              decoration: InputDecoration(
                 labelText: 'Buscar por nombre, email o UID',
-                prefixIcon: Icon(Icons.search, color: Colors.white70),
+                labelStyle: TextStyle(color: AdminUi.secondary(sheetCtx)),
+                prefixIcon: Icon(Icons.search, color: AdminUi.secondary(sheetCtx)),
+                filled: true,
+                fillColor: AdminUi.inputFill(sheetCtx),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: AdminUi.borderSubtle(sheetCtx)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: AdminUi.borderSubtle(sheetCtx)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Theme.of(sheetCtx).colorScheme.primary, width: 1.4),
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -211,12 +226,12 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
     if (!mounted) return;
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('CSV del rango', style: TextStyle(color: Colors.white)),
+      builder: (dCtx) => AlertDialog(
+        backgroundColor: AdminUi.dialogSurface(dCtx),
+        title: Text('CSV del rango', style: TextStyle(color: AdminUi.onCard(dCtx))),
         content: SizedBox(
           width: 600,
-          child: SelectableText(csv, style: const TextStyle(color: Colors.white70)),
+          child: SelectableText(csv, style: TextStyle(color: AdminUi.secondary(dCtx))),
         ),
         actions: [
           TextButton(
@@ -226,7 +241,7 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
                 const SnackBar(content: Text('CSV copiado al portapapeles')),
               );
             },
-            child: const Text('Copiar'),
+            child: Text('Copiar', style: TextStyle(color: Theme.of(dCtx).colorScheme.primary)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
@@ -276,20 +291,21 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(), // ⬅️ NUEVO (mismo drawer que en AdminHome)
       appBar: AppBar(
-        backgroundColor: EstilosFlyGo.fondoOscuro,
-        title: const Text('Panel de Finanzas', style: TextStyle(color: EstilosFlyGo.textoBlanco)),
-        iconTheme: const IconThemeData(color: Colors.white),
+        backgroundColor: AdminUi.scaffold(context),
+        foregroundColor: AdminUi.appBarFg(context),
+        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
+        title: Text('Panel de Finanzas', style: TextStyle(color: AdminUi.onCard(context))),
         actions: [
           IconButton(
-            icon: const Icon(Icons.clear_all, color: Colors.white70),
+            icon: Icon(Icons.clear_all, color: AdminUi.secondary(context)),
             tooltip: 'Limpiar rango',
             onPressed: _clearRango,
           ),
           IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
+            icon: Icon(Icons.menu, color: AdminUi.iconStandard(context)),
             tooltip: 'Menú',
             onPressed: _abrirMenu,
           ),
@@ -352,35 +368,37 @@ class _RangoPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fg = AdminUi.onCard(context);
+    final ic = AdminUi.secondary(context);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
+        color: AdminUi.card(context),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white24),
+        border: Border.all(color: AdminUi.borderSubtle(context)),
       ),
       child: Row(
         children: [
           Expanded(
             child: OutlinedButton.icon(
               onPressed: onPickDesde,
-              icon: const Icon(Icons.date_range, color: Colors.white70),
-              label: Text('Desde: ${_fmt(desde)}', style: const TextStyle(color: Colors.white)),
+              icon: Icon(Icons.date_range, color: ic),
+              label: Text('Desde: ${_fmt(desde)}', style: TextStyle(color: fg)),
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: OutlinedButton.icon(
               onPressed: onPickHasta,
-              icon: const Icon(Icons.event, color: Colors.white70),
-              label: Text('Hasta: ${_fmt(hasta)}', style: const TextStyle(color: Colors.white)),
+              icon: Icon(Icons.event, color: ic),
+              label: Text('Hasta: ${_fmt(hasta)}', style: TextStyle(color: fg)),
             ),
           ),
           const SizedBox(width: 10),
           IconButton(
             tooltip: 'Limpiar',
             onPressed: onClear,
-            icon: const Icon(Icons.clear, color: Colors.white70),
+            icon: Icon(Icons.clear, color: ic),
           ),
         ],
       ),
@@ -399,6 +417,11 @@ class _CardResumenGlobal extends StatelessWidget {
     return 'RD\$ $intPart.${parts.last}';
   }
 
+  Color _amber(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.light ? Colors.amber.shade900 : Colors.amberAccent;
+  Color _cyan(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.light ? Colors.teal.shade800 : Colors.cyanAccent;
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Map<String, int>>(
@@ -412,20 +435,20 @@ class _CardResumenGlobal extends StatelessWidget {
         return Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Colors.grey[900],
+            color: AdminUi.card(context),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color.fromRGBO(76, 175, 80, 0.35)),
+            border: Border.all(color: const Color.fromRGBO(76, 175, 80, 0.45)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Global (en vivo)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+              Text('Global (en vivo)', style: TextStyle(color: AdminUi.secondary(context), fontWeight: FontWeight.w600)),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: _metric('FlyGo (comisión)', _rd(com), Colors.amberAccent)),
-                  Expanded(child: _metric('Conductores (ganancia)', _rd(gan), Colors.cyanAccent)),
-                  _badgeCnt(cnt),
+                  Expanded(child: _metric(context, 'FlyGo (comisión)', _rd(com), _amber(context))),
+                  Expanded(child: _metric(context, 'Conductores (ganancia)', _rd(gan), _cyan(context))),
+                  _badgeCnt(context, cnt),
                 ],
               ),
             ],
@@ -435,30 +458,30 @@ class _CardResumenGlobal extends StatelessWidget {
     );
   }
 
-  Widget _metric(String title, String value, Color color) {
+  Widget _metric(BuildContext context, String title, String value, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        Text(title, style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
         const SizedBox(height: 4),
         Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 18)),
       ],
     );
   }
 
-  Widget _badgeCnt(int cnt) {
+  Widget _badgeCnt(BuildContext context, int cnt) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white10,
-        border: Border.all(color: Colors.white24),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        border: Border.all(color: AdminUi.borderSubtle(context)),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
-          const Icon(Icons.local_taxi, color: Colors.white70, size: 18),
+          Icon(Icons.local_taxi, color: AdminUi.secondary(context), size: 18),
           const SizedBox(width: 6),
-          Text('$cnt', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+          Text('$cnt', style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700, fontSize: 16)),
         ],
       ),
     );
@@ -516,26 +539,26 @@ class _CardResumenRango extends StatelessWidget {
         return Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Colors.grey[900],
+            color: AdminUi.card(context),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white24),
+            border: Border.all(color: AdminUi.borderSubtle(context)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Rango seleccionado (en vivo)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+              Text('Rango seleccionado (en vivo)', style: TextStyle(color: AdminUi.secondary(context), fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: _metric('FlyGo (comisión)', rd(com / 100.0), Colors.amberAccent)),
-                  Expanded(child: _metric('Conductores (ganancia)', rd(gan / 100.0), Colors.cyanAccent)),
-                  _badgeCnt(cnt),
+                  Expanded(child: _metric(context, 'FlyGo (comisión)', rd(com / 100.0), _amberR(context))),
+                  Expanded(child: _metric(context, 'Conductores (ganancia)', rd(gan / 100.0), _cyanR(context))),
+                  _badgeCnt(context, cnt),
                 ],
               ),
               const SizedBox(height: 6),
-              const Text(
+              Text(
                 'Nota: se listan hasta 1000 viajes completados (filtrado local). Si necesitas más, implementa paginación.',
-                style: TextStyle(color: Colors.white38, fontSize: 11),
+                style: TextStyle(color: AdminUi.muted(context).withValues(alpha: 0.85), fontSize: 11),
               ),
             ],
           ),
@@ -544,30 +567,35 @@ class _CardResumenRango extends StatelessWidget {
     );
   }
 
-  Widget _metric(String title, String value, Color color) {
+  Color _amberR(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.light ? Colors.amber.shade900 : Colors.amberAccent;
+  Color _cyanR(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.light ? Colors.teal.shade800 : Colors.cyanAccent;
+
+  Widget _metric(BuildContext context, String title, String value, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        Text(title, style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
         const SizedBox(height: 4),
         Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 18)),
       ],
     );
   }
 
-  Widget _badgeCnt(int cnt) {
+  Widget _badgeCnt(BuildContext context, int cnt) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white10,
-        border: Border.all(color: Colors.white24),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        border: Border.all(color: AdminUi.borderSubtle(context)),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
-          const Icon(Icons.receipt_long, color: Colors.white70, size: 18),
+          Icon(Icons.receipt_long, color: AdminUi.secondary(context), size: 18),
           const SizedBox(width: 6),
-          Text('$cnt', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+          Text('$cnt', style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700, fontSize: 16)),
         ],
       ),
     );
@@ -685,17 +713,17 @@ class _CardPorTaxista extends StatelessWidget {
             return Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.grey[900],
+                color: AdminUi.card(context),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white24),
+                border: Border.all(color: AdminUi.borderSubtle(context)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Resumen por taxista (rango)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                  Text('Resumen por taxista (rango)', style: TextStyle(color: AdminUi.secondary(context), fontWeight: FontWeight.w600)),
                   const SizedBox(height: 10),
                   if (list.isEmpty)
-                    const Text('No hay viajes completados en el rango.', style: TextStyle(color: Colors.white54))
+                    Text('No hay viajes completados en el rango.', style: TextStyle(color: AdminUi.muted(context)))
                   else
                     ListView.separated(
                       shrinkWrap: true,
@@ -711,9 +739,9 @@ class _CardPorTaxista extends StatelessWidget {
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.black,
+                              color: AdminUi.inputFill(context),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.white24),
+                              border: Border.all(color: AdminUi.borderSubtle(context)),
                             ),
                             child: Row(
                               children: [
@@ -727,24 +755,24 @@ class _CardPorTaxista extends StatelessWidget {
                                         titulo,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                        style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
                                         'UID: ${x.uid}$mail',
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(color: Colors.white54, fontSize: 12),
+                                        style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
                                       ),
                                     ],
                                   ),
                                 ),
                                 const SizedBox(width: 16),
-                                _kv('Comisión', rd(x.comisionCents / 100.0), Colors.amberAccent),
+                                _kv(context, 'Comisión', rd(x.comisionCents / 100.0), _amberT(context)),
                                 const SizedBox(width: 12),
-                                _kv('Ganancia', rd(x.gananciaCents / 100.0), Colors.cyanAccent),
+                                _kv(context, 'Ganancia', rd(x.gananciaCents / 100.0), _cyanT(context)),
                                 const SizedBox(width: 12),
-                                _cnt(x.cantidad),
+                                _cnt(context, x.cantidad),
                               ],
                             ),
                           ),
@@ -752,9 +780,9 @@ class _CardPorTaxista extends StatelessWidget {
                       },
                     ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Tip: usa este cuadro para saber cuánto nos debe cada taxista (comisión) y cuánto ganó.',
-                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                    style: TextStyle(color: AdminUi.muted(context).withValues(alpha: 0.85), fontSize: 11),
                   ),
                 ],
               ),
@@ -765,30 +793,35 @@ class _CardPorTaxista extends StatelessWidget {
     );
   }
 
-  Widget _kv(String k, String v, Color color) {
+  Color _amberT(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.light ? Colors.amber.shade900 : Colors.amberAccent;
+  Color _cyanT(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.light ? Colors.teal.shade800 : Colors.cyanAccent;
+
+  Widget _kv(BuildContext context, String k, String v, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        Text(k, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        Text(k, style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
         const SizedBox(height: 3),
         Text(v, style: TextStyle(color: color, fontWeight: FontWeight.w800)),
       ],
     );
   }
 
-  Widget _cnt(int n) {
+  Widget _cnt(BuildContext context, int n) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white10,
-        border: Border.all(color: Colors.white24),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        border: Border.all(color: AdminUi.borderSubtle(context)),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
-          const Icon(Icons.directions_car_filled, color: Colors.white70, size: 16),
+          Icon(Icons.directions_car_filled, color: AdminUi.secondary(context), size: 16),
           const SizedBox(width: 6),
-          Text('$n', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          Text('$n', style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700)),
         ],
       ),
     );

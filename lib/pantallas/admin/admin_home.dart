@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import '../../utils/estilos.dart';
 import '../../utils/formatos_moneda.dart';
+import 'admin_ui_theme.dart';
 import '../../modelo/liquidacion.dart';
 import '../../servicios/admin_service.dart';
 
@@ -37,21 +37,24 @@ class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
+    final tabSelected = AdminUi.accentGreen(context);
+    final tabUnsel = AdminUi.tabUnselected(context);
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(), // ⬅️ Drawer con “Cerrar sesión”
       appBar: AppBar(
-        backgroundColor: EstilosFlyGo.fondoOscuro,
-        title: const Text(
+        backgroundColor: AdminUi.scaffold(context),
+        foregroundColor: AdminUi.appBarFg(context),
+        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
+        title: Text(
           'Admin — Liquidaciones',
-          style: TextStyle(color: EstilosFlyGo.textoBlanco),
+          style: TextStyle(color: AdminUi.onCard(context)),
         ),
-        iconTheme: const IconThemeData(color: EstilosFlyGo.textoBlanco),
         bottom: TabBar(
           controller: _tab,
-          labelColor: EstilosFlyGo.textoVerde,
-          unselectedLabelColor: Colors.white70,
-          indicatorColor: EstilosFlyGo.textoVerde,
+          labelColor: tabSelected,
+          unselectedLabelColor: tabUnsel,
+          indicatorColor: tabSelected,
           tabs: const [
             Tab(text: 'Pendientes'),
             Tab(text: 'Aprobadas'),
@@ -68,11 +71,11 @@ class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMix
                 MaterialPageRoute(builder: (_) => const PanelFinanzasAdmin()),
               );
             },
-            icon: const Icon(Icons.pie_chart_outline, color: Colors.white),
+            icon: Icon(Icons.pie_chart_outline, color: AdminUi.iconStandard(context)),
           ),
           IconButton(
             onPressed: () => setState(() {}),
-            icon: const Icon(Icons.refresh, color: Colors.white),
+            icon: Icon(Icons.refresh, color: AdminUi.iconStandard(context)),
             tooltip: 'Recargar',
           ),
         ],
@@ -84,16 +87,24 @@ class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMix
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
             child: TextField(
               controller: _buscador,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: AdminUi.onCard(context)),
               decoration: InputDecoration(
                 hintText: 'Buscar por UID de taxista o nota...',
-                hintStyle: const TextStyle(color: Colors.white54),
-                prefixIcon: const Icon(Icons.search, color: Colors.white70),
+                hintStyle: TextStyle(color: AdminUi.secondary(context).withValues(alpha: 0.85)),
+                prefixIcon: Icon(Icons.search, color: AdminUi.secondary(context)),
                 filled: true,
-                fillColor: Colors.grey[900],
+                fillColor: AdminUi.inputFill(context),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Colors.white24),
+                  borderSide: BorderSide(color: AdminUi.borderSubtle(context)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AdminUi.borderSubtle(context)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.4),
                 ),
               ),
               onChanged: (_) => setState(() {}),
@@ -127,24 +138,24 @@ class _LiquidacionesList extends StatelessWidget {
       stream: AdminService.streamLiquidacionesPorEstado(estado, query: query),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: EstilosFlyGo.textoVerde),
+          return Center(
+            child: CircularProgressIndicator(color: AdminUi.progressAccent(context)),
           );
         }
         if (snap.hasError) {
           return Center(
             child: Text(
               'Error: ${snap.error}',
-              style: const TextStyle(color: Colors.white70),
+              style: TextStyle(color: AdminUi.secondary(context)),
             ),
           );
         }
         final items = snap.data ?? [];
         if (items.isEmpty) {
-          return const Center(
+          return Center(
             child: Text(
               'Sin resultados',
-              style: TextStyle(color: Colors.white70),
+              style: TextStyle(color: AdminUi.secondary(context)),
             ),
           );
         }
@@ -167,20 +178,21 @@ class _LiquidacionTile extends StatelessWidget {
   final Liquidacion l;
   const _LiquidacionTile({required this.l});
 
-  Color _chipColor(String estado) {
+  Color _chipColor(BuildContext context, String estado) {
+    final light = Theme.of(context).brightness == Brightness.light;
     switch (estado) {
       case 'aprobado':
-        return Colors.greenAccent;
+        return light ? Colors.green.shade700 : Colors.greenAccent;
       case 'rechazado':
-        return Colors.redAccent;
+        return light ? Colors.red.shade700 : Colors.redAccent;
       default:
-        return Colors.orangeAccent;
+        return light ? Colors.deepOrange.shade700 : Colors.orangeAccent;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final color = _chipColor(l.estado);
+    final color = _chipColor(context, l.estado);
     final fecha = l.solicitadoEn?.toLocal().toString().substring(0, 16) ?? '—';
 
     final usuarioRef =
@@ -189,7 +201,7 @@ class _LiquidacionTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
+        color: AdminUi.card(context),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: color.withValues(alpha: 0.45)),
       ),
@@ -215,8 +227,8 @@ class _LiquidacionTile extends StatelessWidget {
                           titulo,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
+                          style: TextStyle(
+                            color: AdminUi.onCard(context),
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -225,7 +237,7 @@ class _LiquidacionTile extends StatelessWidget {
                           email.isNotEmpty ? email : 'UID: ${l.uidTaxista}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
                         ),
                       ],
                     ),
@@ -250,18 +262,18 @@ class _LiquidacionTile extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             'Monto: ${FormatosMoneda.rd(l.monto)}',
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: AdminUi.onCard(context)),
           ),
           const SizedBox(height: 4),
           Text(
             'Solicitado: $fecha',
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
+            style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
           ),
           if ((l.notaAdmin ?? '').isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
               'Nota: ${l.notaAdmin}',
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
             ),
           ],
           const SizedBox(height: 12),
@@ -288,27 +300,47 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.black,
+        backgroundColor: AdminUi.dialogSurface(ctx),
         title: Text(
           (nuevoEstado == 'aprobado') ? 'Aprobar liquidación' : 'Rechazar liquidación',
-          style: const TextStyle(color: Colors.white),
+          style: TextStyle(color: AdminUi.onCard(ctx)),
         ),
         content: TextField(
           controller: notaCtrl,
           maxLines: 3,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
+          style: TextStyle(color: AdminUi.onCard(ctx)),
+          decoration: InputDecoration(
             labelText: 'Nota (opcional)',
             hintText: 'Ej: Transferencia verificada, Ref #12345',
+            labelStyle: TextStyle(color: AdminUi.secondary(ctx)),
+            hintStyle: TextStyle(color: AdminUi.muted(ctx)),
+            filled: true,
+            fillColor: AdminUi.inputFill(ctx),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: AdminUi.borderSubtle(ctx)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: AdminUi.borderSubtle(ctx)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: Theme.of(ctx).colorScheme.primary, width: 1.4),
+            ),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar'),
+            child: Text('Cancelar', style: TextStyle(color: AdminUi.secondary(ctx))),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.primary,
+              foregroundColor: Theme.of(ctx).colorScheme.onPrimary,
+            ),
             child: Text((nuevoEstado == 'aprobado') ? 'Aprobar' : 'Rechazar'),
           ),
         ],
@@ -340,22 +372,26 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text(
+        backgroundColor: AdminUi.dialogSurface(ctx),
+        title: Text(
           'Marcar como PENDIENTE',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(color: AdminUi.onCard(ctx)),
         ),
-        content: const Text(
+        content: Text(
           '¿Seguro que deseas revertir esta liquidación a pendiente?',
-          style: TextStyle(color: Colors.white70),
+          style: TextStyle(color: AdminUi.secondary(ctx)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar'),
+            child: Text('Cancelar', style: TextStyle(color: AdminUi.secondary(ctx))),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.primary,
+              foregroundColor: Theme.of(ctx).colorScheme.onPrimary,
+            ),
             child: const Text('Revertir'),
           ),
         ],
@@ -384,6 +420,7 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
     final canApproveReject = estado == 'pendiente';
     final canRevert = estado == 'aprobado' || estado == 'rechazado';
 
+    final cs = Theme.of(context).colorScheme;
     return Row(
       children: [
         if (canApproveReject)
@@ -391,12 +428,16 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
             child: ElevatedButton.icon(
               onPressed: _busy ? null : () => _resolver('aprobado'),
               icon: _busy
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.check_circle, color: Colors.green),
+                  ? SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary),
+                    )
+                  : Icon(Icons.check_circle, color: cs.onPrimary),
               label: const Text('Aprobar'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.green,
+                backgroundColor: Colors.green.shade700,
+                foregroundColor: Colors.white,
               ),
             ),
           ),
@@ -406,12 +447,16 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
             child: ElevatedButton.icon(
               onPressed: _busy ? null : () => _resolver('rechazado'),
               icon: _busy
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.cancel, color: Colors.redAccent),
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.cancel, color: Colors.white),
               label: const Text('Rechazar'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.redAccent,
+                backgroundColor: Colors.red.shade700,
+                foregroundColor: Colors.white,
               ),
             ),
           ),
@@ -419,9 +464,9 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
           Expanded(
             child: OutlinedButton.icon(
               onPressed: _busy ? null : _revertir,
-              icon: const Icon(Icons.undo, color: Colors.white70),
-              label: const Text('Revertir a pendiente', style: TextStyle(color: Colors.white)),
-              style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.white30)),
+              icon: Icon(Icons.undo, color: AdminUi.secondary(context)),
+              label: Text('Revertir a pendiente', style: TextStyle(color: AdminUi.onCard(context))),
+              style: OutlinedButton.styleFrom(side: BorderSide(color: AdminUi.borderSubtle(context))),
             ),
           ),
       ],

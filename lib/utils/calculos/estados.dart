@@ -12,7 +12,6 @@ class EstadosViaje {
   static const String rechazado = 'rechazado';
 
   // ====== Compatibilidad con variantes antiguas ======
-  // 'asignado' del flujo viejo se trata como 'aceptado'
   static const Set<String> _aliasAceptado = {
     'aceptado',
     'asignado',
@@ -20,6 +19,7 @@ class EstadosViaje {
 
   static const Set<String> _aliasEnCaminoPickup = {
     'en_camino_pickup',
+    'en_camino',
     'encaminopickup',
     'encamino_pickup',
     'encamino',
@@ -47,6 +47,21 @@ class EstadosViaje {
     'encurzo',
   };
 
+  static const Set<String> _aliasPendiente = {
+    'pendiente',
+    'buscando',
+  };
+
+  static const Set<String> _aliasCompletado = {
+    'completado',
+    'finalizado',
+  };
+
+  static const Set<String> _aliasCancelado = {
+    'cancelado',
+    'cancelado_cliente',
+  };
+
   // ====== Conjuntos útiles ======
   static const Set<String> activos = {
     aceptado,
@@ -66,9 +81,12 @@ class EstadosViaje {
     final s = (estado.isEmpty ? '' : estado.trim().toLowerCase());
 
     if (_aliasAceptado.contains(s)) return aceptado;
+    if (_aliasPendiente.contains(s)) return pendiente;
     if (_aliasEnCaminoPickup.contains(s)) return enCaminoPickup;
     if (_aliasABordo.contains(s)) return aBordo;
     if (_aliasEnCurso.contains(s)) return enCurso;
+    if (_aliasCompletado.contains(s)) return completado;
+    if (_aliasCancelado.contains(s)) return cancelado;
 
     switch (s) {
       case pendiente:
@@ -90,7 +108,6 @@ class EstadosViaje {
       case rechazado:
         return rechazado;
       default:
-        // Fallback seguro para no romper la UI
         return pendiente;
     }
   }
@@ -98,7 +115,13 @@ class EstadosViaje {
   // ====== Helpers booleanos ======
   static bool esPendiente(String e) => normalizar(e) == pendiente;
   static bool esPendientePago(String e) => normalizar(e) == pendientePago;
-  static bool esAceptado(String e) => normalizar(e) == aceptado;
+  
+  // 🔥 CORREGIDO: esAceptado incluye tanto aceptado como en_camino_pickup
+  static bool esAceptado(String e) {
+    final n = normalizar(e);
+    return n == aceptado || n == enCaminoPickup;
+  }
+  
   static bool esEnCaminoPickup(String e) => normalizar(e) == enCaminoPickup;
   static bool esAbordo(String e) => normalizar(e) == aBordo;
   static bool esEnCurso(String e) => normalizar(e) == enCurso;
@@ -131,6 +154,10 @@ class EstadosViaje {
 
   // ====== Texto para UI ======
   static String descripcion(String estado) {
+    final String raw = estado.trim().toLowerCase();
+    if (raw == 'pendiente_admin') {
+      return 'Solicitud enviada — asignación por administración';
+    }
     switch (normalizar(estado)) {
       case pendiente:
         return 'Pendiente';

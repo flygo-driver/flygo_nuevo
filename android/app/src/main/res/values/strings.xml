@@ -1,14 +1,14 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">FlyGo</string>
+    <string name="app_name">RAI Driver</string>
 
-    <!-- 🔑 Tu clave real del Maps SDK for Android -->
-    <string name="google_maps_api_key">AIzaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</string>
+    <!-- 🔑 Maps SDK for Android -->
+    <string name="google_maps_api_key">AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w</string>
 
-    <!-- Canal por defecto para notificaciones (opcional, pero tú lo usas) -->
-    <string name="default_notification_channel_id">taxi_new_rides</string>
+    <!-- 🔔 Canal por defecto para FCM / notificaciones -->
+    <string name="default_notification_channel_id">flygo_offers_v11</string>
 
-    <!-- Textos de permisos (opcional) -->
+    <!-- 🛈 Textos de permisos -->
     <string name="permiso_gps">Se requiere acceso a la ubicación para mostrar el mapa.</string>
     <string name="permiso_camara">Se requiere acceso a la cámara para subir documentos.</string>
 </resources>

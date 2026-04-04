@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+
 import 'documentos_taxista.dart';
+import 'contrato_taxista_firma.dart';
 import 'viaje_disponible.dart';
 import '../cliente/cliente_home.dart';
+import '../../widgets/rai_app_bar.dart';
+import '../../servicios/pool_repo.dart';
 
 class TaxistaEntry extends StatefulWidget {
   const TaxistaEntry({super.key});
@@ -30,7 +35,7 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
   Future<void> _decidirRuta() async {
     final u = FirebaseAuth.instance.currentUser;
     if (!mounted || u == null) {
-      _go(const ClienteHome()); // fallback seguro
+      _go(const ClienteHome());
       return;
     }
 
@@ -43,7 +48,6 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
       final data = usrDoc.data() ?? {};
       final rol = (data['rol'] as String?)?.toLowerCase() ?? 'cliente';
 
-      // 🛡️ GUARD DE ROL: si NO es taxista, no puede estar aquí
       if (rol != 'taxista') {
         debugPrint(
           '[TAXISTA_ENTRY] uid=${u.uid} rol=$rol -> redirigiendo a ClienteHome',
@@ -52,14 +56,28 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
         return;
       }
 
-      // Si es taxista, decidir por estado de documentos
-      final estado =
-          (data['docsEstado'] as String?)?.toLowerCase() ?? 'pendiente';
-      debugPrint('[TAXISTA_ENTRY] uid=${u.uid} rol=taxista docsEstado=$estado');
+      // Cierre de pools por deuda semanal (consistencia con pagos/ADM).
+      // Si el taxista no ha pagado, sus pools deben quedar "no disponibles".
+      try {
+        final tienePagoPendiente = data['tienePagoPendiente'] == true;
+        await PoolRepo.syncPoolsPorPagoSemanal(
+          ownerTaxistaId: u.uid,
+          tienePagoPendiente: tienePagoPendiente,
+        );
+      } catch (e) {
+        debugPrint('[TAXISTA_ENTRY] syncPoolsPorPagoSemanal error=$e');
+      }
 
-      final Widget destino = (estado == 'aprobado')
-          ? const ViajeDisponible()
-          : const DocumentosTaxista();
+      final estado = taxistaDocsEstadoDesdeUsuario(data);
+      final bool poolOk = taxistaAprobadoParaOperarPool(data);
+      final bool contratoOk = taxistaContratoFirmado(data);
+      debugPrint(
+        '[TAXISTA_ENTRY] uid=${u.uid} rol=taxista docsEstado=$estado poolOk=$poolOk contratoOk=$contratoOk',
+      );
+
+      final Widget destino = !poolOk
+          ? const DocumentosTaxista()
+          : (contratoOk ? const ViajeDisponible() : const ContratoTaxistaFirma());
 
       _go(destino);
     } catch (e) {
@@ -72,7 +90,14 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
   Widget build(BuildContext context) {
     return const Scaffold(
       backgroundColor: Colors.black,
-      body: Center(child: CircularProgressIndicator(color: Colors.greenAccent)),
+      appBar: RaiAppBar(
+        title: 'Conductor',
+      ),
+      body: Center(
+        child: CircularProgressIndicator(
+          color: Colors.greenAccent,
+        ),
+      ),
     );
   }
 }

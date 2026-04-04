@@ -1,0 +1,119 @@
+<!-- android/app/src/main/AndroidManifest.xml -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.flygo.nuevo">
+
+    <!-- Permisos de red -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+    <!-- Permisos de ubicación -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <!-- Si usas tracking en background (solo si realmente lo necesitas) -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- Servicios en primer plano (Android 9+ / 10+ tipos) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+
+    <!-- Cámara / galería para image_picker -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+
+    <!-- Android 13+ (Tiramisu): notificaciones y media -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+
+    <!-- (Opcional) Compatibilidad pre-Android 13 si aún accedes a almacenamiento "legacy".
+         La mayoría de casos modernos NO lo requieren con image_picker. 
+         <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+    -->
+
+    <!-- Declarar que el GPS no es estrictamente requerido para instalar -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.location.network" android:required="false" />
+
+    <application
+        android:name="${applicationName}"
+        android:label="FlyGo"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true"
+        android:fullBackupContent="true"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:largeHeap="true">
+
+        <!-- Lanzador principal -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Asegura que Flutter maneje los intents de enlaces externos si los hubiera -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+
+            <!-- Para url_launcher (enlaces HTTP/HTTPS si te interesa "abrir con app") -->
+            <!--
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"/>
+                <data android:scheme="http"/>
+            </intent-filter>
+            -->
+        </activity>
+
+        <!-- Splash de Flutter -->
+        <meta-data
+            android:name="io.flutter.embedding.android.NormalTheme"
+            android:resource="@style/NormalTheme" />
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- Google Maps SDK (google_maps_flutter) -->
+        <!-- Usa esto si pones la key literal: -->
+        <!-- <meta-data android:name="com.google.android.geo.API_KEY" android:value="YOUR_GOOGLE_MAPS_API_KEY_HERE"/> -->
+        <!-- O, mejor, desde gradle.properties (recomendado): -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
+
+        <!-- Firebase Messaging: icono/color por defecto para notificaciones -->
+        <!-- Asegúrate de tener @drawable/ic_stat_notify (o usa ic_launcher si prefieres) -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color"/>
+
+        <!-- Canal por defecto (puedes personalizarlo en tu NotificationService) -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="flygo_default_channel"/>
+
+        <!-- Receptor de mensajes (se autoinyecta por Firebase a través del manifest merge).
+             No declares nada extra aquí salvo que tengas servicios personalizados. -->
+
+        <!-- Provider para FileProvider (normalmente image_picker lo gestiona por manifest merge).
+             Si tu build falla por FileProvider, descomenta este bloque y crea xml/file_paths.xml -->
+        <!--
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"/>
+        </provider>
+        -->
+
+    </application>
+</manifest>

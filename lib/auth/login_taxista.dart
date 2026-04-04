@@ -1,3 +1,5 @@
+// lib/auth/login_taxista.dart
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -5,6 +7,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/servicios/auth_service.dart';
 import 'package:flygo_nuevo/servicios/google_auth.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 /// ================== FLAGS QA (modo flexible) ==================
 const bool kQaFlexibleAccess =
@@ -27,9 +31,30 @@ class _LoginTaxistaState extends State<LoginTaxista> {
 
   bool _loadingEmail = false;
   bool _loadingGoogle = false;
+  StreamSubscription<User?>? _authSub;
+  bool _autoRedirectDone = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (!mounted || _autoRedirectDone) return;
+      if (user != null) {
+        _autoRedirectDone = true;
+        Navigator.of(context)
+            .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+      }
+    });
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _email.dispose();
     _pass.dispose();
     super.dispose();
@@ -40,7 +65,8 @@ class _LoginTaxistaState extends State<LoginTaxista> {
     if (e.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Escribe tu correo para enviarte el reset.')),
+        const SnackBar(
+            content: Text('Escribe tu correo para enviarte el reset.')),
       );
       return;
     }
@@ -48,7 +74,9 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       await FirebaseAuth.instance.sendPasswordResetEmail(email: e);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Te enviamos un correo para restablecer tu contraseña.')),
+        const SnackBar(
+            content:
+                Text('Te enviamos un correo para restablecer tu contraseña.')),
       );
     } on FirebaseAuthException catch (er) {
       if (!mounted) return;
@@ -70,13 +98,17 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       'email': _email.text.trim(),
       'nombre': '',
       'telefono': '',
-      'disponible': true, // para poder aceptar en QA
+      'disponible': false,
       'docsEstado': 'pendiente',
+      'estadoDocumentos': 'pendiente',
       'documentosCompletos': false,
+      'puedeRecibirViajes': false,
       'fechaRegistro': FieldValue.serverTimestamp(),
       'actualizadoEn': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
+    if (!mounted) return;
+    await ViajesRepo.reconciliarActivosTaxista(uid);
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
   }
@@ -98,23 +130,22 @@ class _LoginTaxistaState extends State<LoginTaxista> {
         final nowTs = FieldValue.serverTimestamp();
 
         if (!snap.exists) {
-          // CREATE: se permite poner rol/email/etc.
           await ref.set({
             'uid': uid,
             'rol': 'taxista',
             'email': email,
-            'disponible': true,
+            'disponible': false,
             'docsEstado': 'pendiente',
+            'estadoDocumentos': 'pendiente',
             'documentosCompletos': false,
+            'puedeRecibirViajes': false,
             'fechaRegistro': nowTs,
             'actualizadoEn': nowTs,
           }, SetOptions(merge: true));
         } else {
-          // UPDATE: cumplir reglas (NO tocar email/docsEstado/documentosCompletos aquí)
           final data = snap.data() ?? <String, dynamic>{};
           final rolActual = (data['rol'] ?? '').toString().trim().toLowerCase();
 
-          // Si no tenía rol, solo 'rol' + timestamps (regla especial)
           if (rolActual.isEmpty) {
             await ref.set(
               {
@@ -126,10 +157,8 @@ class _LoginTaxistaState extends State<LoginTaxista> {
             );
           }
 
-          // Campos permitidos en update
           await ref.set(
             {
-              'disponible': true,
               'lastLogin': nowTs,
               'updatedAt': nowTs,
               'actualizadoEn': nowTs,
@@ -140,11 +169,15 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       }
 
       if (!mounted) return;
-      Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
+      if (uid != null) {
+        await ViajesRepo.reconciliarActivosTaxista(uid);
+      }
+      if (!mounted) return;
+      Navigator.of(context)
+          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
 
-      // Modo flexible: pase anónimo ante errores frecuentes
       if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
         const codesForAnon = {
           'user-not-found',
@@ -169,7 +202,9 @@ class _LoginTaxistaState extends State<LoginTaxista> {
               'También puedes restablecer tu contraseña.',
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cerrar')),
               TextButton(
                 onPressed: () {
                   Navigator.pop(context);
@@ -199,14 +234,13 @@ class _LoginTaxistaState extends State<LoginTaxista> {
         _ => 'Error al iniciar sesión.',
       };
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    } catch (err) {
+    } catch (_) {
       if (mounted) {
         if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
           await _loginAnonTaxista();
           return;
         }
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error inesperado: $err')));
+        _snack('No se pudo iniciar sesión en este momento. Inténtalo de nuevo.');
       }
     } finally {
       if (mounted) setState(() => _loadingEmail = false);
@@ -219,66 +253,57 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       await GoogleAuthService.signInWithGoogleStrict(entradaRol: 'taxista');
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
+      // Navegación inmediata tras auth exitosa (tipo Uber).
+      Navigator.of(context)
+          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+
+      // Persistencia / reconciliación en segundo plano.
       if (uid != null) {
-        final nowTs = FieldValue.serverTimestamp();
-        await FirebaseFirestore.instance.collection('usuarios').doc(uid).set(
-          {
-            // En UPDATE solo lo permitido:
-            'disponible': true,
-            'updatedAt': nowTs,
-            'actualizadoEn': nowTs,
-          },
-          SetOptions(merge: true),
-        );
-      }
-      if (!mounted) return;
-      Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
-    } on FirebaseAuthException catch (e) {
-      // Manejo claro para rol distinto
-      if (e.code == 'role-mismatch') {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.message ?? 'Rol no coincide.')),
+        Future<void>(() async {
+          final nowTs = FieldValue.serverTimestamp();
+          await FirebaseFirestore.instance.collection('usuarios').doc(uid).set(
+            {
+              'lastLogin': nowTs,
+              'updatedAt': nowTs,
+              'actualizadoEn': nowTs,
+            },
+            SetOptions(merge: true),
           );
-        }
+          await ViajesRepo.reconciliarActivosTaxista(uid);
+        });
+      }
+    } on FirebaseAuthException catch (e) {
+      if (kQaFlexibleAccess && kQaAllowAnonOnCollision && e.code != 'role-mismatch') {
+        await _loginAnonTaxista();
       } else {
-        // Fallback anónimo si está permitido en QA
-        if (kQaFlexibleAccess && kQaAllowAnonOnCollision) {
-          await _loginAnonTaxista();
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('No se pudo iniciar con Google (${e.code}).')),
-            );
-          }
-        }
+        _snack(GoogleAuthService.friendlyAuthError(e, rol: 'taxista'));
       }
     } catch (err) {
       if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
         await _loginAnonTaxista();
       } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error (Firestore/Conexión): $err')),
-          );
-        }
+        _snack(GoogleAuthService.friendlyAuthError(err, rol: 'taxista'));
       }
     } finally {
       if (mounted) setState(() => _loadingGoogle = false);
     }
   }
 
-  InputDecoration _inputDec(String label, IconData icon) {
+  InputDecoration _inputDec(BuildContext context, String label, IconData icon) {
+    final cs = Theme.of(context).colorScheme;
+    final divider = cs.outline.withOpacity(0.6);
+    final labelColor = cs.onSurface.withOpacity(0.7);
+
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(color: Colors.white70),
-      prefixIcon: Icon(icon, color: Colors.greenAccent),
+      labelStyle: TextStyle(color: labelColor),
+      prefixIcon: Icon(icon, color: cs.primary),
       enabledBorder: OutlineInputBorder(
-        borderSide: const BorderSide(color: Colors.white24),
+        borderSide: BorderSide(color: divider),
         borderRadius: BorderRadius.circular(12),
       ),
       focusedBorder: OutlineInputBorder(
-        borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+        borderSide: BorderSide(color: cs.primary, width: 2),
         borderRadius: BorderRadius.circular(12),
       ),
     );
@@ -286,18 +311,17 @@ class _LoginTaxistaState extends State<LoginTaxista> {
 
   @override
   Widget build(BuildContext context) {
-    const titleStyle = TextStyle(
-      fontSize: 26,
-      color: Colors.greenAccent,
-      fontWeight: FontWeight.bold,
-    );
+    final cs = Theme.of(context).colorScheme;
+    final divider = cs.outline.withOpacity(0.55);
+    final muted38 = cs.onSurface.withOpacity(0.38);
+    final muted54 = cs.onSurface.withOpacity(0.54);
+    final primaryContainer = cs.primaryContainer;
+    final onPrimaryContainer = cs.onPrimaryContainer;
 
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        title: const Text('Login Taxista', style: titleStyle),
-        centerTitle: true,
+      backgroundColor: cs.surface,
+      appBar: const RaiAppBar(
+        title: 'Login Taxista',
       ),
       body: Padding(
         padding: const EdgeInsets.all(24),
@@ -307,60 +331,89 @@ class _LoginTaxistaState extends State<LoginTaxista> {
             children: [
               const Icon(Icons.local_taxi, size: 90, color: Colors.greenAccent),
               const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  icon: _loadingGoogle
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.account_circle_outlined),
-                  label: Text(_loadingGoogle ? 'Conectando...' : 'Continuar con Google'),
-                  onPressed: _loadingGoogle ? null : _loginGoogle,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white24),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+
+              // 🔥 BOTÓN GOOGLE - CENTRADO Y RESPONSIVE
+              Center(
+                child: SizedBox(
+                  width: 280,
+                  child: OutlinedButton.icon(
+                    icon: _loadingGoogle
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.account_circle_outlined, size: 20),
+                    label: Text(
+                      _loadingGoogle ? 'Conectando...' : 'Continuar con Google',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    onPressed: (_loadingGoogle)
+                        ? null
+                        : _loginGoogle,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: cs.onSurface,
+                      side: BorderSide(color: divider),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 10, horizontal: 16),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20)),
+                      minimumSize: const Size(200, 40),
+                    ),
                   ),
                 ),
               ),
+              Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'Entra rápido con Google o correo. La habilitación operativa de viajes se valida dentro del flujo de taxista.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: muted38, fontSize: 11),
+                ),
+              ),
+
               const SizedBox(height: 14),
-              const Row(
+              Row(
                 children: <Widget>[
-                  Expanded(child: Divider(color: Colors.white24)),
+                  Expanded(child: Divider(color: divider)),
                   Padding(
                     padding: EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('o usa tu correo', style: TextStyle(color: Colors.white54)),
+                    child: Text('o usa tu correo',
+                        style: TextStyle(color: muted54)),
                   ),
-                  Expanded(child: Divider(color: Colors.white24)),
+                  Expanded(child: Divider(color: divider)),
                 ],
               ),
               const SizedBox(height: 16),
+
               TextFormField(
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
-                style: const TextStyle(color: Colors.white),
-                decoration: _inputDec('Correo electrónico', Icons.email),
-                validator: (v) => (v == null || !v.contains('@')) ? 'Correo inválido' : null,
+                style: TextStyle(color: cs.onSurface),
+                decoration: _inputDec(context, 'Correo electrónico', Icons.email),
+                validator: (v) =>
+                    (v == null || !v.contains('@')) ? 'Correo inválido' : null,
                 autofillHints: const [AutofillHints.email],
               ),
               const SizedBox(height: 16),
+
               TextFormField(
                 controller: _pass,
                 obscureText: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: _inputDec('Contraseña', Icons.lock),
-                validator: (v) => (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
+                style: TextStyle(color: cs.onSurface),
+                decoration: _inputDec(context, 'Contraseña', Icons.lock),
+                validator: (v) =>
+                    (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
                 autofillHints: const [AutofillHints.password],
               ),
+
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () => _sendResetPassword(_email.text),
+                  style: TextButton.styleFrom(foregroundColor: cs.primary),
                   child: const Text('¿Olvidaste tu contraseña?'),
                 ),
               ),
-
-              // 🔰 Botón QA visible en debug (flex)
               if (kQaFlexibleAccess) ...[
                 const SizedBox(height: 8),
                 TextButton(
@@ -370,31 +423,84 @@ class _LoginTaxistaState extends State<LoginTaxista> {
               ],
 
               const SizedBox(height: 8),
-              _loadingEmail
-                  ? const Center(child: CircularProgressIndicator(color: Colors.greenAccent))
-                  : SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _loginEmail,
-                        icon: const Icon(Icons.login, color: Colors.green),
-                        label: const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12.0),
-                          child: Text('Iniciar Sesión',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
+
+              // 🔥 BOTÓN INICIAR SESIÓN - CENTRADO Y RESPONSIVE
+              Center(
+                child: SizedBox(
+                  width: 280,
+                  child: _loadingEmail
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                              color: Colors.greenAccent))
+                      : ElevatedButton.icon(
+                          onPressed: _loginEmail,
+                          icon: Icon(Icons.login,
+                              size: 18, color: onPrimaryContainer),
+                          label: Text(
+                            'Continuar',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: onPrimaryContainer),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryContainer,
+                            foregroundColor: onPrimaryContainer,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20)),
+                            minimumSize: const Size(200, 40),
+                          ),
                         ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          minimumSize: const Size(double.infinity, 52),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                      ),
-                    ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: () => Navigator.pushNamed(context, '/registro_taxista'),
-                child: const Text('¿No tienes cuenta? Regístrate',
-                    style: TextStyle(color: Colors.white70, fontSize: 16)),
+                ),
               ),
+
+              const SizedBox(height: 20),
+
+              // 🔥 BOTÓN DE REGISTRO DESTACADO - RESPONSIVE CON WRAP
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(
+                      color: Colors.red.shade700,
+                      width: 3,
+                    ),
+                  ),
+                ),
+                child: TextButton(
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/registro_taxista');
+                  },
+                  style: TextButton.styleFrom(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                  ),
+                  child: Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    children: [
+                      Icon(
+                        Icons.person_add_alt_1,
+                        color: Colors.red.shade700,
+                        size: 24,
+                      ),
+                      Text(
+                        '¿NO TIENES CUENTA? REGÍSTRATE AQUÍ',
+                        style: TextStyle(
+                          color: Colors.red.shade700,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
             ],
           ),
         ),

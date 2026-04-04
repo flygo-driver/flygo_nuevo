@@ -180,7 +180,10 @@ class AuthService {
       await _ensureUserDoc(
         user: user,
         rolSiFalta: 'cliente',
-        extra: {'telefono': telefono},
+        extra: {
+          'telefono': telefono,
+          'registroClienteCompleto': true,
+        },
       );
       return user;
     } on FirebaseAuthException catch (e) {

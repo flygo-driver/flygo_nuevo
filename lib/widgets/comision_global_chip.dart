@@ -7,6 +7,11 @@ class ComisionGlobalChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final amber = Theme.of(context).brightness == Brightness.light
+        ? Colors.amber.shade900
+        : const Color(0xFFFFC107);
+    final fill = Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.65);
+
     return StreamBuilder<int>(
       stream: WalletService.streamComisionCentsGlobal(),
       builder: (context, snap) {
@@ -16,21 +21,21 @@ class ComisionGlobalChip extends StatelessWidget {
           margin: const EdgeInsets.only(right: 10),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.white10,
+            color: fill,
             border: Border.all(
-              color: const Color.fromRGBO(255, 193, 7, 0.8),
+              color: amber.withValues(alpha: 0.85),
               width: 1.2,
             ),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(
             children: [
-              const Icon(Icons.trending_up, color: Color(0xFFFFC107), size: 20),
+              Icon(Icons.trending_up, color: amber, size: 20),
               const SizedBox(width: 6),
               Text(
                 FormatosMoneda.rd(rd),
-                style: const TextStyle(
-                  color: Color(0xFFFFC107),
+                style: TextStyle(
+                  color: amber,
                   fontWeight: FontWeight.w800,
                   fontSize: 14,
                   letterSpacing: 0.2,

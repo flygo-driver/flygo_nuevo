@@ -2,9 +2,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
-
 // Para navegar aunque no haya context montado
+import 'package:flygo_nuevo/servicios/google_auth.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
 Future<void> cerrarSesion(BuildContext? context) async {
@@ -19,8 +18,9 @@ Future<void> cerrarSesion(BuildContext? context) async {
 
   try {
     // 1) Cerrar proveedores externos (best-effort)
-    try { await GoogleSignIn().signOut(); } catch (_) {}
-    try { await GoogleSignIn().disconnect(); } catch (_) {}
+    try {
+      await GoogleAuthService.clearGoogleSignInSession();
+    } catch (_) {}
 
     // 2) Firebase sign out (bloqueante)
     await FirebaseAuth.instance.signOut();

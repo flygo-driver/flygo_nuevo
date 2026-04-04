@@ -1,3 +1,4 @@
+// lib/auth/auth_check.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,15 +10,24 @@ import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 
 // Flujo selección / login
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
-import 'package:flygo_nuevo/auth/login_cliente.dart';
+import 'package:flygo_nuevo/servicios/google_auth.dart';
+import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
+import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 
 /// ================== FLAGS QA (modo flexible) ==================
+/// En release, por default quedan false.
 const bool kQaFlexibleAccess =
     bool.fromEnvironment('QA_FLEX', defaultValue: !kReleaseMode);
 const bool kQaAllowAnonOnCollision =
     bool.fromEnvironment('QA_ALLOW_ANON', defaultValue: !kReleaseMode);
 const bool kQaAllowAnonOnAuthError =
     bool.fromEnvironment('QA_ALLOW_ANON_ERR', defaultValue: !kReleaseMode);
+
+/// Si quieres ser AÚN más estricto en producción:
+/// - true: si Firestore falla, NO deja pasar.
+/// - false: permite fallback a 'cliente' cuando Firestore falla (NO recomendado para público).
+const bool kProductionStrict =
+    bool.fromEnvironment('PROD_STRICT', defaultValue: true);
 
 class AuthCheck extends StatefulWidget {
   const AuthCheck({super.key});
@@ -26,107 +36,195 @@ class AuthCheck extends StatefulWidget {
 }
 
 class _AuthCheckState extends State<AuthCheck> {
-  final _auth = FirebaseAuth.instance;
-  final _db = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+
   bool _navigated = false;
+  bool _busy = true;
+  String? _errorMsg;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _cargarYRedirigir());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _run();
+    });
   }
 
   void _go(Widget page) {
     if (_navigated || !mounted) return;
     _navigated = true;
-    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => page));
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => page),
+      (route) => false,
+    );
   }
 
-  void _goAdminNamedOrFallback() {
+  void _goNamed(String route, {Widget? fallback}) {
     if (_navigated || !mounted) return;
     try {
-      Navigator.of(context).pushReplacementNamed('/admin');
       _navigated = true;
+      Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => false);
     } catch (_) {
-      _go(const ClienteHome());
+      if (fallback != null) _go(fallback);
     }
   }
 
-  Future<void> _cargarYRedirigir() async {
+  Future<void> _run() async {
+    setState(() {
+      _busy = true;
+      _errorMsg = null;
+    });
+
     try {
       final user = _auth.currentUser;
 
+      // 0) No user => selección
       if (user == null) {
         _go(const SeleccionUsuario());
         return;
       }
 
-      final rol = await _resolveAndEnsureRol(user);
+      // 0.5) Politicas obligatorias luego del login (flujo tipo Uber/inDriver)
+      final accepted = await LegalAcceptanceService.hasAccepted(user.uid);
+      if (!accepted) {
+        _go(
+          TermsPolicyScreen(
+            requireAcceptance: true,
+            onAccepted: () {
+              if (!mounted) return;
+              Navigator.of(context)
+                  .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+            },
+          ),
+        );
+        return;
+      }
+
+      // 1) Resolver rol de forma segura
+      final rol = await _resolveRolSafe(user);
+
       if (!mounted) return;
 
+      // 2) Redirigir
       if (rol == 'admin') {
-        _goAdminNamedOrFallback();
+        _goNamed('/admin', fallback: const ClienteHome());
       } else if (rol == 'taxista') {
         _go(const TaxistaEntry());
+      } else if (rol == 'cliente') {
+        _go(const ClienteHome());
       } else {
-        _go(const ClienteHome()); // 👈 SIEMPRE HOME DEL CLIENTE
+        // rol raro => volver a selección
+        _go(const SeleccionUsuario());
       }
+    } on FirebaseAuthException catch (e) {
+      await _handleFatal('Auth: ${e.code}');
     } catch (e) {
-      if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
-        try {
-          final cred = await _auth.signInAnonymously();
-          final u = cred.user!;
-          await _ensureUsuarioDoc(
+      await _handleFatal('AuthCheck: $e');
+    } finally {
+      if (mounted && !_navigated) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<void> _handleFatal(String msg) async {
+    // ✅ const porque solo depende de constantes
+    const bool allowQaFallback = kQaFlexibleAccess && kQaAllowAnonOnAuthError;
+
+    if (allowQaFallback) {
+      try {
+        final cred = await _auth.signInAnonymously();
+        final u = cred.user;
+        if (u != null) {
+          await _tryEnsureUsuarioDoc(
             u.uid,
             preferRol: 'cliente',
             email: u.email,
             displayName: u.displayName,
             phone: u.phoneNumber,
           );
-          if (!mounted) return;
-          _go(const ClienteHome());
-          return;
-        } catch (_) {}
+        }
+        if (!mounted) return;
+        _go(const ClienteHome());
+        return;
+      } catch (_) {
+        // si falla el fallback, seguimos al error UI
       }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al verificar usuario: $e')),
-      );
-      _go(const LoginCliente());
     }
+
+    if (!mounted) return;
+    setState(() {
+      _errorMsg = msg;
+      _busy = false;
+    });
   }
 
-  Future<String> _resolveAndEnsureRol(User user) async {
+  /// ✅ Resolver rol sin “inventarlo” en producción si Firestore falla.
+  Future<String> _resolveRolSafe(User user) async {
     final uid = user.uid;
 
-    final uRef = _db.collection('usuarios').doc(uid);
-    final uSnap = await uRef.get();
-    String rolActual = '';
-    if (uSnap.exists) {
-      rolActual = (uSnap.data()?['rol'] ?? '').toString().trim().toLowerCase();
-      if (rolActual.isNotEmpty) {
-        await uRef.set(
-          {
-            'lastLogin': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
+    // 1) Intentar /usuarios/{uid}
+    try {
+      final uRef = _db.collection('usuarios').doc(uid);
+      final uSnap = await uRef.get();
+
+      if (uSnap.exists) {
+        final rol =
+            (uSnap.data()?['rol'] ?? '').toString().trim().toLowerCase();
+        if (rol.isNotEmpty) {
+          _tryTouchUsuario(uid);
+          return _sanitizeRol(rol);
+        }
+      }
+    } on FirebaseException catch (e) {
+      // Firestore falló (permisos/red/etc.)
+      if (kProductionStrict && kReleaseMode) {
+        throw FirebaseException(
+          plugin: 'cloud_firestore',
+          code: e.code,
+          message: 'Firestore (/usuarios) bloqueó o falló: ${e.code}',
         );
-        return rolActual;
+      }
+      return 'cliente';
+    }
+
+    // 2) Intentar /roles/{uid}
+    String rolFinal = 'cliente';
+    try {
+      final rRef = _db.collection('roles').doc(uid);
+      final rSnap = await rRef.get();
+
+      if (rSnap.exists) {
+        final rolRolesRaw =
+            (rSnap.data()?['rol'] as String?)?.toLowerCase().trim();
+        if ((rolRolesRaw ?? '').isNotEmpty) {
+          rolFinal = rolRolesRaw ?? 'cliente';
+        }
+      }
+    } on FirebaseException catch (e) {
+      if (kProductionStrict && kReleaseMode) {
+        throw FirebaseException(
+          plugin: 'cloud_firestore',
+          code: e.code,
+          message: 'Firestore (/roles) bloqueó o falló: ${e.code}',
+        );
+      }
+      rolFinal = 'cliente';
+    }
+
+    final pendingRaw = GoogleAuthService.consumePendingGoogleEntradaRol();
+    if (pendingRaw != null && rolFinal != 'admin') {
+      final p = _sanitizeRol(pendingRaw);
+      if (p == 'taxista' || p == 'cliente') {
+        rolFinal = p;
       }
     }
 
-    String? rolRoles;
-    final rRef = _db.collection('roles').doc(uid);
-    final rSnap = await rRef.get();
-    if (rSnap.exists) {
-      rolRoles = (rSnap.data()?['rol'] as String?)?.toLowerCase().trim();
-    }
+    rolFinal = _sanitizeRol(rolFinal);
 
-    final rolFinal = (rolRoles?.isNotEmpty ?? false) ? rolRoles! : 'cliente';
-
-    await _ensureUsuarioDoc(
+    // 3) Best-effort: asegurar /usuarios (si reglas lo permiten)
+    await _tryEnsureUsuarioDoc(
       uid,
       preferRol: rolFinal,
       email: user.email,
@@ -137,7 +235,23 @@ class _AuthCheckState extends State<AuthCheck> {
     return rolFinal;
   }
 
-  Future<void> _ensureUsuarioDoc(
+  String _sanitizeRol(String rol) {
+    final r = rol.trim().toLowerCase();
+    if (r == 'admin' || r == 'taxista' || r == 'cliente') return r;
+    return 'cliente';
+  }
+
+  /// Best-effort: tocar timestamps sin bloquear
+  void _tryTouchUsuario(String uid) {
+    final now = FieldValue.serverTimestamp();
+    _db.collection('usuarios').doc(uid).set(
+      {'lastLogin': now, 'updatedAt': now, 'actualizadoEn': now},
+      SetOptions(merge: true),
+    ).catchError((_) {});
+  }
+
+  /// Best-effort: crear/asegurar doc sin romper login
+  Future<void> _tryEnsureUsuarioDoc(
     String uid, {
     required String preferRol,
     String? email,
@@ -145,43 +259,130 @@ class _AuthCheckState extends State<AuthCheck> {
     String? phone,
   }) async {
     final ref = _db.collection('usuarios').doc(uid);
-    final snap = await ref.get();
     final now = FieldValue.serverTimestamp();
 
-    if (!snap.exists) {
-      await ref.set({
-        'uid': uid,
-        'email': email ?? '',
-        'nombre': displayName ?? '',
-        'telefono': phone ?? '',
-        'rol': preferRol,
-        'fechaRegistro': now,
-        'actualizadoEn': now,
-      });
-      return;
-    }
+    try {
+      final snap = await ref.get();
 
-    final data = snap.data() ?? <String, dynamic>{};
-    final hadRol = (data['rol'] ?? '').toString().trim().isNotEmpty;
+      if (!snap.exists) {
+        await ref.set({
+          'uid': uid,
+          'email': email ?? '',
+          'nombre': displayName ?? '',
+          'telefono': phone ?? '',
+          'rol': preferRol,
+          'fechaRegistro': now,
+          'actualizadoEn': now,
+        });
+        return;
+      }
 
-    if (!hadRol) {
-      await ref.set(
-        {'rol': preferRol, 'updatedAt': now, 'actualizadoEn': now},
-        SetOptions(merge: true),
-      );
-    } else {
-      await ref.set(
-        {'lastLogin': now, 'updatedAt': now, 'actualizadoEn': now},
-        SetOptions(merge: true),
-      );
+      final data = snap.data() ?? <String, dynamic>{};
+      final hadRol = (data['rol'] ?? '').toString().trim().isNotEmpty;
+
+      if (!hadRol) {
+        await ref.set(
+          {'rol': preferRol, 'updatedAt': now, 'actualizadoEn': now},
+          SetOptions(merge: true),
+        );
+      } else {
+        await ref.set(
+          {'lastLogin': now, 'updatedAt': now, 'actualizadoEn': now},
+          SetOptions(merge: true),
+        );
+      }
+    } catch (_) {
+      // Ignorar: reglas pueden bloquear set/get
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Cargando
+    if (_busy && _errorMsg == null) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: CircularProgressIndicator(color: Colors.greenAccent),
+        ),
+      );
+    }
+
+    // Error UI (profesional para producción)
+    if (_errorMsg != null) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          title: const Text('Problema de inicio de sesión'),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 12),
+              const Text(
+                'No pudimos validar tu cuenta ahora mismo.',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Esto suele pasar por conexión, configuración del proyecto Firebase o reglas de Firestore.',
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                _errorMsg!,
+                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+              ),
+              const Spacer(),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _run,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reintentar'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () {
+                    _go(const SeleccionUsuario());
+                  },
+                  child: const Text('Volver'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () async {
+                    await _auth.signOut();
+                    if (!mounted) return;
+                    _go(const SeleccionUsuario());
+                  },
+                  child: const Text('Cerrar sesión'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // fallback
     return const Scaffold(
       backgroundColor: Colors.black,
-      body: Center(child: CircularProgressIndicator(color: Colors.greenAccent)),
+      body: Center(
+        child: CircularProgressIndicator(color: Colors.greenAccent),
+      ),
     );
   }
 }

@@ -36,7 +36,11 @@ class AdminService {
     required String nuevoEstado, // 'aprobado' | 'rechazado'
     String? notaAdmin,
   }) async {
-    assert(nuevoEstado == 'aprobado' || nuevoEstado == 'rechazado');
+    // `assert` se desactiva en release; validamos explícitamente para evitar
+    // estados inválidos que romperían el saldo calculado en billetera.
+    if (nuevoEstado != 'aprobado' && nuevoEstado != 'rechazado') {
+      throw ArgumentError('nuevoEstado inválido: $nuevoEstado');
+    }
     final ref = _liquidas.doc(id);
     await ref.update({
       'estado': nuevoEstado,

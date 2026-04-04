@@ -7,6 +7,7 @@ import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
 /// ===== Estados que usaremos =====
+/// Taxista: ok
 const _estadosTaxista = <String>[
   'asignado',
   'aceptado',
@@ -17,8 +18,10 @@ const _estadosTaxista = <String>[
   'enCurso',
 ];
 
-const _estadosCliente = <String>[
-  'pendiente',
+/// Cliente:
+/// IMPORTANTE: NO incluimos 'pendiente' porque eso hace que viajes programados
+/// (que suelen estar "pendiente") te manden a ViajeEnCurso.
+const _estadosClienteActivos = <String>[
   'asignado',
   'aceptado',
   'en_camino_pickup',
@@ -28,10 +31,16 @@ const _estadosCliente = <String>[
   'enCurso',
 ];
 
+bool _estadoClienteEsActivo(String estado) {
+  final e = estado.trim();
+  return _estadosClienteActivos.contains(e);
+}
+
 /// ===== TAXISTA =====
 class TaxistaTripRouter extends StatefulWidget {
   final Widget child;
   const TaxistaTripRouter({super.key, required this.child});
+
   @override
   State<TaxistaTripRouter> createState() => _TaxistaTripRouterState();
 }
@@ -82,7 +91,7 @@ class _TaxistaTripRouterState extends State<TaxistaTripRouter> {
       // si algo raro pasa, mantenemos la preferida
     }
 
-    _sub?.cancel();
+    await _sub?.cancel();
     _sub = qFinal.snapshots().listen((snap) async {
       if (!mounted || _navegando) return;
       if (snap.docs.isNotEmpty) {
@@ -102,6 +111,7 @@ class _TaxistaTripRouterState extends State<TaxistaTripRouter> {
     final now = DateTime.now();
     if (now.difference(_ultimaAccion).inMilliseconds < 500) return;
     _ultimaAccion = now;
+
     _navegando = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -126,10 +136,11 @@ class _TaxistaTripRouterState extends State<TaxistaTripRouter> {
 /// ===== CLIENTE =====
 /// 1) Escucha usuarios/{uid}.siguienteViajeId para navegar INMEDIATO tras crear.
 /// 2) Respaldo: query de viaje activo por estado para el cliente.
-/// Navega a /viaje_en_curso_cliente vía pushReplacement para evitar apilar pantallas.
+/// Navega a ViajeEnCursoCliente vía pushReplacement para evitar apilar pantallas.
 class ClienteTripRouter extends StatefulWidget {
   final Widget child;
   const ClienteTripRouter({super.key, required this.child});
+
   @override
   State<ClienteTripRouter> createState() => _ClienteTripRouterState();
 }
@@ -137,6 +148,7 @@ class ClienteTripRouter extends StatefulWidget {
 class _ClienteTripRouterState extends State<ClienteTripRouter> {
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subUser;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subActivos;
+
   bool _navegando = false;
   DateTime _ultimaAccion = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -152,19 +164,25 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
 
     final userRef = FirebaseFirestore.instance.collection('usuarios').doc(u.uid);
 
-    // (1) Fallback inmediato pos-creación/promoción: siguienteViajeId
-    _subUser?.cancel();
+    // (1) Navegación pos-creación: siguienteViajeId
+    // FIX: Solo navega si el viaje existe Y está en estado activo real (no "pendiente").
+    await _subUser?.cancel();
     _subUser = userRef.snapshots().listen((snap) async {
       if (!mounted || _navegando) return;
+
       final data = snap.data();
-      final String siguiente = (data?['siguienteViajeId'] ?? '').toString();
+      final String siguiente = (data?['siguienteViajeId'] ?? '').toString().trim();
       if (siguiente.isEmpty) return;
 
-      // Confirmamos que el viaje existe (evita navegar por un id obsoleto)
       try {
         final vref = FirebaseFirestore.instance.collection('viajes').doc(siguiente);
         final vsnap = await vref.get();
-        if (vsnap.exists) {
+        if (!vsnap.exists) return;
+
+        final v = vsnap.data() as Map<String, dynamic>;
+        final estado = (v['estado'] ?? '').toString();
+
+        if (_estadoClienteEsActivo(estado)) {
           _goOnce(() async {
             await Navigator.of(context).pushReplacement(
               MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
@@ -180,14 +198,14 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
     final qPreferida = FirebaseFirestore.instance
         .collection('viajes')
         .where('uidCliente', isEqualTo: u.uid)
-        .where('estado', whereIn: _estadosCliente)
+        .where('estado', whereIn: _estadosClienteActivos)
         .orderBy('updatedAt', descending: true)
         .limit(1);
 
     final qFallback = FirebaseFirestore.instance
         .collection('viajes')
         .where('uidCliente', isEqualTo: u.uid)
-        .where('estado', whereIn: _estadosCliente)
+        .where('estado', whereIn: _estadosClienteActivos)
         .limit(1);
 
     Query<Map<String, dynamic>> qFinal = qPreferida;
@@ -201,7 +219,7 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
       }
     } catch (_) {}
 
-    _subActivos?.cancel();
+    await _subActivos?.cancel();
     _subActivos = qFinal.snapshots().listen((snap) async {
       if (!mounted || _navegando) return;
       if (snap.docs.isNotEmpty) {
@@ -221,6 +239,7 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
     final now = DateTime.now();
     if (now.difference(_ultimaAccion).inMilliseconds < 500) return;
     _ultimaAccion = now;
+
     _navegando = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;

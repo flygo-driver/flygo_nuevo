@@ -1,5 +1,6 @@
-name: flygo_nuevo
-description: Aplicación FlyGo para viajes largos.
+name: flygo_nuevo  # ← NO lo cambies
+description: RAI Driver — app de movilidad para clientes y taxistas.
+version: 2.0.0+1
 publish_to: "none"
 
 environment:
@@ -51,6 +52,10 @@ dependencies:
   # Timbre + info del paquete
   audioplayers: ^5.2.1
   package_info_plus: ^8.0.0
+  firebase_crashlytics: ^3.5.7
+  share_plus: ^10.0.0
+  video_player: ^2.9.2
+  app_links: ^6.4.0
 
 dev_dependencies:
   flutter_test:
@@ -62,25 +67,27 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/icon/icon_foreground_padded.png
-    - assets/icon/paracaida_color.png
-    - assets/icon/logo_flygo.png
+    - assets/sounds/notification.wav     # Timbre in-app (mismo tono que res/raw en Android)
+    - assets/icon/icono_app_R.png        # R sola (icono app y appbar)
+    - assets/icon/paracaida_color.png    # Paracaídas (pantalla bienvenida)
+    - assets/icon/splash_rai.png         # R + RAI + "Movilidad Inteligente" (splash)
+    - assets/icon/logo_rai_vertical.png  # R arriba + RAI abajo (pantalla bienvenida)
 
-# ---------- Icono APK ----------
+# ---------- ICONO DE LA APP (R sola) ----------
 flutter_launcher_icons:
   android: true
   ios: false
   adaptive_icon_background: "#000000"
-  adaptive_icon_foreground: assets/icon/icon_foreground_padded.png
-  image_path: assets/icon/icon_foreground_padded.png
+  adaptive_icon_foreground: assets/icon/icono_app_R.png
+  image_path: assets/icon/icono_app_R.png
   min_sdk_android: 21
 
-# ---------- Splash ----------
+# ---------- SPLASH SCREEN (Logo RAI con texto) ----------
 flutter_native_splash:
   color: "#000000"
-  image: assets/icon/icon_foreground_padded.png
+  image: assets/icon/splash_rai.png      # R + RAI + "Movilidad Inteligente"
   android_gravity: center
   android_12:
-    image: assets/icon/icon_foreground_padded.png
+    image: assets/icon/splash_rai.png
     icon_background_color: "#000000"
   fullscreen: true

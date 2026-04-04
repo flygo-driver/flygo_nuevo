@@ -1,4 +1,9 @@
 // lib/servicios/taxista_viaje_logic.dart
+//
+// Nota de producción:
+// Adaptador de compatibilidad. Si se habilita desde UI en algún momento,
+// validar que los efectos (especialmente pagos/estados) queden alineados
+// con el flujo central (`viajes_repo.dart` + pantallas actuales).
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 

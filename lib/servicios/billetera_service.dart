@@ -317,6 +317,7 @@ class BilleteraService {
   static Future<void> solicitarRetiro({
     required String uidTaxista,
     required double monto,
+    String? requestId,
   }) async {
     if (uidTaxista.trim().isEmpty) {
       throw Exception('UID vacío.');
@@ -325,19 +326,41 @@ class BilleteraService {
       throw Exception('El monto debe ser mayor a 0.');
     }
 
+    final int montoCents = (monto * 100).round();
+    final String rid = (requestId ?? '').trim();
+    final DocumentReference<Map<String, dynamic>> ref =
+        rid.isEmpty ? _liquidas.doc() : _liquidas.doc(rid);
+
+    final existing = await ref.get();
+    if (existing.exists) {
+      return;
+    }
+
+    // Deduplicación defensiva por doble click/reintento inmediato.
+    final recientes = await _liquidas
+        .where('uidTaxista', isEqualTo: uidTaxista)
+        .where('estado', isEqualTo: 'pendiente')
+        .where('monto_cents', isEqualTo: montoCents)
+        .limit(1)
+        .get();
+    if (recientes.docs.isNotEmpty) {
+      return;
+    }
+
     final saldo = await calcularSaldoDisponible(uidTaxista);
     if (monto > saldo) {
       throw Exception('Monto mayor al saldo disponible.');
     }
 
-    final ref = _liquidas.doc();
     await ref.set({
       'id': ref.id,
       'uidTaxista': uidTaxista,
       'monto': double.parse(monto.toStringAsFixed(2)),
+      'monto_cents': montoCents,
       'estado': 'pendiente',
       'solicitadoEn': FieldValue.serverTimestamp(),
       'resueltoEn': null,
+      'requestId': rid.isEmpty ? ref.id : rid,
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }

@@ -130,19 +130,21 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
                   label: const Text('Eliminar foto',
                       style: TextStyle(color: Colors.greenAccent)),
                 ),
-                const SizedBox(height: 12),
-                // 🔧 BOTÓN DE PRUEBA
-                OutlinedButton.icon(
-                  onPressed: _subiendo ? null : _pruebaSubidaSimple,
-                  icon: const Icon(Icons.upload_file, color: Colors.greenAccent),
-                  label: const Text(
-                    'PRUEBA SUBIDA (test.txt)',
-                    style: TextStyle(color: Colors.greenAccent),
+                if (kDebugMode) ...[
+                  const SizedBox(height: 12),
+                  // Boton de prueba solo en debug.
+                  OutlinedButton.icon(
+                    onPressed: _subiendo ? null : _pruebaSubidaSimple,
+                    icon: const Icon(Icons.upload_file, color: Colors.greenAccent),
+                    label: const Text(
+                      'PRUEBA SUBIDA (test.txt)',
+                      style: TextStyle(color: Colors.greenAccent),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.greenAccent),
+                    ),
                   ),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.greenAccent),
-                  ),
-                ),
+                ],
               ],
             ),
           );

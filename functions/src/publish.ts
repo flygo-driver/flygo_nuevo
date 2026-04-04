@@ -1,11 +1,11 @@
 // functions/src/publish.ts
-import * as admin from "firebase-admin";
+import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 
-// admin.initializeApp() ya se hace en src/index.ts
-const db = admin.firestore();
+// initializeApp() ya se hace en src/index.ts
+const db = () => getFirestore();
 
 const COLL = "viajes";
 
@@ -16,13 +16,13 @@ const READY_MIN_BEFORE = 45;     // ventana "ready" N minutos antes
 const AHORA_MIN_THRESHOLD = 15;  // si falta <= 15 min => esAhora
 
 // Utilidades pequeñas
-const tsNow = () => admin.firestore.Timestamp.now();
-const svNow = () => admin.firestore.FieldValue.serverTimestamp();
+const tsNow = () => Timestamp.now();
+const svNow = () => FieldValue.serverTimestamp();
 
 // Convierte fechaHora a Date (acepta Timestamp, Date o string ISO)
 function toDateSafe(v: any, fallback: Date): Date {
   if (!v) return fallback;
-  if (v instanceof admin.firestore.Timestamp) return v.toDate();
+  if (v instanceof Timestamp) return v.toDate();
   if (v instanceof Date) return v;
   if (typeof v === "string") {
     const t = Date.parse(v);
@@ -31,8 +31,8 @@ function toDateSafe(v: any, fallback: Date): Date {
   return fallback;
 }
 
-function fromDate(d: Date): admin.firestore.Timestamp {
-  return admin.firestore.Timestamp.fromDate(d);
+function fromDate(d: Date): Timestamp {
+  return Timestamp.fromDate(d);
 }
 
 function computeFieldsOnCreate(data: FirebaseFirestore.DocumentData, now: Date) {
@@ -43,15 +43,15 @@ function computeFieldsOnCreate(data: FirebaseFirestore.DocumentData, now: Date) 
   const programado = !esAhora;
 
   // Respetar si ya vienen set, si no, calcular
-  const publishAt: Date = (data.publishAt instanceof admin.firestore.Timestamp)
+  const publishAt: Date = (data.publishAt instanceof Timestamp)
     ? data.publishAt.toDate()
     : (esAhora ? now : new Date(fechaViaje.getTime() - POOL_HOURS_BEFORE * 3_600_000));
 
-  const acceptAfter: Date = (data.acceptAfter instanceof admin.firestore.Timestamp)
+  const acceptAfter: Date = (data.acceptAfter instanceof Timestamp)
     ? data.acceptAfter.toDate()
     : (esAhora ? now : new Date(fechaViaje.getTime() - ACCEPT_HOURS_BEFORE * 3_600_000));
 
-  const startWindowAt: Date = (data.startWindowAt instanceof admin.firestore.Timestamp)
+  const startWindowAt: Date = (data.startWindowAt instanceof Timestamp)
     ? data.startWindowAt.toDate()
     : (esAhora ? now : new Date(fechaViaje.getTime() - READY_MIN_BEFORE * 60_000));
 
@@ -123,7 +123,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
   // ---- A) Publicar viajes cuyo publishAt ya venció ----
   {
-    const q = db.collection(COLL)
+    const q = db().collection(COLL)
       .where("estado", "in", ["pendiente", "pendiente_pago"])
       .where("uidTaxista", "==", "")
       .where("publishAt", "<=", nowTs)
@@ -131,7 +131,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
     const snaps = await q.get();
     if (!snaps.empty) {
-      let batch = db.batch();
+      let batch = db().batch();
       let writes = 0;
 
       for (const doc of snaps.docs) {
@@ -154,7 +154,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
         if (writes >= 450) {
           await batch.commit();
-          batch = db.batch();
+          batch = db().batch();
           writes = 0;
         }
       }
@@ -165,7 +165,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
   // ---- B) Liberar reservas vencidas ----
   {
-    const q = db.collection(COLL)
+    const q = db().collection(COLL)
       .where("estado", "in", ["pendiente", "pendiente_pago"])
       .where("uidTaxista", "==", "")
       .where("reservadoHasta", "<=", nowTs) // solo los que tienen fecha de vencimiento menor/igual a ahora
@@ -173,7 +173,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
     const snaps = await q.get();
     if (!snaps.empty) {
-      let batch = db.batch();
+      let batch = db().batch();
       let writes = 0;
 
       for (const doc of snaps.docs) {
@@ -192,7 +192,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
         if (writes >= 450) {
           await batch.commit();
-          batch = db.batch();
+          batch = db().batch();
           writes = 0;
         }
       }
@@ -203,14 +203,14 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
   // ---- C) Sincronizar 'esAhora' por si alguien reprogramó fechaHora ----
   {
-    const q = db.collection(COLL)
+    const q = db().collection(COLL)
       .where("estado", "in", ["pendiente", "pendiente_pago"])
       .where("uidTaxista", "==", "")
       .limit(400);
 
     const snaps = await q.get();
     if (!snaps.empty) {
-      let batch = db.batch();
+      let batch = db().batch();
       let writes = 0;
 
       for (const doc of snaps.docs) {
@@ -229,7 +229,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
         if (writes >= 450) {
           await batch.commit();
-          batch = db.batch();
+          batch = db().batch();
           writes = 0;
         }
       }

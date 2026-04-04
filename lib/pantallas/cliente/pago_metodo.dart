@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../data/pago_data.dart';
+import '../../widgets/rai_app_bar.dart';
 
 class PagoMetodo extends StatefulWidget {
   /// Modo simple: sin viajeId/clienteId/montoDop -> solo selecciona y devuelve el método.
@@ -48,8 +49,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
         await PagoData.autorizarPago(
           viajeId: widget.viajeId!,
           clienteId: widget.clienteId!,
-          paymentMethodId:
-              'pm_mock', // TODO: reemplazar por el ID real de Stripe u otro gateway
+          paymentMethodId: 'pm_mock',
           montoDop: widget.montoDop!,
           emailCliente: email,
         );
@@ -60,13 +60,13 @@ class _PagoMetodoState extends State<PagoMetodo> {
       }
 
       if (!mounted) return;
-      Navigator.pop(context, _metodo); // devolvemos la selección al caller
+      Navigator.pop(context, _metodo);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('⚠️ Error: ${e.toString()}')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('⚠️ Error: ${e.toString()}')),
+      );
     } finally {
       if (mounted) setState(() => _procesando = false);
     }
@@ -76,14 +76,8 @@ class _PagoMetodoState extends State<PagoMetodo> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: const Text(
-          'Método de pago',
-          style: TextStyle(color: Colors.white),
-        ),
+      appBar: const RaiAppBar(
+        title: 'Método de pago',
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -94,7 +88,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
               groupValue: _metodo,
               onChanged: _procesando
                   ? null
-                  : (v) => setState(() => _metodo = v!),
+                  : (String? v) => setState(() => _metodo = v!),
               activeColor: Colors.greenAccent,
               tileColor: Colors.grey[900],
               title: const Text(
@@ -112,7 +106,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
               groupValue: _metodo,
               onChanged: _procesando
                   ? null
-                  : (v) => setState(() => _metodo = v!),
+                  : (String? v) => setState(() => _metodo = v!),
               activeColor: Colors.greenAccent,
               tileColor: Colors.grey[900],
               title: const Text(

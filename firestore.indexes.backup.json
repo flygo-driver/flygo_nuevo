@@ -1,0 +1,666 @@
+﻿{
+    "fieldOverrides":  [
+
+                       ],
+    "apiVersion":  2,
+    "indexes":  [
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "activo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "resueltoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "emailCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "completado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "resueltoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "solicitadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "programado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "updatedAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "emailTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "createdAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "docsEstado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "docsEnviadosEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "esAhora",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "acceptAfter",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fechaHora",
+                                           "order":  "ASCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "solicitadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "uidCliente",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "completado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "finalizadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "docsEstado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "actualizadoEn",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "uidTaxista",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "publishAt",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    },
+                    {
+                        "collectionGroup":  null,
+                        "queryScope":  "COLLECTION",
+                        "fields":  [
+                                       {
+                                           "fieldPath":  "tipo",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "estado",
+                                           "order":  "ASCENDING"
+                                       },
+                                       {
+                                           "fieldPath":  "fecha",
+                                           "order":  "DESCENDING"
+                                       }
+                                   ]
+                    }
+                ]
+}

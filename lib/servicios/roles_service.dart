@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flygo_nuevo/servicios/disponibilidad_service.dart';
 
 class Roles {
   static const String cliente = 'cliente';
@@ -59,25 +60,57 @@ class RolesService {
     }
   }
 
-  static Stream<bool?> streamDisponibilidad(String uid) {
+  /// Lee `disponible` de forma tolerante (bool / int legacy / string).
+  static bool leerDisponibleDesdeUsuarioDoc(Map<String, dynamic>? data) {
+    if (data == null) return false;
+    final d = data['disponible'];
+    if (d is bool) return d;
+    if (d is int) return d != 0;
+    if (d is num) return d != 0;
+    if (d is String) {
+      final s = d.toLowerCase().trim();
+      return s == 'true' ||
+          s == '1' ||
+          s == 'si' ||
+          s == 'sí' ||
+          s == 'yes';
+    }
+    return false;
+  }
+
+  static Stream<bool> streamDisponibilidad(String uid) {
     return _usuarios.doc(uid).snapshots().map((snap) {
-      if (!snap.exists) return null;
-      final d = snap.data()?['disponible'];
-      return (d is bool) ? d : null;
+      return leerDisponibleDesdeUsuarioDoc(snap.data());
     });
   }
 
-  static Future<bool?> getDisponibilidad(String uid) async {
+  static Future<bool> getDisponibilidad(String uid) async {
     final doc = await _usuarios.doc(uid).get();
-    if (!doc.exists) return null;
-    final d = doc.data()?['disponible'];
-    return (d is bool) ? d : null;
+    return leerDisponibleDesdeUsuarioDoc(doc.data());
   }
 
-  static Future<void> setDisponibilidad(String uid, bool disponible) async {
-    await _usuarios.doc(uid).set({
-      'disponible': disponible,
-      'actualizadoEn': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+  static Future<void> setDisponibilidad(String uid, bool value) async {
+    if (value) {
+      await DisponibilidadService.activar(uid);
+    } else {
+      final ref = _usuarios.doc(uid);
+      try {
+        await ref.update({
+          'disponible': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        });
+      } on FirebaseException catch (e) {
+        if (e.code == 'not-found') {
+          await ref.set({
+            'disponible': false,
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        } else {
+          rethrow;
+        }
+      }
+    }
   }
 }

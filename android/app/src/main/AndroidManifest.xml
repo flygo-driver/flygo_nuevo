@@ -1,6 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 👁️ Visibilidad de paquetes (Android 11+) para abrir Waze/Maps/geo links -->
+    <!-- Forzamos minSdk 24 en el manifest -->
+    <uses-sdk android:minSdkVersion="24" />
+
+    <!-- Visibilidad para abrir Waze/Maps/geo -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -20,35 +24,31 @@
         </intent>
     </queries>
 
-    <!-- 🌐 Network -->
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- Network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- 📍 Ubicación -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Ubicación -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- 🔔 Notificaciones (Android 13+) -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Notificaciones (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- 📷 Cámara -->
-    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Cámara -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- ▶️ Foreground Services (Android 9+ / 14+) -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <!-- Foreground Services -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
-    <!-- (Opcional) ubicación en 2º plano: si la vas a usar, debes justificarla en Play -->
-    <!-- <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" /> -->
-
-    <!-- (Opcional) declara features de ubicación, pero no obligues el GPS -->
-    <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
-    <uses-feature android:name="android.hardware.location.network" android:required="false"/>
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.location.network" android:required="false" />
 
     <application
-        android:label="FlyGo"
+        android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="false">
 
         <activity
             android:name=".MainActivity"
@@ -60,12 +60,12 @@
             android:windowSoftInputMode="adjustResize">
 
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- 🎯 Tema normal de Flutter al volver del splash -->
+        <!-- Tema normal de Flutter al volver del splash -->
         <meta-data
             android:name="io.flutter.embedding.android.NormalTheme"
             android:resource="@style/NormalTheme" />
@@ -73,22 +73,26 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- 🗺️ Google Maps: lee la API key del strings.xml -->
+        <!-- Google Maps / Places -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="@string/google_maps_api_key" />
+        <meta-data
+            android:name="com.google.android.libraries.places.API_KEY"
+            android:value="@string/google_maps_api_key" />
 
-        <!-- 🔔 (Opcional) Canal por defecto de FCM si lo usas -->
+        <!-- Canal por defecto FCM/local -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="@string/default_notification_channel_id" />
 
-        <!-- (Opcional) Servicio foreground si luego trackeas rutas -->
-        <!--
-        <service
-            android:name=".location.LocationService"
-            android:exported="false"
-            android:foregroundServiceType="location" />
-        -->
+        <!-- Ícono y color por defecto de notificaciones -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
+
     </application>
 </manifest>

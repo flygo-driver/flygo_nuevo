@@ -2,19 +2,20 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+
 import '../../servicios/chat_repo.dart';
 
 class ChatScreen extends StatefulWidget {
-  final String otroUid;     // UID del otro participante (taxista o cliente)
-  final String otroNombre;  // Para el título
-  final String? viajeId;    // Opcional, para agrupar por viaje
+  final String otroUid;
+  final String otroNombre;
+  final String? viajeId;
 
   const ChatScreen({
-    Key? key,
+    super.key,
     required this.otroUid,
     required this.otroNombre,
     this.viajeId,
-  }) : super(key: key);
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -35,10 +36,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _prepare() async {
-    debugPrint('[CHAT] miUid=$miUid');
-    debugPrint('[CHAT] otroUid=${widget.otroUid}');
-    debugPrint('[CHAT] viajeId=${widget.viajeId ?? ''}');
-
     try {
       final cid = await ChatRepo.resolveOrCreateChatId(
         uidA: miUid,
@@ -50,7 +47,6 @@ class _ChatScreenState extends State<ChatScreen> {
         chatId = cid;
         _chatReady = true;
       });
-      debugPrint('[CHAT] READY cid="$cid"');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -87,28 +83,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _sendTest() async {
-    if (!_chatReady) return;
-    try {
-      await ChatRepo.enviar(
-        chatId: chatId,
-        deUid: miUid,
-        texto: 'Mensaje de prueba ✅ ${DateTime.now().toIso8601String()}',
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mensaje de prueba enviado')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al enviar prueba: $e')),
-      );
-    }
-  }
-
-  Widget _bubble(Map<String, dynamic> m) {
-    final emisor = (m['de'] ?? m['from']) as String? ?? '';
+  Widget _bubble(BuildContext context, Map<String, dynamic> m) {
+    final emisor = (m['de'] ?? m['from'] ?? m['senderUid']) as String? ?? '';
     final soyYo = emisor == miUid;
 
     final textoRaw = m['texto'];
@@ -118,7 +94,14 @@ class _ChatScreenState extends State<ChatScreen> {
     DateTime? when;
     if (ts is Timestamp) when = ts.toDate();
     if (ts is DateTime) when = ts;
-    final hora = when != null ? '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}' : '';
+    final hora = when != null
+        ? '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}'
+        : '';
+
+    final cs = Theme.of(context).colorScheme;
+    final bubbleBg = soyYo ? cs.primary : cs.surfaceContainerHighest;
+    final fg = soyYo ? cs.onPrimary : cs.onSurface;
+    final sub = soyYo ? cs.onPrimary.withValues(alpha: 0.75) : cs.onSurfaceVariant;
 
     return Align(
       alignment: soyYo ? Alignment.centerRight : Alignment.centerLeft,
@@ -126,19 +109,19 @@ class _ChatScreenState extends State<ChatScreen> {
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
         decoration: BoxDecoration(
-          color: soyYo ? const Color(0xFF1F8E4E) : const Color(0xFF222222),
+          color: bubbleBg,
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(
           crossAxisAlignment: soyYo ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             if (texto.isEmpty)
-              const Text('—', style: TextStyle(color: Colors.white70))
+              Text('—', style: TextStyle(color: sub))
             else
-              Text(texto, style: const TextStyle(color: Colors.white)),
+              Text(texto, style: TextStyle(color: fg)),
             if (hora.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(hora, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+              Text(hora, style: TextStyle(color: sub, fontSize: 11)),
             ],
           ],
         ),
@@ -148,41 +131,37 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: cs.surface,
       appBar: AppBar(
-        title: Text('Chat con ${widget.otroNombre}', style: const TextStyle(color: Colors.white)),
-        backgroundColor: Colors.black,
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          IconButton(
-            tooltip: 'Probar envío',
-            onPressed: _sendTest,
-            icon: const Icon(Icons.bolt, color: Colors.greenAccent),
-          ),
-        ],
+        title: Text('Chat con ${widget.otroNombre}'),
+        backgroundColor: cs.surface,
+        foregroundColor: cs.onSurface,
+        surfaceTintColor: cs.surfaceTint,
+        elevation: 0,
       ),
       body: Column(
         children: [
           Expanded(
             child: !_chatReady
-                ? const Center(child: CircularProgressIndicator(color: Colors.greenAccent))
+                ? Center(child: CircularProgressIndicator(color: cs.primary))
                 : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: ChatRepo.streamMensajes(chatId),
                     builder: (context, snap) {
                       if (snap.connectionState == ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
+                        return Center(child: CircularProgressIndicator(color: cs.primary));
                       }
                       if (snap.hasError) {
                         final msg = snap.error.toString();
-                        debugPrint('[CHAT] stream error: $msg');
                         return Center(
                           child: Padding(
                             padding: const EdgeInsets.all(16),
                             child: Text(
                               'No se pueden cargar mensajes.\n$msg',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.redAccent),
+                              style: TextStyle(color: cs.error),
                             ),
                           ),
                         );
@@ -192,8 +171,11 @@ class _ChatScreenState extends State<ChatScreen> {
                       }
                       final docs = snap.data!.docs;
                       if (docs.isEmpty) {
-                        return const Center(
-                          child: Text('Empieza la conversación 👋', style: TextStyle(color: Colors.white54)),
+                        return Center(
+                          child: Text(
+                            'Empieza la conversación',
+                            style: TextStyle(color: cs.onSurfaceVariant),
+                          ),
                         );
                       }
                       return ListView.builder(
@@ -201,7 +183,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         itemCount: docs.length,
                         itemBuilder: (_, i) {
                           final m = docs[i].data();
-                          return _bubble(m);
+                          return _bubble(context, m);
                         },
                       );
                     },
@@ -216,24 +198,24 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _ctrl,
-                      style: const TextStyle(color: Colors.white),
+                      style: TextStyle(color: cs.onSurface),
                       decoration: InputDecoration(
                         hintText: 'Escribe un mensaje…',
-                        hintStyle: const TextStyle(color: Colors.white54),
+                        hintStyle: TextStyle(color: cs.onSurfaceVariant),
                         filled: true,
-                        fillColor: const Color(0xFF1A1A1A),
+                        fillColor: cs.surfaceContainerHighest,
                         contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: Colors.white24),
+                          borderSide: BorderSide(color: cs.outlineVariant),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: Colors.white24),
+                          borderSide: BorderSide(color: cs.outlineVariant),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(color: Colors.greenAccent),
+                          borderSide: BorderSide(color: cs.primary, width: 2),
                         ),
                       ),
                       onSubmitted: (_) => _send(),
@@ -241,9 +223,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton(
+                  IconButton.filledTonal(
                     onPressed: _send,
-                    icon: const Icon(Icons.send, color: Colors.greenAccent),
+                    icon: Icon(Icons.send, color: cs.primary),
                   ),
                 ],
               ),

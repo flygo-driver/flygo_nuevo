@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/modelo/viaje.dart';
@@ -434,7 +435,12 @@ class ViajeData {
     };
 
     final q = _viajes
-        .where('uidCliente', isEqualTo: uidCliente)
+        .where(
+          Filter.or(
+            Filter('uidCliente', isEqualTo: uidCliente),
+            Filter('clienteId', isEqualTo: uidCliente),
+          ),
+        )
         .where('completado', isEqualTo: false);
 
     return q.snapshots().map((QuerySnapshot<Map<String, dynamic>> snap) {
@@ -816,7 +822,12 @@ class ViajeData {
     String? motivo,
   }) async {
     final QuerySnapshot<Map<String, dynamic>> qs = await _viajes
-        .where('uidCliente', isEqualTo: uidCliente)
+        .where(
+          Filter.or(
+            Filter('uidCliente', isEqualTo: uidCliente),
+            Filter('clienteId', isEqualTo: uidCliente),
+          ),
+        )
         .where('completado', isEqualTo: false)
         .get();
 
@@ -871,7 +882,9 @@ class ViajeData {
       final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe.');
       final Map<String, dynamic> data = snap.data()!;
-      if ((data['clienteId'] ?? '') != uidCliente) {
+      final String ownerA = (data['clienteId'] ?? '').toString();
+      final String ownerB = (data['uidCliente'] ?? '').toString();
+      if (ownerA != uidCliente && ownerB != uidCliente) {
         throw Exception('No puedes reprogramar este viaje.');
       }
 
@@ -1138,57 +1151,63 @@ class ViajeData {
     });
   }
 
+  /// Persistencia vía Cloud Function [submitTripRating]: Admin SDK, compatible con reglas Firestore.
   static Future<void> calificarViajeSeguro({
     required String viajeId,
     required String uidCliente,
     required num calificacion,
     String? comentario,
   }) async {
-    final DocumentReference<Map<String, dynamic>> refViaje = _viajes.doc(viajeId);
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw Exception('Debes iniciar sesión.');
+    }
+    if (user.uid != uidCliente) {
+      throw Exception('Sesión no coincide con el usuario.');
+    }
 
-    await _db.runTransaction((Transaction tx) async {
-      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(refViaje);
-      if (!snap.exists) throw Exception('El viaje no existe.');
-      final Map<String, dynamic> data = snap.data()!;
+    final HttpsCallable callable = FirebaseFunctions.instanceFor(
+      region: 'us-central1',
+    ).httpsCallable('submitTripRating');
 
-      final String clienteId = (data['clienteId'] ?? '').toString();
-      if (clienteId != uidCliente) {
-        throw Exception('No puedes calificar este viaje.');
+    try {
+      final HttpsCallableResult<dynamic> res = await callable.call(
+        <String, dynamic>{
+          'viajeId': viajeId,
+          'calificacion': calificacion,
+          if (comentario != null && comentario.isNotEmpty) 'comentario': comentario,
+        },
+      );
+      final Object? data = res.data;
+      if (data is Map) {
+        final Map<String, dynamic> map = Map<String, dynamic>.from(data);
+        if (map['ok'] != true) {
+          throw Exception(
+            map['error']?.toString() ?? 'No se pudo guardar la calificación.',
+          );
+        }
       }
-
-      final bool completado = (data['completado'] ?? false) == true;
-      if (!completado) {
-        throw Exception('Solo puedes calificar viajes completados.');
+    } on FirebaseFunctionsException catch (e) {
+      final String msg = (e.message ?? '').trim();
+      switch (e.code) {
+        case 'unauthenticated':
+          throw Exception('Debes iniciar sesión.');
+        case 'permission-denied':
+          throw Exception(msg.isNotEmpty ? msg : 'No puedes calificar este viaje.');
+        case 'failed-precondition':
+          throw Exception(
+            msg.isNotEmpty ? msg : 'Solo puedes calificar viajes completados.',
+          );
+        case 'not-found':
+          throw Exception(msg.isNotEmpty ? msg : 'El viaje no existe.');
+        case 'invalid-argument':
+          throw Exception(msg.isNotEmpty ? msg : 'Datos inválidos.');
+        default:
+          throw Exception(
+            msg.isNotEmpty ? msg : 'Error al guardar calificación (${e.code}).',
+          );
       }
-
-      final bool yaCalificado = (data['calificado'] ?? false) == true;
-      if (yaCalificado) return;
-
-      final double cal = calificacion.toDouble();
-
-      tx.update(refViaje, <String, dynamic>{
-        'calificado': true,
-        'calificacion': cal,
-        if (comentario != null && comentario.isNotEmpty) 'comentario': comentario,
-        'calificadoEn': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      });
-
-      final String uidTaxista = (data['uidTaxista'] ?? '').toString();
-      if (uidTaxista.isNotEmpty) {
-        final DocumentReference<Map<String, dynamic>> refTaxista =
-            _db.collection('usuarios').doc(uidTaxista);
-        tx.set(
-          refTaxista,
-          <String, dynamic>{
-            'ratingSuma': FieldValue.increment(cal),
-            'ratingConteo': FieldValue.increment(1),
-          },
-          SetOptions(merge: true),
-        );
-      }
-    });
+    }
   }
 
   static Future<double> obtenerPromedioTaxista(String uidTaxista) async {

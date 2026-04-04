@@ -3,11 +3,20 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 
 class GpsService {
-  static Future<bool> isServiceEnabled() => Geolocator.isLocationServiceEnabled();
-  static Future<LocationPermission> checkPermission() => Geolocator.checkPermission();
-  static Future<LocationPermission> requestPermission() => Geolocator.requestPermission();
-  static Future<bool> openLocationSettings() => Geolocator.openLocationSettings();
-  static Future<bool> openAppSettings() => Geolocator.openAppSettings();
+  static Future<bool> isServiceEnabled() =>
+      Geolocator.isLocationServiceEnabled();
+
+  static Future<LocationPermission> checkPermission() =>
+      Geolocator.checkPermission();
+
+  static Future<LocationPermission> requestPermission() =>
+      Geolocator.requestPermission();
+
+  static Future<bool> openLocationSettings() =>
+      Geolocator.openLocationSettings();
+
+  static Future<bool> openAppSettings() =>
+      Geolocator.openAppSettings();
 
   static Future<Position?> obtenerUbicacionActual({
     Duration timeout = const Duration(seconds: 10),
@@ -15,20 +24,14 @@ class GpsService {
     LocationAccuracy accuracy = LocationAccuracy.high,
   }) async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      return null;
-    }
+    if (!serviceEnabled) return null;
 
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
-      if (perm == LocationPermission.denied) {
-        return null;
-      }
+      if (perm == LocationPermission.denied) return null;
     }
-    if (perm == LocationPermission.deniedForever) {
-      return null;
-    }
+    if (perm == LocationPermission.deniedForever) return null;
 
     try {
       return await Geolocator.getCurrentPosition(
@@ -37,15 +40,11 @@ class GpsService {
       );
     } on TimeoutException {
       final last = await Geolocator.getLastKnownPosition();
-      if (last != null && _esReciente(last, maxEdadUltima)) {
-        return last;
-      }
+      if (last != null && _esReciente(last, maxEdadUltima)) return last;
       return null;
     } catch (_) {
       final last = await Geolocator.getLastKnownPosition();
-      if (last != null && _esReciente(last, maxEdadUltima)) {
-        return last;
-      }
+      if (last != null && _esReciente(last, maxEdadUltima)) return last;
       return null;
     }
   }
@@ -58,8 +57,9 @@ class GpsService {
       accuracy: accuracy,
       distanceFilter: distanceFilterMeters,
     );
+
     return Geolocator.getPositionStream(locationSettings: settings)
-        .where((p) => p.latitude != 0 || p.longitude != 0);
+        .where((p) => p.latitude != 0.0 || p.longitude != 0.0);
   }
 
   static Future<Position?> esperarPrimeraUbicacion({
@@ -83,14 +83,11 @@ class GpsService {
     Duration maxEdadUltima = const Duration(minutes: 2),
   }) async {
     final last = await Geolocator.getLastKnownPosition();
-    if (last != null && _esReciente(last, maxEdadUltima)) {
-      return last;
-    }
+    if (last != null && _esReciente(last, maxEdadUltima)) return last;
     return null;
   }
 
   static bool _esReciente(Position p, Duration maxEdad) {
-    final ts = p.timestamp;
-    return DateTime.now().difference(ts).abs() <= maxEdad;
+    return DateTime.now().difference(p.timestamp).abs() <= maxEdad;
   }
 }

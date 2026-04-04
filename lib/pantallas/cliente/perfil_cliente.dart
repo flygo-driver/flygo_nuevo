@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class PerfilCliente extends StatelessWidget {
   const PerfilCliente({super.key});
@@ -10,10 +11,8 @@ class PerfilCliente extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text('Mi Perfil'),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
+      appBar: const RaiAppBar(
+        title: 'Mi Perfil',
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -36,7 +35,6 @@ class PerfilCliente extends StatelessWidget {
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: () {
-                  // Aquí luego puedes abrir edición de perfil
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Editar perfil (placeholder)'),

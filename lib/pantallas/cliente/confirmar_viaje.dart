@@ -1,6 +1,6 @@
+// lib/pantallas/cliente/confirmar_viaje_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart'; // Para FirebaseException
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';

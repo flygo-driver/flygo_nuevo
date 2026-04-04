@@ -1,3 +1,9 @@
+// lib/pantallas/taxista/viaje_en_curso_taxista_logic.dart
+//
+// Nota de producción:
+// Implementación alternativa/legacy para "completar" y asentar pagos.
+// El flujo principal actual debe ser el de las pantallas/controladores
+// que usan `ViajesRepo`/`PagoData` directamente.
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../data/pago_data.dart';

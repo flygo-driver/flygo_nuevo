@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
+import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 
 class ServiciosConsularesScreen extends StatelessWidget {
   const ServiciosConsularesScreen({super.key});
@@ -60,6 +61,22 @@ class ServiciosConsularesScreen extends StatelessWidget {
                 },
                 icon: const Icon(Icons.event_available),
                 label: const Text('Programar servicio consular'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PoolsClienteLista(tipo: 'consular'),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.groups),
+                label: const Text('Ver giras y cupos de agencias'),
               ),
             ),
           ],

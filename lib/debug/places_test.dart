@@ -19,7 +19,7 @@ class PlacesTestPage extends StatefulWidget {
 
 class _PlacesTestPageState extends State<PlacesTestPage> {
   // ❗ En esta versión del plugin debes pasar la API key al constructor
-  late final places.FlutterGooglePlacesSdk _places =
+  final places.FlutterGooglePlacesSdk _places =
       places.FlutterGooglePlacesSdk(app_keys.kGooglePlacesApiKey);
 
   final _queryCtrl = TextEditingController();
@@ -90,7 +90,7 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
     try {
       final result = await _places.findAutocompletePredictions(
         query,
-        countries: const ['DO'], // opcional
+        countries: const ['DO'],
         newSessionToken: true,
       );
       setState(() {
@@ -114,14 +114,15 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
   // Devuelve la lista de PlaceField compatible con tu versión del plugin:
   // usa LatLng si existe; si no, usa Location.
   List<places.PlaceField> _compatibleFields() {
-    final values = places.PlaceField.values;
+    const values = places.PlaceField.values; // ✅ CORREGIDO: ahora es const
+    
     places.PlaceField? _byName(String n) {
       try {
         return values.firstWhere(
-          (f) => (f as dynamic).name == n, // Dart >=2.15 enum.name
+          (f) => f.name == n,
           orElse: () => values.firstWhere(
             (f) => f.toString().split('.').last == n,
-            orElse: () => values.first, // fallback (no debería usarse)
+            orElse: () => values.first,
           ),
         );
       } catch (_) {
@@ -133,7 +134,7 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
     final name = _byName('Name');
     final address = _byName('Address');
     final types = _byName('Types');
-    final latLng = _byName('LatLng') ?? _byName('Location'); // <- clave
+    final latLng = _byName('LatLng') ?? _byName('Location');
 
     final out = <places.PlaceField>[];
     if (id != null) out.add(id);
@@ -160,7 +161,7 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
       double? lat;
       double? lng;
       try {
-        final ll = place?.latLng; // si tu SDK tiene LatLng
+        final ll = place?.latLng;
         if (ll != null) {
           lat = ll.lat;
           lng = ll.lng;
@@ -169,7 +170,7 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
 
       if ((lat == null || lng == null) && place != null) {
         try {
-          final loc = (place as dynamic).location; // si tu SDK usa Location
+          final loc = (place as dynamic).location;
           lat = (loc?.lat as num?)?.toDouble();
           lng = (loc?.lng as num?)?.toDouble();
         } catch (_) {}
@@ -236,8 +237,7 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
     }
     if (lat == null || lng == null) return;
 
-    final uri =
-        Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     }

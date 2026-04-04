@@ -22,6 +22,9 @@ class DirectionsResult {
   final String? distanceText;
   final String? durationText;
 
+  /// Distancia por tramos (para múltiples paradas)
+  final List<double>? segmentDistances;
+
   const DirectionsResult({
     required this.km,
     required this.seconds,
@@ -29,6 +32,7 @@ class DirectionsResult {
     this.path,
     this.distanceText,
     this.durationText,
+    this.segmentDistances,
   });
 }
 
@@ -41,6 +45,7 @@ class DirectionsService {
     required double originLon,
     required double destLat,
     required double destLon,
+    List<({double lat, double lon})>? waypoints,
     bool withTraffic = true,
     String region = 'do',
   }) async {
@@ -51,8 +56,17 @@ class DirectionsService {
         'mode': 'driving',
         'units': 'metric',
         'region': region,
-        'key': app_keys.kGooglePlacesApiKey, // 👈 asegura que esta key exista en keys.dart
+        'key': app_keys.kGooglePlacesApiKey,
       };
+      
+      // Agregar waypoints si existen
+      if (waypoints != null && waypoints.isNotEmpty) {
+        final waypointsStr = waypoints
+            .map((w) => '${w.lat},${w.lon}')
+            .join('|');
+        params['waypoints'] = waypointsStr;
+      }
+      
       if (withTraffic) {
         params['departure_time'] = 'now';
         params['traffic_model'] = 'best_guess';
@@ -68,7 +82,6 @@ class DirectionsService {
       final data = json.decode(resp.body) as Map<String, dynamic>;
       final status = (data['status'] as String? ?? '');
       if (status != 'OK') {
-        // Google a veces devuelve ZERO_RESULTS o OVER_QUERY_LIMIT, etc.
         if (kDebugMode) print('🔴 Directions status=$status, error=${data['error_message']}');
         return null;
       }
@@ -80,18 +93,34 @@ class DirectionsService {
       final legs = (route0['legs'] as List?) ?? const [];
       if (legs.isEmpty) return null;
 
-      final leg0 = legs.first as Map<String, dynamic>;
+      // Calcular totales sumando todos los legs
+      double totalKm = 0;
+      int totalSeconds = 0;
+      final List<double> segmentDistances = [];
 
-      // Distancia/duración numéricas
-      final distanceMeters = (leg0['distance'] as Map?)?['value'] as num?;
-      final distanceText = (leg0['distance'] as Map?)?['text'] as String?;
+      for (final leg in legs) {
+        final legMap = leg as Map<String, dynamic>;
+        final num? distanceMeters = (legMap['distance'] as Map?)?['value'] as num?;
+        final num? durationSeconds = (legMap['duration'] as Map?)?['value'] as num?;
+        
+        if (distanceMeters != null) {
+          totalKm += distanceMeters / 1000.0;
+          segmentDistances.add(distanceMeters / 1000.0);
+        }
+        
+        if (durationSeconds != null) {
+          totalSeconds += durationSeconds.toInt();
+        }
+      }
+
+      // Texto de distancia (primer leg)
+      final distanceText = (legs.first['distance'] as Map?)?['text'] as String?;
+      
+      // Texto de duración (con tráfico si aplica)
       final durationMap = withTraffic
-          ? (leg0['duration_in_traffic'] as Map?)
-          : (leg0['duration'] as Map?);
-      final seconds = (durationMap?['value'] as num?)?.toInt() ?? 0;
+          ? (legs.first['duration_in_traffic'] as Map?)
+          : (legs.first['duration'] as Map?);
       final durationText = (durationMap?['text'] as String?);
-
-      if (distanceMeters == null || distanceMeters <= 0) return null;
 
       // Polyline
       List<LatLng>? path;
@@ -101,12 +130,13 @@ class DirectionsService {
       }
 
       return DirectionsResult(
-        km: distanceMeters.toDouble() / 1000.0,
-        seconds: seconds,
+        km: totalKm,
+        seconds: totalSeconds,
         summary: route0['summary'] as String?,
         path: path,
         distanceText: distanceText,
         durationText: durationText,
+        segmentDistances: segmentDistances,
       );
     } catch (e, st) {
       if (kDebugMode) {

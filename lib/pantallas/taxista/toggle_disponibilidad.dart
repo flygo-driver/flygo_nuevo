@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
+import 'package:flygo_nuevo/pantallas/taxista/contrato_taxista_firma.dart';
 
 class ToggleDisponibilidad extends StatefulWidget {
   const ToggleDisponibilidad({super.key});
@@ -10,22 +14,7 @@ class ToggleDisponibilidad extends StatefulWidget {
 }
 
 class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
-  bool? _valor; // null = cargando
   bool _guardando = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final u = FirebaseAuth.instance.currentUser;
-    if (u != null) {
-      RolesService.streamDisponibilidad(u.uid).listen((v) {
-        if (!mounted) return;
-        setState(() => _valor = v ?? false);
-      });
-    } else {
-      _valor = false;
-    }
-  }
 
   Future<void> _cambiar(bool v) async {
     final u = FirebaseAuth.instance.currentUser;
@@ -34,6 +23,49 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
     final messenger = ScaffoldMessenger.of(context);
 
     try {
+      // Flujo profesional: activar disponibilidad solo cuando documentos y aprobación están OK.
+      if (v) {
+        final userSnap = await FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(u.uid)
+            .get();
+        final data = userSnap.data() ?? <String, dynamic>{};
+        final bool poolOk = taxistaAprobadoParaOperarPool(data);
+        final bool contratoOk = taxistaContratoFirmado(data);
+        if (!poolOk) {
+          final estado = taxistaDocsEstadoDesdeUsuario(data);
+          if (mounted) {
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  estado == 'aprobado'
+                      ? 'Completa tu perfil/documentos para activar disponibilidad.'
+                      : 'Debes subir y aprobar documentos antes de activar disponibilidad.',
+                ),
+              ),
+            );
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DocumentosTaxista()),
+            );
+          }
+          return;
+        }
+        if (!contratoOk) {
+          if (mounted) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('Debes firmar el contrato digital para activar disponibilidad.'),
+              ),
+            );
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ContratoTaxistaFirma()),
+            );
+          }
+          return;
+        }
+      }
       await RolesService.setDisponibilidad(u.uid, v);
       messenger.showSnackBar(
         SnackBar(
@@ -49,40 +81,105 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
 
   @override
   Widget build(BuildContext context) {
-    final cargando = (_valor == null);
+    final cs = Theme.of(context).colorScheme;
+    final u = FirebaseAuth.instance.currentUser;
+
+    if (u == null) {
+      return Scaffold(
+        backgroundColor: cs.surface,
+        appBar: AppBar(
+          title: const Text('Disponibilidad'),
+          backgroundColor: cs.surface,
+          foregroundColor: cs.onSurface,
+        ),
+        body: Center(
+          child: Text(
+            'Sesión no válida. Vuelve a iniciar sesión.',
+            style: TextStyle(color: cs.onSurface),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: cs.surface,
       appBar: AppBar(
         title: const Text('Disponibilidad'),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
+        backgroundColor: cs.surface,
+        foregroundColor: cs.onSurface,
       ),
-      body: cargando
-          ? const Center(
-              child: CircularProgressIndicator(color: Colors.greenAccent),
-            )
-          : ListTile(
-              title: const Text(
-                'Taxista disponible',
-                style: TextStyle(color: Colors.white),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance.collection('usuarios').doc(u.uid).snapshots(),
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'No se pudo cargar tu perfil.\n${snap.error}',
+                  style: TextStyle(color: cs.onSurface),
+                  textAlign: TextAlign.center,
+                ),
               ),
-              trailing: Switch(
-                value: _valor ?? false,
-                onChanged: _guardando ? null : _cambiar,
-              ),
-              subtitle: _guardando
-                  ? const Text(
-                      'Guardando…',
-                      style: TextStyle(color: Colors.white70),
-                    )
-                  : Text(
-                      (_valor ?? false)
-                          ? 'Recibirás viajes'
-                          : 'No recibirás viajes',
-                      style: const TextStyle(color: Colors.white70),
-                    ),
+            );
+          }
+          if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final data = snap.data?.data() ?? <String, dynamic>{};
+          final rawDisp = data['disponible'];
+          final bool disponible = rawDisp is bool ? rawDisp : false;
+          final poolOk = taxistaAprobadoParaOperarPool(data);
+          final estadoDocs = taxistaDocsEstadoDesdeUsuario(data);
+
+          return ListTile(
+            title: Text(
+              'Taxista disponible',
+              style: TextStyle(color: cs.onSurface),
             ),
+            trailing: Switch(
+              value: disponible,
+              onChanged: _guardando ? null : _cambiar,
+              thumbColor: WidgetStateProperty.resolveWith<Color?>(
+                (states) {
+                  if (states.contains(WidgetState.disabled)) {
+                    return cs.onSurface.withValues(alpha: 0.38);
+                  }
+                  final selected = states.contains(WidgetState.selected);
+                  if (selected) return cs.onPrimaryContainer;
+                  return cs.onSurface.withValues(alpha: 0.65);
+                },
+              ),
+              trackColor: WidgetStateProperty.resolveWith<Color?>(
+                (states) {
+                  if (states.contains(WidgetState.disabled)) {
+                    return cs.onSurface.withValues(alpha: 0.10);
+                  }
+                  final selected = states.contains(WidgetState.selected);
+                  return selected
+                      ? cs.primary.withValues(alpha: 0.45)
+                      : cs.onSurface.withValues(alpha: 0.18);
+                },
+              ),
+            ),
+            subtitle: _guardando
+                ? Text(
+                    'Guardando…',
+                    style: TextStyle(
+                      color: cs.onSurface.withValues(alpha: 0.7),
+                    ),
+                  )
+                : Text(
+                    poolOk
+                        ? (disponible ? 'Recibirás viajes' : 'No recibirás viajes')
+                        : 'Estado de documentos: $estadoDocs. Debes completar y aprobar para operar.',
+                    style: TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
+                  ),
+          );
+        },
+      ),
     );
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:flygo_nuevo/widgets/cliente_drawer.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class Soporte extends StatelessWidget {
   const Soporte({super.key});
@@ -77,18 +78,8 @@ class Soporte extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.black,
       drawer: const ClienteDrawer(),
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
-            tooltip: 'Menú',
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-          ),
-        ),
-        title: const Text('Soporte', style: TextStyle(color: Colors.white)),
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.white),
+      appBar: const RaiAppBar(
+        title: 'Soporte',
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -188,7 +179,7 @@ class Soporte extends StatelessWidget {
           Center(
             child: Text(
               'FlyGo • v1.0.0',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.6)), // ✅ sin withOpacity
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.6)),
             ),
           ),
         ],

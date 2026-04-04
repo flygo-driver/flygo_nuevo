@@ -1,10 +1,11 @@
 // lib/pantallas/taxista/viaje_en_curso_taxista.dart
-// ignore_for_file: prefer_const_constructors, prefer_const_literals_to_create_immutables
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -15,15 +16,30 @@ import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_disponible.dart';
+import 'package:flygo_nuevo/servicios/directions_service.dart';
+import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
-import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';   // 🔥 ESTA LÍNEA
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
-import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
+import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/widgets/taxista_drawer.dart';
+import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
+import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
+import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
 const bool kLog = true;
 void logDbg(String msg) { if (kLog) debugPrint('[VIAJE_TX] $msg'); }
+const bool _diagTripFlow =
+    bool.fromEnvironment('TRIP_FLOW_DIAG', defaultValue: false);
+void _diag(String msg) {
+  if (_diagTripFlow) debugPrint('[TRIP_FLOW][en_curso] $msg');
+}
+
+/// Solo en debug/profile: ignorar distancias muy pequeñas (mismo dispositivo).
+const double kDebugMinDistance = 0.01; // ~10 m
+const double kFinalizarRadioMetros = 250; // Produccion: finalizar solo cerca del destino
 
 class ViajeEnCursoTaxista extends StatefulWidget {
   const ViajeEnCursoTaxista({super.key});
@@ -31,42 +47,96 @@ class ViajeEnCursoTaxista extends StatefulWidget {
   State<ViajeEnCursoTaxista> createState() => _ViajeEnCursoTaxistaState();
 }
 
-class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
+// ... resto del código igual
+
+class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with AutomaticKeepAliveClientMixin {
+  
+  @override
+  bool get wantKeepAlive => true;
+
   GoogleMapController? _map;
 
   // ===== GPS =====
   StreamSubscription<Position>? _gpsSub;
   String? _gpsParaViajeId;
   bool _gpsActivo = false;
-  bool _myLoc = false;
 
   // ===== Acciones =====
   bool _actionBusy = false;
 
   // ===== Remoción / cancelación remota =====
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _cancelSub;
+  bool _procesandoRemocion = false;
 
-  // ===== Stream principal =====
+  // ===== Controlador para código de verificación =====
+  final TextEditingController _codigoCtrl = TextEditingController();
+
+  // ===== Polylines para rutas =====
+  final Set<Polyline> _polylines = <Polyline>{};
+  Timer? _routeDebounce;
+
+  // ===== Viajes cercanos / cola: aislado en [ViajesCercanosTaxistaLayer] (no setState aquí) =====
+  final ViajesCercanosTaxistaController _viajesCercanosCtl = ViajesCercanosTaxistaController();
+  final ValueNotifier<bool> _viajesCercanosEscucha = ValueNotifier<bool>(false);
+  final ValueNotifier<(double, double)?> _taxistaPosCola = ValueNotifier<(double, double)?>(null);
+
+  // 🚀 Variables para detección de cercanía del cliente
+  bool _clienteCerca = false;
+  bool _navegacionIniciada = false;
+  bool _selectorNavegacionAbierto = false;
+  static const double DISTANCIA_CERCANIA_KM = 0.1;
+  
+  // Cache del viaje actual
+  Viaje? _cachedViaje;
+  bool _isUpdatingLocation = false;
+
+  // ===== Stream principal (deduplicado: el taxista escribe GPS en el mismo doc → sin esto, cada ping reconstruye toda la pantalla) =====
   Stream<Viaje?> _stream() {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return const Stream<Viaje?>.empty();
-    return ViajesRepo.streamViajeEnCursoPorTaxista(u.uid);
+    return ViajesRepo.streamViajeEnCursoPorTaxista(u.uid).distinct(_mismoViajeParaUiTaxista);
+  }
+
+  static bool _mismoViajeParaUiTaxista(Viaje? a, Viaje? b) => _firmaViajeUiTaxista(a) == _firmaViajeUiTaxista(b);
+
+  static String _firmaViajeUiTaxista(Viaje? v) {
+    if (v == null) return '';
+    final est = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    String r5(double x) => (x.isFinite) ? x.toStringAsFixed(5) : 'x';
+    final int wp = v.waypoints?.length ?? 0;
+    // No incluir latTaxista/lonTaxista: este taxista escribe el GPS en el mismo doc y cada
+    // actualización dispararía StreamBuilder + Column completa. La posición se mantiene en
+    // _cachedViaje vía copyWith en el listener GPS.
+    return '${v.id}|$est|${r5(v.latCliente)}|${r5(v.lonCliente)}|${r5(v.latDestino)}|${r5(v.lonDestino)}|'
+        '${v.codigoVerificado}|${v.uidTaxista}|${v.completado}|$wp';
   }
 
   // ===== Utilidades =====
-  void _mover(LatLng p) => _map?.animateCamera(CameraUpdate.newLatLngZoom(p, 15));
-
   bool _coordsValid(double lat, double lon) =>
       lat.isFinite && lon.isFinite &&
       !(lat == 0 && lon == 0) &&
       lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 
-  String _cleanPhone(String raw) {
-    final onlyDigits = raw.replaceAll(RegExp(r'\D+'), '');
-    if (onlyDigits.isEmpty) return '';
-    if (onlyDigits.startsWith('1')) return onlyDigits; // +1 RD
-    if (onlyDigits.length == 10) return '1$onlyDigits';
-    return onlyDigits;
+  String _cleanPhone(String raw) => telefonoNormalizarDigitos(raw);
+
+  String _digitsOnlyCode(String? s) => (s ?? '').replaceAll(RegExp(r'\D'), '');
+
+  bool _codigoEsperadoValido(String? codigo) => _digitsOnlyCode(codigo).length == 6;
+
+  double? _waypointLat(Map<String, dynamic> w) {
+    final x = w['lat'];
+    if (x is num) return x.toDouble();
+    return double.tryParse('$x');
+  }
+
+  double? _waypointLon(Map<String, dynamic> w) {
+    final x = w['lon'];
+    if (x is num) return x.toDouble();
+    return double.tryParse('$x');
   }
 
   String _uidClienteDe(Viaje v) {
@@ -74,6 +144,72 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     if (a.isNotEmpty) return a;
     final b = (v.uidCliente).toString().trim();
     return b;
+  }
+
+  void _verificarCercaniaCliente(double latTaxista, double lonTaxista, double latCliente, double lonCliente) {
+    if (!_coordsValid(latTaxista, lonTaxista) || !_coordsValid(latCliente, lonCliente)) return;
+    
+    final distancia = _calcularDistanciaKm(latTaxista, lonTaxista, latCliente, lonCliente);
+    final bool ahoraCerca = distancia <= DISTANCIA_CERCANIA_KM;
+    
+    // Modo desarrollo: ignorar distancias muy pequeñas (mismo dispositivo)
+    if (kDebugMode && distancia < kDebugMinDistance) {
+      logDbg('⚠️ Modo desarrollo: ignorando distancia muy pequeña (${(distancia * 1000).toStringAsFixed(0)}m)');
+      return;
+    }
+    
+    if (ahoraCerca != _clienteCerca && mounted && !_isUpdatingLocation) {
+      _isUpdatingLocation = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _clienteCerca = ahoraCerca;
+          });
+          _isUpdatingLocation = false;
+          
+          if (ahoraCerca) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Row(
+                  children: [
+                    Icon(Icons.location_on, color: Colors.white),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        '🚕 ¡Has llegado! El cliente está cerca. Presiona "Cliente a bordo" para continuar.',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ],
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 5),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            );
+          }
+        } else {
+          _isUpdatingLocation = false;
+        }
+      });
+      logDbg('🎯 Cambio de cercanía: $ahoraCerca, distancia: ${(distancia * 1000).toStringAsFixed(0)}m');
+    }
+  }
+
+  double _calcularDistanciaKm(double lat1, double lon1, double lat2, double lon2) {
+    const double R = 6371.0;
+    final double dLat = (lat2 - lat1) * pi / 180.0;
+    final double dLon = (lon2 - lon1) * pi / 180.0;
+    final double a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180.0) *
+            cos(lat2 * pi / 180.0) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+    final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return R * c;
   }
 
   // ===== GPS control =====
@@ -99,31 +235,36 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
           'updatedAt': FieldValue.serverTimestamp(),
           'actualizadoEn': FieldValue.serverTimestamp(),
         });
+        logDbg('📍 Ubicación enviada: ${p.latitude}, ${p.longitude}');
+        _taxistaPosCola.value = (p.latitude, p.longitude);
+
+        if (mounted && _cachedViaje != null && _cachedViaje!.id == viajeId) {
+          _cachedViaje = _cachedViaje!.copyWith(latTaxista: p.latitude, lonTaxista: p.longitude);
+        }
+
+        if (mounted && _cachedViaje != null && _coordsValid(_cachedViaje!.latCliente, _cachedViaje!.lonCliente)) {
+          _verificarCercaniaCliente(p.latitude, p.longitude, _cachedViaje!.latCliente, _cachedViaje!.lonCliente);
+          _scheduleDrawRoute();
+        }
       } catch (e) {
         logDbg('Error actualizando Firestore: $e');
       }
     });
   }
 
-  void _stopGps({bool fromBuild = false}) {
+  void _stopGps() {
     _gpsSub?.cancel();
     _gpsSub = null;
     _gpsActivo = false;
     _gpsParaViajeId = null;
-    if (fromBuild) {
-      _myLoc = false;
-    } else {
-      if (mounted) {
-        setState(() => _myLoc = false);
-      } else {
-        _myLoc = false;
-      }
-    }
+    logDbg('🛑 GPS detenido');
   }
 
   Future<bool> _asegurarGps(String viajeId) async {
+    logDbg('_asegurarGps($viajeId) - _gpsActivo: $_gpsActivo');
+    
     if (_gpsActivo && _gpsParaViajeId == viajeId) {
-      if (!_myLoc && mounted) setState(() => _myLoc = true);
+      logDbg('✅ GPS ya activo');
       return true;
     }
 
@@ -132,17 +273,131 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
       perm = await Geolocator.requestPermission();
     }
     if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-      if (!mounted) return false; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Permiso de ubicación requerido para navegar')),
-      );
+      if (!mounted) return false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Permiso de ubicación requerido para navegar')),
+          );
+        }
+      });
+      logDbg('❌ Permiso denegado');
       return false;
     }
 
-    if (mounted) setState(() => _myLoc = true);
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      if (!mounted) return false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Activa el GPS del teléfono')),
+          );
+        }
+      });
+      logDbg('❌ GPS apagado');
+      return false;
+    }
+
     await _startGpsFor(viajeId);
     _gpsActivo = true;
+    logDbg('✅ GPS activado correctamente');
     return true;
+  }
+
+  // ===== RUTAS =====
+  void _scheduleDrawRoute() {
+    _routeDebounce?.cancel();
+    _routeDebounce = Timer(const Duration(milliseconds: 500), () => _drawRoutes());
+  }
+
+  Future<void> _drawRoutes() async {
+    if (!mounted || _cachedViaje == null) return;
+    
+    final v = _cachedViaje!;
+    
+    final estadoBase = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    
+    final oldPolylines = Set<Polyline>.from(_polylines);
+    _polylines.clear();
+    
+    if ((EstadosViaje.esAceptado(estadoBase) || EstadosViaje.esEnCaminoPickup(estadoBase)) &&
+        _coordsValid(v.latTaxista, v.lonTaxista) &&
+        _coordsValid(v.latCliente, v.lonCliente)) {
+      await _drawRoute(
+        LatLng(v.latTaxista, v.lonTaxista),
+        LatLng(v.latCliente, v.lonCliente),
+        id: 'to_cliente',
+        color: const Color(0xFF49F18B),
+      );
+    }
+    
+    final bool rutaAlDestino = EstadosViaje.esEnCurso(estadoBase) ||
+        (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
+    if (rutaAlDestino &&
+        _coordsValid(v.latCliente, v.lonCliente) &&
+        _coordsValid(v.latDestino, v.lonDestino)) {
+      await _drawRoute(
+        LatLng(v.latCliente, v.lonCliente),
+        LatLng(v.latDestino, v.lonDestino),
+        id: 'to_destino',
+        color: const Color(0xFF49F18B),
+      );
+    }
+    
+    if (mounted && !_polylinesEquals(oldPolylines, _polylines)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+  
+  bool _polylinesEquals(Set<Polyline> a, Set<Polyline> b) {
+    if (a.length != b.length) return false;
+    final aIds = a.map((p) => p.polylineId.value).toSet();
+    final bIds = b.map((p) => p.polylineId.value).toSet();
+    return aIds.containsAll(bIds) && bIds.containsAll(aIds);
+  }
+  
+  Future<void> _drawRoute(LatLng a, LatLng b, {required String id, required Color color}) async {
+    try {
+      final result = await DirectionsService.drivingDistanceKm(
+        originLat: a.latitude,
+        originLon: a.longitude,
+        destLat: b.latitude,
+        destLon: b.longitude,
+        withTraffic: true,
+        region: 'do',
+      );
+      
+      List<LatLng> points = [];
+      if (result != null && result.path != null && result.path!.isNotEmpty) {
+        points = result.path!;
+      }
+      
+      _polylines.add(
+        Polyline(
+          polylineId: PolylineId(id),
+          points: points.isNotEmpty ? points : [a, b],
+          width: 5,
+          color: color,
+          geodesic: true,
+        ),
+      );
+    } catch (e) {
+      _polylines.add(
+        Polyline(
+          polylineId: PolylineId(id),
+          points: [a, b],
+          width: 5,
+          color: color,
+          geodesic: true,
+        ),
+      );
+    }
   }
 
   @override
@@ -150,10 +405,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     _cancelSub?.cancel();
     _map?.dispose();
     _stopGps();
+    _codigoCtrl.dispose();
+    _routeDebounce?.cancel();
+    _viajesCercanosEscucha.dispose();
+    _viajesCercanosCtl.dispose();
+    _taxistaPosCola.dispose();
     super.dispose();
   }
 
-  /* ===================== Navegación externa ===================== */
+  // ===================== Navegación externa =====================
 
   Future<bool> _tryLaunch(Uri uri, {bool preferExternalApp = true}) async {
     try {
@@ -219,50 +479,437 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     await _abrirGoogleMapsDireccion(query);
   }
 
-  /* ===================== Acciones ===================== */
+  // ===================== Acciones Principales =====================
 
-  Future<void> _marcarClienteAbordo(String viajeId) async {
+  Future<void> _iniciarNavegacionPickup(Viaje v) async {
     if (_actionBusy) return;
     _actionBusy = true;
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) { _actionBusy = false; return; }
+    
     try {
-      await ViajesRepo.marcarClienteAbordo(viajeId: viajeId, uidTaxista: uid);
-      if (!mounted) return; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Cliente a bordo')));
+      // Si el backend ya está en `en_camino_pickup`, el botón no debe fallar.
+      // Esto evita que `marcarEnCaminoPickup()` intente una transición inválida
+      // (de `en_camino_pickup` a `en_camino_pickup`) y dispare el snackbar genérico.
+      final estadoN = EstadosViaje.normalizar(v.estado);
+      final bool yaEnCaminoPickup = estadoN == EstadosViaje.enCaminoPickup;
+      if (estadoN == EstadosViaje.cancelado || estadoN == EstadosViaje.completado) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('El viaje ya no está disponible.'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        });
+        return;
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _navegacionIniciada = true);
+      });
+      
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (!yaEnCaminoPickup) {
+        if (uid != null) {
+          try {
+            await ViajesRepo.marcarEnCaminoPickup(
+              viajeId: v.id,
+              uidTaxista: uid,
+            );
+          } catch (e) {
+            // Robustez: si el backend ya está en `en_camino_pickup`,
+            // `marcarEnCaminoPickup` puede lanzar "Estado inválido".
+            // No bloqueamos la navegación por esto.
+            final msg = e.toString().toLowerCase();
+            if (msg.contains('estado inválido') ||
+                msg.contains('estado invalido') ||
+                msg.contains('estado inválido para en_camino_pickup') ||
+                msg.contains('estado invalido para en_camino_pickup')) {
+              // Continuar: la navegación puede abrirse igual.
+            } else {
+              rethrow;
+            }
+          }
+        }
+      }
+      
+      final gpsOk = await _asegurarGps(v.id);
+      if (!gpsOk && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _navegacionIniciada = false);
+        });
+        _actionBusy = false;
+        return;
+      }
+      
+      final tieneCoords = _coordsValid(v.latCliente, v.lonCliente);
+      
+      if (mounted) {
+        await showModalBottomSheet(
+          context: context,
+          backgroundColor: Colors.black,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          builder: (context) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white30,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Selecciona tu app de navegación',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Punto de recogida: ${v.origen}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        if (tieneCoords) {
+                          _abrirWazeDestino(v.latCliente, v.lonCliente);
+                        } else {
+                          _abrirWazeBusqueda(v.origen);
+                        }
+                      },
+                      icon: const Icon(Icons.waves, color: Colors.blue),
+                      label: const Text(
+                        'Waze',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black87,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        if (tieneCoords) {
+                          _abrirGoogleMapsDestino(v.latCliente, v.lonCliente);
+                        } else {
+                          _abrirGoogleMapsDireccion(v.origen);
+                        }
+                      },
+                      icon: const Icon(Icons.map, color: Colors.green),
+                      label: const Text(
+                        'Google Maps',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black87,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) setState(() => _navegacionIniciada = false);
+                      });
+                    },
+                    child: const Text(
+                      'Cancelar',
+                      style: TextStyle(color: Colors.white54),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+      
+      if (mounted && _navegacionIniciada) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Row(
+                  children: [
+                    Icon(Icons.navigation, color: Colors.white),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Navegación iniciada. Cuando llegues al punto de recogida, presiona "Cliente a bordo".',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                backgroundColor: Colors.blue,
+                duration: const Duration(seconds: 4),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+            );
+          }
+        });
+      }
+      
     } catch (e) {
-      if (!mounted) return; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ ${errorAuthEs(e)}')));
+      logDbg('Error iniciando navegación: $e');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() => _navegacionIniciada = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al iniciar navegación: ${errorAuthEs(e)}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      });
     } finally {
       _actionBusy = false;
     }
   }
 
-  Future<void> _iniciarViaje(
-    String viajeId, {
-    required double lat,
-    required double lon,
-    String? destinoTexto,
-  }) async {
+  Future<void> _marcarClienteAbordo(Viaje v) async {
     if (_actionBusy) return;
     _actionBusy = true;
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) { _actionBusy = false; return; }
+    
     try {
-      final okGps = await _asegurarGps(viajeId);
-      if (!okGps) { _actionBusy = false; return; }
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) {
+        throw Exception('Usuario no autenticado');
+      }
 
-      await ViajesRepo.iniciarViaje(viajeId: viajeId, uidTaxista: uid);
-      if (!mounted) return; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('▶ Viaje iniciado')));
+      // Micro-harden: al usar el repo garantizamos la transición válida + limpieza
+      // defensiva (evita estados "fantasma" en cola/activos del taxista),
+      // manteniendo luego los campos extra que la UI depende (`clienteAbordo*`).
+      final estadoN = EstadosViaje.normalizar(v.estado);
+      final bool yaEnAboard = estadoN == EstadosViaje.aBordo;
+      if (!yaEnAboard) {
+        try {
+          await ViajesRepo.marcarClienteAbordo(viajeId: v.id, uidTaxista: uid);
+        } catch (e, st) {
+          // Si hubo carrera de estado (backend ya cambió a `a_bordo`),
+          // igual dejamos consistentes los campos de UI abajo.
+          await ErrorReporting.reportError(
+            e,
+            stack: st,
+            context: '_marcarClienteAbordo: repo.marcarClienteAbordo',
+          );
+        }
+      }
 
-      final label = (destinoTexto == null || destinoTexto.trim().isEmpty) ? 'destino' : destinoTexto.trim();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('🧭 Navegando a: $label')));
-
-      await _selectorNavegacionDestino(lat, lon);
+      await FirebaseFirestore.instance.collection('viajes').doc(v.id).update({
+        'estado': EstadosViaje.aBordo,
+        'clienteAbordo': true,
+        'clienteAbordoEn': FieldValue.serverTimestamp(),
+        // Importante: el flujo de UI para "Viaje en curso" depende del flag `activo==true`.
+        // Al alternar cuentas (un solo teléfono) la pantalla se recarga y usa el stream del repo.
+        // Si no se activa aquí, el viaje puede aparecer como "no tienes viaje en curso".
+        'activo': true,
+        'pickupConfirmadoEn': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      });
+      
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.white),
+                  SizedBox(width: 12),
+                  Text('✅ Cliente marcado como a bordo'),
+                ],
+              ),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          );
+        }
+      });
+      
+      // Recargar viaje
+      final snapshot = await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && snapshot.exists) {
+          final viajeActualizado = Viaje.fromMap(v.id, snapshot.data()!);
+          setState(() {
+            _cachedViaje = viajeActualizado;
+            _navegacionIniciada = false;
+            _clienteCerca = false;
+          });
+        }
+      });
+      
     } catch (e) {
-      if (!mounted) return; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ ${errorAuthEs(e)}')));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: ${errorAuthEs(e)}'), backgroundColor: Colors.red),
+          );
+        }
+      });
+    } finally {
+      _actionBusy = false;
+    }
+  }
+
+  Future<void> _verificarCodigo(String viajeId, String codigoCorrecto) async {
+    if (_actionBusy) return;
+
+    final esperado = _digitsOnlyCode(codigoCorrecto);
+    final ingresado = _digitsOnlyCode(_codigoCtrl.text);
+    if (esperado.length != 6) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Este viaje no tiene un código válido en el sistema. Contacta soporte.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      });
+      return;
+    }
+    if (ingresado.length != 6) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ingresa los 6 dígitos del código'), backgroundColor: Colors.red),
+          );
+        }
+      });
+      return;
+    }
+    if (ingresado != esperado) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('❌ Código incorrecto'), backgroundColor: Colors.red),
+          );
+        }
+      });
+      return;
+    }
+
+    _actionBusy = true;
+    _codigoCtrl.clear();
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      _actionBusy = false;
+      return;
+    }
+    
+    try {
+      await FirebaseFirestore.instance.collection('viajes').doc(viajeId).update({
+        'codigoVerificado': true,
+        'viajeIniciadoEn': FieldValue.serverTimestamp(),
+      });
+
+      try {
+        await ViajesRepo.iniciarViaje(viajeId: viajeId, uidTaxista: uid);
+      } catch (eInicio) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Código verificado. ${errorAuthEs(eInicio)}'),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 6),
+              ),
+            );
+          }
+        });
+        return;
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ Código verificado. Viaje en ruta.'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      });
+
+      if (!mounted) {
+        return;
+      }
+
+      final viajeSnap = await FirebaseFirestore.instance.collection('viajes').doc(viajeId).get();
+      
+      if (!mounted) {
+        _actionBusy = false;
+        return;
+      }
+
+      final data = viajeSnap.data();
+      if (data != null) {
+        final latDestino = (data['latDestino'] ?? 0).toDouble();
+        final lonDestino = (data['lonDestino'] ?? 0).toDouble();
+        final destinoTexto = data['destino']?.toString() ?? 'destino';
+        
+        if (_coordsValid(latDestino, lonDestino)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('🧳 Viaje iniciado. Navegando a: $destinoTexto')),
+              );
+            }
+          });
+          
+          await _selectorNavegacionDestino(latDestino, lonDestino);
+        }
+      }
+    } catch (e) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error al iniciar: $e'), backgroundColor: Colors.red),
+          );
+        }
+      });
     } finally {
       _actionBusy = false;
     }
@@ -272,7 +919,118 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     if (_actionBusy) return;
     _actionBusy = true;
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) { _actionBusy = false; return; }
+    if (uid == null) {
+      _actionBusy = false;
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    final String estadoLocal = EstadosViaje.normalizar(v.estado);
+
+    // Hardening UX/produccion: finalizar solo cuando el viaje este en curso.
+    // Si la UI va atrasada por latencia, validamos tambien contra Firestore.
+    if (!EstadosViaje.esEnCurso(estadoLocal)) {
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(v.id)
+            .get();
+        final data = snap.data() ?? const <String, dynamic>{};
+        final String estadoRemoto =
+            EstadosViaje.normalizar((data['estado'] ?? '').toString());
+        if (!EstadosViaje.esEnCurso(estadoRemoto)) {
+          if (mounted) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Para finalizar, primero inicia el viaje hacia el destino.',
+                ),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          _actionBusy = false;
+          return;
+        }
+      } catch (_) {
+        if (mounted) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No se pudo validar el estado del viaje. Intenta nuevamente.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        _actionBusy = false;
+        return;
+      }
+    }
+
+    // Produccion real: solo permitir finalizar cuando el taxista este cerca del destino.
+    if (_coordsValid(v.latDestino, v.lonDestino)) {
+      double? latTx;
+      double? lonTx;
+
+      if (_coordsValid(v.latTaxista, v.lonTaxista)) {
+        latTx = v.latTaxista;
+        lonTx = v.lonTaxista;
+      } else if (_cachedViaje != null && _coordsValid(_cachedViaje!.latTaxista, _cachedViaje!.lonTaxista)) {
+        latTx = _cachedViaje!.latTaxista;
+        lonTx = _cachedViaje!.lonTaxista;
+      } else {
+        try {
+          final pos = await Geolocator.getCurrentPosition();
+          latTx = pos.latitude;
+          lonTx = pos.longitude;
+        } catch (_) {
+          latTx = null;
+          lonTx = null;
+        }
+      }
+
+      if (latTx == null || lonTx == null || !_coordsValid(latTx, lonTx)) {
+        if (mounted) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No se pudo validar tu ubicacion. Activa GPS y acercate al destino para finalizar.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        _actionBusy = false;
+        return;
+      }
+
+      final distanciaM = Geolocator.distanceBetween(
+        latTx,
+        lonTx,
+        v.latDestino,
+        v.lonDestino,
+      );
+      if (distanciaM > kFinalizarRadioMetros) {
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                'Aun no llegas al destino. Te faltan ${(distanciaM / 1000).toStringAsFixed(2)} km para finalizar.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        _actionBusy = false;
+        return;
+      }
+    }
+
+    if (!mounted) {
+      _actionBusy = false;
+      return;
+    }
 
     final ok = await showDialog<bool>(
       context: context,
@@ -286,48 +1044,155 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
         ],
       ),
     ) ?? false;
-    if (!ok) { _actionBusy = false; return; }
+
+    if (!ok) { 
+      _actionBusy = false; 
+      return; 
+    }
 
     try {
       await ViajesRepo.completarViajePorTaxista(viajeId: v.id, uidTaxista: uid);
 
-      // registrar pago (tolerante)
-      try {
-        final doc = await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
-        final data = doc.data() ?? {};
-        double _toDouble(dynamic x) => x is num ? x.toDouble() : (double.tryParse('$x') ?? 0.0);
+      // ────────────────────────────────────────────────────────────────
+      // Pagos / facturación:
+      // No silenciamos errores. Si falla registrar el pago, el viaje ya
+      // está completado, pero mostramos mensaje + reintento.
+      // ────────────────────────────────────────────────────────────────
+      double total = v.precio;
+      double comision = v.precio * 0.20;
+      double ganancia = v.precio - comision;
+      String metodo = v.metodoPago.toString().toLowerCase().trim();
+      final String uidTxDefault = v.uidTaxista.isNotEmpty ? v.uidTaxista : uid;
 
-        final total = _toDouble(data['precioFinal'] ?? data['precio'] ?? v.precio);
-        final comisionCampo = _toDouble(data['comision'] ?? data['comisionFlyGo']);
-        final comision = comisionCampo > 0 ? comisionCampo : (total * 0.20);
-        final gananciaCampo = _toDouble(data['gananciaTaxista']);
-        final ganancia = gananciaCampo > 0 ? gananciaCampo : (total - comision);
+      bool retryingPago = false;
+      Future<void> retryPago() async {
+        final uidTx = uidTxDefault;
+        if (uidTx.isEmpty) throw Exception('uidTaxista vacío (pago)');
 
-        final metodo = (data['metodoPago'] ?? v.metodoPago ?? 'Efectivo').toString().toLowerCase();
-        final uidTx = v.uidTaxista.isNotEmpty ? v.uidTaxista : uid;
-
-        if (uidTx.isNotEmpty) {
-          if (metodo == 'efectivo') {
-            await PagoData.registrarComisionCash(viajeId: v.id, taxistaId: uidTx, comision: comision);
-          } else {
-            await PagoData.registrarTransferenciaCliente(
-              viajeId: v.id, uidTaxista: uidTx, montoFinalDop: total, comision: comision, gananciaTaxista: ganancia,
-            );
-          }
+        if (metodo == 'efectivo') {
+          await PagoData.registrarComisionCash(
+            viajeId: v.id,
+            taxistaId: uidTx,
+            comision: comision,
+          );
+        } else {
+          await PagoData.registrarTransferenciaCliente(
+            viajeId: v.id,
+            uidTaxista: uidTx,
+            montoFinalDop: total,
+            comision: comision,
+            gananciaTaxista: ganancia,
+          );
         }
-      } catch (_) {}
+      }
+
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(v.id)
+            .get();
+        final data = doc.data() ?? {};
+        double _toDouble(dynamic x) => x is num
+            ? x.toDouble()
+            : (double.tryParse('$x') ?? 0.0);
+
+        total = _toDouble(data['precioFinal'] ?? data['precio'] ?? v.precio);
+
+        final cc = data['comision_cents'];
+        if (cc is num && cc > 0) {
+          comision = cc.toDouble() / 100.0;
+        } else {
+          final comisionCampo =
+              _toDouble(data['comision'] ?? data['comisionFlyGo']);
+          comision = comisionCampo > 0 ? comisionCampo : (total * 0.20);
+        }
+
+        final gc = data['ganancia_cents'];
+        if (gc is num && gc > 0) {
+          ganancia = gc.toDouble() / 100.0;
+        } else {
+          final gananciaCampo = _toDouble(data['gananciaTaxista']);
+          ganancia = gananciaCampo > 0 ? gananciaCampo : (total - comision);
+        }
+
+        metodo = (data['metodoPago'] ?? v.metodoPago ?? 'Efectivo')
+            .toString()
+            .toLowerCase()
+            .trim();
+
+        await retryPago();
+      } catch (e, st) {
+        await ErrorReporting.reportError(
+          e,
+          stack: st,
+          context: '_finalizarViaje: registrar pago',
+        );
+
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: const Text(
+                'Viaje completado, pero no se pudo registrar el pago. Reintenta',
+              ),
+              backgroundColor: Colors.orangeAccent,
+              duration: const Duration(seconds: 6),
+              action: SnackBarAction(
+                label: 'Reintentar',
+                onPressed: () {
+                  if (retryingPago || !context.mounted) return;
+                  retryingPago = true;
+                  () async {
+                    try {
+                      await retryPago();
+                      if (!context.mounted) return;
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text('✅ Pago registrado correctamente'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    } catch (e2, st2) {
+                      await ErrorReporting.reportError(
+                        e2,
+                        stack: st2,
+                        context: '_finalizarViaje: reintento pago',
+                      );
+                      if (!context.mounted) return;
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'No se pudo registrar el pago. Intenta más tarde.',
+                          ),
+                          backgroundColor: Colors.redAccent,
+                        ),
+                      );
+                    } finally {
+                      retryingPago = false;
+                    }
+                  }();
+                },
+              ),
+            ),
+          );
+        }
+      }
 
       _stopGps();
-      if (!mounted) return; // guard de State.context
 
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🏁 Viaje marcado como completado')));
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ViajeDisponible()),
-        (route) => false,
+      if (!mounted) return;
+      await TaxistaColaPostCompletar.navegarTrasCompletar(
+        context: context,
+        uidTaxista: uid,
       );
+
     } catch (e) {
-      if (!mounted) return; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ ${errorAuthEs(e)}')));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(content: Text('❌ ${errorAuthEs(e)}'))
+          );
+        }
+      });
     } finally {
       _actionBusy = false;
     }
@@ -337,50 +1202,202 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     if (_actionBusy) return;
     _actionBusy = true;
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) { _actionBusy = false; return; }
+    if (uid == null) {
+      _actionBusy = false;
+      return;
+    }
 
-    final ok = await showDialog<bool>(
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    final String estado = EstadosViaje.normalizar(v.estado);
+    final bool cancelable =
+        estado == EstadosViaje.aceptado || estado == EstadosViaje.enCaminoPickup;
+    if (!cancelable) {
+      _actionBusy = false;
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Solo puedes cancelar antes de que el cliente esté a bordo.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    final confirmar = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.black,
         title: const Text('Cancelar viaje', style: TextStyle(color: Colors.white)),
-        content: const Text('Esta acción cancelará tu aceptación y el viaje volverá a estar disponible.',
+        content: const Text('¿Seguro que deseas cancelar este viaje?',
             style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No', style: TextStyle(color: Colors.white70))),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sí, cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('No', style: TextStyle(color: Colors.white70)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sí, cancelar'),
+          ),
         ],
       ),
     ) ?? false;
 
-    if (!ok) { _actionBusy = false; return; }
+    if (!confirmar) {
+      _actionBusy = false; 
+      return; 
+    }
 
     try {
-      await ViajesRepo.cancelarPorTaxista(viajeId: v.id, uidTaxista: uid);
-      _stopGps();
-      if (!mounted) return; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🚫 Cancelado. El viaje se republicó.')));
-
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ViajeDisponible()),
-        (route) => false,
+      await ViajesRepo.cancelarPorTaxista(
+        viajeId: v.id,
+        uidTaxista: uid,
       );
+      _stopGps();
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                '🚨 Viaje cancelado y limpiado. Ya estás disponible.',
+              ),
+            ),
+          );
+          
+          navigator.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+            (route) => false,
+          );
+        }
+      });
+
     } catch (e) {
-      if (!mounted) return; // guard de State.context
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ ${errorAuthEs(e)}')));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(content: Text('❌ ${errorAuthEs(e)}'))
+          );
+        }
+      });
     } finally {
       _actionBusy = false;
     }
   }
 
-  Future<void> _verClienteBottomSheet({required String uidCliente, required String viajeId}) async {
-    if (!mounted) return; // guard de State.context
+  // ===== Ver información del cliente =====
+  Future<void> _verInfoCliente({required String uidCliente}) async {
+    if (!mounted) return;
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.black,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance.collection('usuarios').doc(uidCliente).snapshots(),
+              builder: (ctx, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
+                }
+                
+                final u = snap.data?.data() ?? {};
+                final nombre = (u['nombre'] ?? '—').toString().trim();
+                final telefono = (u['telefono'] ?? '—').toString().trim();
+                
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)))),
+                    const SizedBox(height: 16),
+                    const Text('Información del Cliente', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 24),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[900],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.person, color: Colors.greenAccent, size: 24),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Nombre', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                                    Text(nombre, style: const TextStyle(color: Colors.white, fontSize: 18)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              const Icon(Icons.phone, color: Colors.greenAccent, size: 24),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Teléfono', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                                    Text(telefono, style: const TextStyle(color: Colors.white, fontSize: 18)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(sheetCtx),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        child: const Text('Cerrar'),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ===== Contactar cliente =====
+  Future<void> _contactarCliente({required String uidCliente, required String viajeId}) async {
+    if (!mounted) return;
+    final ColorScheme sheetScheme = Theme.of(context).colorScheme;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.black,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      backgroundColor: sheetScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (sheetCtx) {
+        final ColorScheme cs = Theme.of(sheetCtx).colorScheme;
         return DraggableScrollableSheet(
           expand: false,
           initialChildSize: 0.55,
@@ -393,13 +1410,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                 stream: FirebaseFirestore.instance.collection('usuarios').doc(uidCliente).snapshots(),
                 builder: (ctx2, snap) {
                   if (snap.connectionState == ConnectionState.waiting) {
-                    return const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator(color: Colors.greenAccent)));
-                  }
-                  if (snap.hasError || !snap.hasData || !snap.data!.exists) {
-                    return const Text('No se pudo cargar el cliente.', style: TextStyle(color: Colors.white70));
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: CircularProgressIndicator(color: cs.primary),
+                      ),
+                    );
                   }
 
-                  final u = snap.data!.data() ?? {};
+                  final u = snap.data?.data() ?? {};
                   final nombre = (u['nombre'] ?? '—').toString().trim();
                   final telefono = (u['telefono'] ?? '').toString().trim();
                   final telOk = _cleanPhone(telefono).isNotEmpty;
@@ -407,60 +1426,93 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                   return ListView(
                     controller: controller,
                     children: [
-                      Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)))),
-                      const SizedBox(height: 12),
-                      const Text('Tu cliente', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      Text('Nombre: $nombre', style: const TextStyle(color: Colors.white70)),
-                      Text('Teléfono: ${telefono.isEmpty ? '—' : telefono}', style: const TextStyle(color: Colors.white70)),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: !telOk ? null : () async {
-                                final tel = _cleanPhone(telefono);
-                                final uri = Uri.parse('tel:$tel');
-                                await launchUrl(uri, mode: LaunchMode.platformDefault);
-                              },
-                              icon: const Icon(Icons.call, color: Colors.green),
-                              label: const Text('Llamar'),
-                              style: _styleBase(),
-                            ),
+                      Center(
+                        child: Container(
+                          width: 46,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(3),
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: !telOk ? null : () async {
-                                final tel = _cleanPhone(telefono);
-                                final msg = Uri.encodeComponent('Hola, soy tu taxista de FlyGo.');
-                                final waApp = Uri.parse('whatsapp://send?phone=%2B$tel&text=%20$msg');
-                                if (await canLaunchUrl(waApp)) {
-                                  await launchUrl(waApp);
-                                } else {
-                                  final waWeb = Uri.parse('https://wa.me/$tel?text=$msg');
-                                  await launchUrl(waWeb, mode: LaunchMode.externalApplication);
-                                }
-                              },
-                              icon: const Icon(Icons.chat_bubble_outline, color: Colors.green),
-                              label: const Text('WhatsApp'),
-                              style: _styleBase(),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                       const SizedBox(height: 12),
-                      ElevatedButton.icon(
+                      Text(
+                        'Contactar cliente',
+                        style: TextStyle(color: cs.onSurface, fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        nombre.isEmpty ? 'Cliente' : nombre,
+                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 15),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: !telOk
+                            ? null
+                            : () async {
+                                final tel = _cleanPhone(telefono);
+                                await telefonoLaunchUri(telefonoUriLlamada(tel));
+                              },
+                        icon: Icon(Icons.call, color: cs.onPrimary),
+                        label: const Text('Llamar'),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 52),
+                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      FilledButton.tonalIcon(
+                        onPressed: !telOk
+                            ? null
+                            : () async {
+                                final tel = _cleanPhone(telefono);
+                                const String waMsg = 'Hola, soy tu taxista de RAI.';
+                                if (await telefonoLaunchUri(
+                                      telefonoUriWhatsAppApp(tel, waMsg),
+                                    )) {
+                                  return;
+                                }
+                                await telefonoLaunchUri(
+                                  telefonoUriWhatsAppWeb(tel, waMsg),
+                                );
+                              },
+                        icon: Icon(Icons.chat_bubble_outline, color: cs.primary),
+                        label: const Text('WhatsApp'),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 52),
+                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
                         onPressed: () {
-                          Navigator.of(sheetCtx).pop();
-                          if (!sheetCtx.mounted) return; // guard del BuildContext local
-                          Navigator.of(sheetCtx).push(MaterialPageRoute(
-                            builder: (_) => ChatScreen(otroUid: uidCliente, otroNombre: nombre.isEmpty ? 'Cliente' : nombre, viajeId: viajeId),
-                          ));
+                          Navigator.pop(sheetCtx);
+                          Future.microtask(() {
+                            if (!mounted) return;
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  otroUid: uidCliente,
+                                  otroNombre: nombre.isEmpty ? 'Cliente' : nombre,
+                                  viajeId: viajeId,
+                                ),
+                              ),
+                            );
+                          });
                         },
-                        icon: const Icon(Icons.chat),
-                        label: const Text('Chat'),
-                        style: _styleBase(),
+                        icon: Icon(Icons.chat_outlined, color: cs.primary),
+                        label: const Text('Chat en la app'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 52),
+                          side: BorderSide(color: cs.outline),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextButton(
+                        onPressed: () => Navigator.pop(sheetCtx),
+                        child: Text('Cerrar', style: TextStyle(color: cs.primary)),
                       ),
                     ],
                   );
@@ -474,57 +1526,54 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
   }
 
   Future<void> _selectorNavegacionDestino(double lat, double lon) async {
-    if (!mounted) return; // guard de State.context
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.black,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Wrap(
-            runSpacing: 12,
-            children: [
-              Center(child: Container(width: 44, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)))),
-              const SizedBox(height: 8),
-              const Text('Abrir navegación', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              ElevatedButton.icon(onPressed: () => _abrirWazeDestino(lat, lon), icon: const Icon(Icons.directions_car, color: Colors.green), label: const Text('Waze'), style: _styleBase()),
-              ElevatedButton.icon(onPressed: () => _abrirGoogleMapsDestino(lat, lon), icon: const Icon(Icons.map, color: Colors.green), label: const Text('Google Maps'), style: _styleBase()),
-            ],
+    if (!mounted) return;
+    if (_selectorNavegacionAbierto) return;
+    _selectorNavegacionAbierto = true;
+    try {
+      await showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.black,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (_) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Wrap(
+              runSpacing: 12,
+              children: [
+                Center(child: Container(width: 44, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)))),
+                const SizedBox(height: 8),
+                const Text('Abrir navegación', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    unawaited(_abrirWazeDestino(lat, lon));
+                  },
+                  icon: const Icon(Icons.directions_car, color: Colors.green),
+                  label: const Text('Waze'),
+                  style: _styleBase(),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    unawaited(_abrirGoogleMapsDestino(lat, lon));
+                  },
+                  icon: const Icon(Icons.map, color: Colors.green),
+                  label: const Text('Google Maps'),
+                  style: _styleBase(),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _selectorNavegacionAbierto = false;
+    }
   }
 
-  Future<void> _selectorNavegacionPickup({required String origenTexto, required double latPickup, required double lonPickup}) async {
-    if (!mounted) return; // guard de State.context
-    final tieneCoords = _coordsValid(latPickup, lonPickup);
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.black,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Wrap(
-            runSpacing: 12,
-            children: [
-              Center(child: Container(width: 44, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)))),
-              const SizedBox(height: 8),
-              const Text('Ir a buscar al cliente', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              ElevatedButton.icon(onPressed: () => tieneCoords ? _abrirWazeDestino(latPickup, lonPickup) : _abrirWazeBusqueda(origenTexto), icon: const Icon(Icons.directions_car, color: Colors.green), label: const Text('Waze'), style: _styleBase()),
-              ElevatedButton.icon(onPressed: () => tieneCoords ? _abrirGoogleMapsDestino(latPickup, lonPickup) : _abrirGoogleMapsDireccion(origenTexto), icon: const Icon(Icons.map, color: Colors.green), label: const Text('Google Maps'), style: _styleBase()),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ===== Tarjeta "tu vehículo (visible al cliente)" =====
   String _s(Object? x) => x?.toString() ?? '';
   Widget _chip(String text) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -537,8 +1586,133 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
         child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
       );
 
+  Widget _servicioBadge(Viaje v) {
+    Color color;
+    IconData icon;
+    String label;
+
+    switch (v.tipoServicio) {
+      case 'motor':
+        color = Colors.orange;
+        icon = Icons.two_wheeler;
+        label = '🛵 MOTOR';
+        break;
+      case 'turismo':
+        color = Colors.purple;
+        icon = Icons.beach_access;
+        label = '🏝️ TURISMO';
+        break;
+      default:
+        color = Colors.greenAccent;
+        icon = Icons.directions_car;
+        label = '🚗 NORMAL';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWaypoints(Viaje v, {required bool enRuta}) {
+    if (v.waypoints == null || v.waypoints!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12, bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '📍 Paradas intermedias:',
+            style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          ...v.waypoints!.asMap().entries.map((entry) {
+            final index = entry.key + 1;
+            final waypoint = entry.value;
+            final label = waypoint['label']?.toString() ?? 'Parada $index';
+            final lat = _waypointLat(waypoint);
+            final lon = _waypointLon(waypoint);
+            final navOk = enRuta && lat != null && lon != null && _coordsValid(lat, lon);
+            final wLat = lat;
+            final wLon = lon;
+            return Padding(
+              padding: const EdgeInsets.only(left: 8, bottom: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.flag_circle, size: 16, color: Colors.orangeAccent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '$index. $label',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                  if (navOk && wLat != null && wLon != null)
+                    IconButton(
+                      tooltip: 'Navegar a esta parada',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      onPressed: () => _selectorNavegacionDestino(wLat, wLon),
+                      icon: const Icon(Icons.navigation, size: 20, color: Colors.greenAccent),
+                    ),
+                ],
+              ),
+            );
+          }).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExtras(Viaje v) {
+    if (v.extras == null || v.extras!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final List<Widget> chips = [];
+    if (v.extras!['pasajeros'] != null) {
+      chips.add(_chip('👥 ${v.extras!['pasajeros']} pasajero${v.extras!['pasajeros'] != 1 ? 's' : ''}'));
+    }
+    if (v.extras!['peaje'] != null) {
+      chips.add(_chip('💰 Peaje: ${FormatosMoneda.rd(v.extras!['peaje'])}'));
+    }
+
+    if (chips.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Wrap(
+        spacing: 8,
+        children: chips,
+      ),
+    );
+  }
+
   Widget _tarjetaVehiculoVisibleAlCliente(Viaje v) {
-    // Lee de viaje y hace fallback al perfil del taxista
     final taxistaId = (v.uidTaxista).toString().trim();
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: taxistaId.isEmpty
@@ -601,48 +1775,278 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
     return e;
   }
 
-  // Listener robusto: cancelado, doc borrado o taxista removido ⇒ salir
+  int _etapaActualViaje(String estadoBase) {
+    if (EstadosViaje.esCompletado(estadoBase)) return 4;
+    if (EstadosViaje.esEnCurso(estadoBase)) return 3;
+    if (EstadosViaje.esAbordo(estadoBase)) return 2;
+    if (EstadosViaje.esEnCaminoPickup(estadoBase) || EstadosViaje.esAceptado(estadoBase)) return 1;
+    return 0;
+  }
+
+  Widget _progresoOperativoViaje(String estadoBase) {
+    final int etapa = _etapaActualViaje(estadoBase);
+    const labels = <String>[
+      'Aceptado',
+      'Pickup',
+      'A bordo',
+      'En ruta',
+      'Finalizado',
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Progreso del viaje',
+          style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            minHeight: 7,
+            value: (etapa + 1) / labels.length,
+            backgroundColor: Colors.white12,
+            valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: List<Widget>.generate(labels.length, (i) {
+            final bool done = i <= etapa;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: done ? Colors.greenAccent.withValues(alpha: 0.18) : Colors.white10,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: done ? Colors.greenAccent.withValues(alpha: 0.6) : Colors.white24,
+                ),
+              ),
+              child: Text(
+                labels[i],
+                style: TextStyle(
+                  color: done ? Colors.greenAccent : Colors.white60,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  static String _formatDurationHMS(Duration d) {
+    if (d.isNegative) return '00:00';
+    final int h = d.inHours;
+    final int m = d.inMinutes.remainder(60);
+    final int s = d.inSeconds.remainder(60);
+    if (h > 0) {
+      return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    }
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildDuracionEnRuta(Viaje v, String estadoBase) {
+    if (!EstadosViaje.esEnCurso(estadoBase)) return const SizedBox.shrink();
+    final DateTime? start = v.inicioRutaDesde;
+    if (start == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: StreamBuilder<DateTime>(
+        stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
+        builder: (BuildContext context, _) {
+          final Duration elapsed = DateTime.now().difference(start);
+          return Row(
+            children: [
+              const Icon(Icons.schedule, color: Colors.blueAccent, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Tiempo en ruta: ${_formatDurationHMS(elapsed)}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 15),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void _escucharCancelacionRemota(String viajeId) {
     _cancelSub?.cancel();
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
-    _cancelSub = FirebaseFirestore.instance.collection('viajes').doc(viajeId).snapshots().listen((ds) async {
-      if (!ds.exists) {
-        _stopGps();
-        if (!mounted) return; // guard de State.context
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('El viaje ya no está disponible.')));
-        Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const ViajeDisponible()), (route) => false);
-        return;
-      }
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
 
-      final d = ds.data();
-      if (d == null) return;
-
-      final est = (d['estado'] ?? '').toString();
-      final estN = EstadosViaje.normalizar(est);
-      final taxistaId = (d['taxistaId'] ?? d['uidTaxista'] ?? '').toString();
-      final teRemovieron = uid.isNotEmpty && (taxistaId.isEmpty || taxistaId != uid);
-
-      if (estN == EstadosViaje.cancelado || teRemovieron) {
-        _stopGps();
-        if (uid.isNotEmpty) {
-          try {
-            await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
-              'viajeActivoId': '',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-          } catch (_) {}
+    _cancelSub = FirebaseFirestore.instance.collection('viajes').doc(viajeId).snapshots().listen((ds) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        _diag('remote snapshot id=$viajeId exists=${ds.exists}');
+        
+        if (!ds.exists) {
+          if (_procesandoRemocion) return;
+          _procesandoRemocion = true;
+          final bool ausenciaConfirmada = await _confirmarAusenciaReal(
+            viajeId: viajeId,
+            uidTaxista: uid,
+          );
+          _diag('absence check id=$viajeId confirmed=$ausenciaConfirmada');
+          _procesandoRemocion = false;
+          if (!ausenciaConfirmada) return;
+          _stopGps();
+          messenger.showSnackBar(const SnackBar(content: Text('El viaje ya no está disponible.')));
+          navigator.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+            (route) => false,
+          );
+          return;
         }
-        if (!mounted) return; // guard de State.context
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(teRemovieron ? 'Fuiste removido del viaje.' : 'El cliente canceló el viaje.')));
-        Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const ViajeDisponible()), (route) => false);
+
+        final d = ds.data();
+        if (d == null) return;
+
+        final est = (d['estado'] ?? '').toString();
+        final estN = EstadosViaje.normalizar(est);
+        final taxistaId = (d['taxistaId'] ?? d['uidTaxista'] ?? '').toString();
+        final bool teRemovieron = uid.isNotEmpty && (taxistaId.isEmpty || taxistaId != uid);
+        _diag('state id=$viajeId estado=$estN taxistaDoc=$taxistaId me=$uid teRemovieron=$teRemovieron');
+
+        if (estN == EstadosViaje.cancelado || teRemovieron) {
+          // Evita flicker por estados transitorios/reconciliaciones rápidas.
+          if (_procesandoRemocion) return;
+          _procesandoRemocion = true;
+          final String? motivoConfirmado = await _confirmarRemocionReal(
+            viajeId: viajeId,
+            uidTaxista: uid,
+            snapshotActual: d,
+          );
+          _diag('removal check id=$viajeId result=$motivoConfirmado');
+          _procesandoRemocion = false;
+          if (motivoConfirmado == null) return;
+
+          _stopGps();
+          if (uid.isNotEmpty) {
+            try {
+              await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+                'viajeActivoId': '',
+                'updatedAt': FieldValue.serverTimestamp(),
+                'actualizadoEn': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+            } catch (e, st) {
+              await ErrorReporting.reportError(
+                e,
+                stack: st,
+                context: 'viaje_en_curso_taxista: reset viajeActivoId (removido)',
+              );
+            }
+          }
+          final bool esRemocion = motivoConfirmado == 'removido' || (motivoConfirmado != 'cancelado' && teRemovieron);
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(esRemocion ? 'Fuiste removido del viaje.' : 'El cliente canceló el viaje.'),
+            ),
+          );
+          navigator.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+            (route) => false,
+          );
+        }
+        // Posición del viaje: ya la cubre StreamBuilder + stream deduplicado; evitar setState duplicado aquí.
+      });
+    }, onError: (e, st) {
+      ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'viaje_en_curso_taxista: stream listener onError',
+      );
+    });
+  }
+
+  Future<String?> _confirmarRemocionReal({
+    required String viajeId,
+    required String uidTaxista,
+    required Map<String, dynamic> snapshotActual,
+  }) async {
+    final String estadoNow =
+        EstadosViaje.normalizar((snapshotActual['estado'] ?? '').toString());
+    final String taxistaNow =
+        (snapshotActual['taxistaId'] ?? snapshotActual['uidTaxista'] ?? '')
+            .toString();
+
+    if (estadoNow == EstadosViaje.cancelado) {
+      _diag('confirmRemocion fast-cancel id=$viajeId');
+      return 'cancelado';
+    }
+    if (uidTaxista.isEmpty) return null;
+
+    // Si aún me pertenece, claramente no está removido.
+    if (taxistaNow == uidTaxista) return null;
+
+    try {
+      // Pequeño debounce para permitir reconciliaciones rápidas del backend.
+      await Future.delayed(const Duration(milliseconds: 700));
+      final doc = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get();
+      if (!doc.exists) {
+        _diag('confirmRemocion doc-missing id=$viajeId');
+        return 'removido';
       }
-    }, onError: (_) {});
+      final data = doc.data() ?? const <String, dynamic>{};
+      final String estado =
+          EstadosViaje.normalizar((data['estado'] ?? '').toString());
+      final String taxista =
+          (data['taxistaId'] ?? data['uidTaxista'] ?? '').toString();
+
+      if (estado == EstadosViaje.cancelado) {
+        _diag('confirmRemocion server-cancel id=$viajeId');
+        return 'cancelado';
+      }
+      // Solo confirmamos remoción cuando el viaje sigue sin pertenecerme.
+      if (taxista.isEmpty || taxista != uidTaxista) {
+        _diag('confirmRemocion server-removed id=$viajeId taxista=$taxista me=$uidTaxista');
+        return 'removido';
+      }
+      return null;
+    } catch (_) {
+      // Si falla verificación remota, no mostramos mensaje agresivo por seguridad UX.
+      return null;
+    }
+  }
+
+  Future<bool> _confirmarAusenciaReal({
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    try {
+      await Future.delayed(const Duration(milliseconds: 700));
+      final doc = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get();
+      if (!doc.exists) return true;
+      final data = doc.data() ?? const <String, dynamic>{};
+      final String estado =
+          EstadosViaje.normalizar((data['estado'] ?? '').toString());
+      final String taxista =
+          (data['taxistaId'] ?? data['uidTaxista'] ?? '').toString();
+      if (estado == EstadosViaje.cancelado) return true;
+      return taxista.isEmpty || (uidTaxista.isNotEmpty && taxista != uidTaxista);
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final formato = DateFormat('dd/MM/yyyy - HH:mm');
 
     return Scaffold(
@@ -650,53 +2054,192 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
       drawer: const TaxistaDrawer(),
       appBar: AppBar(
         backgroundColor: Colors.black,
+        elevation: 0,
+        title: const Text(
+          'Mi viaje en curso',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
         leading: Builder(
-          builder: (ctx) => IconButton(
+          builder: (context) => IconButton(
             icon: const Icon(Icons.menu, color: Colors.white),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-            tooltip: 'Menú',
+            onPressed: () => Scaffold.of(context).openDrawer(),
           ),
         ),
-        title: const Text('Mi viaje en curso', style: TextStyle(color: Colors.white)),
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: const [SaldoGananciasChip()],
+        actions: [
+          ViajesCercanosTaxistaAppBarAction(
+            controller: _viajesCercanosCtl,
+            escuchaActiva: _viajesCercanosEscucha,
+          ),
+        ],
       ),
-      body: StreamBuilder<Viaje?>(
-        stream: _stream(),
-        builder: (context, snap) {
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: StreamBuilder<Viaje?>(
+              stream: _stream(),
+              builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
           }
 
           if (snap.hasError) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!context.mounted) return; // guard del BuildContext del builder
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Volviste a disponibles.')));
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const ViajeDisponible()),
-                (route) => false,
+            if (_cachedViaje != null) {
+              final v = _cachedViaje!;
+              final fecha = formato.format(v.fechaHora);
+              final total = FormatosMoneda.rd(v.precio);
+              final estadoBase = EstadosViaje.normalizar(
+                v.estado.isNotEmpty
+                    ? v.estado
+                    : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
               );
-            });
-            return const SizedBox.shrink();
+              return Column(
+                children: [
+                  const Expanded(
+                    flex: 3,
+                    child: RepaintBoundary(
+                      child: MapaTiempoReal(
+                        key: ValueKey<String>('mapa-cache-viaje'),
+                        esTaxista: true,
+                        esCliente: false,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('🧭 ${v.origen} → ${v.destino}', style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 8),
+                          Text('🕓 Fecha: $fecha', style: const TextStyle(fontSize: 16, color: Colors.white70)),
+                          const SizedBox(height: 8),
+                          Text('💰 Total: $total', style: const TextStyle(fontSize: 18, color: Colors.greenAccent)),
+                          const SizedBox(height: 8),
+                          Text('📍 Estado: ${_labelEstado(estadoBase)}', style: const TextStyle(fontSize: 16, color: Colors.white70)),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Reconectando viaje en tiempo real...',
+                            style: TextStyle(color: Colors.white54),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }
+            return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
           }
 
           final v = snap.data;
-          if (v == null) {
-            _stopGps(fromBuild: true);
-            _cancelSub?.cancel();
 
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(20),
-                child: Text('No tienes viaje en curso.', style: TextStyle(color: Colors.white)),
-              ),
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            final bool escucharPendientes = v != null &&
+                (() {
+                  final String est = EstadosViaje.normalizar(
+                    v.estado.isNotEmpty
+                        ? v.estado
+                        : (v.completado
+                            ? EstadosViaje.completado
+                            : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+                  );
+                  return EstadosViaje.esAbordo(est) || EstadosViaje.esEnCurso(est);
+                })();
+            if (_viajesCercanosEscucha.value != escucharPendientes) {
+              _viajesCercanosEscucha.value = escucharPendientes;
+              if (!escucharPendientes) {
+                _viajesCercanosCtl.resetListeningUi();
+              }
+            }
+          });
+          
+          if (v == null) {
+            _cachedViaje = null;
+            _stopGps();
+            return Column(
+              children: [
+                const Expanded(
+                  flex: 3,
+                  child: RepaintBoundary(
+                    child: MapaTiempoReal(
+                      key: ValueKey<String>('mapa-sin-viaje'),
+                      esTaxista: true,
+                      esCliente: false,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.taxi_alert,
+                            color: Colors.greenAccent,
+                            size: 60,
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'No tienes viaje en curso',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Puedes buscar viajes disponibles\nen el botón verde',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                          const SizedBox(height: 20),
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+                              );
+                            },
+                            icon: const Icon(Icons.search),
+                            label: const Text('Buscar viajes'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.greenAccent,
+                              foregroundColor: Colors.black,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             );
           }
 
-          _escucharCancelacionRemota(v.id);
+          // Actualizar cache
+          if (_cachedViaje?.id != v.id) {
+            _cachedViaje = v;
+            _escucharCancelacionRemota(v.id);
+            
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _asegurarGps(v.id).then((_) {
+                if (mounted) {
+                  _scheduleDrawRoute();
+                }
+              });
+            });
+          } else if (_cachedViaje != v) {
+            _cachedViaje = v;
+          }
 
-          final destino = LatLng(v.latDestino, v.lonDestino);
           final fecha = formato.format(v.fechaHora);
           final total = FormatosMoneda.rd(v.precio);
 
@@ -707,6 +2250,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
           );
 
           if (estadoBase == EstadosViaje.cancelado) {
+            final cancelNavigator = Navigator.of(context);
+            
             WidgetsBinding.instance.addPostFrameCallback((_) async {
               _stopGps();
               final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -717,147 +2262,705 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
                     'updatedAt': FieldValue.serverTimestamp(),
                     'actualizadoEn': FieldValue.serverTimestamp(),
                   }, SetOptions(merge: true));
-                } catch (_) {}
+                } catch (e, st) {
+                  await ErrorReporting.reportError(
+                    e,
+                    stack: st,
+                    context: 'viaje_en_curso_taxista: set viajeActivoId (cancelado)',
+                  );
+                }
               }
-              if (!context.mounted) return; // guard del BuildContext del builder
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const ViajeDisponible()),
-                (route) => false,
-              );
+              if (mounted) {
+                cancelNavigator.pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+                  (route) => false,
+                );
+              }
             });
             return const SizedBox.shrink();
           }
 
-          final markers = <Marker>{
-            if (_coordsValid(v.latDestino, v.lonDestino))
-              Marker(
-                markerId: const MarkerId('destino'),
-                position: destino,
-                infoWindow: InfoWindow(title: 'Destino: ${v.destino}'),
-                icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-              ),
-          };
-          if (_coordsValid(v.latCliente, v.lonCliente)) {
-            markers.add(
-              Marker(
-                markerId: const MarkerId('pickup'),
-                position: LatLng(v.latCliente, v.lonCliente),
-                infoWindow: InfoWindow(title: 'Recoger: ${v.origen}'),
-                icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-              ),
-            );
-          }
+          final mostrarOrigen = EstadosViaje.esAceptado(estadoBase) || 
+                                 EstadosViaje.esEnCaminoPickup(estadoBase) ||
+                                 EstadosViaje.esAbordo(estadoBase);
+          
+          final mostrarDestino = EstadosViaje.esEnCurso(estadoBase) ||
+              (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
 
-          final initialTarget =
-              (EstadosViaje.esAceptado(estadoBase) || EstadosViaje.esEnCaminoPickup(estadoBase)) && _coordsValid(v.latCliente, v.lonCliente)
-                  ? LatLng(v.latCliente, v.lonCliente)
-                  : (_coordsValid(v.latDestino, v.lonDestino) ? destino : const LatLng(18.4861, -69.9312));
+          final LatLng? puntoOrigen = _coordsValid(v.latCliente, v.lonCliente) 
+              ? LatLng(v.latCliente, v.lonCliente) 
+              : null;
+          
+          final LatLng? puntoDestino = _coordsValid(v.latDestino, v.lonDestino) 
+              ? LatLng(v.latDestino, v.lonDestino) 
+              : null;
 
           return Column(
-            children: [
-              Expanded(
-                flex: 3,
-                child: GoogleMap(
-                  initialCameraPosition: CameraPosition(target: initialTarget, zoom: 14),
-                  onMapCreated: (c) { _map = c; _mover(initialTarget); },
-                  markers: markers,
-                  myLocationEnabled: _myLoc,
-                  myLocationButtonEnabled: false,
-                  zoomControlsEnabled: true,
-                ),
-              ),
-              Expanded(
-                flex: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: ListView(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[900],
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.white12),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('🧭 ${v.origen} → ${v.destino}', style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 8),
-                            Text('🕓 Fecha: $fecha', style: const TextStyle(fontSize: 16, color: Colors.white70)),
-                            const SizedBox(height: 8),
-                            Text('💰 Total: $total', style: const TextStyle(fontSize: 18, color: Colors.greenAccent)),
-                            const SizedBox(height: 8),
-                            Text('📍 Estado: ${_labelEstado(estadoBase)}', style: const TextStyle(fontSize: 16, color: Colors.white70)),
-                          ],
-                        ),
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: RepaintBoundary(
+                      child: MapaTiempoReal(
+                        key: ValueKey<String>('mapa-${v.id}'),
+                        origen: puntoOrigen,
+                        origenNombre: v.origen,
+                        destino: puntoDestino,
+                        destinoNombre: v.destino,
+                        mostrarOrigen: mostrarOrigen,
+                        mostrarDestino: mostrarDestino,
+                        esTaxista: true,
+                        esCliente: false,
+                        mostrarTaxista: false,
+                        ubicacionTaxista: _coordsValid(v.latTaxista, v.lonTaxista)
+                            ? LatLng(v.latTaxista, v.lonTaxista)
+                            : null,
                       ),
-                      const SizedBox(height: 12),
-                      _tarjetaVehiculoVisibleAlCliente(v),
-                      const SizedBox(height: 16),
-                      KeyedSubtree(key: ValueKey('acciones-taxista-${v.id}'), child: _actionBar(v, estadoBase)),
-                      const SizedBox(height: 8),
-                      _botonRescate(v.id),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-            ],
+                  Expanded(
+                    flex: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: ListView(
+                        children: [
+                          if (FirebaseAuth.instance.currentUser?.uid != null)
+                            ColaSiguienteViajeBannerTaxista(
+                              uidTaxista: FirebaseAuth.instance.currentUser!.uid,
+                            ),
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[900],
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text('🧭 ${v.origen} → ${v.destino}',
+                                          style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
+                                    ),
+                                    _servicioBadge(v),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Text('🕓 Fecha: $fecha', style: const TextStyle(fontSize: 16, color: Colors.white70)),
+                                const SizedBox(height: 8),
+                                Text('💰 Total: $total', style: const TextStyle(fontSize: 18, color: Colors.greenAccent)),
+                                const SizedBox(height: 8),
+                                Text('📍 Estado: ${_labelEstado(estadoBase)}', style: const TextStyle(fontSize: 16, color: Colors.white70)),
+                                const SizedBox(height: 10),
+                                _progresoOperativoViaje(estadoBase),
+                                _buildDuracionEnRuta(v, estadoBase),
+                                _buildWaypoints(v, enRuta: EstadosViaje.esEnCurso(estadoBase)),
+                                _buildExtras(v),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          _tarjetaVehiculoVisibleAlCliente(v),
+                          const SizedBox(height: 16),
+                          _actionBar(v, estadoBase),
+                          const SizedBox(height: 8),
+                          _botonRescate(v.id),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
           );
         },
+            ),
+          ),
+          ViajesCercanosTaxistaLayer(
+            controller: _viajesCercanosCtl,
+            escuchaActiva: _viajesCercanosEscucha,
+            taxistaUbicacion: _taxistaPosCola,
+          ),
+        ],
       ),
     );
   }
 
-  /// Action bar adaptable por estado
+  // ==================== BARRA DE ACCIONES ====================
+
   Widget _actionBar(Viaje v, String estadoBase) {
-    final acciones = _botonesPorPaso(v, estadoBase);
-    return Wrap(spacing: 10, runSpacing: 10, children: acciones);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: _getActionButtons(v, estadoBase),
+      ),
+    );
   }
 
-  /// Botones por paso
-  List<Widget> _botonesPorPaso(Viaje v, String estadoBase) {
+  List<Widget> _getActionButtons(Viaje v, String estadoBase) {
     final uidCli = _uidClienteDe(v);
-
-    if (EstadosViaje.esAceptado(estadoBase)) {
+    
+    if (EstadosViaje.esAceptado(estadoBase) || EstadosViaje.esEnCaminoPickup(estadoBase)) {
+      final bool puedeMarcarAbordo = _navegacionIniciada || _clienteCerca;
+      
       return [
-        _btnPrimario(icon: const Icon(Icons.person_outline), label: const Text('Ver cliente'),
-          onPressed: (uidCli.isEmpty) ? null : () => _verClienteBottomSheet(uidCliente: uidCli, viajeId: v.id)),
-        _btnPrimario(icon: const Icon(Icons.route), label: const Text('Buscar cliente'), onPressed: () async {
-          final uid = FirebaseAuth.instance.currentUser?.uid;
-          if (uid != null) { try { await ViajesRepo.marcarEnCaminoPickup(viajeId: v.id, uidTaxista: uid); } catch (_) {} }
-          final okGps = await _asegurarGps(v.id);
-          if (!okGps) return;
-          final label = (v.origen.trim().isEmpty) ? 'punto de recogida' : v.origen.trim();
-          if (!mounted) return; // guard de State.context antes de SnackBar
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('🧭 Navegando a: $label')));
-          await _selectorNavegacionPickup(origenTexto: v.origen, latPickup: v.latCliente, lonPickup: v.lonCliente);
-        }),
-        _btnSecundario(icon: const Icon(Icons.emoji_people), label: const Text('Cliente a bordo'), onPressed: () => _marcarClienteAbordo(v.id)),
-        _btnPeligro(icon: const Icon(Icons.cancel), label: const Text('Cancelar (emergencia)'), onPressed: () => _cancelarPorTaxista(v)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.grey[850],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '📍 Punto de recogida',
+                style: TextStyle(
+                  color: Colors.greenAccent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                v.origen,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (_clienteCerca) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.location_on, color: Colors.green, size: 18),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '✅ ¡Estás muy cerca del cliente! Ya puedes marcarlo como a bordo.',
+                          style: TextStyle(color: Colors.green, fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _navegacionIniciada ? null : () => _iniciarNavegacionPickup(v),
+            icon: Icon(_navegacionIniciada ? Icons.check_circle : Icons.navigation, size: 24),
+            label: Text(
+              _navegacionIniciada ? 'NAVEGACIÓN ACTIVADA' : 'INICIAR NAVEGACIÓN',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _navegacionIniciada ? Colors.green : Colors.blue,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 56),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ),
+        
+        if (_navegacionIniciada) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'La navegación está activa. Cuando llegues al punto de recogida, presiona el botón de abajo.',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        
+        if (!_navegacionIniciada && !_clienteCerca) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.touch_app, color: Colors.orange, size: 20),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Presiona "Iniciar navegación" o acércate al punto de recogida para activar "Cliente a bordo".',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        
+        if (!_navegacionIniciada && _clienteCerca) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.green.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withValues(alpha: 0.5)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green, size: 20),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '✅ ¡Excelente! Estás en el punto de recogida. Ya puedes marcar "Cliente a bordo".',
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        
+        if (puedeMarcarAbordo) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _marcarClienteAbordo(v),
+              icon: const Icon(Icons.person_add, size: 24),
+              label: const Text(
+                'CLIENTE A BORDO',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 56),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+        ],
+        
+        const SizedBox(height: 16),
+        const Divider(color: Colors.white24),
+        const SizedBox(height: 12),
+        
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+                icon: const Icon(Icons.person, size: 18),
+                label: const Text('Ver cliente'),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+                icon: const Icon(Icons.chat, size: 18),
+                label: const Text('Contactar'),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        
+        const SizedBox(height: 12),
+        
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => _cancelarPorTaxista(v),
+            icon: const Icon(Icons.cancel_outlined, size: 20),
+            label: const Text('Cancelar viaje', style: TextStyle(fontSize: 15)),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5)),
+              foregroundColor: Colors.redAccent,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
       ];
     }
 
     if (EstadosViaje.esAbordo(estadoBase)) {
+      if (!_codigoEsperadoValido(v.codigoVerificacion)) {
+        return [
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.withValues(alpha: 0.55)),
+            ),
+            child: const Text(
+              'Este viaje no tiene un código de verificación válido en el sistema. '
+              'Contacta soporte o cancela para que el cliente pueda solicitar un viaje nuevo.',
+              style: TextStyle(color: Colors.white70, height: 1.35),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _btnSecundario(
+                icon: const Icon(Icons.person, size: 20),
+                label: const Text('Ver cliente'),
+                onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+              ),
+              const SizedBox(width: 12),
+              _btnSecundario(
+                icon: const Icon(Icons.chat, size: 20),
+                label: const Text('Contactar'),
+                onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
+          const SizedBox(height: 12),
+          const Text(
+            'Cancelación bloqueada: el cliente ya está a bordo.',
+            style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
+          ),
+        ];
+      }
+
+      if (v.codigoVerificado) {
+        return [
+          const SizedBox(height: 12),
+          const Text(
+            'Código verificado',
+            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Continúa para dejar el viaje en ruta y abrir navegación al destino.',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          const SizedBox(height: 16),
+          _btnPrimario(
+            icon: const Icon(Icons.play_arrow, size: 24),
+            label: const Text('CONTINUAR VIAJE', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              if (_actionBusy || _selectorNavegacionAbierto) return;
+              _actionBusy = true;
+              final uidTax = FirebaseAuth.instance.currentUser?.uid;
+              if (uidTax == null) {
+                _actionBusy = false;
+                return;
+              }
+              try {
+                try {
+                  await ViajesRepo.iniciarViaje(viajeId: v.id, uidTaxista: uidTax);
+                } catch (e, st) {
+                  await ErrorReporting.reportError(
+                    e,
+                    stack: st,
+                    context: 'viaje_en_curso_taxista: iniciarViaje (continuar)',
+                  );
+                }
+                final okGps = await _asegurarGps(v.id);
+                if (!okGps) return;
+                if (!mounted) return;
+                await _selectorNavegacionDestino(v.latDestino, v.lonDestino);
+              } finally {
+                _actionBusy = false;
+              }
+            },
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _btnSecundario(
+                icon: const Icon(Icons.person, size: 20),
+                label: const Text('Ver cliente'),
+                onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+              ),
+              const SizedBox(width: 12),
+              _btnSecundario(
+                icon: const Icon(Icons.chat, size: 20),
+                label: const Text('Contactar'),
+                onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
+          const SizedBox(height: 12),
+          const Text(
+            'Cancelación bloqueada: el cliente ya está a bordo.',
+            style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
+          ),
+        ];
+      }
+
       return [
-        _btnPrimario(icon: const Icon(Icons.play_arrow), label: const Text('Iniciar viaje'),
-          onPressed: () => _iniciarViaje(v.id, lat: v.latDestino, lon: v.lonDestino, destinoTexto: v.destino)),
-        _btnPeligro(icon: const Icon(Icons.cancel), label: const Text('Cancelar (emergencia)'), onPressed: () => _cancelarPorTaxista(v)),
+        const SizedBox(height: 12),
+        const Text(
+          'Código de verificación',
+          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Pídele el código de 6 dígitos al cliente',
+          style: TextStyle(color: Colors.white70, fontSize: 14),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.grey[800],
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            children: [
+              TextField(
+                controller: _codigoCtrl,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 32,
+                  letterSpacing: 8,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: InputDecoration(
+                  hintText: '000000',
+                  hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 32, letterSpacing: 8),
+                  filled: true,
+                  fillColor: Colors.grey[900],
+                  border: const OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(12)),
+                    borderSide: BorderSide.none,
+                  ),
+                  counterText: '',
+                  contentPadding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _btnPrimario(
+                icon: const Icon(Icons.verified, size: 24),
+                label: const Text('VERIFICAR CÓDIGO', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                onPressed: () => _verificarCodigo(v.id, v.codigoVerificacion ?? ''),
+                backgroundColor: Colors.orange,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            _btnSecundario(
+              icon: const Icon(Icons.person, size: 20),
+              label: const Text('Ver cliente'),
+              onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+            ),
+            const SizedBox(width: 12),
+            _btnSecundario(
+              icon: const Icon(Icons.chat, size: 20),
+              label: const Text('Contactar'),
+              onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
+        const SizedBox(height: 12),
+        _btnPeligro(
+          icon: const Icon(Icons.cancel_outlined, size: 20),
+          label: const Text('Salir a disponibilidad', style: TextStyle(fontSize: 15)),
+          onPressed: () => _cancelarPorTaxista(v),
+        ),
       ];
     }
 
     if (EstadosViaje.esEnCurso(estadoBase)) {
       return [
-        _btnPrimario(icon: const Icon(Icons.flag), label: Text(v.completado ? 'Viaje completado' : 'Finalizar viaje'),
-          onPressed: v.completado ? null : () => _finalizarViaje(v)),
+        const SizedBox(height: 12),
+        const Text(
+          'En camino al destino',
+          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          v.destino,
+          style: const TextStyle(color: Colors.white70, fontSize: 14),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 16),
+        _btnPrimario(
+          icon: const Icon(Icons.navigation, size: 24),
+          label: const Text('NAVEGAR AL DESTINO', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          onPressed: () async {
+            final okGps = await _asegurarGps(v.id);
+            if (!okGps) return;
+            await _selectorNavegacionDestino(v.latDestino, v.lonDestino);
+          },
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            _btnSecundario(
+              icon: const Icon(Icons.person, size: 20),
+              label: const Text('Ver cliente'),
+              onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+            ),
+            const SizedBox(width: 12),
+            _btnSecundario(
+              icon: const Icon(Icons.chat, size: 20),
+              label: const Text('Contactar'),
+              onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
+        const SizedBox(height: 12),
+        _btnPrimario(
+          icon: const Icon(Icons.check_circle, size: 24),
+          label: const Text('FINALIZAR VIAJE', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          onPressed: () => _finalizarViaje(v),
+          backgroundColor: Colors.blueAccent,
+        ),
       ];
     }
 
-    if (EstadosViaje.esEnCaminoPickup(estadoBase)) {
-      return _botonesPorPaso(v, EstadosViaje.aceptado);
-    }
+    return [
+      const Center(
+        child: Text(
+          'Estado del viaje no reconocido',
+          style: TextStyle(color: Colors.white70),
+        ),
+      ),
+    ];
+  }
 
-    return const [SizedBox.shrink()];
+  // ==================== ESTILOS DE BOTONES ====================
+
+  ButtonStyle _styleBase() => ElevatedButton.styleFrom(
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black87,
+        minimumSize: const Size(1, 52),
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        elevation: 0,
+      );
+
+  Widget _btnPrimario({
+    required Widget icon,
+    required Widget label,
+    required VoidCallback? onPressed,
+    Color? backgroundColor,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: icon,
+        label: label,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: backgroundColor ?? Colors.greenAccent,
+          foregroundColor: Colors.black,
+          minimumSize: const Size(double.infinity, 56),
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          elevation: 0,
+        ),
+      ),
+    );
+  }
+
+  Widget _btnSecundario({
+    required Widget icon,
+    required Widget label,
+    required VoidCallback? onPressed,
+  }) {
+    return Expanded(
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: icon,
+        label: label,
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+          foregroundColor: Colors.white,
+          minimumSize: const Size(1, 48),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      ),
+    );
+  }
+
+  Widget _btnPeligro({
+    required Widget icon,
+    required Widget label,
+    required VoidCallback? onPressed,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: icon,
+        label: label,
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5)),
+          foregroundColor: Colors.redAccent,
+          minimumSize: const Size(double.infinity, 48),
+          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      ),
+    );
   }
 
   Widget _botonRescate(String viajeId) {
@@ -872,51 +2975,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> {
               'updatedAt': FieldValue.serverTimestamp(),
               'actualizadoEn': FieldValue.serverTimestamp(),
             }, SetOptions(merge: true));
-          } catch (_) {}
+            } catch (e, st) {
+              await ErrorReporting.reportError(
+                e,
+                stack: st,
+                context: 'viaje_en_curso_taxista: set viajeActivoId (rescate)',
+              );
+            }
         }
-        if (!mounted) return; // guard de State.context
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const ViajeDisponible()),
-          (route) => false,
-        );
+        if (mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+            (route) => false,
+          );
+        }
       },
       icon: const Icon(Icons.exit_to_app, color: Colors.white70),
       label: const Text('Salir a disponibles (rescate)', style: TextStyle(color: Colors.white70)),
     );
   }
-
-  // ===== Estilos =====
-  ButtonStyle _styleBase() => ElevatedButton.styleFrom(
-        backgroundColor: Colors.white, foregroundColor: Colors.black87,
-        minimumSize: const Size(1, 52),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      );
-
-  ButtonStyle _stylePeligro() => ElevatedButton.styleFrom(
-        backgroundColor: Colors.redAccent, foregroundColor: Colors.white,
-        minimumSize: const Size(1, 52),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      );
-
-  Widget _btnPrimario({required Widget icon, required Widget label, required VoidCallback? onPressed}) =>
-      ConstrainedBox(constraints: const BoxConstraints(minWidth: 160, maxWidth: 400),
-        child: ElevatedButton.icon(onPressed: onPressed, icon: icon, label: label, style: _styleBase()));
-
-  Widget _btnSecundario({required Widget icon, required Widget label, required VoidCallback? onPressed}) =>
-      ConstrainedBox(constraints: const BoxConstraints(minWidth: 160, maxWidth: 400),
-        child: OutlinedButton.icon(
-          onPressed: onPressed, icon: icon, label: label,
-          style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: Colors.white70),
-            foregroundColor: Colors.white, minimumSize: const Size(1, 52),
-            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ));
-
-  Widget _btnPeligro({required Widget icon, required Widget label, required VoidCallback? onPressed}) =>
-      ConstrainedBox(constraints: const BoxConstraints(minWidth: 160, maxWidth: 400),
-        child: ElevatedButton.icon(onPressed: onPressed, icon: icon, label: label, style: _stylePeligro()));
 }
