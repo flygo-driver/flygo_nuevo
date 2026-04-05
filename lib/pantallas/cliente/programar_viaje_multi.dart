@@ -19,6 +19,7 @@ import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/keys.dart' as app_keys;
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
+import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
 
 class _LugarSel {
@@ -974,22 +975,28 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               const SizedBox(height: 8),
               Text(tipoLabel, style: TextStyle(color: textMuted, fontSize: 12)),
               const SizedBox(height: 12),
-              Divider(color: dividerSoft, height: 1),
+              SizedBox(
+                width: double.infinity,
+                child: Divider(color: dividerSoft, height: 1),
+              ),
               const SizedBox(height: 12),
               Text(
                 FormatosMoneda.km(_distKm),
+                textAlign: TextAlign.center,
                 style: TextStyle(color: textSecondary, fontWeight: FontWeight.w600),
               ),
               if (_peaje > 0) ...<Widget>[
                 const SizedBox(height: 6),
                 Text(
                   'Peaje: ${FormatosMoneda.rd(_peaje)}',
+                  textAlign: TextAlign.center,
                   style: TextStyle(color: textMuted, fontSize: 12),
                 ),
               ],
               const SizedBox(height: 14),
               Text(
                 'TOTAL A PAGAR',
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   color: textMuted,
                   fontSize: 12,
@@ -998,39 +1005,47 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 ),
               ),
               const SizedBox(height: 4),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  FormatosMoneda.rd(_precio),
-                  style: TextStyle(
-                    color: c,
-                    fontSize: 50,
-                    fontWeight: FontWeight.w900,
-                    height: 1.05,
+              SizedBox(
+                width: double.infinity,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.center,
+                  child: Text(
+                    FormatosMoneda.rd(_precio),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: c,
+                      fontSize: 50,
+                      fontWeight: FontWeight.w900,
+                      height: 1.05,
+                    ),
                   ),
                 ),
               ),
               const SizedBox(height: 12),
-              Row(
-                children: <Widget>[
-                  Icon(Icons.payments_outlined, size: 18, color: textSecondary),
-                  const SizedBox(width: 8),
-                  Text('Pago:', style: TextStyle(color: textMuted, fontSize: 13)),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: metodoPagoChipBg,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: metodoPagoChipBorder),
+              SizedBox(
+                width: double.infinity,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    Icon(Icons.payments_outlined, size: 18, color: textSecondary),
+                    const SizedBox(width: 8),
+                    Text('Pago:', style: TextStyle(color: textMuted, fontSize: 13)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: metodoPagoChipBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: metodoPagoChipBorder),
+                      ),
+                      child: Text(
+                        _metodoPago,
+                        style: TextStyle(color: textPrimary, fontWeight: FontWeight.w700),
+                      ),
                     ),
-                    child: Text(
-                      _metodoPago,
-                      style: TextStyle(color: textPrimary, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               const SizedBox(height: 18),
               SizedBox(
@@ -1151,6 +1166,17 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           ListView(
             padding: const EdgeInsets.all(16),
             children: <Widget>[
+              if (_cargando)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: CotizacionPrecioLoadingStrip(
+                    accentColor: _colorServicio,
+                    isDark: isDark,
+                    message: _precio > 0
+                        ? 'Procesando…'
+                        : 'Calculando precio…',
+                  ),
+                ),
               if (_mostrarResumenMulti)
                 _tarjetaResumenMulti(
                   textPrimary: textPrimary,
@@ -1442,9 +1468,11 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     border: Border.all(color: _colorServicio, width: 2),
                   ),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Text(
                         'DISTANCIA TOTAL',
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           color: _colorServicio,
                           fontSize: 12,
@@ -1455,27 +1483,40 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                       const SizedBox(height: 4),
                       Text(
                         FormatosMoneda.km(_distKm),
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           color: textSecondary,
                           fontSize: 16,
                         ),
                       ),
                       const SizedBox(height: 12),
-                      Divider(color: dividerSoft),
+                      SizedBox(
+                        width: double.infinity,
+                        child: Divider(color: dividerSoft),
+                      ),
                       const SizedBox(height: 12),
                       Text(
                         'TOTAL',
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           color: textSecondary,
                           fontSize: 14,
                         ),
                       ),
-                      Text(
-                        FormatosMoneda.rd(_precio),
-                        style: TextStyle(
-                          color: _colorServicio,
-                          fontSize: 42,
-                          fontWeight: FontWeight.w900,
+                      SizedBox(
+                        width: double.infinity,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.center,
+                          child: Text(
+                            FormatosMoneda.rd(_precio),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: _colorServicio,
+                              fontSize: 42,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
                         ),
                       ),
                       if (_peaje > 0)
@@ -1483,6 +1524,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                           padding: const EdgeInsets.only(top: 8),
                           child: Text(
                             'Incluye peaje: ${FormatosMoneda.rd(_peaje)}',
+                            textAlign: TextAlign.center,
                             style: TextStyle(color: textMuted, fontSize: 12),
                           ),
                         ),
@@ -1513,38 +1555,22 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 ),
               ],
               if (_cargando)
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: CircularProgressIndicator(
-                      color: isDark ? Colors.greenAccent : const Color(0xFF0F9D58),
-                    ),
-                  ),
+                CotizacionPrecioLoadingPlaceholder(
+                  accentColor: _colorServicio,
+                  isDark: isDark,
+                  message: _precio > 0
+                      ? 'Procesando…'
+                      : 'Calculando precio…',
                 ),
               ],
             ],
           ),
           if (_cargando && _mensajeCarga.isNotEmpty)
-            Container(
-              color: Colors.black54,
-              child: Center(
-                child: Card(
-                  color: isDark ? Colors.grey[900] : Colors.white,
-                  elevation: 4,
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        CircularProgressIndicator(
-                          color: isDark ? Colors.greenAccent : const Color(0xFF0F9D58),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(_mensajeCarga, style: TextStyle(color: textPrimary)),
-                      ],
-                    ),
-                  ),
-                ),
+            Positioned.fill(
+              child: CotizacionPrecioLoadingDimmed(
+                accentColor: _colorServicio,
+                isDark: isDark,
+                message: _mensajeCarga,
               ),
             ),
         ],

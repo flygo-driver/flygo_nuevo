@@ -27,6 +27,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart'; // DetalleLugar
 
 // ===== Flags =====
@@ -770,14 +771,17 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  c.withValues(alpha: isDark ? 0.22 : 0.14),
-                  c.withValues(alpha: isDark ? 0.06 : 0.04),
+                  c.withValues(alpha: isDark ? 0.2 : 0.12),
+                  c.withValues(alpha: isDark ? 0.05 : 0.03),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: c.withValues(alpha: isDark ? 1 : 0.65), width: 2),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: c.withValues(alpha: isDark ? 0.85 : 0.5),
+                width: 1,
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -869,22 +873,21 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                 const SizedBox(height: 14),
                 Divider(color: dividerColor, height: 1),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '${FormatosMoneda.km(distanciaKm)}${idaYVuelta ? ' · Ida y vuelta' : ''}',
-                        style: TextStyle(
-                          color: subtle,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    '${FormatosMoneda.km(distanciaKm)}${idaYVuelta ? ' · Ida y vuelta' : ''}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: subtle,
+                      fontWeight: FontWeight.w600,
                     ),
-                  ],
+                  ),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'TOTAL A PAGAR',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: subtle,
                     fontSize: 12,
@@ -893,45 +896,53 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                   ),
                 ),
                 const SizedBox(height: 4),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    FormatosMoneda.rd(precioCalculado),
-                    style: TextStyle(
-                      color: c,
-                      fontSize: 52,
-                      fontWeight: FontWeight.w900,
-                      height: 1.05,
+                SizedBox(
+                  width: double.infinity,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.center,
+                    child: Text(
+                      FormatosMoneda.rd(precioCalculado),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: c,
+                        fontSize: 44,
+                        fontWeight: FontWeight.w900,
+                        height: 1.05,
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Icon(Icons.payments_outlined, size: 18, color: subtle),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Pago:',
-                      style: TextStyle(color: subtle, fontSize: 13),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: chipBg,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: chipBorder),
+                SizedBox(
+                  width: double.infinity,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.payments_outlined, size: 18, color: subtle),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Pago:',
+                        style: TextStyle(color: subtle, fontSize: 13),
                       ),
-                      child: Text(
-                        metodoPago,
-                        style: TextStyle(
-                          color: onCard,
-                          fontWeight: FontWeight.w700,
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: chipBg,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: chipBorder),
+                        ),
+                        child: Text(
+                          metodoPago,
+                          style: TextStyle(
+                            color: onCard,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 18),
                 SizedBox(
@@ -1182,13 +1193,33 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                     ),
                   ],
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-                  child: Form(
-                    key: _formKey,
-                    child: ListView(
-                      controller: controller,
-                      children: [
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (_cargando)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                        child: CotizacionPrecioLoadingStrip(
+                          accentColor: const Color(0xFFFF5A00),
+                          isDark: isDark,
+                          message: (ubicacionObtenida && precioCalculado > 0)
+                              ? 'Enviando solicitud…'
+                              : 'Calculando precio…',
+                        ),
+                      ),
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          _cargando ? 6 : 10,
+                          16,
+                          24,
+                        ),
+                        child: Form(
+                          key: _formKey,
+                          child: ListView(
+                            controller: controller,
+                            children: [
                         GestureDetector(
                           onTap: _expandToMax,
                           child: Column(
@@ -1239,7 +1270,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                         _MotoUberHeader(isDark: isDark),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 12),
                         _MotoSearchShell(
                           isDark: isDark,
                           child: kUsePlacesAutocomplete
@@ -1336,16 +1367,14 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                           ),
                         ),
 
-                        const SizedBox(height: 14),
-
+                        const SizedBox(height: 12),
                         _MotoOptionsCard(
                           idaYVuelta: idaYVuelta,
                           onIdaYVuelta: (v) => setState(() => idaYVuelta = v),
                           metodoPago: metodoPago,
                           onElegirPago: _elegirMetodoPago,
                         ),
-                        const SizedBox(height: 16),
-
+                        const SizedBox(height: 14),
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton(
@@ -1364,7 +1393,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                 : const Text('Ver precio'),
                           ),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 8),
 
                         if (precioCalculado > 0)
                           _MotoEstimacionChip(
@@ -1374,7 +1403,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                             idaYVuelta: idaYVuelta,
                             precio: precioCalculado,
                           ),
-                        const SizedBox(height: 12),
+                        if (precioCalculado > 0) const SizedBox(height: 10),
 
                         SizedBox(
                           width: double.infinity,
@@ -1388,12 +1417,15 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                           ),
                         ),
 
-                        const SizedBox(height: 12),
-                        Text(
-                          'Hora: ${DateFormat('dd/MM/yyyy - HH:mm').format(DateTime.now())}',
-                          style: TextStyle(
-                            color: scheme.onSurface.withValues(alpha: 0.38),
-                            fontSize: 12,
+                        const SizedBox(height: 10),
+                        Center(
+                          child: Text(
+                            DateFormat('dd/MM/yyyy · HH:mm')
+                                .format(DateTime.now()),
+                            style: TextStyle(
+                              color: scheme.onSurface.withValues(alpha: 0.32),
+                              fontSize: 11,
+                            ),
                           ),
                         ),
                             ],
@@ -1402,7 +1434,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                     ),
                   ),
                 ),
-              );
+              ),
+            ],
+          ),
+        );
             },
           ),
         ],
@@ -1434,7 +1469,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 // ==========================
 // Auxiliares UI
 // ==========================
-/// Cabecera tipo sheet de movilidad: producto claro (una sola vez "Moto") + contexto.
+/// Cabecera compacta alineada al tema (menos contraste duro que bloque negro).
 class _MotoUberHeader extends StatelessWidget {
   final bool isDark;
 
@@ -1444,62 +1479,61 @@ class _MotoUberHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = isDark ? const Color(0xFF121212) : const Color(0xFF000000);
+    final scheme = Theme.of(context).colorScheme;
+    final on = scheme.onSurface;
+    final bg = isDark
+        ? scheme.surfaceContainerHigh
+        : scheme.surfaceContainerHighest;
+    final border = scheme.outline.withValues(alpha: isDark ? 0.22 : 0.14);
 
     return Semantics(
       container: true,
       label: 'Pedir viaje en moto',
       child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.2),
-              blurRadius: 24,
-              offset: const Offset(0, 8),
-            ),
-          ],
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: border),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Container(
-              width: 54,
-              height: 54,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
-                color: _accent,
-                borderRadius: BorderRadius.circular(14),
+                color: _accent.withValues(alpha: isDark ? 0.22 : 0.14),
+                borderRadius: BorderRadius.circular(12),
               ),
               child: const Icon(
                 Icons.two_wheeler_rounded,
-                color: Colors.white,
-                size: 30,
+                color: _accent,
+                size: 26,
               ),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Moto',
                     style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
+                      color: on,
+                      fontSize: 18,
                       fontWeight: FontWeight.w800,
-                      height: 1.05,
-                      letterSpacing: -0.6,
+                      height: 1.1,
+                      letterSpacing: -0.4,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 2),
                   Text(
-                    'Salida en tu ubicación · Mantén pulsado el mapa para elegir destino',
+                    'Te recogen donde estás. En el mapa: pulsación larga para marcar destino.',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.58),
-                      fontSize: 13,
-                      height: 1.35,
+                      color: on.withValues(alpha: 0.52),
+                      fontSize: 12,
+                      height: 1.3,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1535,47 +1569,13 @@ class _MotoSearchShell extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 8),
-            child: Row(
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFF5A00),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  '¿A dónde?',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSurface.withValues(alpha: 0.72),
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
             decoration: BoxDecoration(
               color: fill,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(color: line),
-              boxShadow: isDark
-                  ? null
-                  : [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 18,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
             ),
             child: child,
           ),
@@ -1608,27 +1608,22 @@ class _MotoOptionsCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: border),
       ),
       child: Column(
         children: [
           SwitchListTile.adaptive(
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
             title: Text(
               'Ida y vuelta',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
-                fontSize: 15,
+                fontSize: 14,
                 color: scheme.onSurface,
-              ),
-            ),
-            subtitle: Text(
-              'Incluye el regreso al mismo trayecto',
-              style: TextStyle(
-                fontSize: 12,
-                color: scheme.onSurface.withValues(alpha: 0.52),
               ),
             ),
             value: idaYVuelta,
@@ -1638,31 +1633,33 @@ class _MotoOptionsCard extends StatelessWidget {
           ),
           Divider(height: 1, thickness: 1, color: border),
           ListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
             contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             leading: Icon(
-              Icons.wallet_outlined,
-              color: scheme.onSurface.withValues(alpha: 0.5),
+              Icons.payments_outlined,
+              size: 22,
+              color: scheme.onSurface.withValues(alpha: 0.45),
             ),
             title: Text(
-              'Pago',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: scheme.onSurface.withValues(alpha: 0.5),
-              ),
-            ),
-            subtitle: Text(
               metodoPago,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 15,
                 fontWeight: FontWeight.w700,
                 color: scheme.onSurface,
               ),
             ),
+            subtitle: Text(
+              'Forma de pago',
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurface.withValues(alpha: 0.45),
+              ),
+            ),
             trailing: Icon(
               Icons.chevron_right_rounded,
-              color: scheme.onSurface.withValues(alpha: 0.35),
+              color: scheme.onSurface.withValues(alpha: 0.32),
             ),
             onTap: onElegirPago,
           ),
@@ -1692,42 +1689,53 @@ class _MotoEstimacionChip extends StatelessWidget {
     final subtle = scheme.onSurface.withValues(alpha: 0.55);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF142018) : const Color(0xFFF3F6F4),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: const Color(0xFF49F18B).withValues(alpha: isDark ? 0.35 : 0.45),
+          color: const Color(0xFF49F18B).withValues(alpha: isDark ? 0.3 : 0.4),
         ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
+            '${FormatosMoneda.km(distanciaKm)}${idaYVuelta ? ' · Ida y vuelta' : ''}',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: scheme.onSurface.withValues(alpha: 0.75),
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
             'Estimación',
+            textAlign: TextAlign.center,
             style: TextStyle(
               color: subtle,
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
-              letterSpacing: 0.3,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${FormatosMoneda.km(distanciaKm)}${idaYVuelta ? ' · Ida y vuelta' : ''}',
-            style: TextStyle(
-              color: scheme.onSurface,
               fontWeight: FontWeight.w600,
-              fontSize: 14,
+              fontSize: 11,
+              letterSpacing: 0.2,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            FormatosMoneda.rd(precio),
-            style: TextStyle(
-              color: isDark ? Colors.greenAccent : const Color(0xFF047857),
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
+              child: Text(
+                FormatosMoneda.rd(precio),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: isDark ? Colors.greenAccent : const Color(0xFF047857),
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.3,
+                ),
+              ),
             ),
           ),
         ],

@@ -22,7 +22,6 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/detalle_viaje.dart';
-import 'package:flygo_nuevo/widgets/loading_professional.dart';
 import 'package:flygo_nuevo/widgets/empty_trips_widget.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
@@ -32,8 +31,76 @@ class _Item {
   final DateTime fecha;
   final DateTime acceptAfter;
   final bool esAhora;
-  final double distancia;
-  const _Item(this.v, this.fecha, this.acceptAfter, this.esAhora, this.distancia);
+  /// Km desde el taxista al punto de recogida; `null` si no hay coords → al final del listado.
+  final double? distanciaKmPickup;
+  _Item(this.v, this.fecha, this.acceptAfter, this.esAhora, this.distanciaKmPickup);
+}
+
+/// Carga inicial del listado del pool: mensaje claro para producción.
+class _PoolEntradaLoading extends StatelessWidget {
+  final String titulo;
+  final String subtitulo;
+
+  const _PoolEntradaLoading({
+    required this.titulo,
+    required this.subtitulo,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF090B10),
+      alignment: Alignment.center,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 36),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.radar,
+              size: 58,
+              color: Colors.greenAccent.withValues(alpha: 0.92),
+            ),
+            const SizedBox(height: 26),
+            Text(
+              titulo,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                height: 1.2,
+                letterSpacing: -0.4,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              subtitulo,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.68),
+                fontSize: 15,
+                height: 1.45,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: 200,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  minHeight: 4,
+                  backgroundColor: Colors.white.withValues(alpha: 0.08),
+                  color: Colors.greenAccent,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class ViajeDisponible extends StatefulWidget {
@@ -328,7 +395,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           }
           if (!_disponibleParaMi(data, myUid)) continue;
           if (!_esAhoraDesdeData(data)) continue;
-          if (!_viajeTienePrecioReal(data)) continue;
           _vistosParaTimbre.add(d.id);
         }
         return;
@@ -341,20 +407,22 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         }
         if (!_disponibleParaMi(data, myUid)) continue;
         if (!_esAhoraDesdeData(data)) continue;
-        if (!_viajeTienePrecioReal(data)) continue;
 
         final id = d.id;
         if (_vistosParaTimbre.contains(id)) continue;
         _vistosParaTimbre.add(id);
 
+        // Timbre en cuanto entra al pool (aunque el precio llegue un instante después).
         await NotificationService.I.playPoolOfferSoundInApp();
-        await NotificationService.I.notifyNuevoViaje(
-          viajeId: id,
-          titulo: 'Nuevo viaje disponible',
-          cuerpo:
-              '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
-          skipSound: true,
-        );
+        if (_viajeTienePrecioReal(data)) {
+          await NotificationService.I.notifyNuevoViaje(
+            viajeId: id,
+            titulo: 'Nuevo viaje disponible',
+            cuerpo:
+                '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+            skipSound: true,
+          );
+        }
       }
     });
 
@@ -373,7 +441,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           }
           if (!_disponibleParaMi(data, myUid)) continue;
           if (_esAhoraDesdeData(data)) continue;
-          if (!_viajeTienePrecioReal(data)) continue;
           _vistosParaTimbre.add(d.id);
         }
         return;
@@ -386,20 +453,21 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         }
         if (!_disponibleParaMi(data, myUid)) continue;
         if (_esAhoraDesdeData(data)) continue;
-        if (!_viajeTienePrecioReal(data)) continue;
 
         final id = d.id;
         if (_vistosParaTimbre.contains(id)) continue;
         _vistosParaTimbre.add(id);
 
         await NotificationService.I.playPoolOfferSoundInApp();
-        await NotificationService.I.notifyNuevoViaje(
-          viajeId: id,
-          titulo: 'Viaje programado disponible',
-          cuerpo:
-              '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
-          skipSound: true,
-        );
+        if (_viajeTienePrecioReal(data)) {
+          await NotificationService.I.notifyNuevoViaje(
+            viajeId: id,
+            titulo: 'Viaje programado disponible',
+            cuerpo:
+                '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+            skipSound: true,
+          );
+        }
       }
     });
   }
@@ -465,7 +533,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     return ViajePoolTaxistaGate.viajeTomableEnPool(data, myUid);
   }
 
-  /// Pool “real”: ya hay tarifa (>0). Evita timbre en borradores; si el precio llega después, sí suena.
+  /// Pool “real”: ya hay tarifa (>0). Usado para la notificación en bandeja; el timbre in-app suena antes si hace falta.
   bool _viajeTienePrecioReal(Map<String, dynamic> data) {
     final dynamic pc = data['precio_cents'];
     if (pc is int && pc > 0) return true;
@@ -1169,7 +1237,11 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       stream: stream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingProfessional();
+          return const _PoolEntradaLoading(
+            titulo: 'Conectando al pool',
+            subtitulo:
+                'Las ofertas se actualizan al instante y se ordenan por cercanía a tu posición.',
+          );
         }
         if (snapshot.hasError) {
           final errorMsg = snapshot.error.toString().toLowerCase();
@@ -1187,8 +1259,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               });
               _arrancarTimbres();
             });
-            return const LoadingProfessional(
-              mensajePersonalizado: "Preparando viajes disponibles",
+            return const _PoolEntradaLoading(
+              titulo: 'Preparando el pool',
+              subtitulo:
+                  'Estamos enlazando con el servidor. Los viajes más cercanos aparecerán primero.',
             );
           }
           // Evita falso "sin internet" cuando hay datos pero falló la query principal.
@@ -1206,8 +1280,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               });
               _arrancarTimbres();
             });
-            return const LoadingProfessional(
-              mensajePersonalizado: "Reconectando viajes disponibles",
+            return const _PoolEntradaLoading(
+              titulo: 'Reconectando al pool',
+              subtitulo: 'Sincronización en curso. No cierres la pantalla.',
             );
           }
           return EmptyTripsWidget(esTabAhora: esTabAhora);
@@ -1245,7 +1320,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
           final bool tieneCoordsCliente =
               v.latCliente.abs() > 0.000001 || v.lonCliente.abs() > 0.000001;
-          final double distancia = tieneCoordsCliente
+          final double? distanciaKmPickup = tieneCoordsCliente
               ? Geolocator.distanceBetween(
                     latTaxista,
                     lonTaxista,
@@ -1253,12 +1328,12 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                     v.lonCliente,
                   ) /
                   1000
-              : 0.0;
+              : null;
 
           // Producción: no bloquear visibilidad por distancia.
           // La distancia se muestra como dato informativo para decidir.
 
-          items.add(_Item(v, fecha, acceptAfter, esAhoraDoc, distancia));
+          items.add(_Item(v, fecha, acceptAfter, esAhoraDoc, distanciaKmPickup));
         }
 
         if (items.isEmpty) {
@@ -1270,7 +1345,19 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         }
         _diag('items ready tab=${esTabAhora ? "ahora" : "prog"} count=${items.length}');
 
-        items.sort((a, b) => a.distancia.compareTo(b.distancia));
+        items.sort((a, b) {
+          final ad = a.distanciaKmPickup;
+          final bd = b.distanciaKmPickup;
+          if (ad != null && bd != null) {
+            final c = ad.compareTo(bd);
+            if (c != 0) return c;
+          } else if (ad != null && bd == null) {
+            return -1;
+          } else if (ad == null && bd != null) {
+            return 1;
+          }
+          return a.fecha.compareTo(b.fecha);
+        });
 
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
@@ -1282,7 +1369,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             final fecha = it.fecha;
             final acceptAfter = it.acceptAfter;
             final esAhora = it.esAhora;
-            final distancia = it.distancia;
+            final distanciaKmPickup = it.distanciaKmPickup;
             final aceptando = _aceptandoIds.contains(v.id);
 
             final bool puedeAceptar = esAhora || !DateTime.now().isBefore(acceptAfter);
@@ -1423,7 +1510,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                       children: [
                         _chipInfo(
                           Icons.near_me,
-                          'A ${distancia.toStringAsFixed(1)} km',
+                          distanciaKmPickup != null
+                              ? 'A ${distanciaKmPickup.toStringAsFixed(1)} km'
+                              : 'Cercanía: sin ubicación de recogida',
                         ),
                         _chipInfo(
                           Icons.straighten,

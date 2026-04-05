@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../modelo/pago_taxista.dart';
+import 'pool_repo.dart';
 
 class PagosTaxistaRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -14,6 +15,22 @@ class PagosTaxistaRepo {
     'pendiente_verificacion',
     'rechazado',
   ];
+
+  /// Cierra o reabre `viajes_pool` del taxista según la bandera (misma regla que [TaxistaEntry]).
+  static Future<void> _syncPoolsTrasBandera(
+    String uidTaxista,
+    bool tienePagoPendiente,
+  ) async {
+    if (uidTaxista.trim().isEmpty) return;
+    try {
+      await PoolRepo.syncPoolsPorPagoSemanal(
+        ownerTaxistaId: uidTaxista,
+        tienePagoPendiente: tienePagoPendiente,
+      );
+    } catch (e) {
+      debugPrint('[PagosTaxistaRepo] syncPoolsTrasBandera: $e');
+    }
+  }
 
   static Future<void> _sincronizarBanderaPendiente(String uidTaxista) async {
     // Evita depender de índices compuestos en una ruta crítica de verificación.
@@ -31,6 +48,7 @@ class PagosTaxistaRepo {
       },
       SetOptions(merge: true),
     );
+    await _syncPoolsTrasBandera(uidTaxista, tieneAbiertos);
   }
 
   // ==============================================================
@@ -93,10 +111,10 @@ class PagosTaxistaRepo {
         viajesSemana: viajesSemana,
       );
 
-      await _db.runTransaction((tx) async {
+      final bool insertado = await _db.runTransaction<bool>((tx) async {
         final pagoSnap = await tx.get(pagoRef);
         if (pagoSnap.exists) {
-          return; // idempotencia fuerte: ya creado para ese taxista+semana
+          return false;
         }
         tx.set(pagoRef, {
           ...pago.toMap(),
@@ -108,7 +126,11 @@ class PagosTaxistaRepo {
           'semanaPendiente': semanaStr,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
+        return true;
       });
+      if (insertado) {
+        await _syncPoolsTrasBandera(uidTaxista, true);
+      }
 
     } catch (e) {
       debugPrint('Error generando pago semanal: $e');

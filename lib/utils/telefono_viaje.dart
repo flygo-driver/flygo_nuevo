@@ -11,6 +11,31 @@ String telefonoNormalizarDigitos(String raw) {
   return onlyDigits;
 }
 
+/// Primer valor no vacío entre claves habituales en `usuarios` / viajes (evita botones inactivos si el campo no se llama `telefono`).
+String telefonoCrudoDesdeMapa(Map<String, dynamic> m) {
+  const List<String> keys = <String>[
+    'telefonoTaxista',
+    'telefono',
+    'phone',
+    'phoneNumber',
+    'celular',
+    'movil',
+    'telefonoMovil',
+    'whatsapp',
+    'whatsappNumber',
+    'numeroTelefono',
+    'telefonoContacto',
+    'mobile',
+  ];
+  for (final String k in keys) {
+    final Object? v = m[k];
+    if (v == null) continue;
+    final String s = v.toString().trim();
+    if (s.isNotEmpty) return s;
+  }
+  return '';
+}
+
 /// Misma forma en toda la app: `tel:+<digitos>`.
 Uri telefonoUriLlamada(String digitosNormalizados) =>
     Uri.parse('tel:+$digitosNormalizados');

@@ -39,6 +39,32 @@ class ResultadoPrepClaimPoolTurismo {
 class AsignacionTurismoRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  /// Alinea `subtipoTurismo` / `tipoVehiculo` del documento con `vehiculos[].tipo` en `choferes_turismo`.
+  static String normalizarCodigoTipoTurismo(String? subtipo, String? tipoVehiculoDoc) {
+    String from(String raw) {
+      final t = raw.trim().toLowerCase();
+      if (t.isEmpty) return '';
+      if (t.contains('jeepeta')) return 'jeepeta';
+      if (t.contains('minivan') || t.contains('minib')) return 'minivan';
+      if (t.contains('bus') ||
+          t.contains('guagua') ||
+          t.contains('autobús') ||
+          t.contains('autobus')) {
+        return 'bus';
+      }
+      if (t.contains('carro')) return 'carro';
+      if (t == 'carro' || t == 'jeepeta' || t == 'minivan' || t == 'bus') return t;
+      if (t == 'viaje_multi' || t == 'ciudad' || t == 'interior') return 'carro';
+      return '';
+    }
+
+    final String a = from(subtipo ?? '');
+    if (a.isNotEmpty) return a;
+    final String b = from(tipoVehiculoDoc ?? '');
+    if (b.isNotEmpty) return b;
+    return 'carro';
+  }
+
   // ==============================================================
   //                   ASIGNAR CHOFER A VIAJE
   // ==============================================================
@@ -47,9 +73,12 @@ class AsignacionTurismoRepo {
     required String uidChofer,
     required String nombreChofer,
     required String telefonoChofer,
-    required String tipoVehiculo,
     required String placa,
+    required String subtipoTurismoCodigo,
     String? notaAdmin,
+    String marca = '',
+    String modelo = '',
+    String color = '',
   }) async {
     final vRef = _db.collection('viajes').doc(viajeId);
     final cRef = _db.collection('choferes_turismo').doc(uidChofer);
@@ -60,9 +89,12 @@ class AsignacionTurismoRepo {
         if (!vSnap.exists) throw 'viaje-no-existe';
 
         final vData = vSnap.data()!;
-        final String estado = vData['estado']?.toString() ?? '';
-        
-        if (estado != 'pendiente_admin' && estado != 'pendiente') {
+        final String estadoRaw = vData['estado']?.toString() ?? '';
+        final String estadoNorm = EstadosViaje.normalizar(estadoRaw);
+        final bool estadoOk = estadoRaw == 'pendiente_admin' ||
+            estadoNorm == EstadosViaje.pendiente ||
+            estadoNorm == EstadosViaje.pendientePago;
+        if (!estadoOk) {
           throw 'estado-invalido';
         }
 
@@ -77,30 +109,38 @@ class AsignacionTurismoRepo {
         if (cData['estado'] != 'aprobado') throw 'chofer-no-aprobado';
         if (cData['disponible'] != true) throw 'chofer-no-disponible';
 
-        // Actualizar viaje
-        tx.update(vRef, {
+        final Map<String, dynamic> updViaje = {
           'uidTaxista': uidChofer,
           'taxistaId': uidChofer,
           'nombreTaxista': nombreChofer,
           'telefono': telefonoChofer,
           'telefonoTaxista': telefonoChofer,
           'placa': placa,
-          'tipoVehiculo': tipoVehiculo,
-          'estado': 'aceptado',
+          'tipoVehiculo': '🏝️ TURISMO 🏝️',
+          'tipoVehiculoOriginal': subtipoTurismoCodigo,
+          'estado': EstadosViaje.aceptado,
           'aceptado': true,
+          'rechazado': false,
           'activo': true,
           'aceptadoEn': FieldValue.serverTimestamp(),
           'asignadoPor': FirebaseAuth.instance.currentUser?.uid,
           'asignadoEn': FieldValue.serverTimestamp(),
           if (notaAdmin != null && notaAdmin.isNotEmpty) 'notaAdminAsignacion': notaAdmin,
           'updatedAt': FieldValue.serverTimestamp(),
-        });
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        };
+        if (marca.isNotEmpty) updViaje['marca'] = marca;
+        if (modelo.isNotEmpty) updViaje['modelo'] = modelo;
+        if (color.isNotEmpty) updViaje['color'] = color;
+
+        tx.update(vRef, updViaje);
 
         // Marcar chofer como no disponible
         tx.update(cRef, {
           'disponible': false,
           'viajeActualId': viajeId,
           'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
         });
 
         // Actualizar usuario del chofer
@@ -108,6 +148,7 @@ class AsignacionTurismoRepo {
         tx.set(uRef, {
           'viajeActivoId': viajeId,
           'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 
         // Actualizar usuario del cliente
@@ -117,6 +158,7 @@ class AsignacionTurismoRepo {
           tx.set(clienteRef, {
             'viajeActivoId': viajeId,
             'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
       });

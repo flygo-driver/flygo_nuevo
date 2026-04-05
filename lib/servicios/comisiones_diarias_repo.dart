@@ -49,9 +49,9 @@ class ComisionesDiariasRepo {
   }
 
   // ==============================================================
-  // COMISIÓN BASE: 20% PARA TODOS LOS SERVICIOS
+  // COMISIÓN BASE: 20% plataforma (RAI) — alineado con asientos en `pagos` y `ViajesRepo`.
   // ==============================================================
-  static const double _COMISION_BASE = 0.20; // 20% para todos
+  static const double _COMISION_BASE = 0.20;
 
   // ==============================================================
   // CALCULAR COMISIÓN (con posibilidad de ajuste individual)

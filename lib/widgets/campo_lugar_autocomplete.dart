@@ -1,8 +1,18 @@
 // lib/widgets/campo_lugar_autocomplete.dart
 import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../servicios/lugares_service.dart';
+
+/// Entrada persistida: con `placeId` el toque dispara el mismo flujo que elegir de la lista (precio, ruta).
+class _RecienteEntry {
+  const _RecienteEntry({required this.label, required this.placeId});
+
+  final String label;
+  final String placeId;
+}
 
 class CampoLugarAutocomplete extends StatefulWidget {
   final String label;
@@ -16,6 +26,9 @@ class CampoLugarAutocomplete extends StatefulWidget {
   final int minChars;
   final bool showQuickSuggestions; // NUEVO: mostrar sugerencias rápidas
   final bool showCategories; // NUEVO: mostrar categorías
+  /// Si se define, el campo usa estos colores (p. ej. teal/azul alineado al paso origen/destino).
+  final Color? fieldAccent;
+  final Color? fieldFill;
 
   const CampoLugarAutocomplete({
     super.key,
@@ -30,6 +43,8 @@ class CampoLugarAutocomplete extends StatefulWidget {
     this.minChars = 1,
     this.showQuickSuggestions = true, // Activado por defecto
     this.showCategories = true, // Activado por defecto
+    this.fieldAccent,
+    this.fieldFill,
   });
 
   @override
@@ -54,17 +69,35 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   // el estado actual cuando el usuario escribe rápido.
   int _autocompleteSeq = 0;
 
-  // NUEVO: lugares recientes
-  List<String> _recientes = [];
-  static const int _maxRecientes = 5;
+  /// Evita que al asignar [_controller.text] con un lugar ya resuelto se dispare
+  /// [onTextChanged] en el padre (p. ej. programar_viaje borraba lat/_destinoDet y la cotización no corría).
+  bool _applyingResolvedPlace = false;
+
+  // Lugares recientes (label + placeId para re-selección fiable).
+  List<_RecienteEntry> _recientes = [];
+  static const int _maxRecientes = 4;
+  static const String _prefsRecientesV2 = 'lugares_recientes_v2';
+  static const String _prefsRecientesLegacy = 'lugares_recientes';
 
   // NUEVO: lugares populares de RD
   final List<Map<String, dynamic>> _lugaresPopulares = [
-    {'nombre': 'Santo Domingo', 'icon': Icons.location_city, 'color': Colors.blue},
+    {
+      'nombre': 'Santo Domingo',
+      'icon': Icons.location_city,
+      'color': Colors.blue
+    },
     {'nombre': 'Santiago', 'icon': Icons.location_city, 'color': Colors.indigo},
     {'nombre': 'Punta Cana', 'icon': Icons.beach_access, 'color': Colors.amber},
-    {'nombre': 'Puerto Plata', 'icon': Icons.beach_access, 'color': Colors.orange},
-    {'nombre': 'La Romana', 'icon': Icons.location_city, 'color': Colors.purple},
+    {
+      'nombre': 'Puerto Plata',
+      'icon': Icons.beach_access,
+      'color': Colors.orange
+    },
+    {
+      'nombre': 'La Romana',
+      'icon': Icons.location_city,
+      'color': Colors.purple
+    },
     {'nombre': 'Bávaro', 'icon': Icons.beach_access, 'color': Colors.teal},
     {'nombre': 'Jarabacoa', 'icon': Icons.terrain, 'color': Colors.green},
     {'nombre': 'Constanza', 'icon': Icons.terrain, 'color': Colors.lightGreen},
@@ -72,14 +105,54 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
 
   // NUEVO: categorías de búsqueda
   final List<Map<String, dynamic>> _categorias = [
-    {'nombre': 'Restaurantes', 'tipo': 'restaurant', 'icon': Icons.restaurant, 'color': Colors.red},
-    {'nombre': 'Hoteles', 'tipo': 'lodging', 'icon': Icons.hotel, 'color': Colors.purple},
-    {'nombre': 'Aeropuerto', 'tipo': 'airport', 'icon': Icons.local_airport, 'color': Colors.blue},
-    {'nombre': 'Hospital', 'tipo': 'hospital', 'icon': Icons.local_hospital, 'color': Colors.redAccent},
-    {'nombre': 'Supermercado', 'tipo': 'supermarket', 'icon': Icons.shopping_cart, 'color': Colors.green},
-    {'nombre': 'Farmacia', 'tipo': 'pharmacy', 'icon': Icons.local_pharmacy, 'color': Colors.cyan},
-    {'nombre': 'Gasolinera', 'tipo': 'gas_station', 'icon': Icons.local_gas_station, 'color': Colors.orange},
-    {'nombre': 'Banco', 'tipo': 'bank', 'icon': Icons.account_balance, 'color': Colors.brown},
+    {
+      'nombre': 'Restaurantes',
+      'tipo': 'restaurant',
+      'icon': Icons.restaurant,
+      'color': Colors.red
+    },
+    {
+      'nombre': 'Hoteles',
+      'tipo': 'lodging',
+      'icon': Icons.hotel,
+      'color': Colors.purple
+    },
+    {
+      'nombre': 'Aeropuerto',
+      'tipo': 'airport',
+      'icon': Icons.local_airport,
+      'color': Colors.blue
+    },
+    {
+      'nombre': 'Hospital',
+      'tipo': 'hospital',
+      'icon': Icons.local_hospital,
+      'color': Colors.redAccent
+    },
+    {
+      'nombre': 'Supermercado',
+      'tipo': 'supermarket',
+      'icon': Icons.shopping_cart,
+      'color': Colors.green
+    },
+    {
+      'nombre': 'Farmacia',
+      'tipo': 'pharmacy',
+      'icon': Icons.local_pharmacy,
+      'color': Colors.cyan
+    },
+    {
+      'nombre': 'Gasolinera',
+      'tipo': 'gas_station',
+      'icon': Icons.local_gas_station,
+      'color': Colors.orange
+    },
+    {
+      'nombre': 'Banco',
+      'tipo': 'bank',
+      'icon': Icons.account_balance,
+      'color': Colors.brown
+    },
   ];
 
   @override
@@ -107,32 +180,62 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     if (_entry != null) _refreshOverlay();
   }
 
-  // NUEVO: cargar lugares recientes
   Future<void> _cargarRecientes() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _recientes = prefs.getStringList('lugares_recientes') ?? [];
-    });
+    final rawV2 = prefs.getString(_prefsRecientesV2);
+    List<_RecienteEntry> list = [];
+    if (rawV2 != null && rawV2.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawV2);
+        if (decoded is List) {
+          for (final e in decoded) {
+            if (e is! Map) continue;
+            final m = Map<String, dynamic>.from(e);
+            final l = (m['l'] ?? m['label'] ?? '').toString().trim();
+            if (l.isEmpty) continue;
+            final p = (m['p'] ?? m['placeId'] ?? '').toString().trim();
+            list.add(_RecienteEntry(label: l, placeId: p));
+          }
+        }
+      } catch (_) {}
+    }
+    if (list.isEmpty) {
+      final legacy = prefs.getStringList(_prefsRecientesLegacy) ?? [];
+      for (final l in legacy) {
+        final t = l.trim();
+        if (t.isNotEmpty) list.add(_RecienteEntry(label: t, placeId: ''));
+      }
+    }
+    if (list.length > _maxRecientes) {
+      list = list.sublist(0, _maxRecientes);
+    }
+    if (!mounted) return;
+    setState(() => _recientes = list);
   }
 
-  // NUEVO: guardar lugar reciente
-  Future<void> _guardarReciente(String lugar) async {
+  Future<void> _guardarReciente(DetalleLugar det) async {
     final prefs = await SharedPreferences.getInstance();
-    var recientes = List<String>.from(_recientes);
-    
-    // Eliminar si ya existe
-    recientes.remove(lugar);
-    // Agregar al inicio
-    recientes.insert(0, lugar);
-    // Limitar tamaño
-    if (recientes.length > _maxRecientes) {
-      recientes = recientes.sublist(0, _maxRecientes);
-    }
-    
-    await prefs.setStringList('lugares_recientes', recientes);
-    setState(() {
-      _recientes = recientes;
+    var list = List<_RecienteEntry>.from(_recientes);
+
+    list.removeWhere((e) {
+      if (det.placeId.isNotEmpty && e.placeId == det.placeId) return true;
+      return _norm(e.label) == _norm(det.displayLabel);
     });
+    list.insert(
+      0,
+      _RecienteEntry(label: det.displayLabel, placeId: det.placeId),
+    );
+    if (list.length > _maxRecientes) {
+      list = list.sublist(0, _maxRecientes);
+    }
+
+    final encoded = jsonEncode(
+      list.map((e) => {'l': e.label, 'p': e.placeId}).toList(),
+    );
+    await prefs.setString(_prefsRecientesV2, encoded);
+    await prefs.remove(_prefsRecientesLegacy);
+    if (!mounted) return;
+    setState(() => _recientes = list);
   }
 
   @override
@@ -195,9 +298,11 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
           spaceAbove = topLeft.dy - mq.padding.top - 8;
         }
         const minComfort = 168.0;
-        final openUpward =
-            spaceBelow < minComfort && spaceAbove >= 120 && spaceAbove >= spaceBelow - 40;
-        final maxListH = (openUpward ? spaceAbove : spaceBelow).clamp(140.0, 340.0);
+        final openUpward = spaceBelow < minComfort &&
+            spaceAbove >= 120 &&
+            spaceAbove >= spaceBelow - 40;
+        final maxListH =
+            (openUpward ? spaceAbove : spaceBelow).clamp(140.0, 340.0);
 
         return Stack(
           clipBehavior: Clip.none,
@@ -211,7 +316,6 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                 },
               ),
             ),
-
             CompositedTransformFollower(
               link: _layerLink,
               showWhenUnlinked: false,
@@ -340,6 +444,18 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   }
 
   void _onChanged(String text) {
+    if (_applyingResolvedPlace) {
+      _debounce?.cancel();
+      _removeOverlay();
+      if (mounted) {
+        setState(() {
+          _sugs = const [];
+          _loading = false;
+        });
+      }
+      return;
+    }
+
     widget.onTextChanged?.call(text);
 
     _debounce?.cancel();
@@ -383,6 +499,22 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     });
   }
 
+  Future<void> _finalizePlaceSelection(DetalleLugar det) async {
+    _debounce?.cancel();
+    _autocompleteSeq++;
+    _applyingResolvedPlace = true;
+    try {
+      _controller.text = det.displayLabel;
+      // Antes de prefs async: el padre fija coords y programa cotización sin ventana intermedia.
+      widget.onPlaceSelected(det);
+      await _guardarReciente(det);
+    } finally {
+      _applyingResolvedPlace = false;
+    }
+    _focus.unfocus();
+    _clearSugsAndOverlay();
+  }
+
   Future<void> _selectPrediction(PrediccionLugar p) async {
     if (mounted) setState(() => _loading = true);
     _removeOverlay();
@@ -393,15 +525,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     setState(() => _loading = false);
 
     if (det != null) {
-      _controller.text = det.displayLabel;
-      widget.onTextChanged?.call(det.displayLabel);
-      
-      // Guardar en recientes
-      await _guardarReciente(det.displayLabel);
-      
-      widget.onPlaceSelected(det);
-      _focus.unfocus();
-      _clearSugsAndOverlay();
+      await _finalizePlaceSelection(det);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -411,20 +535,65 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     }
   }
 
+  /// Toca un chip reciente: prioriza `detalle(placeId)` para disparar igual que una sugerencia.
+  Future<void> _seleccionarReciente(_RecienteEntry entry) async {
+    if (entry.placeId.isNotEmpty) {
+      if (mounted) setState(() => _loading = true);
+      _removeOverlay();
+      final det = await _svc.detalle(entry.placeId);
+      if (!mounted) return;
+      setState(() => _loading = false);
+      if (det != null) {
+        await _finalizePlaceSelection(det);
+        return;
+      }
+    }
+    await _seleccionarPopular(entry.label);
+  }
+
   // NUEVO: seleccionar lugar popular
   Future<void> _seleccionarPopular(String lugar) async {
-    _controller.text = lugar;
-    widget.onTextChanged?.call(lugar);
-    
-    final sugs = await _svc.autocompletar(
+    _debounce?.cancel();
+    _autocompleteSeq++;
+    _applyingResolvedPlace = true;
+    try {
+      _controller.text = lugar;
+    } finally {
+      _applyingResolvedPlace = false;
+    }
+
+    List<PrediccionLugar> sugs = await _svc.autocompletar(
       lugar,
       biasLat: widget.biasLat,
       biasLon: widget.biasLon,
       country: widget.country ?? 'DO',
     );
-    
-    if (sugs.isNotEmpty && mounted) {
-      await _selectPrediction(sugs.first);
+
+    if (sugs.isEmpty && lugar.contains(',')) {
+      final shorter = lugar.split(',').first.trim();
+      if (shorter.length >= widget.minChars) {
+        sugs = await _svc.autocompletar(
+          shorter,
+          biasLat: widget.biasLat,
+          biasLon: widget.biasLon,
+          country: widget.country ?? 'DO',
+        );
+      }
+    }
+
+    if (!mounted) return;
+    if (sugs.isNotEmpty) {
+      final ranked = _rankPredictions(sugs, lugar);
+      await _selectPrediction(ranked.first);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No encontramos ese lugar. Escribí de nuevo o elegí de la lista.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -432,7 +601,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   Future<void> _seleccionarCategoria(String tipo, String nombre) async {
     _controller.text = nombre;
     widget.onTextChanged?.call(nombre);
-    
+
     // Buscar lugares de esa categoría cerca
     if (widget.biasLat != null && widget.biasLon != null) {
       // Aquí podrías implementar búsqueda por categoría
@@ -443,7 +612,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
         biasLon: widget.biasLon,
         country: widget.country ?? 'DO',
       );
-      
+
       if (sugs.isNotEmpty && mounted) {
         await _selectPrediction(sugs.first);
       }
@@ -455,18 +624,20 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final accent = isDark ? Colors.greenAccent : const Color(0xFF7C3AED);
+    final accent = widget.fieldAccent ??
+        (isDark ? Colors.greenAccent : const Color(0xFF7C3AED));
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.circular(14),
-      borderSide: BorderSide(color: accent.withValues(alpha: isDark ? 0.9 : 0.55)),
+      borderSide:
+          BorderSide(color: accent.withValues(alpha: isDark ? 0.9 : 0.55)),
     );
     final textColor = isDark ? Colors.white : scheme.onSurface;
     final labelColor =
         isDark ? Colors.white70 : scheme.onSurface.withValues(alpha: 0.72);
     final hintColor =
         isDark ? Colors.white38 : scheme.onSurface.withValues(alpha: 0.45);
-    final fillColor =
-        isDark ? Colors.grey[900]! : const Color(0xFFF5F3FF);
+    final fillColor = widget.fieldFill ??
+        (isDark ? Colors.grey[900]! : const Color(0xFFF5F3FF));
 
     final kbInset = MediaQuery.of(context).viewInsets.bottom;
 
@@ -533,19 +704,15 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
               },
             ),
           ),
-
           const SizedBox(height: 8),
-
           if (widget.showQuickSuggestions &&
               _controller.text.isEmpty &&
               _focus.hasFocus)
             _buildQuickSuggestions(),
-
           if (widget.showCategories &&
               _controller.text.isEmpty &&
               _focus.hasFocus)
             _buildCategoriesSection(),
-
           if (_recientes.isNotEmpty &&
               _controller.text.isEmpty &&
               _focus.hasFocus)
@@ -558,8 +725,9 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   // NUEVO: sugerencias rápidas (lugares populares)
   Widget _buildQuickSuggestions() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final headerColor =
-        isDark ? Colors.white70 : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
+    final headerColor = isDark
+        ? Colors.white70
+        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
     return Container(
       margin: const EdgeInsets.only(top: 8),
       child: Column(
@@ -583,7 +751,8 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
               return InkWell(
                 onTap: () => _seleccionarPopular(lugar['nombre']),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
                     color: (lugar['color'] as Color).withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(20),
@@ -617,8 +786,9 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   // NUEVO: categorías de búsqueda
   Widget _buildCategoriesSection() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final headerColor =
-        isDark ? Colors.white70 : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
+    final headerColor = isDark
+        ? Colors.white70
+        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
     return Container(
       margin: const EdgeInsets.only(top: 8),
       child: Column(
@@ -646,7 +816,8 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                   width: 80,
                   margin: const EdgeInsets.only(right: 8),
                   child: InkWell(
-                    onTap: () => _seleccionarCategoria(cat['tipo'], cat['nombre']),
+                    onTap: () =>
+                        _seleccionarCategoria(cat['tipo'], cat['nombre']),
                     child: Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
@@ -691,8 +862,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     final scheme = theme.colorScheme;
     final headerColor =
         isDark ? Colors.white70 : scheme.onSurface.withValues(alpha: 0.65);
-    final chipBg =
-        isDark ? Colors.grey[800]! : scheme.surfaceContainerHighest;
+    final chipBg = isDark ? Colors.grey[800]! : scheme.surfaceContainerHighest;
     final chipBorder =
         isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.28);
     final chipText =
@@ -701,12 +871,13 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
         isDark ? Colors.white54 : scheme.onSurface.withValues(alpha: 0.5);
 
     return Container(
-      margin: const EdgeInsets.only(top: 8),
+      margin: const EdgeInsets.only(top: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(vertical: 2),
             child: Text(
               'Recientes',
               style: TextStyle(
@@ -716,36 +887,52 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
               ),
             ),
           ),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _recientes.map((lugar) {
-              return InkWell(
-                onTap: () => _seleccionarPopular(lugar),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: chipBg,
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 76),
+            child: SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _recientes.map((entry) {
+                  final lugar = entry.label;
+                  return InkWell(
+                    onTap: () => _seleccionarReciente(entry),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: chipBorder),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.history, color: iconColor, size: 14),
-                      const SizedBox(width: 6),
-                      Text(
-                        lugar.length > 20 ? '${lugar.substring(0, 18)}...' : lugar,
-                        style: TextStyle(
-                          color: chipText,
-                          fontSize: 13,
-                        ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: chipBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: chipBorder),
                       ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.history, color: iconColor, size: 13),
+                          const SizedBox(width: 5),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 160),
+                            child: Text(
+                              lugar.length > 28
+                                  ? '${lugar.substring(0, 26)}…'
+                                  : lugar,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: chipText,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
           ),
         ],
       ),

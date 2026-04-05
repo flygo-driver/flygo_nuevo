@@ -32,6 +32,10 @@ class ViajesRepo {
   static CollectionReference<Map<String, dynamic>> get _pagosCol => _db.collection('pagos');
   static const int _cancelWindowAfterAcceptMinutes = 3;
 
+  /// Comisión nominal plataforma (RAI), alineada con `ComisionesDiariasRepo` y partidas en `viajes`.
+  /// Los importes reales siempre salen de `comision_cents` / `precio_cents` por viaje.
+  static const int comisionPlataformaPorcentoNominal = 20;
+
   static int _toCents(num v) => (v * 100).round();
   static double _fromCents(int c) => c / 100.0;
   static int _comision20Cents(int precioCents) => ((precioCents * 20) + 50) ~/ 100;
@@ -1142,6 +1146,10 @@ class ViajesRepo {
     await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
   }
 
+  /// Cierra el viaje y, si aún no estaba registrado el pago:
+  /// - Escribe partidas en el doc `viajes` (`comision_cents`, `settlement.*`, `pagoDetalle`).
+  /// - Efectivo: incrementa `billeteras_taxista.comisionPendiente` (deuda del conductor con RAI).
+  /// - Asiento único en `pagos/viaje_{id}_asiento` para administración (mismos centavos que el viaje).
   static Future<void> completarViajePorTaxista({
     required String viajeId,
     required String uidTaxista,
@@ -1232,6 +1240,11 @@ class ViajesRepo {
             'viajeId': viajeId,
             'uidTaxista': uidTaxista,
             'monto': esEfectivo ? -_fromCents(comisionCents) : _fromCents(gananciaCents),
+            'totalCents': precioCents,
+            'comisionCents': comisionCents,
+            'gananciaCents': gananciaCents,
+            'comisionPlataformaPct': comisionPlataformaPorcentoNominal,
+            'fuenteAsiento': 'completar_viaje_taxista',
             'metodo': metodoAsiento,
             'estado': esEfectivo ? 'comision_pendiente' : 'por_liquidar',
             'fecha': DateTime.now().toIso8601String(),

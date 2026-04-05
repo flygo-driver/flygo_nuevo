@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/auth/login_cliente.dart';
 import 'package:flygo_nuevo/auth/login_taxista.dart';
-import 'package:flygo_nuevo/pantallas/comun/legales.dart';
+import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 
 class SeleccionUsuario extends StatelessWidget {
   const SeleccionUsuario({super.key});
@@ -97,9 +97,9 @@ class SeleccionUsuario extends StatelessWidget {
                       ),
                     ),
 
-                    // ---------- Abajo: botones ----------
+                    // ---------- Abajo: botones + pie legal discreto ----------
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
                       child: Column(
                         children: [
                           _BigButton(
@@ -127,54 +127,8 @@ class SeleccionUsuario extends StatelessWidget {
                               );
                             },
                           ),
-                          const SizedBox(height: 10),
-
-                          // Legales
-                          Text.rich(
-                            TextSpan(
-                              style: const TextStyle(
-                                color: Color.fromARGB(180, 255, 255, 255),
-                                fontSize: 12.5,
-                                height: 1.25,
-                              ),
-                              children: [
-                                const TextSpan(text: 'Al continuar aceptas nuestras '),
-                                TextSpan(
-                                  text: 'Condiciones',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    decoration: TextDecoration.underline,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  recognizer: TapGestureRecognizer()
-                                    ..onTap = () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (_) => const TerminosCondicionesPage()),
-                                      );
-                                    },
-                                ),
-                                const TextSpan(text: ' y '),
-                                TextSpan(
-                                  text: 'Política de privacidad',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    decoration: TextDecoration.underline,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  recognizer: TapGestureRecognizer()
-                                    ..onTap = () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (_) => const PoliticaPrivacidadPage()),
-                                      );
-                                    },
-                                ),
-                                const TextSpan(text: '.'),
-                              ],
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
+                          const SizedBox(height: 18),
+                          const _UberStyleLegalFooter(),
                         ],
                       ),
                     ),
@@ -185,6 +139,86 @@ class SeleccionUsuario extends StatelessWidget {
           },
         ),
       ),
+    );
+  }
+}
+
+/// Pie legal discreto (estilo apps tipo Uber); enlaces con gestos bien dispuestos.
+class _UberStyleLegalFooter extends StatefulWidget {
+  const _UberStyleLegalFooter();
+
+  @override
+  State<_UberStyleLegalFooter> createState() => _UberStyleLegalFooterState();
+}
+
+class _UberStyleLegalFooterState extends State<_UberStyleLegalFooter> {
+  late final TapGestureRecognizer _tapCondiciones;
+  late final TapGestureRecognizer _tapPrivacidad;
+
+  void _abrirPoliticasLargas() {
+    if (!mounted) return;
+    final nav = Navigator.of(context);
+    nav.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TermsPolicyScreen(
+          requireAcceptance: true,
+          onAccepted: () => nav.pop(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _tapCondiciones = TapGestureRecognizer()..onTap = _abrirPoliticasLargas;
+    _tapPrivacidad = TapGestureRecognizer()..onTap = _abrirPoliticasLargas;
+  }
+
+  @override
+  void dispose() {
+    _tapCondiciones.dispose();
+    _tapPrivacidad.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text.rich(
+      TextSpan(
+        style: TextStyle(
+          color: Colors.white.withValues(alpha: 0.52),
+          fontSize: 12,
+          height: 1.45,
+          fontWeight: FontWeight.w400,
+        ),
+        children: [
+          const TextSpan(text: 'Al continuar, aceptas nuestras '),
+          TextSpan(
+            text: 'Condiciones',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.92),
+              fontWeight: FontWeight.w600,
+              decoration: TextDecoration.underline,
+              decorationColor: Colors.white.withValues(alpha: 0.35),
+            ),
+            recognizer: _tapCondiciones,
+          ),
+          const TextSpan(text: ' y la '),
+          TextSpan(
+            text: 'Política de privacidad',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.92),
+              fontWeight: FontWeight.w600,
+              decoration: TextDecoration.underline,
+              decorationColor: Colors.white.withValues(alpha: 0.35),
+            ),
+            recognizer: _tapPrivacidad,
+          ),
+          const TextSpan(text: '.'),
+        ],
+      ),
+      textAlign: TextAlign.center,
     );
   }
 }

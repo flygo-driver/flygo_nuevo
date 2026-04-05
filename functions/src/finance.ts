@@ -24,20 +24,60 @@ function roleFromUserDoc(data: AnyMap | undefined): string {
   return typeof rol === "string" ? rol : "";
 }
 
-async function syncTienePagoPendiente(uidTaxista: string): Promise<void> {
+/** Devuelve el valor final de `tienePagoPendiente` escrito en `usuarios`. */
+async function syncTienePagoPendiente(uidTaxista: string): Promise<boolean> {
   const abiertos = await db()
     .collection("pagos_taxistas")
     .where("uidTaxista", "==", uidTaxista)
     .where("estado", "in", ["pendiente", "vencido", "pendiente_verificacion", "rechazado"])
     .limit(1)
     .get();
+  const tienePagoPendiente = !abiertos.empty;
   await db().collection("usuarios").doc(uidTaxista).set(
     {
-      tienePagoPendiente: !abiertos.empty,
+      tienePagoPendiente,
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true },
   );
+  return tienePagoPendiente;
+}
+
+/** Misma lógica que `PoolRepo.syncPoolsPorPagoSemanal` en la app (cierra pools si hay deuda). */
+async function syncPoolsPorPagoSemanal(ownerTaxistaId: string, tienePagoPendiente: boolean): Promise<void> {
+  const trimmed = ownerTaxistaId.trim();
+  if (!trimmed) return;
+  const snap = await db().collection("viajes_pool").where("ownerTaxistaId", "==", trimmed).get();
+  if (snap.empty) return;
+  const chunkSize = 450;
+  for (let i = 0; i < snap.docs.length; i += chunkSize) {
+    const chunk = snap.docs.slice(i, i + chunkSize);
+    const b = db().batch();
+    for (const docSnap of chunk) {
+      const d = (docSnap.data() ?? {}) as AnyMap;
+      const estadoActual = String(d.estado ?? "abierto");
+      const canceladoPorPagoSemanal = d.canceladoPorPagoSemanal === true;
+      const estadoPrevio = String(d.estadoPrevioPorPagoSemanal ?? estadoActual);
+      if (tienePagoPendiente) {
+        if (estadoActual === "cancelado" && canceladoPorPagoSemanal) continue;
+        if (estadoActual === "cancelado" && !canceladoPorPagoSemanal) continue;
+        b.update(docSnap.ref, {
+          estado: "cancelado",
+          canceladoPorPagoSemanal: true,
+          estadoPrevioPorPagoSemanal: estadoActual,
+          canceladoPorPagoSemanalEn: FieldValue.serverTimestamp(),
+        });
+      } else if (estadoActual === "cancelado" && canceladoPorPagoSemanal) {
+        b.update(docSnap.ref, {
+          estado: estadoPrevio.length > 0 ? estadoPrevio : "abierto",
+          canceladoPorPagoSemanal: false,
+          estadoPrevioPorPagoSemanal: FieldValue.delete(),
+          canceladoPorPagoSemanalEn: FieldValue.delete(),
+        });
+      }
+    }
+    await b.commit();
+  }
 }
 
 async function getRole(uid: string): Promise<string> {
@@ -194,6 +234,11 @@ export const finalizarViajeSeguro = onCall(async (request) => {
           viajeId,
           uidTaxista,
           monto: esEfectivo ? -fromCents(comisionCents) : fromCents(gananciaCents),
+          totalCents: precioCents,
+          comisionCents,
+          gananciaCents,
+          comisionPlataformaPct: 20,
+          fuenteAsiento: "finalizar_viaje_seguro_cf",
           metodo: metodoAsiento,
           estado: esEfectivo ? "comision_pendiente" : "por_liquidar",
           fecha: new Date().toISOString(),
@@ -300,7 +345,10 @@ export const approvePayment = onCall(async (request) => {
 
   const pagoSnap = await pagoRef.get();
   const uidTaxista = String((pagoSnap.data() ?? {}).uidTaxista ?? "");
-  if (uidTaxista) await syncTienePagoPendiente(uidTaxista);
+  if (uidTaxista) {
+    const tiene = await syncTienePagoPendiente(uidTaxista);
+    await syncPoolsPorPagoSemanal(uidTaxista, tiene);
+  }
   await markIdempotencyDone(idem.ref, result);
   return result;
 });
@@ -345,7 +393,10 @@ export const rejectPayment = onCall(async (request) => {
 
   const pagoSnap = await pagoRef.get();
   const uidTaxista = String((pagoSnap.data() ?? {}).uidTaxista ?? "");
-  if (uidTaxista) await syncTienePagoPendiente(uidTaxista);
+  if (uidTaxista) {
+    const tiene = await syncTienePagoPendiente(uidTaxista);
+    await syncPoolsPorPagoSemanal(uidTaxista, tiene);
+  }
   await markIdempotencyDone(idem.ref, result);
   return result;
 });

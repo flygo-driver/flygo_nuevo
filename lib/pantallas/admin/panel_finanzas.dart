@@ -446,7 +446,7 @@ class _CardResumenGlobal extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: _metric(context, 'FlyGo (comisión)', _rd(com), _amber(context))),
+                  Expanded(child: _metric(context, 'RAI (comisión)', _rd(com), _amber(context))),
                   Expanded(child: _metric(context, 'Conductores (ganancia)', _rd(gan), _cyan(context))),
                   _badgeCnt(context, cnt),
                 ],
@@ -550,7 +550,7 @@ class _CardResumenRango extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: _metric(context, 'FlyGo (comisión)', rd(com / 100.0), _amberR(context))),
+                  Expanded(child: _metric(context, 'RAI (comisión)', rd(com / 100.0), _amberR(context))),
                   Expanded(child: _metric(context, 'Conductores (ganancia)', rd(gan / 100.0), _cyanR(context))),
                   _badgeCnt(context, cnt),
                 ],

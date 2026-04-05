@@ -294,7 +294,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                       ),
                     ),
                     Text(
-                      'Para la empresa',
+                      'Plataforma RAI',
                       style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
                     ),
                   ],

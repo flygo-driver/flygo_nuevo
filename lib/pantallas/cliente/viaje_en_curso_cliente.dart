@@ -4,6 +4,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -86,8 +88,8 @@ double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
 String _viajeDocMapUiSig(DocumentSnapshot<Map<String, dynamic>> ds) {
   if (!ds.exists) return '';
   final Map<String, dynamic> d = ds.data() ?? {};
-  String r5(Object? n) {
-    if (n is num && n.isFinite) return n.toStringAsFixed(5);
+  String r6(Object? n) {
+    if (n is num && n.isFinite) return n.toStringAsFixed(6);
     return 'x';
   }
 
@@ -99,8 +101,9 @@ String _viajeDocMapUiSig(DocumentSnapshot<Map<String, dynamic>> ds) {
   final bool completado = d['completado'] == true;
   final int wp = (d['waypoints'] is List) ? (d['waypoints'] as List).length : 0;
 
-  return '${ds.id}|$est|${r5(dLat)}|${r5(dLon)}|${r5(d['latCliente'])}|${r5(d['lonCliente'])}|'
-      '${r5(d['latDestino'])}|${r5(d['lonDestino'])}|$tid|$codigoOk|$completado|'
+  // Mayor precisión en coords para mapa en vivo (taxista / cliente).
+  return '${ds.id}|$est|${r6(dLat)}|${r6(dLon)}|${r6(d['latCliente'])}|${r6(d['lonCliente'])}|'
+      '${r6(d['latDestino'])}|${r6(d['lonDestino'])}|$tid|$codigoOk|$completado|'
       '${d['metodoPago']}|${d['precio']}|$wp';
 }
 
@@ -111,7 +114,7 @@ class ViajeEnCursoCliente extends StatefulWidget {
 }
 
 class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   GoogleMapController? _map;
   bool _myLoc = false;
 
@@ -123,11 +126,17 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   String _lastBoundsKey = '';
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeDocSub;
-  Timer? _etaDebounce;
-  double? _etaMin;
-  double? _distKm;
-  DateTime? _etaTarget;
   String _lastNotifiedState = '';
+
+  /// Publica la posición del cliente en el documento del viaje (Firestore en vivo).
+  StreamSubscription<Position>? _clienteViajePosSub;
+  String? _clienteViajePosViajeId;
+
+  /// Seguimiento automático de cámara al taxista (el usuario puede soltar con gesto en el mapa).
+  bool _seguirTaxistaCamara = true;
+  DateTime? _ultimoSeguimientoTaxistaMs;
+  double? _ultimoSeguimientoTaxLat;
+  double? _ultimoSeguimientoTaxLon;
 
   final DraggableScrollableController _sheetController = DraggableScrollableController();
 
@@ -142,6 +151,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   List<DocumentSnapshot<Map<String, dynamic>>> _driversList = [];
   String _lastDriversPoolSig = '';
   late final AnimationController _radarCtrl;
+  late final AnimationController _progresoBrilloCtrl;
 
   @override
   void initState() {
@@ -149,6 +159,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _radarCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
+    )..repeat();
+    _progresoBrilloCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
     )..repeat();
     _enableMyLocation();
     _listenPagoFinal();
@@ -161,11 +175,105 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _pagoSub?.cancel();
     _routeDebounce?.cancel();
     _disposeDocWatch();
+    _stopClienteUbicacionEnViaje();
     _sheetController.dispose();
     _mensajeCercaniaTimer?.cancel();
     _driversSub?.cancel();
     _radarCtrl.dispose();
+    _progresoBrilloCtrl.dispose();
     super.dispose();
+  }
+
+  void _stopClienteUbicacionEnViaje() {
+    _clienteViajePosSub?.cancel();
+    _clienteViajePosSub = null;
+    _clienteViajePosViajeId = null;
+  }
+
+  Future<void> _ensureClienteUbicacionEnViaje(String viajeId) async {
+    if (_clienteViajePosViajeId == viajeId && _clienteViajePosSub != null) return;
+
+    await _clienteViajePosSub?.cancel();
+    _clienteViajePosViajeId = viajeId;
+
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      return;
+    }
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      return;
+    }
+
+    final LocationSettings settings =
+        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+            ? AndroidSettings(
+                accuracy: LocationAccuracy.high,
+                distanceFilter: 8,
+                intervalDuration: const Duration(seconds: 2),
+              )
+            : const LocationSettings(
+                accuracy: LocationAccuracy.high,
+                distanceFilter: 10,
+              );
+
+    final ref = FirebaseFirestore.instance.collection('viajes').doc(viajeId);
+    _clienteViajePosSub = Geolocator.getPositionStream(locationSettings: settings).listen(
+      (Position p) async {
+        try {
+          await ref.set(
+            {
+              'latCliente': p.latitude,
+              'lonCliente': p.longitude,
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+        } catch (_) {}
+      },
+      onError: (_) {},
+    );
+  }
+
+  void _maybeAnimarCamaraAlTaxista(Viaje v, String estadoBase) {
+    if (!_seguirTaxistaCamara) return;
+    if (!_isValidCoord(v.latTaxista, v.lonTaxista)) return;
+    if (v.uidTaxista.isEmpty) return;
+    if (!(estadoBase == EstadosViaje.aceptado || estadoBase == EstadosViaje.enCaminoPickup)) {
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    if (_ultimoSeguimientoTaxistaMs != null &&
+        now.difference(_ultimoSeguimientoTaxistaMs!) < const Duration(milliseconds: 850)) {
+      return;
+    }
+
+    if (_ultimoSeguimientoTaxLat != null &&
+        _ultimoSeguimientoTaxLon != null) {
+      final double dKm = _haversineKm(
+        _ultimoSeguimientoTaxLat!,
+        _ultimoSeguimientoTaxLon!,
+        v.latTaxista,
+        v.lonTaxista,
+      );
+      if (dKm < 0.004) {
+        return;
+      }
+    }
+
+    _ultimoSeguimientoTaxistaMs = now;
+    _ultimoSeguimientoTaxLat = v.latTaxista;
+    _ultimoSeguimientoTaxLon = v.lonTaxista;
+
+    final GoogleMapController? c = _map;
+    if (c == null) return;
+    c.animateCamera(
+      CameraUpdate.newLatLngZoom(LatLng(v.latTaxista, v.lonTaxista), 16),
+    );
   }
 
   // 🚀 NUEVO: Iniciar escucha de conductores disponibles
@@ -344,7 +452,24 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           : ((d['precio'] is num) ? (d['precio'] as num).toDouble() : 0.0);
 
       if (!mounted) return;
-      await _showPagoModal(context, total);
+
+      final String metodoRaw = (d['metodoPago'] ?? '').toString().toLowerCase();
+      final bool esEfectivo = metodoRaw.contains('efectivo');
+      final bool yaVioFacturaEfectivo = d['clienteFacturaEfectivoVistaEn'] != null;
+
+      if (esEfectivo) {
+        if (!yaVioFacturaEfectivo) {
+          await _showFacturaEfectivoModal(
+            context,
+            viajeId: id,
+            data: d,
+            total: total,
+            uidCliente: u.uid,
+          );
+        }
+      } else {
+        await _showPagoModal(context, total);
+      }
       if (!mounted) return;
 
       final bool yaCalificado = d['calificado'] == true;
@@ -358,6 +483,173 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         );
       }
     });
+  }
+
+  /// Recibo en pantalla solo para efectivo; al OK se registra en el viaje (auditoría / historial).
+  Future<void> _showFacturaEfectivoModal(
+    BuildContext ctx, {
+    required String viajeId,
+    required Map<String, dynamic> data,
+    required double total,
+    required String uidCliente,
+  }) async {
+    if (!mounted) return;
+
+    final Timestamp? finTs = data['finalizadoEn'] as Timestamp?;
+    final String cuando =
+        finTs != null ? _safeFecha(finTs.toDate()) : _safeFecha(DateTime.now());
+    final String refCorta =
+        viajeId.length >= 8 ? viajeId.substring(0, 8).toUpperCase() : viajeId.toUpperCase();
+    final String origen = _s(data['origen']).trim();
+    final String destino = _s(data['destino']).trim();
+    final String taxistaNombre = _s(data['nombreTaxista']).trim();
+
+    await showModalBottomSheet<void>(
+      context: ctx,
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Theme.of(ctx).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (BuildContext bctx) {
+        final cs = Theme.of(bctx).colorScheme;
+        final onSurface = cs.onSurface;
+        final muted = onSurface.withValues(alpha: 0.72);
+        final isDark = Theme.of(bctx).brightness == Brightness.dark;
+
+        Widget linea(String etiqueta, String valor) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: Text(etiqueta, style: TextStyle(color: muted, fontSize: 13)),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    valor.isEmpty ? '—' : valor,
+                    style: TextStyle(color: onSurface, fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(20, 16, 20, 24 + MediaQuery.paddingOf(bctx).bottom),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 5,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: cs.outline.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+                Text(
+                  'Recibo de viaje',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: onSurface,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Pago en efectivo — conserva este resumen si lo necesitas',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: muted, fontSize: 13, height: 1.3),
+                ),
+                const SizedBox(height: 20),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: cs.outline.withValues(alpha: 0.35)),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        linea('Referencia', refCorta),
+                        linea('Fecha de cierre', cuando),
+                        linea('Método', 'Efectivo'),
+                        if (origen.isNotEmpty) linea('Origen', origen),
+                        if (destino.isNotEmpty) linea('Destino', destino),
+                        if (taxistaNombre.isNotEmpty) linea('Conductor', taxistaNombre),
+                        const Divider(height: 24),
+                        Text(
+                          'Total pagado',
+                          style: TextStyle(color: muted, fontSize: 13),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _safeMoney(total),
+                          style: TextStyle(
+                            color: cs.primary,
+                            fontSize: 36,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      Navigator.of(bctx).maybePop();
+                      try {
+                        await FirebaseFirestore.instance
+                            .collection('viajes')
+                            .doc(viajeId)
+                            .set(
+                              {
+                                'clienteFacturaEfectivoVistaEn': FieldValue.serverTimestamp(),
+                                'clienteFacturaEfectivoVistaPorUid': uidCliente,
+                              },
+                              SetOptions(merge: true),
+                            );
+                      } catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                          SnackBar(content: Text('No se pudo guardar el recibo: $e')),
+                        );
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: cs.primary,
+                      foregroundColor: isDark ? Colors.black87 : Colors.white,
+                      minimumSize: const Size(double.infinity, 50),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text('OK'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _showPagoModal(BuildContext ctx, double total) async {
@@ -495,6 +787,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   // ===== Centrar cámara en el taxista =====
   Future<void> _centrarEnTaxista(Viaje v) async {
+    if (!mounted) return;
+    setState(() => _seguirTaxistaCamara = true);
     if (_isValidCoord(v.latTaxista, v.lonTaxista)) {
       await _map?.animateCamera(CameraUpdate.newLatLngZoom(
         LatLng(v.latTaxista, v.lonTaxista),
@@ -894,8 +1188,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   void _disposeDocWatch() {
     _viajeDocSub?.cancel();
     _viajeDocSub = null;
-    _etaDebounce?.cancel();
-    _etaDebounce = null;
   }
 
   void _watchViajeDoc(String viajeId) {
@@ -931,90 +1223,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         }
       }
 
-      if (estN == EstadosViaje.aceptado || estN == EstadosViaje.enCaminoPickup) {
-        _calcularETA(d);
-      }
-
-      if (estN == EstadosViaje.aBordo) {
-        if (mounted) {
-          setState(() {
-            _etaMin = null;
-            _distKm = null;
-            _etaTarget = null;
-          });
-        }
-      }
     }, onError: (Object _) {});
-  }
-
-  void _calcularETA(Map<String, dynamic> d) {
-    final dynamic driverLat = d['driverLat'] ?? d['latTaxista'];
-    final dynamic driverLon = d['driverLon'] ?? d['lonTaxista'];
-    final dynamic cliLat = (d['latCliente'] ?? 0);
-    final dynamic cliLon = (d['lonCliente'] ?? 0);
-
-    _etaDebounce?.cancel();
-    _etaDebounce = Timer(const Duration(seconds: 5), () async {
-      if (driverLat is num &&
-          driverLon is num &&
-          cliLat is num &&
-          cliLon is num &&
-          _isValidCoord(driverLat.toDouble(), driverLon.toDouble()) &&
-          _isValidCoord(cliLat.toDouble(), cliLon.toDouble())) {
-        try {
-          final dynamic dir = await DirectionsService.drivingDistanceKm(
-            originLat: driverLat.toDouble(),
-            originLon: driverLon.toDouble(),
-            destLat: cliLat.toDouble(),
-            destLon: cliLon.toDouble(),
-            withTraffic: true,
-            region: 'do',
-          );
-
-          double? km;
-          double? min;
-
-          try {
-            final dynamic dk = (dir?.distanceKm ??
-                dir?.km ??
-                (dir is Map ? (dir['distanceKm'] ?? dir['km'] ?? dir['distance']) : null) ??
-                dir?.distance);
-            if (dk is num) km = dk.toDouble();
-          } catch (_) {}
-
-          try {
-            final dynamic dm = (dir?.durationMinutes ??
-                dir?.minutes ??
-                (dir is Map ? (dir['durationMinutes'] ?? dir['minutes'] ?? dir['duration']) : null) ??
-                dir?.duration);
-            if (dm is num) min = dm.toDouble();
-          } catch (_) {}
-
-          final double kmVal = (km != null && km > 0)
-              ? km
-              : _haversineKm(
-                  driverLat.toDouble(),
-                  driverLon.toDouble(),
-                  cliLat.toDouble(),
-                  cliLon.toDouble(),
-                );
-
-          final double minVal = (min != null && min > 0)
-              ? min
-              : (kmVal / 25.0) * 60.0;
-
-          if (mounted) {
-            setState(() {
-              _distKm = kmVal > 0 ? kmVal : null;
-              _etaMin = minVal > 0 ? minVal : null;
-              _etaTarget = (_etaMin != null)
-                  ? DateTime.now().add(Duration(minutes: _etaMin!.round()))
-                  : null;
-            });
-          }
-        } catch (_) {}
-      }
-    });
   }
 
   // Widget de paradas
@@ -1161,134 +1370,122 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       'En ruta',
       'Finalizado',
     ];
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    final double progress = (etapa + 1) / labels.length;
+
+    // La tarjeta de información del viaje usa panel oscuro: neutros claros para contraste.
+    // El brillo animado usa el ColorScheme (se adapta al tema claro/oscuro de la app).
+    final Color tituloProgreso = Colors.white.withValues(alpha: 0.58);
+    final Color trackColor = Colors.white.withValues(alpha: 0.12);
+    final Color chipBgIdle = Colors.white.withValues(alpha: 0.08);
+    final Color chipBorderIdle = Colors.white.withValues(alpha: 0.24);
+    final Color textoChipPendiente = Colors.white.withValues(alpha: 0.68);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'PROGRESO DEL VIAJE',
-          style: TextStyle(color: Colors.white54, fontSize: 12),
+          style: TextStyle(color: tituloProgreso, fontSize: 12, fontWeight: FontWeight.w600),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         ClipRRect(
           borderRadius: BorderRadius.circular(999),
-          child: LinearProgressIndicator(
-            minHeight: 7,
-            value: (etapa + 1) / labels.length,
-            backgroundColor: Colors.white12,
-            valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+          child: SizedBox(
+            height: 10,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ColoredBox(color: trackColor),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: AnimatedBuilder(
+                    animation: _progresoBrilloCtrl,
+                    builder: (BuildContext context, Widget? child) {
+                      final double t = _progresoBrilloCtrl.value;
+                      final double sweep = -1.15 + 2.5 * t;
+                      return FractionallySizedBox(
+                        widthFactor: progress.clamp(0.0, 1.0),
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          height: 10,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment(sweep, 0),
+                              end: Alignment(sweep + 0.9, 0),
+                              colors: <Color>[
+                                cs.primary.withValues(alpha: 0.55),
+                                Color.lerp(cs.primary, cs.tertiary, 0.45)!,
+                                const Color(0xFF69F0AE),
+                                Color.lerp(cs.tertiary, cs.primary, 0.35)!,
+                                cs.primary.withValues(alpha: 0.75),
+                              ],
+                              stops: const <double>[0.0, 0.28, 0.48, 0.72, 1.0],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         Wrap(
           spacing: 6,
           runSpacing: 6,
           children: List<Widget>.generate(labels.length, (int i) {
             final bool done = i <= etapa;
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: done ? Colors.greenAccent.withValues(alpha: 0.18) : Colors.white10,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color: done ? Colors.greenAccent.withValues(alpha: 0.6) : Colors.white24,
-                ),
-              ),
-              child: Text(
-                labels[i],
-                style: TextStyle(
-                  color: done ? Colors.greenAccent : Colors.white60,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+            final bool activo = i == etapa;
+            return AnimatedBuilder(
+              animation: _progresoBrilloCtrl,
+              builder: (BuildContext context, Widget? child) {
+                final double t = _progresoBrilloCtrl.value;
+                final double pulse =
+                    activo ? (0.45 + 0.55 * (0.5 + 0.5 * math.sin(t * math.pi * 2))) : 0.0;
+                final Color fillDone = Color.lerp(
+                  cs.primary.withValues(alpha: 0.22),
+                  cs.tertiary.withValues(alpha: 0.28),
+                  0.5 + 0.5 * math.sin(t * math.pi * 2),
+                )!;
+                final Color borderDone = Color.lerp(cs.primary, cs.tertiary, t)!;
+                final Color textoDone =
+                    Color.lerp(cs.primary, const Color(0xFF69F0AE), 0.35 + 0.25 * math.sin(t * math.pi * 2))!;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: done ? fillDone : chipBgIdle,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: done ? borderDone.withValues(alpha: 0.75 + 0.2 * pulse) : chipBorderIdle,
+                      width: activo ? 1.4 : 1,
+                    ),
+                    boxShadow: activo
+                        ? <BoxShadow>[
+                            BoxShadow(
+                              color: cs.primary.withValues(alpha: 0.12 + 0.22 * pulse),
+                              blurRadius: 10 + 6 * pulse,
+                              spreadRadius: 0.5 * pulse,
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Text(
+                    labels[i],
+                    style: TextStyle(
+                      color: done ? textoDone : textoChipPendiente,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                );
+              },
             );
           }),
         ),
       ],
-    );
-  }
-
-  static String _formatDurationHMS(Duration d) {
-    if (d.isNegative) return '00:00';
-    final int h = d.inHours;
-    final int m = d.inMinutes.remainder(60);
-    final int s = d.inSeconds.remainder(60);
-    if (h > 0) {
-      return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-    }
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-  }
-
-  Widget _buildDuracionRutaCliente(Viaje v, String estadoBase) {
-    if (!EstadosViaje.esEnCurso(estadoBase)) return const SizedBox.shrink();
-    final DateTime? start = v.inicioRutaDesde;
-    if (start == null) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: StreamBuilder<DateTime>(
-        stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
-        builder: (BuildContext context, _) {
-          final Duration elapsed = DateTime.now().difference(start);
-          return Row(
-            children: [
-              const Icon(Icons.schedule, color: Colors.blueAccent, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Tiempo en ruta: ${_formatDurationHMS(elapsed)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 15),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  DateTime _createdAtFromData(Map<String, dynamic> d, Viaje v) {
-    final dynamic a = d['createdAt'] ?? d['creadoEn'] ?? d['fechaCreacion'];
-    if (a is Timestamp) return a.toDate();
-    if (a is DateTime) return a;
-    return v.fechaHora;
-  }
-
-  Widget _buildCronometroEspera(DateTime startAt) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF10231A),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.35)),
-      ),
-      child: StreamBuilder<DateTime>(
-        stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
-        builder: (context, _) {
-          final Duration elapsed = DateTime.now().difference(startAt);
-          final String t = _formatDurationHMS(elapsed);
-          return Row(
-            children: [
-              const Icon(Icons.timelapse, color: Colors.greenAccent),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  'Buscando taxista cercano...',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                ),
-              ),
-              Text(
-                t,
-                style: const TextStyle(
-                  color: Colors.greenAccent,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          );
-        },
-      ),
     );
   }
 
@@ -1431,130 +1628,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               ],
             ),
           ],
-          _buildDuracionRutaCliente(v, estadoBase),
-        ],
-      ),
-    );
-  }
-
-  // ===== Banner de ETA MEJORADO con cronómetro digital grande =====
-  Widget _buildEtaBanner() {
-    if (_etaMin == null || _etaMin! <= 0) return const SizedBox.shrink();
-
-    return Container(
-      margin: const EdgeInsets.only(top: 8, bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F2A1A),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.timer, color: Colors.greenAccent, size: 32),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Llegada estimada', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                    const SizedBox(height: 4),
-                    Text(
-                      _etaTarget != null
-                          ? DateFormat('HH:mm').format(_etaTarget!)
-                          : 'Calculando...',
-                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${_distKm?.toStringAsFixed(1) ?? '?'} km • ${_etaMin?.toStringAsFixed(0) ?? '?'} min',
-                      style: const TextStyle(color: Colors.white54, fontSize: 14),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              SizedBox(
-                height: 50,
-                width: 50,
-                child: StreamBuilder<DateTime>(
-                  stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
-                  builder: (BuildContext context, _) {
-                    if (_etaTarget == null) {
-                      return CircularProgressIndicator(
-                        strokeWidth: 4,
-                        backgroundColor: Colors.grey[800],
-                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
-                      );
-                    }
-                    final Duration diff = _etaTarget!.difference(DateTime.now());
-                    if (diff.isNegative) {
-                      return const Icon(Icons.local_taxi_rounded, color: Colors.greenAccent, size: 40);
-                    }
-                    return CircularProgressIndicator(
-                      strokeWidth: 4,
-                      backgroundColor: Colors.grey[800],
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          StreamBuilder<DateTime>(
-            stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
-            builder: (BuildContext context, _) {
-              if (_etaTarget == null) return const SizedBox.shrink();
-              final DateTime now = DateTime.now();
-              final Duration difference = _etaTarget!.difference(now);
-              if (difference.isNegative) {
-                return Column(
-                  children: [
-                    Text(
-                      'Debería estar llegando',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.greenAccent.withValues(alpha: 0.95),
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Hora orientativa: ${DateFormat('HH:mm').format(_etaTarget!)}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white54, fontSize: 14),
-                    ),
-                  ],
-                );
-              }
-              final int totalSec = difference.inSeconds;
-              final int hours = totalSec ~/ 3600;
-              final int minutes = (totalSec % 3600) ~/ 60;
-              final int seconds = totalSec % 60;
-              final String tiempoRestante;
-              if (hours > 0) {
-                tiempoRestante = '${hours}h ${minutes}m ${seconds.toString().padLeft(2, '0')}s';
-              } else if (minutes > 0) {
-                tiempoRestante = '$minutes min ${seconds.toString().padLeft(2, '0')} s';
-              } else {
-                tiempoRestante = '$seconds s';
-              }
-              return Center(
-                child: Text(
-                  tiempoRestante,
-                  style: const TextStyle(
-                    color: Colors.greenAccent,
-                    fontSize: 32,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              );
-            },
-          ),
         ],
       ),
     );
@@ -1596,9 +1669,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         final String telFromViaje = v.telefonoTaxista.isNotEmpty
             ? v.telefonoTaxista
             : v.telefono;
-        final String tel = telFromViaje.trim().isNotEmpty
-            ? telFromViaje
-            : (tx['telefono'] ?? '').toString();
+        String tel = telFromViaje.trim();
+        if (tel.isEmpty) {
+          tel = telefonoCrudoDesdeMapa(tx);
+        }
 
         final String tipo = _s(v.tipoVehiculo).trim().isNotEmpty
             ? _s(v.tipoVehiculo).trim()
@@ -1628,8 +1702,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           if (modelo.isNotEmpty) modelo,
         ].join(' · ');
 
-        final String telClean = telefonoNormalizarDigitos(tel);
-        final bool tieneTel = telClean.isNotEmpty;
         final ColorScheme cs = Theme.of(context).colorScheme;
 
         return Container(
@@ -1688,8 +1760,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       context,
                       icon: Icons.phone,
                       label: 'Llamar',
-                      onPressed: !tieneTel ? null : () async {
-                        await telefonoLaunchUri(telefonoUriLlamada(telClean));
+                      onPressed: () async {
+                        final String raw = tel.trim().isNotEmpty ? tel : telefonoCrudoDesdeMapa(tx);
+                        final String tc = telefonoNormalizarDigitos(raw);
+                        if (tc.isEmpty) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Número del conductor no disponible aún. Usa el chat o espera unos segundos.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        await telefonoLaunchUri(telefonoUriLlamada(tc));
                       },
                     ),
                   ),
@@ -1699,15 +1784,28 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       context,
                       icon: Icons.chat_bubble_outline,
                       label: 'WhatsApp',
-                      onPressed: !tieneTel ? null : () async {
+                      onPressed: () async {
+                        final String raw = tel.trim().isNotEmpty ? tel : telefonoCrudoDesdeMapa(tx);
+                        final String tc = telefonoNormalizarDigitos(raw);
+                        if (tc.isEmpty) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Número del conductor no disponible aún. Usa el chat o espera unos segundos.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
                         const String waMsg = 'Hola, soy tu cliente de RAI.';
                         if (await telefonoLaunchUri(
-                              telefonoUriWhatsAppApp(telClean, waMsg),
+                              telefonoUriWhatsAppApp(tc, waMsg),
                             )) {
                           return;
                         }
                         await telefonoLaunchUri(
-                          telefonoUriWhatsAppWeb(telClean, waMsg),
+                          telefonoUriWhatsAppWeb(tc, waMsg),
                         );
                       },
                     ),
@@ -2014,6 +2112,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
                 if (activoId.isEmpty) {
                   _disposeDocWatch();
+                  _stopClienteUbicacionEnViaje();
                   return const Center(
                     child: Text('No tienes viaje activo en este momento.',
                         style: TextStyle(color: Colors.white70)),
@@ -2075,6 +2174,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     );
 
                     if (EstadosViaje.esTerminal(estadoBase)) {
+                      _stopClienteUbicacionEnViaje();
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
                         await _limpiarActivoDelUsuario(u.uid);
                       });
@@ -2083,6 +2183,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             style: TextStyle(color: Colors.white70)),
                       );
                     }
+
+                    // Ubicación del cliente en Firestore en tiempo real durante el viaje activo.
+                    _ensureClienteUbicacionEnViaje(v.id);
 
                     // Pool de conductores: solo viajes normales/motor en espera (turismo va por ADM)
                     final bool esperandoTaxista = !v.esTurismo &&
@@ -2143,10 +2246,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       }
                     }
 
-                    final bool taxistaCercaVisual =
+                    final bool pulsoTaxistaEnMapa = v.uidTaxista.isNotEmpty &&
                         _isValidCoord(v.latTaxista, v.lonTaxista) &&
-                        (_mostrarMensajeCercania || _lastPickupProximity == true);
-                    if (taxistaCercaVisual) {
+                        (estadoBase == EstadosViaje.aceptado ||
+                            estadoBase == EstadosViaje.enCaminoPickup);
+                    if (pulsoTaxistaEnMapa) {
                       final LatLng txPos = _latLng(v.latTaxista, v.lonTaxista);
                       circles.add(
                         Circle(
@@ -2195,6 +2299,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       WidgetsBinding.instance
                           .addPostFrameCallback((_) => _fitBoundsFor(v));
                     }
+
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      _maybeAnimarCamaraAlTaxista(v, estadoBase);
+                    });
 
                     final bool cancelarHabilitado = !EstadosViaje.esTerminal(estadoBase);
                     final String codigoVerificacion = v.codigoVerificacion ?? '';
@@ -2248,6 +2357,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   await _fitBoundsFor(v);
                                 }
                               });
+                            },
+                            onCameraMoveStarted: () {
+                              if (_seguirTaxistaCamara) {
+                                setState(() => _seguirTaxistaCamara = false);
+                              }
                             },
                             myLocationEnabled: _myLoc,
                             myLocationButtonEnabled: false,
@@ -2376,9 +2490,32 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       ),
                                     ),
 
-                                  if (esperandoTaxista && _etaMin == null)
-                                    _buildCronometroEspera(
-                                      _createdAtFromData(data, v),
+                                  if (esperandoTaxista)
+                                    Container(
+                                      margin: const EdgeInsets.only(bottom: 14),
+                                      padding: const EdgeInsets.all(14),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF10231A),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: Colors.greenAccent.withValues(alpha: 0.35),
+                                        ),
+                                      ),
+                                      child: const Row(
+                                        children: [
+                                          Icon(Icons.timelapse, color: Colors.greenAccent),
+                                          SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              'Buscando taxista cercano…',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
 
                                   // Código de verificación
@@ -2470,24 +2607,23 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       ),
                                     ),
 
+                                  // Transferencia: solo cuando ya va a bordo o en ruta (tiempo de procesar el pago antes del fin).
+                                  if (v.metodoPago.toLowerCase().contains('transfer') &&
+                                      v.uidTaxista.isNotEmpty &&
+                                      (EstadosViaje.esAbordo(estadoBase) ||
+                                          EstadosViaje.esEnCurso(estadoBase))) ...[
+                                    const SizedBox(height: 4),
+                                    _buildDatosBancarios(v, v.uidTaxista, v.precio, data),
+                                    const SizedBox(height: 16),
+                                  ],
+
                                   // Tarjeta de información del viaje
                                   _buildTripInfoCard(v, estadoBase),
-
-                                  // Banner ETA (solo cuando taxista en camino)
-                                  if (estadoBase == EstadosViaje.aceptado || estadoBase == EstadosViaje.enCaminoPickup)
-                                    _buildEtaBanner(),
 
                                   // Tarjeta del conductor
                                   if (v.uidTaxista.isNotEmpty) ...[
                                     const SizedBox(height: 16),
                                     _buildDriverCard(v),
-                                  ],
-
-                                  // Datos bancarios (transferencia — tolera mayúsculas/variantes)
-                                  if (v.metodoPago.toLowerCase().contains('transfer') &&
-                                      v.uidTaxista.isNotEmpty) ...[
-                                    const SizedBox(height: 16),
-                                    _buildDatosBancarios(v, v.uidTaxista, v.precio, data),
                                   ],
 
                                   // Paradas intermedias

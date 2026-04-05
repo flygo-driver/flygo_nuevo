@@ -79,7 +79,23 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     // Si solo se mueve el taxista, actualizar marcadores sin animar la cámara (evita parpadeo).
     if (origenChanged || destinoChanged) {
       _actualizarMarcadores();
-      _centrarEnPuntoImportante();
+      if (destinoChanged) {
+        _centrarEnPuntoImportante();
+      } else if (origenChanged) {
+        final LatLng? o0 = oldWidget.origen;
+        final LatLng? o1 = widget.origen;
+        if (o0 == null && o1 != null) {
+          _centrarEnPuntoImportante();
+        } else if (o0 != null && o1 != null && widget.esTaxista) {
+          // Cliente en movimiento: actualizar marcador sin saltar la cámara en cada ping.
+          final double dM = _haversineM(o0, o1);
+          if (dM > 140.0) {
+            _centrarEnPuntoImportante();
+          }
+        } else {
+          _centrarEnPuntoImportante();
+        }
+      }
       return;
     }
     if (taxiChanged && widget.mostrarTaxista) {

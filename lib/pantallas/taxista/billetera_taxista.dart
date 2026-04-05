@@ -163,7 +163,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                           const SizedBox(height: 16),
                           _infoBox("Ganancia Total", FormatosMoneda.rd(r.gananciaTotal), Colors.green),
                           const SizedBox(height: 16),
-                          _infoBox("Comisión acumulada (FlyGo)", FormatosMoneda.rd(r.comisionTotal), Colors.redAccent),
+                          _infoBox("Comisión acumulada (RAI)", FormatosMoneda.rd(r.comisionTotal), Colors.redAccent),
                           const SizedBox(height: 16),
                           _infoBox("Viajes Completados", "${r.viajesCompletados}", Colors.blueAccent),
                           const SizedBox(height: 20),

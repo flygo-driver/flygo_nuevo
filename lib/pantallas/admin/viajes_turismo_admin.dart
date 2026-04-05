@@ -192,8 +192,8 @@ class _ViajeTurismoTile extends StatelessWidget {
       MaterialPageRoute(
         builder: (BuildContext context) => AsignarViajeTurismo(
           viajeId: id,
-          tipoVehiculo:
-              subtipoTurismo.trim().isNotEmpty ? subtipoTurismo : tipoVehiculo,
+          subtipoTurismo: subtipoTurismo,
+          tipoVehiculoDoc: tipoVehiculo,
           latOrigen: (latCliente != 0 || lonCliente != 0) ? latCliente : null,
           lonOrigen: (latCliente != 0 || lonCliente != 0) ? lonCliente : null,
         ),
@@ -239,6 +239,21 @@ class _ViajeTurismoTile extends StatelessWidget {
     );
     if (ok != true || !context.mounted) return;
     try {
+      final DocumentSnapshot<Map<String, dynamic>> vSnap =
+          await FirebaseFirestore.instance.collection('viajes').doc(id).get();
+      final Map<String, dynamic>? vd = vSnap.data();
+      final String uidTx = (vd?['uidTaxista'] ?? vd?['taxistaId'] ?? '').toString().trim();
+      if (uidTx.isNotEmpty) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Este viaje ya tiene chofer asignado; no se puede liberar al pool.'),
+            backgroundColor: Colors.orangeAccent,
+          ),
+        );
+        return;
+      }
+
       await FirebaseFirestore.instance.collection('viajes').doc(id).update(
         <String, dynamic>{
           'canalAsignacion': AsignacionTurismoRepo.canalTurismoPool,

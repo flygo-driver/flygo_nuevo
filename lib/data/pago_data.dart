@@ -226,18 +226,39 @@ class PagoData {
       return true;
     });
 
-    // 3) Asiento histórico (solo si actualizamos)
+    // 3) Mismo doc que ViajesRepo (`pagos/viaje_*_asiento`) para admin y reporting unificado.
     if (actualizado) {
-      await _pagos.add({
-        'tipo': 'taxista',
-        'viajeId': viajeId,
-        'uidTaxista': taxistaId,
-        'monto': -_round2(comision.abs()), // negativo = deuda del taxista
-        'metodo': 'efectivo',
-        'estado': 'comision_pendiente',
-        'fecha': _isoNow(),
-        'provider': 'cash',
-      });
+      final post = await viajeRef.get();
+      final pm = post.data() ?? <String, dynamic>{};
+      final int tc = (pm['total_cents'] is int)
+          ? pm['total_cents'] as int
+          : _toCents(_asDouble(pm['total'] ?? pm['precioFinal'] ?? pm['precio']));
+      final int cc = (pm['comision_cents'] is int)
+          ? pm['comision_cents'] as int
+          : _toCents(_asDouble(pm['comision'] ?? pm['comisionFlygo']));
+      final int gc = (pm['ganancia_cents'] is int)
+          ? pm['ganancia_cents'] as int
+          : (tc > cc ? tc - cc : 0);
+
+      await _pagos.doc('viaje_${viajeId}_asiento').set(
+            {
+              'tipo': 'taxista',
+              'viajeId': viajeId,
+              'uidTaxista': taxistaId,
+              'monto': -_round2(comision.abs()),
+              'totalCents': tc,
+              'comisionCents': cc,
+              'gananciaCents': gc,
+              'comisionPlataformaPct': 20,
+              'fuenteAsiento': 'registrar_comision_cash',
+              'metodo': 'efectivo',
+              'estado': 'comision_pendiente',
+              'fecha': _isoNow(),
+              'provider': 'cash',
+              'createdAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
     }
   }
 

@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
+import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 
 class DestinoSeleccionado {
   final TurismoLugar lugar;
@@ -401,14 +402,22 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.85,
-      decoration: const BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Column(
-        children: [
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Container(
+        height: MediaQuery.sizeOf(context).height * 0.85,
+        decoration: const BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Column(
+                children: [
           // Handle
           Container(
             margin: const EdgeInsets.only(top: 12),
@@ -537,6 +546,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: TextField(
               style: const TextStyle(color: Colors.white),
+              scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 280),
               decoration: InputDecoration(
                 hintText: 'Buscar cualquier lugar en RD...',
                 hintStyle: const TextStyle(color: Colors.white54),
@@ -576,15 +586,18 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           Expanded(
             child: _buildResultados(),
           ),
-
-          if (_calculando)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Center(
-                child: CircularProgressIndicator(color: Colors.purple),
+                ],
               ),
-            ),
-        ],
+              if (_calculando)
+                const Positioned.fill(
+                  child: CotizacionPrecioLoadingDimmed(
+                    accentColor: Color(0xFFBA68C8),
+                    isDark: true,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -5,7 +5,8 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -106,13 +107,25 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           ? v.estado
           : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
-    String r5(double x) => (x.isFinite) ? x.toStringAsFixed(5) : 'x';
+    String r6(double x) => (x.isFinite) ? x.toStringAsFixed(6) : 'x';
     final int wp = v.waypoints?.length ?? 0;
     // No incluir latTaxista/lonTaxista: este taxista escribe el GPS en el mismo doc y cada
     // actualización dispararía StreamBuilder + Column completa. La posición se mantiene en
     // _cachedViaje vía copyWith en el listener GPS.
-    return '${v.id}|$est|${r5(v.latCliente)}|${r5(v.lonCliente)}|${r5(v.latDestino)}|${r5(v.lonDestino)}|'
+    // Cliente/destino con 6 decimales para ver movimiento en tiempo real en el mapa.
+    return '${v.id}|$est|${r6(v.latCliente)}|${r6(v.lonCliente)}|${r6(v.latDestino)}|${r6(v.lonDestino)}|'
         '${v.codigoVerificado}|${v.uidTaxista}|${v.completado}|$wp';
+  }
+
+  /// Solo campos que afectan polilíneas hacia el cliente o destino.
+  static String _firmaRutaMapaTaxista(Viaje v) {
+    String r6(double x) => (x.isFinite) ? x.toStringAsFixed(6) : 'x';
+    final est = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    return '$est|${r6(v.latCliente)}|${r6(v.lonCliente)}|${r6(v.latDestino)}|${r6(v.lonDestino)}|${v.codigoVerificado}';
   }
 
   // ===== Utilidades =====
@@ -220,11 +233,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     _gpsParaViajeId = viajeId;
 
     final ref = FirebaseFirestore.instance.collection('viajes').doc(viajeId);
+    final LocationSettings gpsSettings = (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+        ? AndroidSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 8,
+            intervalDuration: const Duration(seconds: 2),
+          )
+        : const LocationSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 8,
+          );
     _gpsSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 8,
-      ),
+      locationSettings: gpsSettings,
     ).listen((p) async {
       try {
         await ref.update({
@@ -1420,8 +1440,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
                   final u = snap.data?.data() ?? {};
                   final nombre = (u['nombre'] ?? '—').toString().trim();
-                  final telefono = (u['telefono'] ?? '').toString().trim();
-                  final telOk = _cleanPhone(telefono).isNotEmpty;
+
+                  String telClienteLimpio() => _cleanPhone(telefonoCrudoDesdeMapa(u));
 
                   return ListView(
                     controller: controller,
@@ -1448,12 +1468,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                       ),
                       const SizedBox(height: 16),
                       FilledButton.icon(
-                        onPressed: !telOk
-                            ? null
-                            : () async {
-                                final tel = _cleanPhone(telefono);
-                                await telefonoLaunchUri(telefonoUriLlamada(tel));
-                              },
+                        onPressed: () async {
+                          final String tel = telClienteLimpio();
+                          if (tel.isEmpty) {
+                            ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Número del cliente no disponible aún. Usa el chat o espera unos segundos.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          await telefonoLaunchUri(telefonoUriLlamada(tel));
+                        },
                         icon: Icon(Icons.call, color: cs.onPrimary),
                         label: const Text('Llamar'),
                         style: FilledButton.styleFrom(
@@ -1463,20 +1491,28 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                       ),
                       const SizedBox(height: 10),
                       FilledButton.tonalIcon(
-                        onPressed: !telOk
-                            ? null
-                            : () async {
-                                final tel = _cleanPhone(telefono);
-                                const String waMsg = 'Hola, soy tu taxista de RAI.';
-                                if (await telefonoLaunchUri(
-                                      telefonoUriWhatsAppApp(tel, waMsg),
-                                    )) {
-                                  return;
-                                }
-                                await telefonoLaunchUri(
-                                  telefonoUriWhatsAppWeb(tel, waMsg),
-                                );
-                              },
+                        onPressed: () async {
+                          final String tel = telClienteLimpio();
+                          if (tel.isEmpty) {
+                            ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Número del cliente no disponible aún. Usa el chat o espera unos segundos.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          const String waMsg = 'Hola, soy tu taxista de RAI.';
+                          if (await telefonoLaunchUri(
+                                telefonoUriWhatsAppApp(tel, waMsg),
+                              )) {
+                            return;
+                          }
+                          await telefonoLaunchUri(
+                            telefonoUriWhatsAppWeb(tel, waMsg),
+                          );
+                        },
                         icon: Icon(Icons.chat_bubble_outline, color: cs.primary),
                         label: const Text('WhatsApp'),
                         style: FilledButton.styleFrom(
@@ -2236,8 +2272,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                 }
               });
             });
-          } else if (_cachedViaje != v) {
+          } else {
+            final String prevSig =
+                _cachedViaje != null ? _firmaRutaMapaTaxista(_cachedViaje!) : '';
             _cachedViaje = v;
+            final String newSig = _firmaRutaMapaTaxista(v);
+            if (prevSig != newSig && mounted) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _scheduleDrawRoute();
+              });
+            }
           }
 
           final fecha = formato.format(v.fechaHora);

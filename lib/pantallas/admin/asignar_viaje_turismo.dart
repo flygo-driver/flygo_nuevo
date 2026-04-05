@@ -1,22 +1,26 @@
 // lib/pantallas/admin/asignar_viaje_turismo.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 import 'admin_ui_theme.dart';
 
 class AsignarViajeTurismo extends StatefulWidget {
   final String viajeId;
-  final String tipoVehiculo;
+  /// `subtipoTurismo` del viaje (carro, Carro Turismo, etc.)
+  final String? subtipoTurismo;
+  /// `tipoVehiculo` legado / emoji del documento
+  final String? tipoVehiculoDoc;
   final double? latOrigen;
   final double? lonOrigen;
 
   const AsignarViajeTurismo({
     super.key,
     required this.viajeId,
-    required this.tipoVehiculo,
+    this.subtipoTurismo,
+    this.tipoVehiculoDoc,
     this.latOrigen,
     this.lonOrigen,
   });
@@ -29,19 +33,37 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
   String _filtroVehiculo = '';
   final TextEditingController _notaCtrl = TextEditingController();
 
-  // 🔥 Guardamos el tipoVehiculo para evitar usar widget.tipoVehiculo repetidamente
   late final String _tipoVehiculoRequerido;
+  late final String _etiquetaTipo;
 
   @override
   void initState() {
     super.initState();
-    _tipoVehiculoRequerido = widget.tipoVehiculo.toLowerCase();
+    _tipoVehiculoRequerido = AsignacionTurismoRepo.normalizarCodigoTipoTurismo(
+      widget.subtipoTurismo,
+      widget.tipoVehiculoDoc,
+    );
+    final String raw = (widget.subtipoTurismo ?? '').trim().isNotEmpty
+        ? widget.subtipoTurismo!.trim()
+        : (widget.tipoVehiculoDoc ?? '').trim();
+    _etiquetaTipo = raw.isNotEmpty ? raw : _tipoVehiculoRequerido;
   }
 
   @override
   void dispose() {
     _notaCtrl.dispose();
     super.dispose();
+  }
+
+  Map<String, dynamic>? _vehiculoCoincidente(Map<String, dynamic> choferData) {
+    for (final dynamic v in choferData['vehiculos'] as List? ?? const []) {
+      if (v is! Map) continue;
+      final String t = (v['tipo'] ?? '').toString().toLowerCase();
+      if (t == _tipoVehiculoRequerido) {
+        return Map<String, dynamic>.from(v);
+      }
+    }
+    return null;
   }
 
   @override
@@ -57,6 +79,13 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
       ),
       body: Column(
         children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Text(
+              'Vehículo requerido: $_tipoVehiculoRequerido ($_etiquetaTipo)',
+              style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.all(16),
             child: TextField(
@@ -94,21 +123,12 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return Center(child: CircularProgressIndicator(color: AdminUi.progressAccent(context)));
                 }
-                
+
                 final List<QueryDocumentSnapshot> docs = snapshot.data?.docs ?? [];
-                
-                // Filtrar SOLO los choferes que tienen el tipo de vehículo requerido
+
                 final List<QueryDocumentSnapshot> choferesCompatibles = docs.where((doc) {
                   final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-                  final List<dynamic> vehiculos = (data['vehiculos'] as List?) ?? [];
-                  
-                  // Verificar si tiene el tipo de vehículo que necesita el viaje
-                  final bool tieneTipoRequerido = vehiculos.any((v) {
-                    final tipo = v['tipo']?.toString().toLowerCase() ?? '';
-                    return tipo == _tipoVehiculoRequerido;
-                  });
-                  
-                  return tieneTipoRequerido;
+                  return _vehiculoCoincidente(data) != null;
                 }).toList();
 
                 if (choferesCompatibles.isEmpty) {
@@ -121,18 +141,14 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            Icons.error_outline,
-                            color: warn,
-                            size: 64,
-                          ),
+                          Icon(Icons.error_outline, color: warn, size: 64),
                           const SizedBox(height: 16),
                           Text(
                             'No hay choferes disponibles para',
                             style: TextStyle(color: AdminUi.secondary(context)),
                           ),
                           Text(
-                            widget.tipoVehiculo.toUpperCase(),
+                            _tipoVehiculoRequerido.toUpperCase(),
                             style: TextStyle(
                               color: warn,
                               fontSize: 20,
@@ -154,7 +170,6 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                   );
                 }
 
-                // Buscador: nombre, teléfono, email o tipos de vehículo compatibles
                 final List<QueryDocumentSnapshot> choferesFiltrados = choferesCompatibles.where((doc) {
                   if (_filtroVehiculo.isEmpty) return true;
                   final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
@@ -168,7 +183,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                   }
                   final List<dynamic> vehiculos = (data['vehiculos'] as List?) ?? [];
                   final List<String> tipos = vehiculos
-                      .map((v) => v['tipo'].toString().toLowerCase())
+                      .map((v) => (v is Map ? v['tipo'] : '').toString().toLowerCase())
                       .toList();
                   return tipos.any((String t) => t.contains(_filtroVehiculo));
                 }).toList();
@@ -179,13 +194,16 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                   itemBuilder: (BuildContext context, int index) {
                     final QueryDocumentSnapshot doc = choferesFiltrados[index];
                     final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-                    
+
                     return FutureBuilder<double>(
                       future: _calcularDistancia(data),
                       builder: (BuildContext context, AsyncSnapshot<double> distanciaSnap) {
                         final double distancia = distanciaSnap.data ?? double.infinity;
-                        
+
                         final green = AdminUi.accentGreen(context);
+                        final String nombre = (data['nombre'] ?? '').toString();
+                        final String inicial = nombre.isNotEmpty ? nombre[0].toUpperCase() : '?';
+
                         return Card(
                           color: AdminUi.card(context),
                           margin: const EdgeInsets.only(bottom: 12),
@@ -200,7 +218,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                                   ? Colors.deepPurple.shade100
                                   : Colors.purple,
                               child: Text(
-                                (data['nombre'] ?? '?')[0],
+                                inicial,
                                 style: TextStyle(
                                   color: Theme.of(context).brightness == Brightness.light
                                       ? Colors.deepPurple.shade900
@@ -209,7 +227,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                               ),
                             ),
                             title: Text(
-                              data['nombre'] ?? 'Sin nombre',
+                              nombre.isNotEmpty ? nombre : 'Sin nombre',
                               style: TextStyle(color: AdminUi.onCard(context)),
                             ),
                             subtitle: Column(
@@ -219,12 +237,12 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                                   '📞 ${data['telefono'] ?? ''}',
                                   style: TextStyle(color: AdminUi.secondary(context)),
                                 ),
-                                // Mostrar SOLO los vehículos que coinciden con el tipo requerido
                                 Wrap(
                                   spacing: 4,
-                                  children: (data['vehiculos'] as List?)?.where((v) {
-                                        return v['tipo']?.toString().toLowerCase() == 
-                                               _tipoVehiculoRequerido;
+                                  children: (data['vehiculos'] as List?)?.where((dynamic v) {
+                                        if (v is! Map) return false;
+                                        return (v['tipo'] ?? '').toString().toLowerCase() ==
+                                            _tipoVehiculoRequerido;
                                       }).map((dynamic v) {
                                         return Chip(
                                           label: Text('✅ ${v['tipo'] ?? ''}'),
@@ -235,7 +253,8 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                                             fontWeight: FontWeight.bold,
                                           ),
                                         );
-                                      }).toList() ?? const [],
+                                      }).toList() ??
+                                      const [],
                                 ),
                                 if (distancia != double.infinity)
                                   Text(
@@ -358,63 +377,51 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
 
     if (confirmar != true) return;
 
-    try {
-      // Obtener placa del vehículo que coincide con el tipo requerido
-      String placa = '';
-      if (data['vehiculos'] != null && (data['vehiculos'] as List).isNotEmpty) {
-        final vehiculo = (data['vehiculos'] as List).firstWhere(
-          (v) => v['tipo']?.toString().toLowerCase() == _tipoVehiculoRequerido,
-          orElse: () => null,
-        );
-        if (vehiculo != null) {
-          placa = vehiculo['placa'] ?? '';
-        }
-      }
+    final Map<String, dynamic>? veh = _vehiculoCoincidente(data);
+    if (veh == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('El chofer ya no tiene un vehículo compatible.')),
+      );
+      return;
+    }
 
-      final String res = await ViajesRepo.claimTripWithReason(
+    final String placa = (veh['placa'] ?? '').toString();
+    final String marca = (veh['marca'] ?? '').toString();
+    final String modelo = (veh['modelo'] ?? '').toString();
+    final String color = (veh['color'] ?? '').toString();
+    final String nota = _notaCtrl.text.trim();
+
+    try {
+      final String res = await AsignacionTurismoRepo.asignarChofer(
         viajeId: widget.viajeId,
-        uidTaxista: uidChofer,
-        nombreTaxista: data['nombre'] ?? '',
-        telefono: data['telefono'] ?? '',
+        uidChofer: uidChofer,
+        nombreChofer: (data['nombre'] ?? '').toString(),
+        telefonoChofer: (data['telefono'] ?? '').toString(),
         placa: placa,
-        tipoVehiculo: widget.tipoVehiculo,
+        subtipoTurismoCodigo: _tipoVehiculoRequerido,
+        notaAdmin: nota.isNotEmpty ? nota : null,
+        marca: marca,
+        modelo: modelo,
+        color: color,
       );
 
       if (!mounted) return;
 
       if (res == 'ok') {
-        await FirebaseFirestore.instance.collection('choferes_turismo').doc(uidChofer).update({
-          'disponible': false,
-          'viajeActualId': widget.viajeId,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-
-        final Map<String, dynamic> meta = <String, dynamic>{
-          'asignadoPor': FirebaseAuth.instance.currentUser?.uid,
-          'asignadoEn': FieldValue.serverTimestamp(),
-        };
-        if (_notaCtrl.text.trim().isNotEmpty) {
-          meta['notaAdmin'] = _notaCtrl.text.trim();
-        }
-        await FirebaseFirestore.instance.collection('viajes').doc(widget.viajeId).update(meta);
-
+        await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
         if (!mounted) return;
-        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('✅ Chofer asignado')),
         );
-        // ignore: use_build_context_synchronously
         Navigator.pop(context, true);
       } else {
-        if (!mounted) return;
-        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $res')),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e')),
       );
