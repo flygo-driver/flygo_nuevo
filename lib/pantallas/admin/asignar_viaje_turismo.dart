@@ -1,7 +1,8 @@
 // lib/pantallas/admin/asignar_viaje_turismo.dart
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
@@ -9,8 +10,10 @@ import 'admin_ui_theme.dart';
 
 class AsignarViajeTurismo extends StatefulWidget {
   final String viajeId;
+
   /// `subtipoTurismo` del viaje (carro, Carro Turismo, etc.)
   final String? subtipoTurismo;
+
   /// `tipoVehiculo` legado / emoji del documento
   final String? tipoVehiculoDoc;
   final double? latOrigen;
@@ -32,6 +35,7 @@ class AsignarViajeTurismo extends StatefulWidget {
 class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
   String _filtroVehiculo = '';
   final TextEditingController _notaCtrl = TextEditingController();
+  bool _asignacionEnCurso = false;
 
   late final String _tipoVehiculoRequerido;
   late final String _etiquetaTipo;
@@ -55,6 +59,58 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
     super.dispose();
   }
 
+  String _mensajeFirebase(FirebaseException e) {
+    final m = e.message?.trim();
+    if (m != null && m.isNotEmpty) return m;
+    return e.code;
+  }
+
+  /// Texto legible para códigos devueltos por [AsignacionTurismoRepo.asignarChofer].
+  String _mensajeResultadoAsignacion(String res) {
+    if (res == 'ok') return '';
+    switch (res) {
+      case 'viaje-no-existe':
+        return 'El viaje ya no existe.';
+      case 'no-turismo':
+        return 'El viaje no es de turismo.';
+      case 'canal-invalido':
+        return 'El viaje ya no está en cola de administración (fue liberado al pool u otro canal).';
+      case 'estado-invalido':
+        return 'El estado del viaje ya no permite asignación manual.';
+      case 'ya-asignado':
+        return 'Este viaje ya tiene chofer asignado.';
+      case 'chofer-no-existe':
+        return 'El chofer no existe en turismo.';
+      case 'chofer-no-aprobado':
+        return 'El chofer no está aprobado para turismo.';
+      case 'chofer-no-disponible':
+        return 'El chofer ya no está disponible (posiblemente en otro viaje).';
+      case 'chofer-bloqueo-prepago':
+        return 'Chofer bloqueado por prepago/comisión RAI (misma regla que pool): '
+            'regularizar billetera antes de asignar.';
+      default:
+        if (res.startsWith('firebase:')) {
+          final code = res.substring('firebase:'.length);
+          return 'Error de servidor (${code.isEmpty ? 'desconocido' : code}).';
+        }
+        return res;
+    }
+  }
+
+  static String _fmtCalificacion(dynamic c) {
+    if (c == null) return 'N/A';
+    if (c is num) return c.toDouble().toStringAsFixed(1);
+    final d = double.tryParse(c.toString());
+    return d != null ? d.toStringAsFixed(1) : 'N/A';
+  }
+
+  static int _toIntViajes(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.round();
+    return int.tryParse(v.toString()) ?? 0;
+  }
+
   Map<String, dynamic>? _vehiculoCoincidente(Map<String, dynamic> choferData) {
     for (final dynamic v in choferData['vehiculos'] as List? ?? const []) {
       if (v is! Map) continue;
@@ -75,7 +131,8 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),
         iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Asignar chofer de turismo', style: TextStyle(color: AdminUi.onCard(context))),
+        title: Text('Asignar chofer de turismo',
+            style: TextStyle(color: AdminUi.onCard(context))),
       ),
       body: Column(
         children: [
@@ -92,8 +149,10 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
               style: TextStyle(color: AdminUi.onCard(context)),
               decoration: InputDecoration(
                 hintText: 'Buscar por nombre, teléfono o tipo de vehículo...',
-                hintStyle: TextStyle(color: AdminUi.secondary(context).withValues(alpha: 0.75)),
-                prefixIcon: Icon(Icons.search, color: AdminUi.secondary(context)),
+                hintStyle: TextStyle(
+                    color: AdminUi.secondary(context).withValues(alpha: 0.75)),
+                prefixIcon:
+                    Icon(Icons.search, color: AdminUi.secondary(context)),
                 filled: true,
                 fillColor: AdminUi.inputFill(context),
                 border: OutlineInputBorder(
@@ -109,26 +168,67 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                   borderSide: BorderSide(color: cs.primary, width: 1.4),
                 ),
               ),
-              onChanged: (String v) => setState(() => _filtroVehiculo = v.toLowerCase()),
+              onChanged: (String v) =>
+                  setState(() => _filtroVehiculo = v.toLowerCase()),
             ),
           ),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('choferes_turismo')
                   .where('estado', isEqualTo: 'aprobado')
                   .where('disponible', isEqualTo: true)
                   .snapshots(),
-              builder: (BuildContext context, AsyncSnapshot<QuerySnapshot> snapshot) {
+              builder: (BuildContext context,
+                  AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(child: CircularProgressIndicator(color: AdminUi.progressAccent(context)));
+                  return Center(
+                      child: CircularProgressIndicator(
+                          color: AdminUi.progressAccent(context)));
                 }
 
-                final List<QueryDocumentSnapshot> docs = snapshot.data?.docs ?? [];
+                if (snapshot.hasError) {
+                  final err = snapshot.error;
+                  final String msg = err is FirebaseException
+                      ? _mensajeFirebase(err)
+                      : err.toString();
+                  return Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.cloud_off_outlined,
+                              size: 48, color: AdminUi.secondary(context)),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No se pudieron cargar los choferes.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AdminUi.onCard(context),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            msg,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: AdminUi.secondary(context),
+                                fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
 
-                final List<QueryDocumentSnapshot> choferesCompatibles = docs.where((doc) {
-                  final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-                  return _vehiculoCoincidente(data) != null;
+                final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+                    snapshot.data?.docs ?? [];
+
+                final List<QueryDocumentSnapshot<Map<String, dynamic>>>
+                    choferesCompatibles = docs.where((doc) {
+                  return _vehiculoCoincidente(doc.data()) != null;
                 }).toList();
 
                 if (choferesCompatibles.isEmpty) {
@@ -170,20 +270,26 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                   );
                 }
 
-                final List<QueryDocumentSnapshot> choferesFiltrados = choferesCompatibles.where((doc) {
+                final List<QueryDocumentSnapshot<Map<String, dynamic>>>
+                    choferesFiltrados = choferesCompatibles.where((doc) {
                   if (_filtroVehiculo.isEmpty) return true;
-                  final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-                  final String nombre = (data['nombre'] ?? '').toString().toLowerCase();
-                  final String tel = (data['telefono'] ?? '').toString().toLowerCase();
-                  final String email = (data['email'] ?? '').toString().toLowerCase();
+                  final Map<String, dynamic> data = doc.data();
+                  final String nombre =
+                      (data['nombre'] ?? '').toString().toLowerCase();
+                  final String tel =
+                      (data['telefono'] ?? '').toString().toLowerCase();
+                  final String email =
+                      (data['email'] ?? '').toString().toLowerCase();
                   if (nombre.contains(_filtroVehiculo) ||
                       tel.contains(_filtroVehiculo) ||
                       email.contains(_filtroVehiculo)) {
                     return true;
                   }
-                  final List<dynamic> vehiculos = (data['vehiculos'] as List?) ?? [];
+                  final List<dynamic> vehiculos =
+                      (data['vehiculos'] as List?) ?? [];
                   final List<String> tipos = vehiculos
-                      .map((v) => (v is Map ? v['tipo'] : '').toString().toLowerCase())
+                      .map((v) =>
+                          (v is Map ? v['tipo'] : '').toString().toLowerCase())
                       .toList();
                   return tipos.any((String t) => t.contains(_filtroVehiculo));
                 }).toList();
@@ -192,35 +298,42 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                   padding: const EdgeInsets.all(16),
                   itemCount: choferesFiltrados.length,
                   itemBuilder: (BuildContext context, int index) {
-                    final QueryDocumentSnapshot doc = choferesFiltrados[index];
-                    final Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+                    final QueryDocumentSnapshot<Map<String, dynamic>> doc =
+                        choferesFiltrados[index];
+                    final Map<String, dynamic> data = doc.data();
 
                     return FutureBuilder<double>(
                       future: _calcularDistancia(data),
-                      builder: (BuildContext context, AsyncSnapshot<double> distanciaSnap) {
-                        final double distancia = distanciaSnap.data ?? double.infinity;
+                      builder: (BuildContext context,
+                          AsyncSnapshot<double> distanciaSnap) {
+                        final double distancia =
+                            distanciaSnap.data ?? double.infinity;
 
                         final green = AdminUi.accentGreen(context);
                         final String nombre = (data['nombre'] ?? '').toString();
-                        final String inicial = nombre.isNotEmpty ? nombre[0].toUpperCase() : '?';
+                        final String inicial =
+                            nombre.isNotEmpty ? nombre[0].toUpperCase() : '?';
 
                         return Card(
                           color: AdminUi.card(context),
                           margin: const EdgeInsets.only(bottom: 12),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: AdminUi.borderSubtle(context)),
+                            side: BorderSide(
+                                color: AdminUi.borderSubtle(context)),
                           ),
                           child: ListTile(
                             contentPadding: const EdgeInsets.all(12),
                             leading: CircleAvatar(
-                              backgroundColor: Theme.of(context).brightness == Brightness.light
+                              backgroundColor: Theme.of(context).brightness ==
+                                      Brightness.light
                                   ? Colors.deepPurple.shade100
                                   : Colors.purple,
                               child: Text(
                                 inicial,
                                 style: TextStyle(
-                                  color: Theme.of(context).brightness == Brightness.light
+                                  color: Theme.of(context).brightness ==
+                                          Brightness.light
                                       ? Colors.deepPurple.shade900
                                       : Colors.white,
                                 ),
@@ -235,18 +348,23 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                               children: <Widget>[
                                 Text(
                                   '📞 ${data['telefono'] ?? ''}',
-                                  style: TextStyle(color: AdminUi.secondary(context)),
+                                  style: TextStyle(
+                                      color: AdminUi.secondary(context)),
                                 ),
                                 Wrap(
                                   spacing: 4,
-                                  children: (data['vehiculos'] as List?)?.where((dynamic v) {
+                                  children: (data['vehiculos'] as List?)
+                                          ?.where((dynamic v) {
                                         if (v is! Map) return false;
-                                        return (v['tipo'] ?? '').toString().toLowerCase() ==
+                                        return (v['tipo'] ?? '')
+                                                .toString()
+                                                .toLowerCase() ==
                                             _tipoVehiculoRequerido;
                                       }).map((dynamic v) {
                                         return Chip(
                                           label: Text('✅ ${v['tipo'] ?? ''}'),
-                                          backgroundColor: green.withValues(alpha: 0.18),
+                                          backgroundColor:
+                                              green.withValues(alpha: 0.18),
                                           labelStyle: TextStyle(
                                             color: green,
                                             fontSize: 11,
@@ -259,12 +377,15 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                                 if (distancia != double.infinity)
                                   Text(
                                     '📍 A ${distancia.toStringAsFixed(1)} km',
-                                    style: TextStyle(color: AdminUi.muted(context)),
+                                    style: TextStyle(
+                                        color: AdminUi.muted(context)),
                                   ),
                                 Text(
-                                  '⭐ ${data['calificacion']?.toStringAsFixed(1) ?? 'N/A'} (${data['viajesCompletados'] ?? 0} viajes)',
+                                  '⭐ ${_fmtCalificacion(data['calificacion'])} '
+                                  '(${_toIntViajes(data['viajesCompletados'])} viajes)',
                                   style: TextStyle(
-                                    color: Theme.of(context).brightness == Brightness.light
+                                    color: Theme.of(context).brightness ==
+                                            Brightness.light
                                         ? Colors.amber.shade900
                                         : Colors.amber,
                                   ),
@@ -272,12 +393,14 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                               ],
                             ),
                             trailing: ElevatedButton(
-                              onPressed: () => _asignar(doc.id, data),
+                              onPressed: _asignacionEnCurso
+                                  ? null
+                                  : () => _asignar(doc.id, data),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.green.shade700,
                                 foregroundColor: Colors.white,
                               ),
-                              child: const Text('Asignar'),
+                              child: Text(_asignacionEnCurso ? '…' : 'Asignar'),
                             ),
                           ),
                         );
@@ -316,23 +439,28 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
     if (lat == null || lon == null) return double.infinity;
 
     return Geolocator.distanceBetween(
-      widget.latOrigen!,
-      widget.lonOrigen!,
-      lat,
-      lon,
-    ) / 1000;
+          widget.latOrigen!,
+          widget.lonOrigen!,
+          lat,
+          lon,
+        ) /
+        1000;
   }
 
   Future<void> _asignar(String uidChofer, Map<String, dynamic> data) async {
+    if (_asignacionEnCurso) return;
+
     final bool? confirmar = await showDialog<bool>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
         backgroundColor: AdminUi.dialogSurface(ctx),
-        title: Text('Confirmar asignación', style: TextStyle(color: AdminUi.onCard(ctx))),
+        title: Text('Confirmar asignación',
+            style: TextStyle(color: AdminUi.onCard(ctx))),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Text('¿Asignar este chofer?', style: TextStyle(color: AdminUi.secondary(ctx))),
+            Text('¿Asignar este chofer?',
+                style: TextStyle(color: AdminUi.secondary(ctx))),
             const SizedBox(height: 12),
             TextField(
               controller: _notaCtrl,
@@ -350,7 +478,8 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: const BorderRadius.all(Radius.circular(8)),
-                  borderSide: BorderSide(color: Theme.of(ctx).colorScheme.primary, width: 1.4),
+                  borderSide: BorderSide(
+                      color: Theme.of(ctx).colorScheme.primary, width: 1.4),
                 ),
                 filled: true,
                 fillColor: AdminUi.inputFill(ctx),
@@ -361,7 +490,8 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancelar', style: TextStyle(color: AdminUi.secondary(ctx))),
+            child: Text('Cancelar',
+                style: TextStyle(color: AdminUi.secondary(ctx))),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -381,7 +511,10 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
     if (veh == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El chofer ya no tiene un vehículo compatible.')),
+        const SnackBar(
+          content: Text('El chofer ya no tiene un vehículo compatible.'),
+          backgroundColor: Colors.orange,
+        ),
       );
       return;
     }
@@ -392,6 +525,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
     final String color = (veh['color'] ?? '').toString();
     final String nota = _notaCtrl.text.trim();
 
+    setState(() => _asignacionEnCurso = true);
     try {
       final String res = await AsignacionTurismoRepo.asignarChofer(
         viajeId: widget.viajeId,
@@ -409,22 +543,46 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
       if (!mounted) return;
 
       if (res == 'ok') {
-        await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
+        try {
+          await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
+        } catch (_) {
+          // La asignación ya quedó; el chat se puede crear después.
+        }
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Chofer asignado')),
+          const SnackBar(
+            content: Text('Chofer asignado'),
+            backgroundColor: Colors.green,
+          ),
         );
         Navigator.pop(context, true);
       } else {
+        final msg = _mensajeResultadoAsignacion(res);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $res')),
+          SnackBar(
+            content: Text(msg.isEmpty ? res : msg),
+            backgroundColor: Colors.red,
+          ),
         );
       }
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_mensajeFirebase(e)),
+          backgroundColor: Colors.red,
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.red,
+        ),
       );
+    } finally {
+      if (mounted) setState(() => _asignacionEnCurso = false);
     }
   }
 }

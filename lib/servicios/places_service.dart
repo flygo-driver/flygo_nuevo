@@ -42,6 +42,7 @@ class PlaceDetails {
 class PlacesService {
   final String apiKey;
   final String language;
+
   /// p.ej. ['country:do']
   final List<String> components;
 
@@ -96,34 +97,40 @@ class PlacesService {
       }
 
       final List preds = (json['predictions'] as List?) ?? const [];
-      return preds.map((e) {
-        final m = (e as Map).cast<String, dynamic>();
-        final placeId = (m['place_id'] ?? '').toString();
-        final desc = (m['description'] ?? '').toString();
+      return preds
+          .map((e) {
+            final m = (e as Map).cast<String, dynamic>();
+            final placeId = (m['place_id'] ?? '').toString();
+            final desc = (m['description'] ?? '').toString();
 
-        String primary = desc;
-        String? secondary;
+            String primary = desc;
+            String? secondary;
 
-        final sf = (m['structured_formatting'] as Map?)?.cast<String, dynamic>();
-        final mainText = sf?['main_text']?.toString();
-        final secText = sf?['secondary_text']?.toString();
-        if ((mainText ?? '').trim().isNotEmpty) {
-          primary = mainText!.trim();
-          secondary = (secText ?? '').trim().isEmpty ? null : secText!.trim();
-        } else {
-          final parts = desc.split(',').map((s) => s.trim()).toList();
-          if (parts.length > 1) {
-            primary = parts.first;
-            secondary = parts.sublist(1).join(', ');
-          }
-        }
+            final sf =
+                (m['structured_formatting'] as Map?)?.cast<String, dynamic>();
+            final mainText = sf?['main_text']?.toString();
+            final secText = sf?['secondary_text']?.toString();
+            if ((mainText ?? '').trim().isNotEmpty) {
+              primary = mainText!.trim();
+              secondary =
+                  (secText ?? '').trim().isEmpty ? null : secText!.trim();
+            } else {
+              final parts = desc.split(',').map((s) => s.trim()).toList();
+              if (parts.length > 1) {
+                primary = parts.first;
+                secondary = parts.sublist(1).join(', ');
+              }
+            }
 
-        return PlacePrediction(
-          placeId: placeId.isNotEmpty ? placeId : desc,
-          primary: primary.isNotEmpty ? primary : desc,
-          secondary: (secondary ?? '').trim().isEmpty ? null : secondary!.trim(),
-        );
-      }).cast<PlacePrediction>().toList(growable: false);
+            return PlacePrediction(
+              placeId: placeId.isNotEmpty ? placeId : desc,
+              primary: primary.isNotEmpty ? primary : desc,
+              secondary:
+                  (secondary ?? '').trim().isEmpty ? null : secondary!.trim(),
+            );
+          })
+          .cast<PlacePrediction>()
+          .toList(growable: false);
     } catch (_) {
       return const <PlacePrediction>[];
     }

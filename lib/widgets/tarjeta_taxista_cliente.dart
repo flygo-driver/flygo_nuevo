@@ -8,11 +8,15 @@ class TarjetaTaxistaCliente extends StatelessWidget {
   const TarjetaTaxistaCliente({super.key, required this.viaje});
 
   double? _distKmTaxistaAlPickup(Viaje v) {
-    if ((v.latTaxista == 0 && v.lonTaxista == 0) || (v.latCliente == 0 && v.lonCliente == 0)) {
+    if ((v.latTaxista == 0 && v.lonTaxista == 0) ||
+        (v.latCliente == 0 && v.lonCliente == 0)) {
       return null;
     }
     return DistanciaService.calcularDistancia(
-      v.latTaxista, v.lonTaxista, v.latCliente, v.lonCliente,
+      v.latTaxista,
+      v.lonTaxista,
+      v.latCliente,
+      v.lonCliente,
     );
   }
 
@@ -63,10 +67,10 @@ class TarjetaTaxistaCliente extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Campos que SÍ existen en tu Viaje
-    final String nombre = viaje.nombreTaxista;   // no usar ??
-    final String placa  = viaje.placa;
-    final String tipo   = viaje.tipoVehiculo;
-    final String tel    = viaje.telefono;
+    final String nombre = viaje.nombreTaxista; // no usar ??
+    final String placa = viaje.placa;
+    final String tipo = viaje.tipoVehiculo;
+    final String tel = viaje.telefono;
 
     final String titulo = nombre.isNotEmpty ? nombre : 'Tu conductor';
     final String vehiculoText = [
@@ -95,23 +99,29 @@ class TarjetaTaxistaCliente extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(
-                    titulo,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18),
-                  ),
-                  const SizedBox(height: 4),
-                  if (vehiculoText.isNotEmpty)
-                    Text(
-                      vehiculoText,
-                      style: const TextStyle(color: Colors.white70),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                ]),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        titulo,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 18),
+                      ),
+                      const SizedBox(height: 4),
+                      if (vehiculoText.isNotEmpty)
+                        Text(
+                          vehiculoText,
+                          style: const TextStyle(color: Colors.white70),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ]),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
                   color: estadoColor.withAlpha(28),
                   border: Border.all(color: estadoColor.withAlpha(178)),
@@ -120,18 +130,23 @@ class TarjetaTaxistaCliente extends StatelessWidget {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.local_taxi, size: 14, color: estadoColor),
                   const SizedBox(width: 6),
-                  Text(estadoTxt, style: TextStyle(color: estadoColor, fontWeight: FontWeight.w600)),
+                  Text(estadoTxt,
+                      style: TextStyle(
+                          color: estadoColor, fontWeight: FontWeight.w600)),
                 ]),
               ),
             ],
           ),
           const SizedBox(height: 12),
           Wrap(
-            spacing: 8, runSpacing: 8,
+            spacing: 8,
+            runSpacing: 8,
             children: [
               if (tipo.isNotEmpty) _chip(icon: Icons.local_taxi, text: tipo),
-              if (placa.isNotEmpty) _chip(icon: Icons.credit_card, text: 'Placa: $placa'),
-              if (distKm != null) _chip(icon: Icons.timer, text: 'ETA ${_etaMinTxt(distKm)}'),
+              if (placa.isNotEmpty)
+                _chip(icon: Icons.credit_card, text: 'Placa: $placa'),
+              if (distKm != null)
+                _chip(icon: Icons.timer, text: 'ETA ${_etaMinTxt(distKm)}'),
             ],
           ),
           if (tel.isNotEmpty) ...[
@@ -146,8 +161,10 @@ class TarjetaTaxistaCliente extends StatelessWidget {
                   backgroundColor: Colors.white,
                   foregroundColor: Colors.black87,
                   minimumSize: const Size(double.infinity, 48),
-                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
             ),

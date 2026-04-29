@@ -8,5 +8,6 @@ class Debouncer {
     _t?.cancel();
     _t = Timer(Duration(milliseconds: ms), f);
   }
+
   void dispose() => _t?.cancel();
 }

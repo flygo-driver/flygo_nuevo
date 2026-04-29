@@ -58,12 +58,14 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
               const SizedBox(height: 12),
               ListTile(
                 leading: Icon(Icons.photo_camera, color: bcs.primary),
-                title: Text('Tomar foto', style: TextStyle(color: bcs.onSurface)),
+                title:
+                    Text('Tomar foto', style: TextStyle(color: bcs.onSurface)),
                 onTap: () => Navigator.pop(context, ImageSource.camera),
               ),
               ListTile(
                 leading: Icon(Icons.photo_library, color: bcs.primary),
-                title: Text('Elegir de galería', style: TextStyle(color: bcs.onSurface)),
+                title: Text('Elegir de galería',
+                    style: TextStyle(color: bcs.onSurface)),
                 onTap: () => Navigator.pop(context, ImageSource.gallery),
               ),
               const SizedBox(height: 8),
@@ -98,10 +100,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
 
       // Nombre único para evitar cache y colisiones
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final ref = _storage.ref()
-          .child('perfiles')
-          .child(uid)
-          .child('avatar_$ts.jpg');
+      final ref =
+          _storage.ref().child('perfiles').child(uid).child('avatar_$ts.jpg');
 
       // Sube la imagen (contentType que cumple tus reglas: image/*)
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
@@ -184,15 +184,16 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
 
     if (nombre.length < 2) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Nombre demasiado corto.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nombre demasiado corto.')));
       return;
     }
     if (telefono.length < 7) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Indica un teléfono válido (mínimo 7 dígitos) para completar el registro.'),
+          content: Text(
+              'Indica un teléfono válido (mínimo 7 dígitos) para completar el registro.'),
         ),
       );
       return;
@@ -209,7 +210,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
       }, SetOptions(merge: true));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ Datos guardados y registro sincronizado.')),
+        const SnackBar(
+            content: Text('✅ Datos guardados y registro sincronizado.')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -253,7 +255,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
     } on FirebaseException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ Test Storage: [${e.code}] ${e.message ?? ''}')),
+        SnackBar(
+            content: Text('❌ Test Storage: [${e.code}] ${e.message ?? ''}')),
       );
     } finally {
       if (mounted) {
@@ -278,7 +281,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
       );
     }
 
-    final docRef = FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
+    final docRef =
+        FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
 
     return Scaffold(
       backgroundColor: cs.surface,
@@ -338,7 +342,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                       right: -4,
                       bottom: -4,
                       child: ElevatedButton.icon(
-                        onPressed: _subiendo ? null : () => _cambiarFoto(user.uid),
+                        onPressed:
+                            _subiendo ? null : () => _cambiarFoto(user.uid),
                         icon: _subiendo
                             ? SizedBox(
                                 width: 18,
@@ -353,7 +358,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: cs.primary,
                           foregroundColor: cs.onPrimary,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
                         ),
                       ),
                     ),
@@ -365,7 +371,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                 TextButton.icon(
                   onPressed: () => _eliminarFoto(user.uid),
                   icon: Icon(Icons.delete_outline, color: cs.error),
-                  label: Text('Eliminar foto', style: TextStyle(color: cs.error)),
+                  label:
+                      Text('Eliminar foto', style: TextStyle(color: cs.error)),
                 ),
               const SizedBox(height: 24),
               Text(
@@ -388,7 +395,9 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                   hintStyle: TextStyle(color: cs.onSurfaceVariant),
                   filled: true,
                   fillColor: cs.surfaceContainerHighest.withValues(
-                    alpha: Theme.of(context).brightness == Brightness.dark ? 0.45 : 0.65,
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? 0.45
+                        : 0.65,
                   ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -417,7 +426,9 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                   hintStyle: TextStyle(color: cs.onSurfaceVariant),
                   filled: true,
                   fillColor: cs.surfaceContainerHighest.withValues(
-                    alpha: Theme.of(context).brightness == Brightness.dark ? 0.45 : 0.65,
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? 0.45
+                        : 0.65,
                   ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -437,7 +448,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _guardando ? null : () => _guardarDatosPerfil(user.uid),
+                  onPressed:
+                      _guardando ? null : () => _guardarDatosPerfil(user.uid),
                   icon: _guardando
                       ? SizedBox(
                           width: 18,
@@ -448,7 +460,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                           ),
                         )
                       : Icon(Icons.save, color: cs.onPrimary),
-                  label: Text(_guardando ? 'Guardando…' : 'Guardar datos de registro'),
+                  label: Text(
+                      _guardando ? 'Guardando…' : 'Guardar datos de registro'),
                   style: FilledButton.styleFrom(
                     backgroundColor: cs.primary,
                     foregroundColor: cs.onPrimary,

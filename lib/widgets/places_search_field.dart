@@ -100,7 +100,8 @@ class _PlacesSearchFieldState extends State<PlacesSearchField> {
       _items = const [];
     });
     try {
-      final det = await PlacesApi.details(p.placeId, sessionToken: _sessionToken);
+      final det =
+          await PlacesApi.details(p.placeId, sessionToken: _sessionToken);
       _endSession(); // cerrar la sesión de Places
 
       if (det == null) {
@@ -168,13 +169,11 @@ class _PlacesSearchFieldState extends State<PlacesSearchField> {
             if (_sessionToken == null) _ensureSession();
           },
         ),
-
         if (_loading)
           const Padding(
             padding: EdgeInsets.only(top: 6),
             child: LinearProgressIndicator(minHeight: 2),
           ),
-
         if (_items.isNotEmpty)
           Container(
             margin: const EdgeInsets.only(top: 6),
@@ -203,10 +202,9 @@ class _PlacesSearchFieldState extends State<PlacesSearchField> {
                 return ListTile(
                   onTap: () => _pick(p),
                   dense: true,
-                  leading:
-                      const Icon(Icons.place, color: Colors.greenAccent),
-                  title: Text(title,
-                      style: const TextStyle(color: Colors.white)),
+                  leading: const Icon(Icons.place, color: Colors.greenAccent),
+                  title:
+                      Text(title, style: const TextStyle(color: Colors.white)),
                   subtitle: sec.isEmpty
                       ? null
                       : Text(sec,

@@ -18,7 +18,9 @@ class TarjetaViaje extends StatelessWidget {
           ? viaje.estado
           : (viaje.completado
               ? EstadosViaje.completado
-              : (viaje.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+              : (viaje.aceptado
+                  ? EstadosViaje.aceptado
+                  : EstadosViaje.pendiente)),
     );
 
     return Card(
@@ -31,7 +33,8 @@ class TarjetaViaje extends StatelessWidget {
         leading: const Icon(Icons.local_taxi, color: Colors.white70),
         title: Text(
           "${viaje.origen} ➝ ${viaje.destino}",
-          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          style:
+              const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
@@ -40,11 +43,14 @@ class TarjetaViaje extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("Tipo: ${viaje.tipoVehiculo}", style: const TextStyle(color: Colors.white70)),
-              Text("Pago: ${viaje.metodoPago}", style: const TextStyle(color: Colors.white70)),
+              Text("Tipo: ${viaje.tipoVehiculo}",
+                  style: const TextStyle(color: Colors.white70)),
+              Text("Pago: ${viaje.metodoPago}",
+                  style: const TextStyle(color: Colors.white70)),
               Text(
                 "Precio: RD\$${viaje.precio.toStringAsFixed(2)}",
-                style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                    color: Colors.greenAccent, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
               EstadoBadge(estado: estadoBase),

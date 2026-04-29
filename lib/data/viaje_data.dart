@@ -7,7 +7,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 
 class ViajeData {
   // ---------- Firestore ----------
@@ -87,7 +89,8 @@ class ViajeData {
 
   static int _toCents(num v) => (v * 100).round();
   static double _fromCents(int c) => c / 100.0;
-  static int _comision20Cents(int precioCents) => ((precioCents * 20) + 50) ~/ 100;
+  static int _comision20Cents(int precioCents) =>
+      ((precioCents * 20) + 50) ~/ 100;
 
   static Map<String, int> _partidasCentsDesdePrecio(num precioDbl) {
     final int pCents = _toCents(precioDbl);
@@ -103,30 +106,14 @@ class ViajeData {
   // Fuerza estado canónico al ESCRIBIR en DB
   static String _estadoCanon(String estado) => EstadosViaje.normalizar(estado);
 
-  // ---------- Helpers cancelación ----------
-  static const List<String> _motivosProtegidos = <String>[
-    'vehículo no coincide',
-    'vehiculo no coincide',
-    'seguridad',
-    'conductor pidió cancelar',
-    'conductor pidio cancelar',
-    'retraso excesivo',
-    'retraso',
-  ];
-
-  static bool _esMotivoProtegido(String? motivo) {
-    final String m = motivo?.toLowerCase().trim() ?? '';
-    if (m.isEmpty) return false;
-    return _motivosProtegidos.any((String x) => m.contains(x));
-  }
-
   // ===== Helpers de comparación con tolerancia (para evitar parpadeos) =====
   static bool _approxEq(double a, double b, [double eps = 0.0001]) =>
       (a - b).abs() <= eps;
 
   static bool _viajeIgualAprox(Viaje a, Viaje b) {
     return a.id == b.id &&
-        EstadosViaje.normalizar(a.estado) == EstadosViaje.normalizar(b.estado) &&
+        EstadosViaje.normalizar(a.estado) ==
+            EstadosViaje.normalizar(b.estado) &&
         _approxEq(a.latTaxista, b.latTaxista) &&
         _approxEq(a.lonTaxista, b.lonTaxista) &&
         _approxEq(a.latCliente, b.latCliente) &&
@@ -155,21 +142,24 @@ class ViajeData {
         t?.cancel();
       });
 
-      input.listen((event) {
-        if (t == null || !t!.isActive) {
-          ctrl.add(event);
-          t = Timer(window, () {
+      input.listen(
+          (event) {
+            if (t == null || !t!.isActive) {
+              ctrl.add(event);
+              t = Timer(window, () {
+                emitPending();
+              });
+            } else {
+              pending = event;
+              hasPending = true;
+            }
+          },
+          onError: ctrl.addError,
+          onDone: () {
             emitPending();
+            isClosed = true;
+            ctrl.close();
           });
-        } else {
-          pending = event;
-          hasPending = true;
-        }
-      }, onError: ctrl.addError, onDone: () {
-        emitPending();
-        isClosed = true;
-        ctrl.close();
-      });
 
       return ctrl.stream;
     });
@@ -283,14 +273,18 @@ class ViajeData {
 
     final DateTime now = DateTime.now();
     final DateTime fhLocal = fechaHoraLocal ?? now;
-    final bool esAhoraCalc = fhLocal.isBefore(now.add(const Duration(minutes: 15)));
+    final bool esAhoraCalc =
+        TripPublishWindows.esAhoraPorFechaPickup(fhLocal, now);
 
-    const int kAcceptHoursBefore = 2;
-    const int kReadyMinutesBefore = 45;
-    final DateTime acceptAfterDT =
-        esAhoraCalc ? now : fhLocal.subtract(const Duration(hours: kAcceptHoursBefore));
-    final DateTime startWindowDT =
-        esAhoraCalc ? now : fhLocal.subtract(const Duration(minutes: kReadyMinutesBefore));
+    final DateTime publishAtDT = esAhoraCalc
+        ? now
+        : TripPublishWindows.poolOpensAtForScheduledPickup(fhLocal, now);
+    final DateTime acceptAfterDT = esAhoraCalc
+        ? now
+        : TripPublishWindows.acceptAfterForScheduledPickup(fhLocal, now);
+    final DateTime startWindowDT = esAhoraCalc
+        ? now
+        : TripPublishWindows.startWindowAtForScheduledPickup(fhLocal, now);
 
     final Map<String, int> partidas = _partidasCentsDesdePrecio(precio);
 
@@ -327,7 +321,7 @@ class ViajeData {
       'programado': !esAhoraCalc,
       'acceptAfter': Timestamp.fromDate(acceptAfterDT),
       'startWindowAt': Timestamp.fromDate(startWindowDT),
-      'publishAt': Timestamp.fromDate(acceptAfterDT),
+      'publishAt': Timestamp.fromDate(publishAtDT),
       'precio': _fromCents(partidas['precio_cents']!),
       'metodoPago': metodoPago,
       'tipoVehiculo': tipoVehiculo,
@@ -465,14 +459,14 @@ class ViajeData {
 
       return todos.first;
     })
-    // Ignora microcambios por tolerancia en coordenadas/estado
-    .distinct((prev, next) {
+        // Ignora microcambios por tolerancia en coordenadas/estado
+        .distinct((prev, next) {
       if (prev == null && next == null) return true;
       if (prev == null || next == null) return false;
       return _viajeIgualAprox(prev, next);
     })
-    // Suaviza frecuencia de emisiones para evitar rebuilds/parpadeos
-    .transform(_throttleDistinct(const Duration(milliseconds: 350)));
+        // Suaviza frecuencia de emisiones para evitar rebuilds/parpadeos
+        .transform(_throttleDistinct(const Duration(milliseconds: 350)));
   }
 
   static Stream<Viaje?> streamViajeEnCursoPorTaxista(String uidTaxista) {
@@ -496,39 +490,46 @@ class ViajeData {
         .where('completado', isEqualTo: false)
         .snapshots()
         .map((QuerySnapshot<Map<String, dynamic>> snap) {
-          if (snap.docs.isEmpty) return null;
+      if (snap.docs.isEmpty) return null;
 
-          final List<Map<String, dynamic>> docs = snap.docs.map((d) {
-            final Map<String, dynamic> data = _normalize(d.data());
-            final DateTime updatedAt = (d.data()['updatedAt'] is Timestamp)
-                ? (d.data()['updatedAt'] as Timestamp).toDate()
-                : _createdOf(d.data());
-            return <String, dynamic>{'id': d.id, 'data': data, 'updatedAt': updatedAt};
-          }).toList();
+      final List<Map<String, dynamic>> docs = snap.docs.map((d) {
+        final Map<String, dynamic> data = _normalize(d.data());
+        final DateTime updatedAt = (d.data()['updatedAt'] is Timestamp)
+            ? (d.data()['updatedAt'] as Timestamp).toDate()
+            : _createdOf(d.data());
+        return <String, dynamic>{
+          'id': d.id,
+          'data': data,
+          'updatedAt': updatedAt
+        };
+      }).toList();
 
-          docs.sort((a, b) => (b['updatedAt'] as DateTime).compareTo(a['updatedAt'] as DateTime));
+      docs.sort((a, b) =>
+          (b['updatedAt'] as DateTime).compareTo(a['updatedAt'] as DateTime));
 
-          for (final Map<String, dynamic> it in docs) {
-            final String estado =
-                EstadosViaje.normalizar((it['data'] as Map<String, dynamic>)['estado']?.toString() ?? '');
-            if (EstadosViaje.esActivo(estado)) {
-              return Viaje.fromMap(
-                it['id'] as String,
-                it['data'] as Map<String, dynamic>,
-              );
-            }
-          }
+      for (final Map<String, dynamic> it in docs) {
+        final String estado = EstadosViaje.normalizar(
+            (it['data'] as Map<String, dynamic>)['estado']?.toString() ?? '');
+        if (EstadosViaje.esActivo(estado)) {
+          return Viaje.fromMap(
+            it['id'] as String,
+            it['data'] as Map<String, dynamic>,
+          );
+        }
+      }
 
-          final Map<String, dynamic> top = docs.first;
-          return Viaje.fromMap(top['id'] as String, top['data'] as Map<String, dynamic>);
-        });
+      final Map<String, dynamic> top = docs.first;
+      return Viaje.fromMap(
+          top['id'] as String, top['data'] as Map<String, dynamic>);
+    });
   }
 
   static Stream<List<Viaje>> streamViajesPorCliente(String uidCliente) {
     return _viajes.where('clienteId', isEqualTo: uidCliente).snapshots().map(
       (QuerySnapshot<Map<String, dynamic>> s) {
-        final List<Viaje> list =
-            s.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+        final List<Viaje> list = s.docs
+            .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
+            .toList();
         list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
         return list;
       },
@@ -548,11 +549,13 @@ class ViajeData {
     });
   }
 
-  static Stream<List<Viaje>> streamHistorialClienteTodosEstados(String clienteId) {
+  static Stream<List<Viaje>> streamHistorialClienteTodosEstados(
+      String clienteId) {
     return _viajes.where('clienteId', isEqualTo: clienteId).snapshots().map(
       (QuerySnapshot<Map<String, dynamic>> s) {
-        final List<Viaje> list =
-            s.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+        final List<Viaje> list = s.docs
+            .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
+            .toList();
         list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
         return list;
       },
@@ -577,8 +580,9 @@ class ViajeData {
   static Future<List<Viaje>> obtenerViajesPorCliente(String clienteId) async {
     final QuerySnapshot<Map<String, dynamic>> snapshot =
         await _viajes.where('clienteId', isEqualTo: clienteId).get();
-    final List<Viaje> list =
-        snapshot.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+    final List<Viaje> list = snapshot.docs
+        .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
+        .toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
     return list;
   }
@@ -588,19 +592,22 @@ class ViajeData {
         .where('clienteId', isEqualTo: clienteId)
         .where('completado', isEqualTo: true)
         .get();
-    final List<Viaje> list =
-        snapshot.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+    final List<Viaje> list = snapshot.docs
+        .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
+        .toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
     return list;
   }
 
-  static Future<List<Viaje>> obtenerHistorialTaxista(String emailTaxista) async {
+  static Future<List<Viaje>> obtenerHistorialTaxista(
+      String emailTaxista) async {
     final QuerySnapshot<Map<String, dynamic>> snapshot = await _viajes
         .where('nombreTaxista', isEqualTo: emailTaxista)
         .where('completado', isEqualTo: true)
         .get();
-    final List<Viaje> list =
-        snapshot.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+    final List<Viaje> list = snapshot.docs
+        .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
+        .toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
     return list;
   }
@@ -620,14 +627,16 @@ class ViajeData {
       if (!snap.exists) throw Exception('El viaje no existe.');
       final Map<String, dynamic> data = snap.data()!;
 
-      final bool yaCompletado =
-          (data['completado'] == true) ||
-          (EstadosViaje.normalizar(data['estado']?.toString() ?? '') == EstadosViaje.completado);
+      final bool yaCompletado = (data['completado'] == true) ||
+          (EstadosViaje.normalizar(data['estado']?.toString() ?? '') ==
+              EstadosViaje.completado);
       if (yaCompletado) return;
 
-      final double precioBase = _asDouble(data['precioFinal'] ?? data['precio']);
+      final double precioBase =
+          _asDouble(data['precioFinal'] ?? data['precio']);
 
-      final int precioCents = (data['precio_cents'] as int?) ?? _toCents(precioBase);
+      final int precioCents =
+          (data['precio_cents'] as int?) ?? _toCents(precioBase);
       final int comisionCents =
           (data['comision_cents'] as int?) ?? _comision20Cents(precioCents);
       final int gananciaCents =
@@ -653,16 +662,20 @@ class ViajeData {
       if (uidTaxista.isNotEmpty) {
         final refTax = _db.collection('usuarios').doc(uidTaxista);
         // Las rules exigen poner '' (no delete) y solo esas keys.
-        tx.set(refTax, {
-          'viajeActivoId': '',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        tx.set(
+            refTax,
+            {
+              'viajeActivoId': '',
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true));
       }
     });
 
     try {
-      final DocumentSnapshot<Map<String, dynamic>> d = await _viajes.doc(viajeId).get();
+      final DocumentSnapshot<Map<String, dynamic>> d =
+          await _viajes.doc(viajeId).get();
       if (d.exists) {
         final Viaje v = Viaje.fromMap(d.id, _normalize(d.data()!));
         await PagoData.registrarMovimientoPorViaje(v);
@@ -712,7 +725,8 @@ class ViajeData {
         throw Exception('No puedes cancelar este viaje.');
       }
 
-      final String estado = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final String estado =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
       final bool completado = (d['completado'] ?? false) == true;
 
       if (completado || estado == EstadosViaje.completado) {
@@ -722,15 +736,8 @@ class ViajeData {
         return;
       }
 
-      // Reglas de negocio adicionales (no cambian llaves)
-      final bool protegido = _esMotivoProtegido(motivo);
-      if (estado == EstadosViaje.aBordo && !protegido) {
-        throw Exception(
-          'No puedes cancelar en este estado. Si hay un problema de seguridad, indica ese motivo.',
-        );
-      }
-      if (estado == EstadosViaje.enCurso) {
-        throw Exception('El viaje ya inició.');
+      if (EstadosViaje.esEstadoSinCancelacionApp(estado)) {
+        throw Exception(EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp);
       }
 
       // ⬇️ SOLO llaves permitidas por tus rules (changedOnly([...]))
@@ -778,6 +785,12 @@ class ViajeData {
       // Si ya está completado, no hacemos nada
       final bool completado = (d['completado'] ?? false) == true;
       if (completado) return;
+
+      final String estadoTx =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      if (EstadosViaje.esEstadoSinCancelacionApp(estadoTx)) {
+        throw Exception(EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp);
+      }
 
       uidTaxistaParaLimpiar = (d['uidTaxista'] ?? '').toString();
 
@@ -856,8 +869,12 @@ class ViajeData {
     for (final d in docs) {
       final data = d.data();
       final estado = EstadosViaje.normalizar((data['estado'] ?? '').toString());
-      final bool esActivo = EstadosViaje.esActivo(estado) && estado != EstadosViaje.cancelado;
+      final bool esActivo =
+          EstadosViaje.esActivo(estado) && estado != EstadosViaje.cancelado;
       if (esActivo) {
+        if (EstadosViaje.esEstadoSinCancelacionApp(estado)) {
+          return false;
+        }
         await cancelarCualquierEstadoPorClienteTx(
           viajeId: d.id,
           uidCliente: uidCliente,
@@ -888,7 +905,8 @@ class ViajeData {
         throw Exception('No puedes reprogramar este viaje.');
       }
 
-      final String estado = EstadosViaje.normalizar((data['estado'] ?? '').toString());
+      final String estado =
+          EstadosViaje.normalizar((data['estado'] ?? '').toString());
       final bool completado = (data['completado'] ?? false) == true;
 
       if (completado || estado == EstadosViaje.completado) {
@@ -927,16 +945,17 @@ class ViajeData {
         _db.collection('usuarios').doc(uidTaxista);
 
     await _db.runTransaction((Transaction tx) async {
-      final DocumentSnapshot<Map<String, dynamic>> viajeSnap = await tx.get(viajesRef);
+      final DocumentSnapshot<Map<String, dynamic>> viajeSnap =
+          await tx.get(viajesRef);
       if (!viajeSnap.exists) throw Exception('El viaje no existe.');
       final Map<String, dynamic> d = viajeSnap.data()!;
 
-      final String estado = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final String estado =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
       final bool aceptado = (d['aceptado'] ?? false) == true;
       final bool rechazado = (d['rechazado'] ?? false) == true;
       final bool completado = (d['completado'] ?? false) == true;
-      final bool yaAsignado =
-          ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
+      final bool yaAsignado = ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
           ((d['taxistaId'] ?? '') as String).isNotEmpty;
 
       if (estado != EstadosViaje.pendiente ||
@@ -947,15 +966,26 @@ class ViajeData {
         throw Exception('Este viaje ya no está disponible.');
       }
 
-      final DocumentSnapshot<Map<String, dynamic>> userSnap = await tx.get(userRef);
+      final DocumentSnapshot<Map<String, dynamic>> userSnap =
+          await tx.get(userRef);
       if (!userSnap.exists) throw Exception('Taxista no encontrado.');
       final Map<String, dynamic> u = userSnap.data()!;
+      final billeSnap =
+          await tx.get(_db.collection('billeteras_taxista').doc(uidTaxista));
+      if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+          u, billeSnap.data())) {
+        throw Exception(PagosTaxistaRepo.mensajeRecargaTomarViajes);
+      }
       final bool disponible = (u['disponible'] ?? false) == true;
       if (!disponible) throw Exception('No disponible para aceptar viajes.');
-      final String docsEstado = (u['docsEstado'] ?? '').toString().toLowerCase().trim();
-      final bool documentosCompletos = (u['documentosCompletos'] ?? false) == true;
-      final bool aprobado =
-          documentosCompletos || docsEstado == 'aprobado' || docsEstado == 'verificado' || docsEstado == 'ok';
+      final String docsEstado =
+          (u['docsEstado'] ?? '').toString().toLowerCase().trim();
+      final bool documentosCompletos =
+          (u['documentosCompletos'] ?? false) == true;
+      final bool aprobado = documentosCompletos ||
+          docsEstado == 'aprobado' ||
+          docsEstado == 'verificado' ||
+          docsEstado == 'ok';
       if (!aprobado) throw Exception('Documentos pendientes.');
 
       tx.update(viajesRef, <String, dynamic>{
@@ -969,11 +999,14 @@ class ViajeData {
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
 
-      tx.set(userRef, <String, dynamic>{
-        'viajeActivoId': viajeId,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+          userRef,
+          <String, dynamic>{
+            'viajeActivoId': viajeId,
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true));
     });
   }
 
@@ -990,7 +1023,8 @@ class ViajeData {
         throw Exception('No autorizado');
       }
 
-      final String estadoActual = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final String estadoActual =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
       final bool completado = (d['completado'] ?? false) == true;
       if (completado ||
           estadoActual == EstadosViaje.completado ||
@@ -1020,7 +1054,8 @@ class ViajeData {
         throw Exception('No autorizado');
       }
 
-      final String estadoActual = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final String estadoActual =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
       if (estadoActual != EstadosViaje.aBordo) {
         throw Exception('Primero marca "Cliente a bordo".');
       }
@@ -1047,9 +1082,10 @@ class ViajeData {
         throw Exception('No autorizado');
       }
 
-      final String estadoActual = EstadosViaje.normalizar((d['estado'] ?? '').toString());
-      final bool permitido =
-          (estadoActual == EstadosViaje.aceptado || estadoActual == EstadosViaje.enCaminoPickup);
+      final String estadoActual =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final bool permitido = (estadoActual == EstadosViaje.aceptado ||
+          estadoActual == EstadosViaje.enCaminoPickup);
       if (!permitido) {
         throw Exception('No se puede cancelar en este estado.');
       }
@@ -1065,7 +1101,8 @@ class ViajeData {
       } else {
         fh = DateTime.now();
       }
-      final bool esAhora = !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+      final bool esAhora =
+          !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
 
       tx.update(ref, <String, dynamic>{
         'estado': _estadoCanon(EstadosViaje.pendiente),
@@ -1085,11 +1122,14 @@ class ViajeData {
       });
 
       final refTax = _db.collection('usuarios').doc(uidTaxista);
-      tx.set(refTax, {
-        'viajeActivoId': '',
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+          refTax,
+          {
+            'viajeActivoId': '',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true));
     });
   }
 
@@ -1104,7 +1144,8 @@ class ViajeData {
         .get();
 
     double gananciaTotal = 0.0;
-    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in snapshot.docs) {
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc
+        in snapshot.docs) {
       gananciaTotal += _asDouble(doc.data()['gananciaTaxista']);
     }
 
@@ -1122,7 +1163,8 @@ class ViajeData {
         .get();
 
     double gananciaTotal = 0.0;
-    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in snapshot.docs) {
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc
+        in snapshot.docs) {
       gananciaTotal += _asDouble(doc.data()['gananciaTaxista']);
     }
 
@@ -1175,7 +1217,8 @@ class ViajeData {
         <String, dynamic>{
           'viajeId': viajeId,
           'calificacion': calificacion,
-          if (comentario != null && comentario.isNotEmpty) 'comentario': comentario,
+          if (comentario != null && comentario.isNotEmpty)
+            'comentario': comentario,
         },
       );
       final Object? data = res.data;
@@ -1193,7 +1236,8 @@ class ViajeData {
         case 'unauthenticated':
           throw Exception('Debes iniciar sesión.');
         case 'permission-denied':
-          throw Exception(msg.isNotEmpty ? msg : 'No puedes calificar este viaje.');
+          throw Exception(
+              msg.isNotEmpty ? msg : 'No puedes calificar este viaje.');
         case 'failed-precondition':
           throw Exception(
             msg.isNotEmpty ? msg : 'Solo puedes calificar viajes completados.',
@@ -1216,10 +1260,12 @@ class ViajeData {
 
     final Map<String, dynamic> data = u.data() ?? <String, dynamic>{};
 
-    final double suma =
-        (data['ratingSuma'] is num) ? (data['ratingSuma'] as num).toDouble() : 0.0;
-    final double conteo =
-        (data['ratingConteo'] is num) ? (data['ratingConteo'] as num).toDouble() : 0.0;
+    final double suma = (data['ratingSuma'] is num)
+        ? (data['ratingSuma'] as num).toDouble()
+        : 0.0;
+    final double conteo = (data['ratingConteo'] is num)
+        ? (data['ratingConteo'] as num).toDouble()
+        : 0.0;
 
     if (conteo <= 0) return 0.0;
     return _round2(suma / conteo);

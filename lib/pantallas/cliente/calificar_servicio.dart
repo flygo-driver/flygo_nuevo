@@ -77,7 +77,9 @@ class _CalificarServicioState extends State<CalificarServicio> {
     final onSurface = cs.onSurface;
     final muted = onSurface.withValues(alpha: 0.72);
     final hint = onSurface.withValues(alpha: 0.45);
-    final fieldFill = isDark ? (Colors.grey[900] ?? const Color(0xFF212121)) : const Color(0xFFF1F5F9);
+    final fieldFill = isDark
+        ? (Colors.grey[900] ?? const Color(0xFF212121))
+        : const Color(0xFFF1F5F9);
 
     return PopScope(
       // Bloquea el "atrás" mientras está guardando
@@ -166,7 +168,8 @@ class _CalificarServicioState extends State<CalificarServicio> {
                   max: 5,
                   divisions: 4,
                   activeColor: cs.primary,
-                  inactiveColor: cs.outline.withValues(alpha: isDark ? 0.45 : 0.35),
+                  inactiveColor:
+                      cs.outline.withValues(alpha: isDark ? 0.45 : 0.35),
                   label: '${_calificacion.toInt()}',
                   onChanged: yaCalificado
                       ? null
@@ -196,7 +199,8 @@ class _CalificarServicioState extends State<CalificarServicio> {
                     fillColor: fieldFill,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: cs.primary.withValues(alpha: 0.65)),
+                      borderSide:
+                          BorderSide(color: cs.primary.withValues(alpha: 0.65)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderSide: BorderSide(
@@ -254,7 +258,8 @@ class _CalificarServicioState extends State<CalificarServicio> {
                     },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: cs.primary,
-                      side: BorderSide(color: cs.primary.withValues(alpha: 0.55)),
+                      side:
+                          BorderSide(color: cs.primary.withValues(alpha: 0.55)),
                     ),
                     icon: const Icon(Icons.flag_outlined),
                     label: const Text('Reportar problema de este viaje'),

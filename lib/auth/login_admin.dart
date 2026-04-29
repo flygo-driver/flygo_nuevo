@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flygo_nuevo/servicios/roles_service.dart';
 
 class LoginAdmin extends StatefulWidget {
   const LoginAdmin({super.key});
@@ -66,13 +67,13 @@ class _LoginAdminState extends State<LoginAdmin> {
       final rolU = (u['rol'] ?? '').toString().trim().toLowerCase();
       final isAdminBool = (u['isAdmin'] == true);
 
-      if (rolU == 'admin' || isAdminBool) return true;
+      if (RolesService.esRolAdmin(rolU) || isAdminBool) return true;
 
       final rolSnap = await db.collection('roles').doc(uid).get();
       final r = rolSnap.data() ?? <String, dynamic>{};
       final rolR = (r['rol'] ?? '').toString().trim().toLowerCase();
 
-      return rolR == 'admin';
+      return RolesService.esRolAdmin(rolR);
     } catch (_) {
       return false;
     }
@@ -194,9 +195,14 @@ class _LoginAdminState extends State<LoginAdmin> {
 
     final fieldDecoration = InputDecoration(
       filled: true,
-      fillColor: cs.surfaceContainerHighest.withValues(alpha: isLight ? 0.55 : 0.35),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: border)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: border)),
+      fillColor:
+          cs.surfaceContainerHighest.withValues(alpha: isLight ? 0.55 : 0.35),
+      border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: border)),
+      enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: border)),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide(color: cs.primary, width: 2),
@@ -227,7 +233,6 @@ class _LoginAdminState extends State<LoginAdmin> {
                 style: TextStyle(color: muted),
               ),
               const SizedBox(height: 14),
-
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
@@ -235,10 +240,12 @@ class _LoginAdminState extends State<LoginAdmin> {
                       ? SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: cs.primary),
                         )
                       : Icon(Icons.account_circle_outlined, color: onSurf),
-                  label: Text(_loadingGoogle ? 'Conectando...' : 'Entrar con Google'),
+                  label: Text(
+                      _loadingGoogle ? 'Conectando...' : 'Entrar con Google'),
                   onPressed: _loadingGoogle ? null : _loginGoogleAdmin,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: onSurf,
@@ -250,20 +257,19 @@ class _LoginAdminState extends State<LoginAdmin> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 14),
               Row(
                 children: <Widget>[
                   Expanded(child: Divider(color: border)),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('o usa tu correo', style: TextStyle(color: muted)),
+                    child:
+                        Text('o usa tu correo', style: TextStyle(color: muted)),
                   ),
                   Expanded(child: Divider(color: border)),
                 ],
               ),
               const SizedBox(height: 16),
-
               TextFormField(
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
@@ -279,7 +285,6 @@ class _LoginAdminState extends State<LoginAdmin> {
                         : null,
               ),
               const SizedBox(height: 16),
-
               TextFormField(
                 controller: _pass,
                 obscureText: _obscurePass,
@@ -290,7 +295,8 @@ class _LoginAdminState extends State<LoginAdmin> {
                   labelText: 'Contraseña',
                   prefixIcon: Icon(Icons.lock, color: accentIcon),
                   suffixIcon: IconButton(
-                    onPressed: () => setState(() => _obscurePass = !_obscurePass),
+                    onPressed: () =>
+                        setState(() => _obscurePass = !_obscurePass),
                     icon: Icon(
                       _obscurePass ? Icons.visibility_off : Icons.visibility,
                       color: muted,
@@ -298,17 +304,17 @@ class _LoginAdminState extends State<LoginAdmin> {
                     tooltip: _obscurePass ? 'Mostrar' : 'Ocultar',
                   ),
                 ),
-                validator: (v) => (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
+                validator: (v) =>
+                    (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
               ),
-
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () => _sendResetPassword(_email.text),
-                  child: Text('¿Olvidaste tu contraseña?', style: TextStyle(color: cs.primary)),
+                  child: Text('¿Olvidaste tu contraseña?',
+                      style: TextStyle(color: cs.primary)),
                 ),
               ),
-
               const SizedBox(height: 10),
               SizedBox(
                 width: double.infinity,
@@ -324,7 +330,8 @@ class _LoginAdminState extends State<LoginAdmin> {
                           ),
                         )
                       : Icon(Icons.admin_panel_settings, color: cs.onPrimary),
-                  label: Text(_loadingEmail ? 'Entrando...' : 'Entrar como Admin'),
+                  label:
+                      Text(_loadingEmail ? 'Entrando...' : 'Entrar como Admin'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: cs.primary,
                     foregroundColor: cs.onPrimary,

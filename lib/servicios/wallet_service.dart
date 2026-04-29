@@ -190,7 +190,8 @@ class WalletService {
     DateTime? desde,
     DateTime? hasta,
   }) async {
-    final cents = await totalGananciaCents(uidTaxista, desde: desde, hasta: hasta);
+    final cents =
+        await totalGananciaCents(uidTaxista, desde: desde, hasta: hasta);
     return cents / 100.0;
   }
 

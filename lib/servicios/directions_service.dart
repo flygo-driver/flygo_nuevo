@@ -58,15 +58,14 @@ class DirectionsService {
         'region': region,
         'key': app_keys.kGooglePlacesApiKey,
       };
-      
+
       // Agregar waypoints si existen
       if (waypoints != null && waypoints.isNotEmpty) {
-        final waypointsStr = waypoints
-            .map((w) => '${w.lat},${w.lon}')
-            .join('|');
+        final waypointsStr =
+            waypoints.map((w) => '${w.lat},${w.lon}').join('|');
         params['waypoints'] = waypointsStr;
       }
-      
+
       if (withTraffic) {
         params['departure_time'] = 'now';
         params['traffic_model'] = 'best_guess';
@@ -75,14 +74,18 @@ class DirectionsService {
       final uri = Uri.parse(_base).replace(queryParameters: params);
       final resp = await http.get(uri);
       if (resp.statusCode != 200) {
-        if (kDebugMode) print('🔴 Directions HTTP ${resp.statusCode}: ${resp.body}');
+        if (kDebugMode) {
+          print('🔴 Directions HTTP ${resp.statusCode}: ${resp.body}');
+        }
         return null;
       }
 
       final data = json.decode(resp.body) as Map<String, dynamic>;
       final status = (data['status'] as String? ?? '');
       if (status != 'OK') {
-        if (kDebugMode) print('🔴 Directions status=$status, error=${data['error_message']}');
+        if (kDebugMode) {
+          print('🔴 Directions status=$status, error=${data['error_message']}');
+        }
         return null;
       }
 
@@ -100,14 +103,16 @@ class DirectionsService {
 
       for (final leg in legs) {
         final legMap = leg as Map<String, dynamic>;
-        final num? distanceMeters = (legMap['distance'] as Map?)?['value'] as num?;
-        final num? durationSeconds = (legMap['duration'] as Map?)?['value'] as num?;
-        
+        final num? distanceMeters =
+            (legMap['distance'] as Map?)?['value'] as num?;
+        final num? durationSeconds =
+            (legMap['duration'] as Map?)?['value'] as num?;
+
         if (distanceMeters != null) {
           totalKm += distanceMeters / 1000.0;
           segmentDistances.add(distanceMeters / 1000.0);
         }
-        
+
         if (durationSeconds != null) {
           totalSeconds += durationSeconds.toInt();
         }
@@ -115,7 +120,7 @@ class DirectionsService {
 
       // Texto de distancia (primer leg)
       final distanceText = (legs.first['distance'] as Map?)?['text'] as String?;
-      
+
       // Texto de duración (con tráfico si aplica)
       final durationMap = withTraffic
           ? (legs.first['duration_in_traffic'] as Map?)

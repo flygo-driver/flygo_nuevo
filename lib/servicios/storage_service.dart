@@ -16,7 +16,9 @@ class StorageService {
 
   static Future<void> deleteAvatar(String uid) async {
     final ref = _st.ref('users/$uid/profile.jpg');
-    try { await ref.delete(); } catch (_) {}
+    try {
+      await ref.delete();
+    } catch (_) {}
   }
 
   // ─────────── DOCUMENTOS ───────────
@@ -36,6 +38,8 @@ class StorageService {
     required String tipo,
   }) async {
     final ref = _st.ref('users/$uid/docs/$tipo.jpg');
-    try { await ref.delete(); } catch (_) {}
+    try {
+      await ref.delete();
+    } catch (_) {}
   }
 }

@@ -24,8 +24,8 @@ class ViajeEnCursoTaxistaLogic {
     final snap = await docRef.get();
     final data = snap.data() ?? {};
 
-    final metodo = (data['metodoPago'] ?? viaje.metodoPago ?? 'Efectivo')
-        .toString();
+    final metodo =
+        (data['metodoPago'] ?? viaje.metodoPago ?? 'Efectivo').toString();
     final payment = (data['payment'] ?? {}) as Map<String, dynamic>;
     final paymentStatus = (payment['status'] ?? '').toString();
     final paymentIntentId = (payment['paymentIntentId'] ?? '').toString();
@@ -42,9 +42,8 @@ class ViajeEnCursoTaxistaLogic {
       if (paymentStatus != 'captured') {
         await PagoData.capturarPago(
           viajeId: viaje.id,
-          paymentIntentId: paymentIntentId.isEmpty
-              ? 'pi_mock_${viaje.id}'
-              : paymentIntentId,
+          paymentIntentId:
+              paymentIntentId.isEmpty ? 'pi_mock_${viaje.id}' : paymentIntentId,
           montoFinalDop: total.toDouble(),
           comision: comision,
           gananciaTaxista: driverAmount,

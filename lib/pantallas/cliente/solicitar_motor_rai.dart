@@ -14,7 +14,6 @@ import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
-import 'package:flygo_nuevo/widgets/cliente_drawer.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
@@ -24,6 +23,7 @@ import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/pay_config.dart';
 
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
@@ -101,6 +101,61 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   final DraggableScrollableController _sheetCtrl =
       DraggableScrollableController();
 
+  static const double _sheetMinFracMotor = 0.26;
+  int _mapProgrammaticCameraDepth = 0;
+  Timer? _motorMapGestureEndDebounce;
+
+  void _onMotorMapCameraIdle() {
+    if (_mapProgrammaticCameraDepth > 0) {
+      _mapProgrammaticCameraDepth--;
+      return;
+    }
+    _motorMapGestureEndDebounce?.cancel();
+    if (mounted) _expandMotorSheetTrasMapaInteract();
+  }
+
+  void _expandMotorSheetTrasMapaInteract() {
+    if (!_sheetCtrl.isAttached) return;
+    final double target = _mostrarResumenMotor ? 0.54 : 0.86;
+    try {
+      _sheetCtrl.animateTo(
+        target.clamp(_sheetMinFracMotor, 0.88),
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  void _onMotorMapUserGesture() {
+    if (_mapProgrammaticCameraDepth > 0) return;
+    unawaited(_collapseMotorSheetForMap());
+  }
+
+  Future<void> _collapseMotorSheetForMap() async {
+    if (!_sheetCtrl.isAttached) return;
+    try {
+      final double s = _sheetCtrl.size;
+      if (s <= _sheetMinFracMotor + 0.03) return;
+      await _sheetCtrl.animateTo(
+        _sheetMinFracMotor,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _motorMapAnimate(
+      Future<void> Function(GoogleMapController c) op) async {
+    final GoogleMapController? c = _map;
+    if (c == null) return;
+    _mapProgrammaticCameraDepth++;
+    try {
+      await op(c);
+    } catch (_) {
+      if (_mapProgrammaticCameraDepth > 0) _mapProgrammaticCameraDepth--;
+    }
+  }
+
   // Nudge
   late final AnimationController _nudgeCtrl = AnimationController(
     vsync: this,
@@ -129,6 +184,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     _posSub?.cancel();
     _nudgeTimer?.cancel();
     _nudgeCtrl.dispose();
+    _motorMapGestureEndDebounce?.cancel();
     super.dispose();
   }
 
@@ -205,9 +261,11 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
       setState(() => _cargandoUbicacion = false);
 
-      await _map?.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(target: here, zoom: 15),
+      await _motorMapAnimate(
+        (c) => c.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: here, zoom: 15),
+          ),
         ),
       );
       _didCenterOnce = true;
@@ -223,7 +281,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         _updateOrigenMarker(ll);
 
         if (_map != null && _didCenterOnce) {
-          _map!.animateCamera(CameraUpdate.newLatLng(ll));
+          unawaited(_motorMapAnimate(
+            (c) => c.animateCamera(CameraUpdate.newLatLng(ll)),
+          ));
         }
         if (mounted) setState(() {});
       });
@@ -248,7 +308,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   Future<void> _centrarEnMiUbicacion() async {
     if (_origenMap == null) return;
     _didCenterOnce = true;
-    await _map?.animateCamera(CameraUpdate.newLatLng(_origenMap!));
+    await _motorMapAnimate(
+      (c) => c.animateCamera(CameraUpdate.newLatLng(_origenMap!)),
+    );
   }
 
   void _invalidarCotizacionMotor() {
@@ -261,6 +323,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   }
 
   Future<void> _onLongPressMap(LatLng p) async {
+    unawaited(_collapseMotorSheetForMap());
     latDestino = p.latitude;
     lonDestino = p.longitude;
     _destinoDet = null;
@@ -430,14 +493,18 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
       if (_map != null) {
         if (pts.length >= 2) {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
+          await _motorMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
+            ),
           );
         } else {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(
-              _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
-              80,
+          await _motorMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(
+                _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
+                80,
+              ),
             ),
           );
         }
@@ -638,17 +705,21 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
       if (_map != null && runId == _cotizacionSeq) {
         if (routeLatLng.length >= 2) {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
+          await _motorMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
+            ),
           );
         } else {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(
-              _boundsFrom(
-                LatLng(origenLat, origenLon),
-                LatLng(dLat, dLon),
+          await _motorMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(
+                _boundsFrom(
+                  LatLng(origenLat, origenLon),
+                  LatLng(dLat, dLon),
+                ),
+                80,
               ),
-              80,
             ),
           );
         }
@@ -753,9 +824,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     const Color c = Colors.orange;
     final onCard = scheme.onSurface;
     final subtle = scheme.onSurface.withValues(alpha: 0.62);
-    final chipBg = isDark
-        ? const Color(0xFF1E1E1E)
-        : scheme.surfaceContainerHighest;
+    final chipBg =
+        isDark ? const Color(0xFF1E1E1E) : scheme.surfaceContainerHighest;
     final chipBorder =
         isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.28);
     final dividerColor =
@@ -823,7 +893,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            origenTexto.isNotEmpty ? origenTexto : 'Ubicación actual (GPS)',
+                            origenTexto.isNotEmpty
+                                ? origenTexto
+                                : 'Ubicación actual (GPS)',
                             style: TextStyle(
                               color: onCard,
                               fontSize: 15,
@@ -927,7 +999,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                       ),
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
                           color: chipBg,
                           borderRadius: BorderRadius.circular(10),
@@ -948,7 +1021,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: (ubicacionObtenida && precioCalculado > 0) ? _confirmarMotor : null,
+                    onPressed: (ubicacionObtenida && precioCalculado > 0)
+                        ? _confirmarMotor
+                        : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: c,
                       foregroundColor: Colors.black,
@@ -960,7 +1035,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                     ),
                     child: const Text(
                       'Confirmar viaje',
-                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                      style:
+                          TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
                     ),
                   ),
                 ),
@@ -976,14 +1052,16 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
               borderRadius: BorderRadius.circular(14),
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: chipBorder),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.search_rounded, color: Colors.orange, size: 26),
+                    const Icon(Icons.search_rounded,
+                        color: Colors.orange, size: 26),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -1071,9 +1149,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              item('Efectivo'),
-              item('Tarjeta'),
-              item('Transferencia'),
+              ...PayConfig.metodosReservaVisibles.map(item),
               const SizedBox(height: 8),
             ],
           ),
@@ -1092,7 +1168,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final handleColor = scheme.onSurface.withValues(alpha: isDark ? 0.28 : 0.22);
+    final handleColor =
+        scheme.onSurface.withValues(alpha: isDark ? 0.28 : 0.22);
     final hintStyle = TextStyle(
       color: scheme.onSurface.withValues(alpha: 0.55),
       fontSize: 12,
@@ -1101,10 +1178,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
     return Scaffold(
       backgroundColor: scheme.surface,
-      drawer: const ClienteDrawer(),
       appBar: const RaiAppBar(
         title: '',
         titleSemanticsLabel: 'Solicitar viaje en motor',
+        backWhenCanPop: true,
       ),
       body: Stack(
         children: [
@@ -1124,6 +1201,19 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                 polylines: _polylines,
                 onMapCreated: (c) => _map = c,
                 onLongPress: _onLongPressMap,
+                onTap: (_) {
+                  if (_mapProgrammaticCameraDepth > 0) return;
+                  _onMotorMapUserGesture();
+                  _motorMapGestureEndDebounce?.cancel();
+                  _motorMapGestureEndDebounce = Timer(
+                    const Duration(milliseconds: 420),
+                    () {
+                      if (mounted) _expandMotorSheetTrasMapaInteract();
+                    },
+                  );
+                },
+                onCameraMoveStarted: _onMotorMapUserGesture,
+                onCameraIdle: _onMotorMapCameraIdle,
                 compassEnabled: true,
                 mapToolbarEnabled: false,
               ),
@@ -1187,7 +1277,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.08),
+                      color:
+                          Colors.black.withValues(alpha: isDark ? 0.45 : 0.08),
                       blurRadius: 20,
                       offset: const Offset(0, -4),
                     ),
@@ -1220,224 +1311,248 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                           child: ListView(
                             controller: controller,
                             children: [
-                        GestureDetector(
-                          onTap: _expandToMax,
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 44,
-                                height: 5,
-                                decoration: BoxDecoration(
-                                  color: handleColor,
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              SlideTransition(
-                                position: _nudgeOffset,
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                              GestureDetector(
+                                onTap: _expandToMax,
+                                child: Column(
                                   children: [
-                                    Icon(
-                                      Icons.keyboard_double_arrow_up_rounded,
-                                      size: 18,
-                                      color: scheme.onSurface
-                                          .withValues(alpha: 0.45),
+                                    Container(
+                                      width: 44,
+                                      height: 5,
+                                      decoration: BoxDecoration(
+                                        color: handleColor,
+                                        borderRadius: BorderRadius.circular(3),
+                                      ),
                                     ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        _mostrarResumenMotor
-                                            ? 'Toca abajo para editar'
-                                            : 'Desliza para ver más',
-                                        textAlign: TextAlign.center,
-                                        style: hintStyle,
+                                    const SizedBox(height: 6),
+                                    SlideTransition(
+                                      position: _nudgeOffset,
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons
+                                                .keyboard_double_arrow_up_rounded,
+                                            size: 18,
+                                            color: scheme.onSurface
+                                                .withValues(alpha: 0.45),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              _mostrarResumenMotor
+                                                  ? 'Toca abajo para editar'
+                                                  : 'Desliza para ver más',
+                                              textAlign: TextAlign.center,
+                                              style: hintStyle,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 10),
+                              const SizedBox(height: 10),
+                              if (_mostrarResumenMotor) _tarjetaResumenMotor(),
+                              if (!_mostrarResumenMotor)
+                                Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _MotoUberHeader(isDark: isDark),
+                                    const SizedBox(height: 12),
+                                    _MotoSearchShell(
+                                      isDark: isDark,
+                                      child: kUsePlacesAutocomplete
+                                          ? CampoLugarAutocomplete(
+                                              label: '',
+                                              hint: '¿A dónde vamos?',
+                                              onPlaceSelected: (det) async {
+                                                _destinoDet = det;
+                                                destino = det.displayLabel;
+                                                destinoTexto = det.displayLabel;
+                                                latDestino = det.lat;
+                                                lonDestino = det.lon;
 
-                        if (_mostrarResumenMotor) _tarjetaResumenMotor(),
+                                                final p =
+                                                    LatLng(det.lat, det.lon);
+                                                _markers.removeWhere((m) =>
+                                                    m.markerId.value ==
+                                                    'destino');
+                                                _markers.add(
+                                                  Marker(
+                                                    markerId: const MarkerId(
+                                                        'destino'),
+                                                    position: p,
+                                                    icon: BitmapDescriptor
+                                                        .defaultMarkerWithHue(
+                                                            BitmapDescriptor
+                                                                .hueGreen),
+                                                    infoWindow:
+                                                        const InfoWindow(
+                                                            title: 'Destino'),
+                                                    zIndexInt: 1,
+                                                  ),
+                                                );
+                                                setState(() {});
 
-                        if (!_mostrarResumenMotor)
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                        _MotoUberHeader(isDark: isDark),
-                        const SizedBox(height: 12),
-                        _MotoSearchShell(
-                          isDark: isDark,
-                          child: kUsePlacesAutocomplete
-                              ? CampoLugarAutocomplete(
-                            label: '',
-                            hint: '¿A dónde vamos?',
-                            onPlaceSelected: (det) async {
-                              _destinoDet = det;
-                              destino = det.displayLabel;
-                              destinoTexto = det.displayLabel;
-                              latDestino = det.lat;
-                              lonDestino = det.lon;
-
-                              final p = LatLng(det.lat, det.lon);
-                              _markers.removeWhere(
-                                  (m) => m.markerId.value == 'destino');
-                              _markers.add(
-                                Marker(
-                                  markerId: const MarkerId('destino'),
-                                  position: p,
-                                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                                      BitmapDescriptor.hueGreen),
-                                  infoWindow: const InfoWindow(title: 'Destino'),
-                                  zIndexInt: 1,
-                                ),
-                              );
-                              setState(() {});
-
-                              if (_origenMap != null) {
-                                await _dibujarRutaReal(
-                                  oLat: _origenMap!.latitude,
-                                  oLon: _origenMap!.longitude,
-                                  dLat: det.lat,
-                                  dLon: det.lon,
-                                  previewOnly: true,
-                                );
-                              }
-                            },
-                            onTextChanged: (t) {
-                              _markers.removeWhere(
-                                  (m) => m.markerId.value == 'destino');
-                              _polylines.clear();
-                              setState(() {
-                                destino = t;
-                                latDestino = null;
-                                lonDestino = null;
-                                destinoTexto = '';
-                                _destinoDet = null;
-                                _invalidarCotizacionMotor();
-                              });
-                            },
-                          )
-                        : TextFormField(
-                            style: TextStyle(color: scheme.onSurface),
-                            decoration: InputDecoration(
-                              labelText: '¿A dónde vas?',
-                              hintText: 'Ej: Punta Cana',
-                              labelStyle: TextStyle(
-                                color: scheme.onSurface.withValues(alpha: 0.7),
-                              ),
-                              hintStyle: TextStyle(
-                                color: scheme.onSurface.withValues(alpha: 0.45),
-                              ),
-                              filled: true,
-                              fillColor: isDark
-                                  ? Colors.grey[900]
-                                  : const Color(0xFFF5F3FF),
-                              prefixIcon: Icon(
-                                Icons.search_rounded,
-                                color: const Color(0xFF7C3AED),
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(14),
-                                borderSide: BorderSide(
-                                  color: scheme.outline.withValues(alpha: 0.35),
-                                ),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(14),
-                                borderSide: const BorderSide(
-                                  color: Color(0xFF7C3AED),
-                                  width: 2,
-                                ),
-                              ),
-                            ),
-                            onTap: _expandToMax,
-                            onSaved: (v) => destino = (v ?? ''),
-                            validator: (v) => (v == null || v.trim().isEmpty)
-                                ? 'Indica un destino'
-                                : null,
-                          ),
-                        ),
-
-                        const SizedBox(height: 12),
-                        _MotoOptionsCard(
-                          idaYVuelta: idaYVuelta,
-                          onIdaYVuelta: (v) => setState(() => idaYVuelta = v),
-                          metodoPago: metodoPago,
-                          onElegirPago: _elegirMetodoPago,
-                        ),
-                        const SizedBox(height: 14),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: _obtenerUbicacionYCalcularPrecio,
-                            style: _motoCtaStyle(context),
-                            child: _cargando
-                                ? SizedBox(
-                                    height: 22,
-                                    width: 22,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2.5,
-                                      color:
-                                          isDark ? Colors.black : Colors.white,
+                                                if (_origenMap != null) {
+                                                  await _dibujarRutaReal(
+                                                    oLat: _origenMap!.latitude,
+                                                    oLon: _origenMap!.longitude,
+                                                    dLat: det.lat,
+                                                    dLon: det.lon,
+                                                    previewOnly: true,
+                                                  );
+                                                }
+                                              },
+                                              onTextChanged: (t) {
+                                                _markers.removeWhere((m) =>
+                                                    m.markerId.value ==
+                                                    'destino');
+                                                _polylines.clear();
+                                                setState(() {
+                                                  destino = t;
+                                                  latDestino = null;
+                                                  lonDestino = null;
+                                                  destinoTexto = '';
+                                                  _destinoDet = null;
+                                                  _invalidarCotizacionMotor();
+                                                });
+                                              },
+                                            )
+                                          : TextFormField(
+                                              style: TextStyle(
+                                                  color: scheme.onSurface),
+                                              decoration: InputDecoration(
+                                                labelText: '¿A dónde vas?',
+                                                hintText: 'Ej: Punta Cana',
+                                                labelStyle: TextStyle(
+                                                  color: scheme.onSurface
+                                                      .withValues(alpha: 0.7),
+                                                ),
+                                                hintStyle: TextStyle(
+                                                  color: scheme.onSurface
+                                                      .withValues(alpha: 0.45),
+                                                ),
+                                                filled: true,
+                                                fillColor: isDark
+                                                    ? Colors.grey[900]
+                                                    : const Color(0xFFF5F3FF),
+                                                prefixIcon: Icon(
+                                                  Icons.search_rounded,
+                                                  color:
+                                                      const Color(0xFF7C3AED),
+                                                ),
+                                                border: OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
+                                                ),
+                                                enabledBorder:
+                                                    OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
+                                                  borderSide: BorderSide(
+                                                    color: scheme.outline
+                                                        .withValues(
+                                                            alpha: 0.35),
+                                                  ),
+                                                ),
+                                                focusedBorder:
+                                                    OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
+                                                  borderSide: const BorderSide(
+                                                    color: Color(0xFF7C3AED),
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                              ),
+                                              onTap: _expandToMax,
+                                              onSaved: (v) =>
+                                                  destino = (v ?? ''),
+                                              validator: (v) => (v == null ||
+                                                      v.trim().isEmpty)
+                                                  ? 'Indica un destino'
+                                                  : null,
+                                            ),
                                     ),
-                                  )
-                                : const Text('Ver precio'),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-
-                        if (precioCalculado > 0)
-                          _MotoEstimacionChip(
-                            scheme: scheme,
-                            isDark: isDark,
-                            distanciaKm: distanciaKm,
-                            idaYVuelta: idaYVuelta,
-                            precio: precioCalculado,
-                          ),
-                        if (precioCalculado > 0) const SizedBox(height: 10),
-
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed:
-                                (ubicacionObtenida && precioCalculado > 0)
-                                    ? _confirmarMotor
-                                    : null,
-                            style: _motoCtaStyle(context),
-                            child: const Text('Confirmar viaje'),
-                          ),
-                        ),
-
-                        const SizedBox(height: 10),
-                        Center(
-                          child: Text(
-                            DateFormat('dd/MM/yyyy · HH:mm')
-                                .format(DateTime.now()),
-                            style: TextStyle(
-                              color: scheme.onSurface.withValues(alpha: 0.32),
-                              fontSize: 11,
-                            ),
-                          ),
-                        ),
+                                    const SizedBox(height: 12),
+                                    _MotoOptionsCard(
+                                      idaYVuelta: idaYVuelta,
+                                      onIdaYVuelta: (v) =>
+                                          setState(() => idaYVuelta = v),
+                                      metodoPago: metodoPago,
+                                      onElegirPago: _elegirMetodoPago,
+                                    ),
+                                    const SizedBox(height: 14),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton(
+                                        onPressed:
+                                            _obtenerUbicacionYCalcularPrecio,
+                                        style: _motoCtaStyle(context),
+                                        child: _cargando
+                                            ? SizedBox(
+                                                height: 22,
+                                                width: 22,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                  strokeWidth: 2.5,
+                                                  color: isDark
+                                                      ? Colors.black
+                                                      : Colors.white,
+                                                ),
+                                              )
+                                            : const Text('Ver precio'),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    if (precioCalculado > 0)
+                                      _MotoEstimacionChip(
+                                        scheme: scheme,
+                                        isDark: isDark,
+                                        distanciaKm: distanciaKm,
+                                        idaYVuelta: idaYVuelta,
+                                        precio: precioCalculado,
+                                      ),
+                                    if (precioCalculado > 0)
+                                      const SizedBox(height: 10),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton(
+                                        onPressed: (ubicacionObtenida &&
+                                                precioCalculado > 0)
+                                            ? _confirmarMotor
+                                            : null,
+                                        style: _motoCtaStyle(context),
+                                        child: const Text('Confirmar viaje'),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Center(
+                                      child: Text(
+                                        DateFormat('dd/MM/yyyy · HH:mm')
+                                            .format(DateTime.now()),
+                                        style: TextStyle(
+                                          color: scheme.onSurface
+                                              .withValues(alpha: 0.32),
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                             ],
                           ),
-                      ],
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-        );
+              );
             },
           ),
         ],
@@ -1481,9 +1596,8 @@ class _MotoUberHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final on = scheme.onSurface;
-    final bg = isDark
-        ? scheme.surfaceContainerHigh
-        : scheme.surfaceContainerHighest;
+    final bg =
+        isDark ? scheme.surfaceContainerHigh : scheme.surfaceContainerHighest;
     final border = scheme.outline.withValues(alpha: isDark ? 0.22 : 0.14);
 
     return Semantics(
@@ -1754,7 +1868,8 @@ class _Banner extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     const accent = Color(0xFF49F18B);
-    final bg = isDark ? const Color(0xFF1C1F23) : scheme.surfaceContainerHighest;
+    final bg =
+        isDark ? const Color(0xFF1C1F23) : scheme.surfaceContainerHighest;
     final borderColor = accent.withValues(alpha: isDark ? 0.35 : 0.42);
 
     return Container(

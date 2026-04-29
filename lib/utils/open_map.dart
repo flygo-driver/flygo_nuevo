@@ -24,9 +24,8 @@ Future<void> openMap({
     // En web dejamos el modo por defecto; en móvil forzamos externa (app)
     await launchUrl(
       uri,
-      mode: kIsWeb
-          ? LaunchMode.platformDefault
-          : LaunchMode.externalApplication,
+      mode:
+          kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
     );
   }
 }

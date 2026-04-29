@@ -237,16 +237,7 @@ class ViajeActionBarCliente extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final e = EstadosViaje.normalizar(estadoActual);
-
-    final puedeCancelar =
-        e == EstadosViaje.pendiente ||
-        e == EstadosViaje.pendientePago ||
-        e == EstadosViaje.aceptado ||
-        e == EstadosViaje.enCaminoPickup ||
-        e == EstadosViaje.aBordo;
-
-    if (!puedeCancelar) {
+    if (!EstadosViaje.clientePuedeCancelarViajeDesdeApp(estadoActual)) {
       return const SizedBox.shrink();
     }
 
@@ -268,7 +259,7 @@ class ViajeActionBarCliente extends StatelessWidget {
             run: () => ViajesRepo.cancelarPorCliente(
               viajeId: viajeId,
               uidCliente: uidCliente,
-              motivo: 'Cancelado por el cliente',
+              motivo: 'Cancelado por el cliente (barra de acciones)',
             ),
             okMsg: 'Viaje cancelado',
             failMsg: 'No se pudo cancelar',

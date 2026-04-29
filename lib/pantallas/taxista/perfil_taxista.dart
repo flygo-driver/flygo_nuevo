@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 // Reutilizamos tu screen de foto y el avatar redondo
 import 'panel_taxista.dart' show PerfilFotoScreen; // ya lo tienes ahí
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 
 class PerfilTaxista extends StatelessWidget {
   const PerfilTaxista({super.key});
@@ -24,7 +25,8 @@ class PerfilTaxista extends StatelessWidget {
           centerTitle: true,
         ),
         body: const Center(
-          child: Text('Inicia sesión para ver tu perfil', style: TextStyle(color: Colors.white70)),
+          child: Text('Inicia sesión para ver tu perfil',
+              style: TextStyle(color: Colors.white70)),
         ),
       );
     }
@@ -61,14 +63,18 @@ class PerfilTaxista extends StatelessWidget {
                       size: 110,
                       onTap: () {
                         Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const PerfilFotoScreen()),
+                          MaterialPageRoute(
+                              builder: (_) => const PerfilFotoScreen()),
                         );
                       },
                     ),
                     const SizedBox(height: 12),
                     Text(
                       nombre.isNotEmpty ? nombre : 'Taxista',
-                      style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 4),
@@ -83,11 +89,14 @@ class PerfilTaxista extends StatelessWidget {
                       child: OutlinedButton.icon(
                         onPressed: () {
                           Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => const PerfilFotoScreen()),
+                            MaterialPageRoute(
+                                builder: (_) => const PerfilFotoScreen()),
                           );
                         },
-                        icon: const Icon(Icons.camera_alt, color: Colors.greenAccent),
-                        label: const Text('Cambiar foto', style: TextStyle(color: Colors.greenAccent)),
+                        icon: const Icon(Icons.camera_alt,
+                            color: Colors.greenAccent),
+                        label: const Text('Cambiar foto',
+                            style: TextStyle(color: Colors.greenAccent)),
                         style: OutlinedButton.styleFrom(
                           side: const BorderSide(color: Colors.greenAccent),
                         ),
@@ -104,31 +113,56 @@ class PerfilTaxista extends StatelessWidget {
               SwitchListTile.adaptive(
                 activeColor: Colors.greenAccent,
                 value: disponible,
-                title: const Text('Disponible para aceptar viajes', style: TextStyle(color: Colors.white)),
+                title: const Text('Disponible para aceptar viajes',
+                    style: TextStyle(color: Colors.white)),
                 subtitle: Text(
-                  disponible ? 'Apareces en el pool' : 'No aparecerás en disponibles',
+                  disponible
+                      ? 'Apareces en el pool'
+                      : 'No aparecerás en disponibles',
                   style: const TextStyle(color: Colors.white54),
                 ),
                 onChanged: (val) {
-                  // ← capturamos aquí
                   final messenger = ScaffoldMessenger.of(context);
-
-                  usersRef
-                      .set({
+                  () async {
+                    if (val) {
+                      final snap = await usersRef.get();
+                      if (snap.data()?['tienePagoPendiente'] == true) {
+                        if (!context.mounted) return;
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: const Text(PagosTaxistaRepo
+                                .mensajeRecargaActivarDisponible),
+                            action: SnackBarAction(
+                              label: 'Mis pagos',
+                              onPressed: () {
+                                Navigator.of(context).pushNamed('/mis_pagos');
+                              },
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                    }
+                    try {
+                      await usersRef.set({
                         'disponible': val,
                         'updatedAt': FieldValue.serverTimestamp(),
-                      }, SetOptions(merge: true))
-                      .then((_) {
-                        // ya NO usamos `context` aquí
-                        messenger.showSnackBar(
-                          SnackBar(content: Text(val ? 'Disponibilidad activada' : 'Disponibilidad desactivada')),
-                        );
-                      })
-                      .catchError((e) {
-                        messenger.showSnackBar(
-                          SnackBar(content: Text('Error al actualizar: $e')),
-                        );
-                      });
+                      }, SetOptions(merge: true));
+                      if (!context.mounted) return;
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(val
+                              ? 'Disponibilidad activada'
+                              : 'Disponibilidad desactivada'),
+                        ),
+                      );
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      messenger.showSnackBar(
+                        SnackBar(content: Text('Error al actualizar: $e')),
+                      );
+                    }
+                  }();
                 },
               ),
 
@@ -138,22 +172,28 @@ class PerfilTaxista extends StatelessWidget {
 
               // Documentación (placeholder)
               ListTile(
-                leading: const Icon(Icons.verified_user, color: Colors.greenAccent),
-                title: const Text('Documentación', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Estado: Aprobado', style: TextStyle(color: Colors.white54)),
+                leading:
+                    const Icon(Icons.verified_user, color: Colors.greenAccent),
+                title: const Text('Documentación',
+                    style: TextStyle(color: Colors.white)),
+                subtitle: const Text('Estado: Aprobado',
+                    style: TextStyle(color: Colors.white54)),
                 onTap: () {
                   final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(const SnackBar(content: Text('TODO: Pantalla de documentación')));
+                  messenger.showSnackBar(const SnackBar(
+                      content: Text('TODO: Pantalla de documentación')));
                 },
               ),
 
               // Ajustes (placeholder)
               ListTile(
                 leading: const Icon(Icons.settings, color: Colors.greenAccent),
-                title: const Text('Ajustes', style: TextStyle(color: Colors.white)),
+                title: const Text('Ajustes',
+                    style: TextStyle(color: Colors.white)),
                 onTap: () {
                   final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(const SnackBar(content: Text('TODO: Pantalla de ajustes')));
+                  messenger.showSnackBar(const SnackBar(
+                      content: Text('TODO: Pantalla de ajustes')));
                 },
               ),
             ],

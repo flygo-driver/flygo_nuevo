@@ -53,16 +53,20 @@ class ViajeDisponibleCard extends StatelessWidget {
                 child: Text(
                   origen,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w700),
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: (programado ? Colors.teal : Colors.green).withValues(alpha: .18),
+                  color: (programado ? Colors.teal : Colors.green)
+                      .withValues(alpha: .18),
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(
-                    color: (programado ? Colors.tealAccent : Colors.greenAccent).withValues(alpha: .5),
+                    color: (programado ? Colors.tealAccent : Colors.greenAccent)
+                        .withValues(alpha: .5),
                   ),
                 ),
                 child: Text(
@@ -76,13 +80,18 @@ class ViajeDisponibleCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          Text(fFecha.format(fechaHora), style: const TextStyle(color: Colors.white70)),
+          Text(fFecha.format(fechaHora),
+              style: const TextStyle(color: Colors.white70)),
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              _chip(icon: Icons.straighten, label: (distanciaKm != null) ? 'Dist.: ${distanciaKm!.toStringAsFixed(2)} km' : 'Dist.: —'),
+              _chip(
+                  icon: Icons.straighten,
+                  label: (distanciaKm != null)
+                      ? 'Dist.: ${distanciaKm!.toStringAsFixed(2)} km'
+                      : 'Dist.: —'),
               _chip(icon: Icons.credit_card, label: metodoPago),
               _chip(icon: Icons.directions_car_filled, label: tipoVehiculo),
             ],
@@ -96,7 +105,10 @@ class ViajeDisponibleCard extends StatelessWidget {
                   const Text('Total', style: TextStyle(color: Colors.white60)),
                   Text(
                     fNum.format(precio),
-                    style: const TextStyle(color: Colors.amber, fontSize: 22, fontWeight: FontWeight.w800),
+                    style: const TextStyle(
+                        color: Colors.amber,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800),
                   ),
                 ],
               ),
@@ -106,8 +118,13 @@ class ViajeDisponibleCard extends StatelessWidget {
                 children: [
                   const Text('Ganas', style: TextStyle(color: Colors.white60)),
                   Text(
-                    (gananciaTaxista != null) ? fNum.format(gananciaTaxista) : '—',
-                    style: const TextStyle(color: Colors.greenAccent, fontSize: 20, fontWeight: FontWeight.w700),
+                    (gananciaTaxista != null)
+                        ? fNum.format(gananciaTaxista)
+                        : '—',
+                    style: const TextStyle(
+                        color: Colors.greenAccent,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
@@ -122,8 +139,10 @@ class ViajeDisponibleCard extends StatelessWidget {
               backgroundColor: Colors.white,
               foregroundColor: Colors.black87,
               minimumSize: const Size(double.infinity, 50),
-              textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              textStyle:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
             ),
           ),
         ],

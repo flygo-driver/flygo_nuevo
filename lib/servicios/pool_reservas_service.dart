@@ -10,10 +10,10 @@ class PoolReservasService {
     required String poolId,
     required String uidCliente,
     required int seats,
-    required String metodoPago,      // 'transferencia' | 'efectivo'
+    required String metodoPago, // 'transferencia' | 'efectivo'
     required double total,
-    required double deposit,         // si transferencia, el depósito esperado
-    required String referencia,      // referencia sugerida
+    required double deposit, // si transferencia, el depósito esperado
+    required String referencia, // referencia sugerida
   }) async {
     return FirebaseFirestore.instance.runTransaction((tx) async {
       final poolRef = _pools.doc(poolId);
@@ -31,8 +31,8 @@ class PoolReservasService {
       final reservasRef = poolRef.collection('reservas').doc();
 
       final estado = (metodoPago.toLowerCase() == 'efectivo')
-          ? 'reservado_efectivo'   // paga al abordar
-          : 'pendiente_pago';       // subirá comprobante y validamos
+          ? 'reservado_efectivo' // paga al abordar
+          : 'pendiente_pago'; // subirá comprobante y validamos
 
       tx.set(reservasRef, {
         'uidCliente': uidCliente,

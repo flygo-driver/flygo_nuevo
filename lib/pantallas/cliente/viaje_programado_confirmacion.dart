@@ -5,11 +5,26 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+
+String _textoVentanaPoolCliente(int minutos) {
+  if (minutos < 1) {
+    return 'Poco antes de la recogida tu viaje entra al pool de conductores cercanos.';
+  }
+  if (minutos < 60) {
+    return 'Unos $minutos minutos antes de la recogida los conductores podrán ver y aceptar tu viaje (modelo tipo Uber).';
+  }
+  final h = minutos ~/ 60;
+  final r = minutos % 60;
+  if (r == 0) {
+    return 'Unas $h ${h == 1 ? 'hora' : 'horas'} antes de la recogida abrimos la búsqueda de conductor.';
+  }
+  return 'Unos $minutos minutos antes de la recogida abrimos la búsqueda de conductor.';
+}
 
 /// Seguimiento en vivo del viaje programado: ventana al pool, búsqueda de conductor, etc.
 class ViajeProgramadoConfirmacion extends StatefulWidget {
@@ -29,7 +44,8 @@ class ViajeProgramadoConfirmacion extends StatefulWidget {
   final double? precio;
 
   @override
-  State<ViajeProgramadoConfirmacion> createState() => _ViajeProgramadoConfirmacionState();
+  State<ViajeProgramadoConfirmacion> createState() =>
+      _ViajeProgramadoConfirmacionState();
 }
 
 enum _FaseReserva {
@@ -41,7 +57,8 @@ enum _FaseReserva {
   conductorAsignado,
 }
 
-class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacion> {
+class _ViajeProgramadoConfirmacionState
+    extends State<ViajeProgramadoConfirmacion> {
   Timer? _tick;
   bool _navegoAlMapa = false;
   bool _cancelando = false;
@@ -103,10 +120,13 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
         title: Text(titulo),
         content: Text(cuerpo),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('No')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error),
             child: const Text('Sí, cancelar'),
           ),
         ],
@@ -129,7 +149,7 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
         ),
       );
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute<void>(builder: (_) => const ClienteHome()),
+        MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
         (r) => false,
       );
     } catch (e) {
@@ -187,7 +207,8 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
     final acceptAfter = _ts(d['acceptAfter']);
     final publishAt = _ts(d['publishAt']);
 
-    final bool acceptAbierto = acceptAfter == null || !now.isBefore(acceptAfter);
+    final bool acceptAbierto =
+        acceptAfter == null || !now.isBefore(acceptAfter);
     final bool publishAbierto = publishAt == null || !now.isBefore(publishAt);
 
     if (!acceptAbierto || !publishAbierto) return _FaseReserva.antesDelPool;
@@ -214,7 +235,10 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
     final fmtCorto = DateFormat("d MMM yyyy · HH:mm", 'es');
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('viajes').doc(widget.viajeId).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(widget.viajeId)
+          .snapshots(),
       builder: (context, snap) {
         if (snap.hasError) {
           return Scaffold(
@@ -233,11 +257,16 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
 
         final data = doc.data()!;
         final uid = FirebaseAuth.instance.currentUser?.uid;
-        final cliente = (data['uidCliente'] ?? data['clienteId'] ?? '').toString();
-        if (uid != null && uid.isNotEmpty && cliente.isNotEmpty && cliente != uid) {
+        final cliente =
+            (data['uidCliente'] ?? data['clienteId'] ?? '').toString();
+        if (uid != null &&
+            uid.isNotEmpty &&
+            cliente.isNotEmpty &&
+            cliente != uid) {
           return Scaffold(
             appBar: AppBar(title: const Text('Reserva')),
-            body: const Center(child: Text('Esta reserva no pertenece a tu cuenta.')),
+            body: const Center(
+                child: Text('Esta reserva no pertenece a tu cuenta.')),
           );
         }
 
@@ -252,16 +281,17 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
           );
         }
 
-        final fechaPickup = widget.fechaHoraPickup ??
-            _ts(data['fechaHora']) ??
-            DateTime.now();
+        final fechaPickup =
+            widget.fechaHoraPickup ?? _ts(data['fechaHora']) ?? DateTime.now();
         final origen = (widget.origen ?? data['origen'] ?? '').toString();
         final destino = (widget.destino ?? data['destino'] ?? '').toString();
         final precio = widget.precio ?? _precioDe(data);
 
         final publishAt = _ts(data['publishAt']);
         final acceptAfter = _ts(data['acceptAfter']);
-        final ref = widget.viajeId.length >= 6 ? widget.viajeId.substring(0, 6) : widget.viajeId;
+        final ref = widget.viajeId.length >= 6
+            ? widget.viajeId.substring(0, 6)
+            : widget.viajeId;
 
         return Scaffold(
           appBar: AppBar(
@@ -270,7 +300,7 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
               icon: const Icon(Icons.close),
               onPressed: () {
                 Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute<void>(builder: (_) => const ClienteHome()),
+                  MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
                   (r) => false,
                 );
               },
@@ -307,14 +337,16 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                   const SizedBox(height: 12),
                   Text(
                     'Reserva confirmada',
-                    style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+                    style: theme.textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   Text(
                     'Aquí ves en tiempo real cuándo tu viaje entra al pool y cuándo los conductores pueden aceptarlo.',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
+                      color:
+                          theme.colorScheme.onSurface.withValues(alpha: 0.72),
                       height: 1.35,
                     ),
                     textAlign: TextAlign.center,
@@ -323,7 +355,8 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                 const SizedBox(height: 20),
                 Card(
                   elevation: 0,
-                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+                  color: theme.colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.45),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                     side: BorderSide(color: accent.withValues(alpha: 0.35)),
@@ -343,12 +376,17 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                         const SizedBox(height: 6),
                         Text(
                           fmtLargo.format(fechaPickup),
-                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                          style: theme.textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
                         ),
                         const SizedBox(height: 14),
-                        _RowInfo(icon: Icons.trip_origin, label: 'Origen', value: origen),
+                        _RowInfo(
+                            icon: Icons.trip_origin,
+                            label: 'Origen',
+                            value: origen),
                         const SizedBox(height: 10),
-                        _RowInfo(icon: Icons.flag, label: 'Destino', value: destino),
+                        _RowInfo(
+                            icon: Icons.flag, label: 'Destino', value: destino),
                         if (precio > 0) ...[
                           const SizedBox(height: 10),
                           _RowInfo(
@@ -361,7 +399,8 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                         Text(
                           'Referencia: #$ref',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.55),
                           ),
                         ),
                       ],
@@ -374,7 +413,8 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                   const SizedBox(height: 22),
                   Text(
                     'Estado del servicio',
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 12),
                   _TimelineReserva(
@@ -384,11 +424,12 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                     acceptAfter: acceptAfter,
                     now: now,
                     fmtCorto: fmtCorto,
-                    poolLeadHours: ViajesRepo.poolLeadMinutesProgramado ~/ 60,
+                    poolLeadMinutes: ViajesRepo.poolLeadMinutesProgramado,
                   ),
                 ],
                 const SizedBox(height: 20),
-                _OtrasReservasSection(excluirId: widget.viajeId, accent: accent),
+                _OtrasReservasSection(
+                    excluirId: widget.viajeId, accent: accent),
                 if (_puedeCancelarReserva(fase)) ...[
                   const SizedBox(height: 20),
                   Container(
@@ -397,9 +438,11 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
-                        color: theme.colorScheme.outline.withValues(alpha: 0.35),
+                        color:
+                            theme.colorScheme.outline.withValues(alpha: 0.35),
                       ),
-                      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                      color: theme.colorScheme.surfaceContainerHighest
+                          .withValues(alpha: 0.35),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -412,7 +455,8 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                                   : 'Podés cancelar esta solicitud mientras siga pendiente de pago.',
                           style: theme.textTheme.bodySmall?.copyWith(
                             height: 1.35,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.75),
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -429,13 +473,16 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                                     color: theme.colorScheme.error,
                                   ),
                                 )
-                              : Icon(Icons.cancel_outlined, color: theme.colorScheme.error),
+                              : Icon(Icons.cancel_outlined,
+                                  color: theme.colorScheme.error),
                           label: Text(
                             _cancelando ? 'Cancelando…' : 'Cancelar reserva',
                             style: TextStyle(color: theme.colorScheme.error),
                           ),
                           style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: theme.colorScheme.error.withValues(alpha: 0.65)),
+                            side: BorderSide(
+                                color: theme.colorScheme.error
+                                    .withValues(alpha: 0.65)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         ),
@@ -449,7 +496,8 @@ class _ViajeProgramadoConfirmacionState extends State<ViajeProgramadoConfirmacio
                       ? null
                       : () {
                           Navigator.of(context).pushAndRemoveUntil(
-                            MaterialPageRoute<void>(builder: (_) => const ClienteHome()),
+                            MaterialPageRoute<void>(
+                                builder: (_) => const ClienteShell()),
                             (r) => false,
                           );
                         },
@@ -510,9 +558,12 @@ class _BannerEstado extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                Text(title,
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
-                Text(subtitle, style: theme.textTheme.bodyMedium?.copyWith(height: 1.35)),
+                Text(subtitle,
+                    style: theme.textTheme.bodyMedium?.copyWith(height: 1.35)),
               ],
             ),
           ),
@@ -530,7 +581,7 @@ class _TimelineReserva extends StatelessWidget {
     required this.acceptAfter,
     required this.now,
     required this.fmtCorto,
-    required this.poolLeadHours,
+    required this.poolLeadMinutes,
   });
 
   final _FaseReserva fase;
@@ -539,7 +590,7 @@ class _TimelineReserva extends StatelessWidget {
   final DateTime? acceptAfter;
   final DateTime now;
   final DateFormat fmtCorto;
-  final int poolLeadHours;
+  final int poolLeadMinutes;
 
   @override
   Widget build(BuildContext context) {
@@ -564,7 +615,8 @@ class _TimelineReserva extends StatelessWidget {
         subt2 =
             'Los conductores verán tu viaje a partir del ${fmtCorto.format(aperturaPool)}. Antes de esa hora la reserva queda guardada solo para vos.';
       } else {
-        subt2 = 'Tu viaje entrará en la red en cuanto se cumplan las condiciones de publicación.';
+        subt2 =
+            'Tu viaje entrará en la red en cuanto se cumplan las condiciones de publicación.';
       }
     } else if (fase == _FaseReserva.enPool) {
       subt2 =
@@ -590,7 +642,7 @@ class _TimelineReserva extends StatelessWidget {
           icon: Icons.groups_2_outlined,
           title: 'En red de conductores (pool)',
           subtitle: subt2.isEmpty
-              ? 'Unas $poolLeadHours horas antes de la recogida abrimos la ventana para que un conductor pueda tomar tu viaje a tiempo.'
+              ? _textoVentanaPoolCliente(poolLeadMinutes)
               : subt2,
         ),
         _TimelineTile(
@@ -660,7 +712,9 @@ class _TimelineTile extends StatelessWidget {
                   child: Icon(
                     done ? Icons.check : icon,
                     size: 18,
-                    color: done || current ? accent : theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                    color: done || current
+                        ? accent
+                        : theme.colorScheme.onSurface.withValues(alpha: 0.45),
                   ),
                 ),
                 if (!isLast)
@@ -694,7 +748,8 @@ class _TimelineTile extends StatelessWidget {
                       subtitle,
                       style: theme.textTheme.bodySmall?.copyWith(
                         height: 1.4,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
+                        color:
+                            theme.colorScheme.onSurface.withValues(alpha: 0.72),
                       ),
                     ),
                   ],
@@ -725,7 +780,9 @@ class _RowInfo extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 18, color: theme.colorScheme.onSurface.withValues(alpha: 0.55)),
+        Icon(icon,
+            size: 18,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.55)),
         const SizedBox(width: 8),
         Expanded(
           child: Column(
@@ -739,7 +796,8 @@ class _RowInfo extends StatelessWidget {
               ),
               Text(
                 value.isEmpty ? '—' : value,
-                style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -761,13 +819,17 @@ class _OtrasReservasSection extends StatelessWidget {
   static DateTime _asDate(dynamic v) {
     if (v is Timestamp) return v.toDate();
     if (v is DateTime) return v;
-    if (v is String) return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    if (v is String) {
+      return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   static bool _terminal(Map<String, dynamic> d) {
     final e = EstadosViaje.normalizar((d['estado'] ?? '').toString());
-    if (EstadosViaje.esCancelado(e) || EstadosViaje.esCompletado(e)) return true;
+    if (EstadosViaje.esCancelado(e) || EstadosViaje.esCompletado(e)) {
+      return true;
+    }
     if (d['completado'] == true) return true;
     return false;
   }
@@ -795,7 +857,8 @@ class _OtrasReservasSection extends StatelessWidget {
           if ((m['tipoServicio'] ?? '').toString() == 'turismo') return false;
           return true;
         }).toList()
-          ..sort((a, b) => _asDate(a.data()['fechaHora']).compareTo(_asDate(b.data()['fechaHora'])));
+          ..sort((a, b) => _asDate(a.data()['fechaHora'])
+              .compareTo(_asDate(b.data()['fechaHora'])));
 
         if (otros.isEmpty) return const SizedBox.shrink();
 
@@ -805,7 +868,8 @@ class _OtrasReservasSection extends StatelessWidget {
           children: [
             Text(
               'Tus otras reservas',
-              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
             ...otros.take(4).map((doc) {
@@ -816,7 +880,8 @@ class _OtrasReservasSection extends StatelessWidget {
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Material(
-                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                  color: theme.colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.35),
                   borderRadius: BorderRadius.circular(12),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(12),
@@ -824,12 +889,14 @@ class _OtrasReservasSection extends StatelessWidget {
                       Navigator.push<void>(
                         context,
                         MaterialPageRoute<void>(
-                          builder: (_) => ViajeProgramadoConfirmacion(viajeId: doc.id),
+                          builder: (_) =>
+                              ViajeProgramadoConfirmacion(viajeId: doc.id),
                         ),
                       );
                     },
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
                       child: Row(
                         children: [
                           Icon(Icons.event, size: 18, color: accent),
@@ -840,20 +907,25 @@ class _OtrasReservasSection extends StatelessWidget {
                               children: [
                                 Text(
                                   fmt.format(fecha),
-                                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13),
                                 ),
                                 Text(
                                   '$o → $de',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.65),
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                          Icon(Icons.chevron_right, color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
+                          Icon(Icons.chevron_right,
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.35)),
                         ],
                       ),
                     ),

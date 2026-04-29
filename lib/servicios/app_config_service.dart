@@ -66,7 +66,7 @@ class AppConfigService {
     final data = snap.data();
     if (data == null) return null;
     return DatosBancarios.fromMap(data);
-    }
+  }
 
   /// Stream en vivo de la config bancaria (null si borran el doc).
   static Stream<DatosBancarios?> streamDatosBancarios() {
@@ -84,7 +84,8 @@ class AppConfigService {
   }
 
   /// Sugerencia de referencia para transferencias del taxista (TX-<uid>-YYYY-MM).
-  static String referenciaSugerida({required String uidTaxista, DateTime? fecha}) {
+  static String referenciaSugerida(
+      {required String uidTaxista, DateTime? fecha}) {
     final f = fecha ?? DateTime.now();
     final mm = f.month.toString().padLeft(2, '0');
     return 'TX-$uidTaxista-${f.year}-$mm';

@@ -27,8 +27,9 @@ class SeleccionUsuario extends StatelessWidget {
             final double h = c.maxHeight;
 
             // Logos GRANDES por ALTURA
-            final double paraH = (h * 0.25).clamp(180.0, 360.0);      // Paracaídas
-            final double logoRaiH = (h * 0.15).clamp(100.0, 240.0);   // Logo RAI vertical
+            final double paraH = (h * 0.25).clamp(180.0, 360.0); // Paracaídas
+            final double logoRaiH =
+                (h * 0.15).clamp(100.0, 240.0); // Logo RAI vertical
 
             return SingleChildScrollView(
               physics: const ClampingScrollPhysics(),
@@ -54,7 +55,7 @@ class SeleccionUsuario extends StatelessWidget {
                               ),
                             ),
                           ),
-                          
+
                           // LOGO RAI VERTICAL (R arriba + RAI abajo)
                           SizedBox(height: h * 0.016),
                           Center(
@@ -68,9 +69,9 @@ class SeleccionUsuario extends StatelessWidget {
                               ),
                             ),
                           ),
-                          
+
                           SizedBox(height: h * 0.022),
-                          
+
                           // TEXTO PRINCIPAL
                           const Text(
                             'Largos viajes,\nfáciles y seguros',
@@ -83,7 +84,7 @@ class SeleccionUsuario extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          
+
                           // SUBTEXTO
                           const Text(
                             'Comparte ruta, ahorra y viaja mejor.',
@@ -110,7 +111,8 @@ class SeleccionUsuario extends StatelessWidget {
                             onTap: () {
                               Navigator.push(
                                 context,
-                                MaterialPageRoute(builder: (_) => const LoginCliente()),
+                                MaterialPageRoute(
+                                    builder: (_) => const LoginCliente()),
                               );
                             },
                           ),
@@ -123,7 +125,8 @@ class SeleccionUsuario extends StatelessWidget {
                             onTap: () {
                               Navigator.push(
                                 context,
-                                MaterialPageRoute(builder: (_) => const LoginTaxista()),
+                                MaterialPageRoute(
+                                    builder: (_) => const LoginTaxista()),
                               );
                             },
                           ),

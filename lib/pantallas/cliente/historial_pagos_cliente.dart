@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import '../../widgets/cliente_drawer.dart';
 import '../../data/pago_data.dart';
 
 class HistorialPagosCliente extends StatefulWidget {
@@ -78,19 +77,12 @@ class _HistorialPagosClienteState extends State<HistorialPagosCliente> {
 
     return Scaffold(
       backgroundColor: cs.surface,
-      drawer: const ClienteDrawer(),
       appBar: AppBar(
         backgroundColor: cs.surface,
         foregroundColor: cs.onSurface,
         surfaceTintColor: cs.surfaceTint,
         elevation: 0,
         scrolledUnderElevation: 1,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: Icon(Icons.menu, color: cs.onSurface),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-          ),
-        ),
         title: Text(
           'Mis pagos',
           style: TextStyle(

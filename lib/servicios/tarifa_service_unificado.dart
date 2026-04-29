@@ -2,7 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 // ✅ Eliminado import no utilizado de turismo_catalogo_rd.dart
 
 class TarifaServiceUnificado {
-  static final TarifaServiceUnificado _instance = TarifaServiceUnificado._internal();
+  static final TarifaServiceUnificado _instance =
+      TarifaServiceUnificado._internal();
   factory TarifaServiceUnificado() => _instance;
   TarifaServiceUnificado._internal();
 
@@ -13,7 +14,7 @@ class TarifaServiceUnificado {
   DateTime? _lastFetchGeneral;
   DateTime? _lastFetchTurismo;
   DateTime? _lastFetchPromo;
-  
+
   static const Duration _cacheDuration = Duration(minutes: 5);
 
   // ==============================================================
@@ -76,27 +77,27 @@ class TarifaServiceUnificado {
     // Aeropuertos y transporte - usar carro por defecto
     'AEROPUERTO': 'carro',
     'MUELLE': 'carro',
-    
+
     // Zonas urbanas - carro
     'ZONA_COLONIAL': 'carro',
     'CIUDAD': 'carro',
-    
+
     // Playas - jeepeta es mejor para terrenos playeros
     'PLAYA': 'jeepeta',
     'RESORT': 'jeepeta',
-    
+
     // Hoteles - carro
     'HOTEL': 'carro',
-    
+
     // Tours - según el tipo pueden variar, pero jeepeta es versátil
     'TOUR': 'jeepeta',
-    
+
     // Parques y naturaleza - jeepeta para terrenos variados
     'PARQUE': 'jeepeta',
     'MONTANA': 'jeepeta',
     'CASCADA': 'jeepeta',
     'LAGO': 'jeepeta',
-    
+
     // Museos y atracciones urbanas - carro
     'MUSEO': 'carro',
     'ATRACCION': 'carro',
@@ -143,7 +144,7 @@ class TarifaServiceUnificado {
           .collection('tarifas')
           .doc('general')
           .get();
-          
+
       if (doc.exists) {
         _cacheGeneral = Map<String, dynamic>.from(doc.data()!);
       } else {
@@ -162,10 +163,9 @@ class TarifaServiceUnificado {
 
   Future<Map<String, dynamic>> _recargarTurismo() async {
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('tarifa_turismo')
-          .get();
-          
+      final snapshot =
+          await FirebaseFirestore.instance.collection('tarifa_turismo').get();
+
       if (snapshot.docs.isNotEmpty) {
         final Map<String, dynamic> mapa = {};
         for (final doc in snapshot.docs) {
@@ -196,7 +196,7 @@ class TarifaServiceUnificado {
           .collection('config')
           .doc('promociones')
           .get();
-          
+
       if (doc.exists) {
         _cachePromo = Map<String, dynamic>.from(doc.data()!);
       } else {
@@ -225,7 +225,7 @@ class TarifaServiceUnificado {
 
   double _aplicarDescuento(double precio, int contadorViajes) {
     if (_cachePromo == null) return precio;
-    
+
     final bool activa = _cachePromo!['activa'] == true;
     if (!activa) return precio;
 
@@ -240,12 +240,27 @@ class TarifaServiceUnificado {
     final int ciclo = mFinal + kFinal;
     final int contadorEfectivo = contadorViajes <= 0 ? 1 : contadorViajes;
     final int posicion = (contadorEfectivo - 1) % ciclo + 1;
-    
+
     if (posicion <= mFinal) {
       return precio * (100 - porcentajeFinal) / 100;
     }
-    
+
     return precio;
+  }
+
+  /// Turismo: **ida** = tarifa por distancia (núcleo con mínimo). **Ida y vuelta** = esa tarifa + **½** para la vuelta (1,5× el núcleo).
+  /// El **peaje** no se multiplica por ese factor: ida suma [peaje] una vez; ida y vuelta suma **2× peaje** cuando `cobraPeaje`.
+  double _turismoNucleoIdaVueltaYPeaje({
+    required double nucleoTrayecto,
+    required bool idaVuelta,
+    required double peaje,
+    required bool cobraPeaje,
+  }) {
+    final toll = (cobraPeaje && peaje > 0) ? peaje : 0.0;
+    if (!idaVuelta) {
+      return nucleoTrayecto + toll;
+    }
+    return nucleoTrayecto + 0.5 * nucleoTrayecto + toll * 2;
   }
 
   /// 🔥 Calcula el precio para un servicio dado.
@@ -267,15 +282,16 @@ class TarifaServiceUnificado {
       // 🔇 Prints comentados para producción
       // print('🎯 Turismo - Subtipo original: $subtipoTurismo');
       // print('🎯 Turismo - Subtipo normalizado: $subtipoNormalizado');
-      
+
       // 🔥 PASO 2: Determinar qué tipo de vehículo usar para este subtipo
       // Si ya viene tipoVehiculo, lo respetamos, si no, usamos el mapeo
-      final String vehiculoParaConfig = tipoVehiculo ?? _mapeoSubtipoAVehiculo[subtipoNormalizado] ?? 'carro';
+      final String vehiculoParaConfig =
+          tipoVehiculo ?? _mapeoSubtipoAVehiculo[subtipoNormalizado] ?? 'carro';
       // print('🎯 Turismo - Vehículo a usar: $vehiculoParaConfig');
-      
+
       final tarifas = await _getTarifasTurismo();
       final config = tarifas[vehiculoParaConfig];
-      
+
       if (config == null) {
         // Si no hay configuración, usar fallback
         // print('⚠️ No hay configuración para $vehiculoParaConfig, usando fallback');
@@ -287,7 +303,7 @@ class TarifaServiceUnificado {
           contadorViajes: contadorViajes,
         );
       }
-      
+
       final activo = config['activo'] ?? true;
       if (!activo) {
         // print('⚠️ Servicio $vehiculoParaConfig inactivo, usando fallback');
@@ -299,26 +315,31 @@ class TarifaServiceUnificado {
           contadorViajes: contadorViajes,
         );
       }
-      
+
       final base = (config['tarifaBase'] as num).toDouble();
       final porKm = (config['tarifaKm'] as num).toDouble();
       final minimo = (config['precioMinimo'] as num).toDouble();
       final cobraPeaje = config['cobraPeaje'] ?? true;
 
-      precioBase = base + (distanciaKm * porKm);
-      if (precioBase < minimo) precioBase = minimo;
-      if (cobraPeaje) precioBase += peaje;
+      var nucleo = base + (distanciaKm * porKm);
+      if (nucleo < minimo) nucleo = minimo;
+      precioBase = _turismoNucleoIdaVueltaYPeaje(
+        nucleoTrayecto: nucleo,
+        idaVuelta: idaVuelta,
+        peaje: peaje,
+        cobraPeaje: cobraPeaje,
+      );
     }
 
     // ===== MOTOR =====
     else if (tipoServicio == 'motor') {
       final tarifas = await _getTarifasGenerales();
       final config = tarifas['motor'];
-      
+
       if (config == null) {
         throw ArgumentError('Configuración de motor no encontrada');
       }
-      
+
       final base = (config['base'] as num).toDouble();
       final porKm = (config['porKm'] as num).toDouble();
       final minimo = (config['minimo'] as num).toDouble();
@@ -331,15 +352,16 @@ class TarifaServiceUnificado {
     // ===== NORMAL =====
     else if (tipoServicio == 'normal') {
       if (tipoVehiculo == null) {
-        throw ArgumentError('tipoVehiculo es requerido para servicios normales');
+        throw ArgumentError(
+            'tipoVehiculo es requerido para servicios normales');
       }
 
       final tarifas = await _getTarifasGenerales();
-      
+
       double base = 50.0;
       double porKm = 25.0;
       double minimo = 150.0;
-      
+
       if (tarifas.containsKey(tipoVehiculo)) {
         final rawConfig = tarifas[tipoVehiculo];
         if (rawConfig is Map) {
@@ -356,8 +378,8 @@ class TarifaServiceUnificado {
       throw ArgumentError('Tipo de servicio no válido: $tipoServicio');
     }
 
-    // Aplicar ida y vuelta
-    if (idaVuelta) {
+    // Ida y vuelta (turismo ya aplicado arriba: ida completa + ½ vuelta + peaje sin ×1,8)
+    if (idaVuelta && tipoServicio != 'turismo') {
       precioBase *= 1.8;
     }
 
@@ -371,10 +393,10 @@ class TarifaServiceUnificado {
   /// 🔥 Función de normalización de subtipos
   String _normalizarSubtipo(String? subtipo) {
     if (subtipo == null) return 'CIUDAD';
-    
+
     // Convertir a mayúsculas para comparar con las constantes
     final subtipoUpper = subtipo.toUpperCase();
-    
+
     // Lista de subtipos válidos
     const subtiposValidos = [
       'AEROPUERTO',
@@ -392,16 +414,16 @@ class TarifaServiceUnificado {
       'MUSEO',
       'ATRACCION',
     ];
-    
+
     // Si ya es válido, devolverlo
     if (subtiposValidos.contains(subtipoUpper)) {
       return subtipoUpper;
     }
-    
+
     // Mapeo de strings comunes
-    if (subtipoUpper.contains('AEROPUERTO') || 
+    if (subtipoUpper.contains('AEROPUERTO') ||
         subtipoUpper.contains('AIRPORT') ||
-        subtipoUpper.contains('SDQ') || 
+        subtipoUpper.contains('SDQ') ||
         subtipoUpper.contains('PUJ') ||
         subtipoUpper.contains('STI')) {
       return 'AEROPUERTO';
@@ -442,7 +464,7 @@ class TarifaServiceUnificado {
     if (subtipoUpper.contains('MUSEO')) {
       return 'MUSEO';
     }
-    
+
     // Fallback
     return 'CIUDAD';
   }
@@ -462,15 +484,19 @@ class TarifaServiceUnificado {
       'minivan': {'base': 200.0, 'km': 35.0, 'minimo': 500.0},
       'bus': {'base': 300.0, 'km': 40.0, 'minimo': 600.0},
     };
-    
-    final config = fallbackPorVehiculo[tipoVehiculo] ?? fallbackPorVehiculo['carro']!;
-    
-    double precio = config['base']! + (distanciaKm * config['km']!);
-    if (precio < config['minimo']!) precio = config['minimo']!;
-    precio += peaje;
-    
-    if (idaVuelta) precio *= 1.8;
-    
+
+    final config =
+        fallbackPorVehiculo[tipoVehiculo] ?? fallbackPorVehiculo['carro']!;
+
+    var nucleo = config['base']! + (distanciaKm * config['km']!);
+    if (nucleo < config['minimo']!) nucleo = config['minimo']!;
+    final precio = _turismoNucleoIdaVueltaYPeaje(
+      nucleoTrayecto: nucleo,
+      idaVuelta: idaVuelta,
+      peaje: peaje,
+      cobraPeaje: true,
+    );
+
     return _aplicarDescuento(precio, contadorViajes);
   }
 
@@ -478,14 +504,14 @@ class TarifaServiceUnificado {
   Future<String> getDescripcionPromocion() async {
     await _getConfigPromo();
     if (_cachePromo == null) return 'Sin promoción';
-    
+
     final bool activa = _cachePromo!['activa'] == true;
     if (!activa) return 'Promoción inactiva';
-    
+
     final int m = _cachePromo!['m'] ?? 3;
     final int k = _cachePromo!['k'] ?? 1;
     final int porcentaje = _cachePromo!['porcentaje'] ?? 15;
-    
+
     return '${m}x$k - $porcentaje% descuento';
   }
 
@@ -493,28 +519,30 @@ class TarifaServiceUnificado {
   Future<bool> aplicaDescuento(int contadorViajes) async {
     await _getConfigPromo();
     if (_cachePromo == null) return false;
-    
+
     final bool activa = _cachePromo!['activa'] == true;
     if (!activa) return false;
-    
+
     final int m = _cachePromo!['m'] ?? 3;
     final int k = _cachePromo!['k'] ?? 1;
     final int ciclo = m + k;
     final int contadorEfectivo = contadorViajes <= 0 ? 1 : contadorViajes;
     final int posicion = (contadorEfectivo - 1) % ciclo + 1;
-    
+
     return posicion <= m;
   }
 
   /// Snapshot auditable de la promo aplicada para un contador concreto.
-  Future<Map<String, dynamic>> construirPromoSnapshot(int contadorViajes) async {
+  Future<Map<String, dynamic>> construirPromoSnapshot(
+      int contadorViajes) async {
     await _getConfigPromo();
     final cfg = _cachePromo ?? <String, dynamic>{};
 
     final bool activa = cfg['activa'] == true;
     final int m = ((cfg['m'] as num?)?.toInt() ?? 3).clamp(1, 999);
     final int k = ((cfg['k'] as num?)?.toInt() ?? 1).clamp(1, 999);
-    final int porcentaje = ((cfg['porcentaje'] as num?)?.toInt() ?? 15).clamp(0, 95);
+    final int porcentaje =
+        ((cfg['porcentaje'] as num?)?.toInt() ?? 15).clamp(0, 95);
     final int ciclo = m + k;
     final int contadorEfectivo = contadorViajes <= 0 ? 1 : contadorViajes;
     final int posicion = (contadorEfectivo - 1) % ciclo + 1;

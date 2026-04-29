@@ -1,5 +1,6 @@
 // lib/pantallas/admin/admin_giras_tours_cupos.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -18,6 +19,7 @@ class AdminGirasToursCupos extends StatefulWidget {
 
 class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
   int _filtro = 0;
+  bool _accionEnCurso = false;
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _stream() {
     return PoolRepo.pools
@@ -30,7 +32,9 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
     final raw = d['fechaSalida'] ?? d['fecha'] ?? d['fechaHora'];
     if (raw is Timestamp) return raw.toDate();
     if (raw is DateTime) return raw;
-    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    if (raw is String) {
+      return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
@@ -62,7 +66,9 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
 
   bool _puedeIniciar(Map<String, dynamic> d) {
     final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
-    if (estado == 'en_ruta' || estado == 'cancelado' || estado == 'finalizado') {
+    if (estado == 'en_ruta' ||
+        estado == 'cancelado' ||
+        estado == 'finalizado') {
       return false;
     }
     final minC = ((d['minParaConfirmar'] ?? 0) as num).toInt();
@@ -76,29 +82,61 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
     return true;
   }
 
+  Future<void> _ejecutarAccion(Future<void> Function() fn) async {
+    if (_accionEnCurso || !mounted) return;
+    setState(() => _accionEnCurso = true);
+    try {
+      await fn();
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      final msg = (e.message ?? '').trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg.isNotEmpty ? msg : e.code),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message?.isNotEmpty == true ? e.message! : e.code),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _accionEnCurso = false);
+    }
+  }
+
   Future<void> _operar(
     BuildContext context, {
     required String action,
     required String poolId,
   }) async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
+    await _ejecutarAccion(() async {
+      final messenger = ScaffoldMessenger.of(context);
       if (action == 'iniciar') {
         await PoolRepo.iniciarViajePoolSeguro(poolId: poolId);
         messenger.showSnackBar(const SnackBar(content: Text('Viaje iniciado')));
       } else if (action == 'finalizar') {
         await PoolRepo.finalizarViajePoolSeguro(poolId: poolId);
-        messenger.showSnackBar(const SnackBar(content: Text('Viaje finalizado')));
+        messenger
+            .showSnackBar(const SnackBar(content: Text('Viaje finalizado')));
       } else if (action == 'cancelar') {
         await PoolRepo.cancelarViajePoolSeguro(
           poolId: poolId,
           motivo: 'Cancelado por administración',
         );
-        messenger.showSnackBar(const SnackBar(content: Text('Viaje cancelado')));
+        messenger
+            .showSnackBar(const SnackBar(content: Text('Viaje cancelado')));
       }
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
-    }
+    });
   }
 
   Future<void> _confirmarCancelar(BuildContext context, String poolId) async {
@@ -106,7 +144,8 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AdminUi.dialogSurface(ctx),
-        title: Text('Cancelar gira', style: TextStyle(color: AdminUi.onCard(ctx))),
+        title:
+            Text('Cancelar gira', style: TextStyle(color: AdminUi.onCard(ctx))),
         content: Text(
           '¿Marcar esta gira como cancelada? Los pasajeros deberán ser avisados por el operador.',
           style: TextStyle(color: AdminUi.secondary(ctx)),
@@ -132,6 +171,113 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
     );
     if (ok == true && context.mounted) {
       await _operar(context, action: 'cancelar', poolId: poolId);
+    }
+  }
+
+  /// Gira ya cerrada con "Finalizar": corrección contable/operativa (solo backend admin).
+  Future<void> _confirmarAnularTrasFinalizar(
+      BuildContext context, String poolId) async {
+    final motivoCtrl = TextEditingController();
+    try {
+      final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) {
+              final cs = Theme.of(ctx).colorScheme;
+              return AlertDialog(
+                backgroundColor: AdminUi.dialogSurface(ctx),
+                title: Text(
+                  'Anular gira finalizada',
+                  style: TextStyle(color: AdminUi.onCard(ctx)),
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Quita la gira del flujo de comisión pendiente y la marca como cancelada '
+                      '(uso: error de cierre, disputa, duplicado). Los pasajeros no reciben aviso automático.',
+                      style: TextStyle(
+                          color: AdminUi.secondary(ctx), fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: motivoCtrl,
+                      style: TextStyle(color: AdminUi.onCard(ctx)),
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        hintText: 'Motivo (obligatorio para auditoría)',
+                        hintStyle: TextStyle(
+                            color:
+                                AdminUi.secondary(ctx).withValues(alpha: 0.75)),
+                        filled: true,
+                        fillColor: AdminUi.inputFill(ctx),
+                        border: OutlineInputBorder(
+                          borderRadius:
+                              const BorderRadius.all(Radius.circular(8)),
+                          borderSide:
+                              BorderSide(color: AdminUi.borderSubtle(ctx)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius:
+                              const BorderRadius.all(Radius.circular(8)),
+                          borderSide:
+                              BorderSide(color: AdminUi.borderSubtle(ctx)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius:
+                              const BorderRadius.all(Radius.circular(8)),
+                          borderSide: BorderSide(color: cs.primary, width: 1.4),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: Text('No',
+                        style: TextStyle(color: AdminUi.secondary(ctx))),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(
+                      'Anular cierre',
+                      style: TextStyle(
+                        color: Theme.of(ctx).brightness == Brightness.light
+                            ? Colors.deepOrange.shade800
+                            : Colors.orangeAccent,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ) ??
+          false;
+      if (!ok || !context.mounted) return;
+      final motivo = motivoCtrl.text.trim();
+      if (motivo.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Escribe un motivo antes de anular.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+      await _ejecutarAccion(() async {
+        await PoolRepo.anularGiraFinalizadaAdmin(
+            poolId: poolId, motivo: motivo);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Gira anulada administrativamente'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      });
+    } finally {
+      motivoCtrl.dispose();
     }
   }
 
@@ -181,30 +327,38 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                 ),
                 Expanded(
                   child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: PoolRepo.pools.doc(poolId).collection('reservas').snapshots(),
+                    stream: PoolRepo.pools
+                        .doc(poolId)
+                        .collection('reservas')
+                        .snapshots(),
                     builder: (context, snap) {
                       if (snap.connectionState == ConnectionState.waiting) {
                         return Center(
-                          child: CircularProgressIndicator(color: AdminUi.progressAccent(context)),
+                          child: CircularProgressIndicator(
+                              color: AdminUi.progressAccent(context)),
                         );
                       }
                       if (snap.hasError) {
                         return Center(
                           child: Text('Error: ${snap.error}',
-                              style: TextStyle(color: AdminUi.secondary(context))),
+                              style:
+                                  TextStyle(color: AdminUi.secondary(context))),
                         );
                       }
                       final docs = snap.data?.docs ?? [];
                       if (docs.isEmpty) {
                         return Center(
-                          child: Text('Sin reservas', style: TextStyle(color: AdminUi.muted(context))),
+                          child: Text('Sin reservas',
+                              style: TextStyle(color: AdminUi.muted(context))),
                         );
                       }
                       docs.sort((a, b) {
                         final ta = a.data()['createdAt'];
                         final tb = b.data()['createdAt'];
-                        final da = ta is Timestamp ? ta.millisecondsSinceEpoch : 0;
-                        final db = tb is Timestamp ? tb.millisecondsSinceEpoch : 0;
+                        final da =
+                            ta is Timestamp ? ta.millisecondsSinceEpoch : 0;
+                        final db =
+                            tb is Timestamp ? tb.millisecondsSinceEpoch : 0;
                         return db.compareTo(da);
                       });
                       return ListView.builder(
@@ -221,16 +375,21 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                             color: AdminUi.card(context),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
-                              side: BorderSide(color: AdminUi.borderSubtle(context)),
+                              side: BorderSide(
+                                  color: AdminUi.borderSubtle(context)),
                             ),
                             child: ListTile(
                               title: Text(
                                 '$est · $seats asiento(s) · RD\$ ${total.toStringAsFixed(0)}',
-                                style: TextStyle(color: AdminUi.onCard(context), fontSize: 14),
+                                style: TextStyle(
+                                    color: AdminUi.onCard(context),
+                                    fontSize: 14),
                               ),
                               subtitle: Text(
                                 uid.isEmpty ? '—' : uid,
-                                style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
+                                style: TextStyle(
+                                    color: AdminUi.muted(context),
+                                    fontSize: 12),
                               ),
                             ),
                           );
@@ -282,8 +441,12 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
               child: Text(
                 'Control de viajes_pool: estados, cupos y acciones (iniciar, finalizar, cancelar). '
                 'Iniciar exige cupos firmes (pagos verificados o efectivo reservado). '
-                'Las comisiones al finalizar se validan en Verificar Pagos.',
-                style: TextStyle(color: AdminUi.secondary(context), fontSize: 12, height: 1.35),
+                'Si una gira ya está finalizada y hay que corregir el cierre, usa «Anular cierre (admin)». '
+                'Las comisiones pendientes se gestionan en Verificar Pagos.',
+                style: TextStyle(
+                    color: AdminUi.secondary(context),
+                    fontSize: 12,
+                    height: 1.35),
               ),
             ),
           ),
@@ -350,7 +513,8 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return Center(
-                    child: CircularProgressIndicator(color: AdminUi.progressAccent(context)),
+                    child: CircularProgressIndicator(
+                        color: AdminUi.progressAccent(context)),
                   );
                 }
                 if (snap.hasError) {
@@ -395,20 +559,28 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                     final cap = ((d['capacidad'] ?? 0) as num).toInt();
                     final occ = ((d['asientosReservados'] ?? 0) as num).toInt();
                     final pag = ((d['asientosPagados'] ?? 0) as num).toInt();
-                    final owner = (d['taxistaNombre'] ?? d['ownerTaxistaId'] ?? '').toString();
+                    final owner =
+                        (d['taxistaNombre'] ?? d['ownerTaxistaId'] ?? '')
+                            .toString();
                     final fecha = _fechaSalida(d);
 
                     final puedeIniciar = _puedeIniciar(d);
                     final puedeFinalizar = estadoL == 'en_ruta';
-                    final puedeCancelar = estadoL != 'finalizado' && estadoL != 'cancelado';
+                    final puedeCancelar =
+                        estadoL != 'finalizado' && estadoL != 'cancelado';
+                    final puedeAnularTrasFinalizar = estadoL == 'finalizado';
+                    final yaAnuladaTrasFinal =
+                        d['anuladaTrasFinalizar'] == true;
 
                     final green = AdminUi.accentGreen(context);
-                    final blue = Theme.of(context).brightness == Brightness.light
-                        ? Colors.lightBlue.shade800
-                        : Colors.lightBlueAccent;
-                    final orange = Theme.of(context).brightness == Brightness.light
-                        ? Colors.deepOrange.shade800
-                        : Colors.orangeAccent;
+                    final blue =
+                        Theme.of(context).brightness == Brightness.light
+                            ? Colors.lightBlue.shade800
+                            : Colors.lightBlueAccent;
+                    final orange =
+                        Theme.of(context).brightness == Brightness.light
+                            ? Colors.deepOrange.shade800
+                            : Colors.orangeAccent;
 
                     return Card(
                       color: AdminUi.card(context),
@@ -426,7 +598,8 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                               children: [
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         '$origen → $destino',
@@ -439,19 +612,27 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                       const SizedBox(height: 4),
                                       Text(
                                         df.format(fecha),
-                                        style: TextStyle(color: AdminUi.secondary(context), fontSize: 13),
+                                        style: TextStyle(
+                                            color: AdminUi.secondary(context),
+                                            fontSize: 13),
                                       ),
                                       Text(
                                         'Tipo: ${tipo.isEmpty ? "—" : tipo} · Estado: $estado',
-                                        style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
+                                        style: TextStyle(
+                                            color: AdminUi.muted(context),
+                                            fontSize: 12),
                                       ),
                                       Text(
                                         'Organiza: ${owner.isEmpty ? "—" : owner}',
-                                        style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
+                                        style: TextStyle(
+                                            color: AdminUi.muted(context),
+                                            fontSize: 12),
                                       ),
                                       Text(
                                         'Cupos: $occ/$cap reservados · $pag pagados',
-                                        style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+                                        style: TextStyle(
+                                            color: AdminUi.secondary(context),
+                                            fontSize: 12),
                                       ),
                                     ],
                                   ),
@@ -459,14 +640,19 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                 IconButton(
                                   tooltip: 'Copiar ID',
                                   onPressed: () async {
-                                    await Clipboard.setData(ClipboardData(text: id));
+                                    await Clipboard.setData(
+                                        ClipboardData(text: id));
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('ID copiado')),
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                            content: Text('ID copiado')),
                                       );
                                     }
                                   },
-                                  icon: Icon(Icons.copy, color: AdminUi.secondary(context), size: 20),
+                                  icon: Icon(Icons.copy,
+                                      color: AdminUi.secondary(context),
+                                      size: 20),
                                 ),
                               ],
                             ),
@@ -477,17 +663,25 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                               children: [
                                 if (puedeIniciar)
                                   OutlinedButton.icon(
-                                    onPressed: () => _operar(context, action: 'iniciar', poolId: id),
-                                    icon: const Icon(Icons.play_arrow, size: 18),
+                                    onPressed: _accionEnCurso
+                                        ? null
+                                        : () => _operar(context,
+                                            action: 'iniciar', poolId: id),
+                                    icon:
+                                        const Icon(Icons.play_arrow, size: 18),
                                     label: const Text('Iniciar'),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: green,
-                                      side: BorderSide(color: green.withValues(alpha: 0.65)),
+                                      side: BorderSide(
+                                          color: green.withValues(alpha: 0.65)),
                                     ),
                                   ),
                                 if (puedeFinalizar)
                                   OutlinedButton.icon(
-                                    onPressed: () => _operar(context, action: 'finalizar', poolId: id),
+                                    onPressed: _accionEnCurso
+                                        ? null
+                                        : () => _operar(context,
+                                            action: 'finalizar', poolId: id),
                                     icon: const Icon(Icons.flag, size: 18),
                                     label: const Text('Finalizar'),
                                     style: OutlinedButton.styleFrom(
@@ -497,37 +691,71 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                   ),
                                 if (puedeCancelar)
                                   OutlinedButton.icon(
-                                    onPressed: () => _confirmarCancelar(context, id),
-                                    icon: const Icon(Icons.cancel_outlined, size: 18),
+                                    onPressed: _accionEnCurso
+                                        ? null
+                                        : () => _confirmarCancelar(context, id),
+                                    icon: const Icon(Icons.cancel_outlined,
+                                        size: 18),
                                     label: const Text('Cancelar'),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: orange,
                                       side: BorderSide(color: orange),
                                     ),
                                   ),
+                                if (puedeAnularTrasFinalizar &&
+                                    !yaAnuladaTrasFinal)
+                                  OutlinedButton.icon(
+                                    onPressed: _accionEnCurso
+                                        ? null
+                                        : () => _confirmarAnularTrasFinalizar(
+                                            context, id),
+                                    icon: const Icon(Icons.gpp_bad_outlined,
+                                        size: 18),
+                                    label: const Text('Anular cierre (admin)'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: orange,
+                                      side: BorderSide(
+                                          color: orange.withValues(alpha: 0.9)),
+                                    ),
+                                  ),
                                 OutlinedButton.icon(
-                                  onPressed: () => _verReservas(context, id),
-                                  icon: const Icon(Icons.people_outline, size: 18),
+                                  onPressed: _accionEnCurso
+                                      ? null
+                                      : () => _verReservas(context, id),
+                                  icon: const Icon(Icons.people_outline,
+                                      size: 18),
                                   label: const Text('Reservas'),
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: AdminUi.secondary(context),
-                                    side: BorderSide(color: AdminUi.borderSubtle(context)),
+                                    side: BorderSide(
+                                        color: AdminUi.borderSubtle(context)),
                                   ),
                                 ),
                                 OutlinedButton.icon(
-                                  onPressed: () async {
-                                    final n = await PoolRepo.limpiarReservasVencidas(id);
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Reservas vencidas limpiadas: $n')),
-                                      );
-                                    }
-                                  },
-                                  icon: const Icon(Icons.cleaning_services_outlined, size: 18),
+                                  onPressed: _accionEnCurso
+                                      ? null
+                                      : () async {
+                                          await _ejecutarAccion(() async {
+                                            final n = await PoolRepo
+                                                .limpiarReservasVencidas(id);
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                SnackBar(
+                                                    content: Text(
+                                                        'Reservas vencidas limpiadas: $n')),
+                                              );
+                                            }
+                                          });
+                                        },
+                                  icon: const Icon(
+                                      Icons.cleaning_services_outlined,
+                                      size: 18),
                                   label: const Text('Limpiar vencidas'),
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: AdminUi.muted(context),
-                                    side: BorderSide(color: AdminUi.borderSubtle(context)),
+                                    side: BorderSide(
+                                        color: AdminUi.borderSubtle(context)),
                                   ),
                                 ),
                               ],

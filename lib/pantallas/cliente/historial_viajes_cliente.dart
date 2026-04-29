@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
-import '../../widgets/cliente_drawer.dart';
 import '../../widgets/rai_app_bar.dart';
 import '../../modelo/viaje.dart';
 import '../../data/viaje_data.dart';
@@ -19,9 +18,9 @@ class HistorialViajesCliente extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      drawer: const ClienteDrawer(),
       appBar: const RaiAppBar(
         title: 'Historial de viajes',
+        backWhenCanPop: true,
       ),
       body: user == null
           ? const Center(
@@ -73,10 +72,10 @@ class HistorialViajesCliente extends StatelessWidget {
                       v.estado.isNotEmpty
                           ? v.estado
                           : (v.completado
-                                ? EstadosViaje.completado
-                                : (v.aceptado
-                                      ? EstadosViaje.enCurso
-                                      : EstadosViaje.pendiente)),
+                              ? EstadosViaje.completado
+                              : (v.aceptado
+                                  ? EstadosViaje.enCurso
+                                  : EstadosViaje.pendiente)),
                     );
 
                     return Card(

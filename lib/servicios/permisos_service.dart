@@ -7,7 +7,8 @@ class PermisosService {
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      messenger?.showSnackBar(const SnackBar(content: Text('Activa el GPS para continuar')));
+      messenger?.showSnackBar(
+          const SnackBar(content: Text('Activa el GPS para continuar')));
       return false;
     }
 
@@ -18,13 +19,18 @@ class PermisosService {
 
     if (permission == LocationPermission.deniedForever) {
       messenger?.showSnackBar(const SnackBar(
-        content: Text('Permiso de ubicación denegado permanentemente. Ve a Ajustes.'),
+        content: Text(
+            'Permiso de ubicación denegado permanentemente. Ve a Ajustes.'),
       ));
       return false;
     }
 
-    final ok = permission == LocationPermission.always || permission == LocationPermission.whileInUse;
-    if (!ok) messenger?.showSnackBar(const SnackBar(content: Text('No hay permiso de ubicación.')));
+    final ok = permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse;
+    if (!ok) {
+      messenger?.showSnackBar(
+          const SnackBar(content: Text('No hay permiso de ubicación.')));
+    }
     return ok;
   }
 }

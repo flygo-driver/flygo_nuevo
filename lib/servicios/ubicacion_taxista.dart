@@ -23,9 +23,13 @@ class UbicacionTaxista {
       distanceFilter: 10,
     );
 
-    _subscription = Geolocator.getPositionStream(locationSettings: settings).listen((Position pos) async {
+    _subscription = Geolocator.getPositionStream(locationSettings: settings)
+        .listen((Position pos) async {
       // Siempre actualizar la colección taxistas (para administración)
-      await FirebaseFirestore.instance.collection('taxistas').doc(user.uid).set({
+      await FirebaseFirestore.instance
+          .collection('taxistas')
+          .doc(user.uid)
+          .set({
         'ubicacion': GeoPoint(pos.latitude, pos.longitude),
         'ultimaActualizacion': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -33,14 +37,21 @@ class UbicacionTaxista {
       // ✅ Determinar si el taxista tiene viaje activo
       bool tieneViajeActivo = false;
       if (soloCuandoDisponible) {
-        final userDoc = await FirebaseFirestore.instance.collection('usuarios').doc(user.uid).get();
-        tieneViajeActivo = (userDoc.data()?['viajeActivoId'] as String?)?.isNotEmpty == true;
+        final userDoc = await FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(user.uid)
+            .get();
+        tieneViajeActivo =
+            (userDoc.data()?['viajeActivoId'] as String?)?.isNotEmpty == true;
       }
 
       // ✅ Siempre publicar en drivers_location con online = !tieneViajeActivo
-      await FirebaseFirestore.instance.collection('drivers_location').doc(user.uid).set({
+      await FirebaseFirestore.instance
+          .collection('drivers_location')
+          .doc(user.uid)
+          .set({
         'location': GeoPoint(pos.latitude, pos.longitude),
-        'online': !tieneViajeActivo,   // true si libre, false si ocupado
+        'online': !tieneViajeActivo, // true si libre, false si ocupado
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
@@ -60,7 +71,10 @@ class UbicacionTaxista {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       // Marcar como offline en drivers_location
-      await FirebaseFirestore.instance.collection('drivers_location').doc(user.uid).set({
+      await FirebaseFirestore.instance
+          .collection('drivers_location')
+          .doc(user.uid)
+          .set({
         'online': false,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -72,7 +86,10 @@ class UbicacionTaxista {
   static Future<void> marcarNoDisponible() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      await FirebaseFirestore.instance.collection('drivers_location').doc(user.uid).set({
+      await FirebaseFirestore.instance
+          .collection('drivers_location')
+          .doc(user.uid)
+          .set({
         'online': false,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -83,7 +100,10 @@ class UbicacionTaxista {
   static Future<void> marcarDisponible() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      await FirebaseFirestore.instance.collection('drivers_location').doc(user.uid).set({
+      await FirebaseFirestore.instance
+          .collection('drivers_location')
+          .doc(user.uid)
+          .set({
         'online': true,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));

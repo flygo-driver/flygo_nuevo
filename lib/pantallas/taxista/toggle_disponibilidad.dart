@@ -3,8 +3,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/contrato_taxista_firma.dart';
+import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
 
 class ToggleDisponibilidad extends StatefulWidget {
   const ToggleDisponibilidad({super.key});
@@ -55,7 +57,8 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
           if (mounted) {
             messenger.showSnackBar(
               const SnackBar(
-                content: Text('Debes firmar el contrato digital para activar disponibilidad.'),
+                content: Text(
+                    'Debes firmar el contrato digital para activar disponibilidad.'),
               ),
             );
             Navigator.push(
@@ -65,11 +68,32 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
           }
           return;
         }
+        if (data['tienePagoPendiente'] == true) {
+          if (mounted) {
+            messenger.showSnackBar(
+              SnackBar(
+                content: const Text(
+                    PagosTaxistaRepo.mensajeRecargaActivarDisponible),
+                action: SnackBarAction(
+                  label: 'Mis pagos',
+                  onPressed: () {
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(builder: (_) => const MisPagos()),
+                    );
+                  },
+                ),
+              ),
+            );
+          }
+          return;
+        }
       }
       await RolesService.setDisponibilidad(u.uid, v);
       messenger.showSnackBar(
         SnackBar(
-          content: Text(v ? 'Ahora estás disponible' : 'Marcado como no disponible'),
+          content:
+              Text(v ? 'Ahora estás disponible' : 'Marcado como no disponible'),
         ),
       );
     } catch (e) {
@@ -110,7 +134,10 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
         foregroundColor: cs.onSurface,
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('usuarios').doc(u.uid).snapshots(),
+        stream: FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(u.uid)
+            .snapshots(),
         builder: (context, snap) {
           if (snap.hasError) {
             return Center(
@@ -124,7 +151,8 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
               ),
             );
           }
-          if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+          if (snap.connectionState == ConnectionState.waiting &&
+              !snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
@@ -133,6 +161,7 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
           final bool disponible = rawDisp is bool ? rawDisp : false;
           final poolOk = taxistaAprobadoParaOperarPool(data);
           final estadoDocs = taxistaDocsEstadoDesdeUsuario(data);
+          final bool deudaOperativa = data['tienePagoPendiente'] == true;
 
           return ListTile(
             title: Text(
@@ -172,10 +201,15 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
                     ),
                   )
                 : Text(
-                    poolOk
-                        ? (disponible ? 'Recibirás viajes' : 'No recibirás viajes')
-                        : 'Estado de documentos: $estadoDocs. Debes completar y aprobar para operar.',
-                    style: TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
+                    !poolOk
+                        ? 'Estado de documentos: $estadoDocs. Debes completar y aprobar para operar.'
+                        : (deudaOperativa
+                            ? 'Recarga: salda lo pendiente para poder activarte (como un prepago).'
+                            : (disponible
+                                ? 'Recibirás viajes'
+                                : 'No recibirás viajes')),
+                    style:
+                        TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
                   ),
           );
         },

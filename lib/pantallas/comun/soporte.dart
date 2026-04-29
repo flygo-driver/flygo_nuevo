@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'package:flygo_nuevo/widgets/cliente_drawer.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class Soporte extends StatelessWidget {
@@ -68,7 +67,8 @@ class Soporte extends StatelessWidget {
     final ok = await launchUrl(waWeb, mode: LaunchMode.externalApplication);
     if (messenger != null && !ok) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el enlace de WhatsApp.')),
+        const SnackBar(
+            content: Text('No se pudo abrir el enlace de WhatsApp.')),
       );
     }
   }
@@ -77,9 +77,9 @@ class Soporte extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      drawer: const ClienteDrawer(),
       appBar: const RaiAppBar(
         title: 'Soporte',
+        backWhenCanPop: true,
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),

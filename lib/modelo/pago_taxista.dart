@@ -12,7 +12,8 @@ class PagoTaxista {
   final double totalGanado;
   final double comision; // 20% del total
   final double netoAPagar; // total - comision
-  final String estado; // 'pendiente' | 'pagado' | 'vencido' | 'pendiente_verificacion'
+  final String
+      estado; // 'pendiente' | 'pagado' | 'vencido' | 'pendiente_verificacion'
   final DateTime? fechaPago;
   final String? metodoPago; // 'transferencia' | 'efectivo' | 'tarjeta'
   final String? comprobanteUrl; // Foto del comprobante
@@ -47,7 +48,8 @@ class PagoTaxista {
       uidTaxista: map['uidTaxista'] ?? '',
       nombreTaxista: map['nombreTaxista'] ?? '',
       semana: map['semana'] ?? '',
-      fechaInicio: (map['fechaInicio'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      fechaInicio:
+          (map['fechaInicio'] as Timestamp?)?.toDate() ?? DateTime.now(),
       fechaFin: (map['fechaFin'] as Timestamp?)?.toDate() ?? DateTime.now(),
       totalGanado: (map['totalGanado'] ?? 0).toDouble(),
       comision: (map['comision'] ?? 0).toDouble(),
@@ -78,7 +80,8 @@ class PagoTaxista {
       'metodoPago': metodoPago,
       'comprobanteUrl': comprobanteUrl,
       'verificadoPor': verificadoPor,
-      'verificadoEn': verificadoEn != null ? Timestamp.fromDate(verificadoEn!) : null,
+      'verificadoEn':
+          verificadoEn != null ? Timestamp.fromDate(verificadoEn!) : null,
       'notaAdmin': notaAdmin,
       'viajesSemana': viajesSemana,
       'updatedAt': FieldValue.serverTimestamp(),

@@ -113,7 +113,9 @@ class BlazePaymentGateway implements PaymentGateway {
     final res = await callable.call(payload);
     final ok = (res.data is Map) ? (res.data['ok'] == true) : true;
     if (!ok) {
-      final msg = (res.data is Map) ? (res.data['error'] ?? 'Error autorizar') : 'Error autorizar';
+      final msg = (res.data is Map)
+          ? (res.data['error'] ?? 'Error autorizar')
+          : 'Error autorizar';
       throw Exception(msg.toString());
     }
   }
@@ -133,7 +135,9 @@ class BlazePaymentGateway implements PaymentGateway {
     final res = await callable.call(payload);
     final ok = (res.data is Map) ? (res.data['ok'] == true) : true;
     if (!ok) {
-      final msg = (res.data is Map) ? (res.data['error'] ?? 'Error capturar') : 'Error capturar';
+      final msg = (res.data is Map)
+          ? (res.data['error'] ?? 'Error capturar')
+          : 'Error capturar';
       throw Exception(msg.toString());
     }
   }
@@ -151,7 +155,9 @@ class BlazePaymentGateway implements PaymentGateway {
     final res = await callable.call(payload);
     final ok = (res.data is Map) ? (res.data['ok'] == true) : true;
     if (!ok) {
-      final msg = (res.data is Map) ? (res.data['error'] ?? 'Error cancelar') : 'Error cancelar';
+      final msg = (res.data is Map)
+          ? (res.data['error'] ?? 'Error cancelar')
+          : 'Error cancelar';
       throw Exception(msg.toString());
     }
   }

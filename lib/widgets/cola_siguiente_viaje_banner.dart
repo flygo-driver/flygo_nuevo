@@ -15,9 +15,14 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
     if (uidTaxista.isEmpty) return const SizedBox.shrink();
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('usuarios').doc(uidTaxista).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uidTaxista)
+          .snapshots(),
       builder: (context, uSnap) {
-        if (!uSnap.hasData || !uSnap.data!.exists) return const SizedBox.shrink();
+        if (!uSnap.hasData || !uSnap.data!.exists) {
+          return const SizedBox.shrink();
+        }
         final ud = uSnap.data!.data() ?? {};
         final sig = (ud['siguienteViajeId'] ?? '').toString();
         final enc = (ud['viajeEncoladoId'] ?? '').toString();
@@ -27,7 +32,10 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
         final bool reservaFormal = sig.isNotEmpty;
 
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance.collection('viajes').doc(nextId).snapshots(),
+          stream: FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(nextId)
+              .snapshots(),
           builder: (context, vSnap) {
             if (!vSnap.hasData || !vSnap.data!.exists) {
               return _shell(
@@ -94,7 +102,9 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
         color: const Color(0xFF0D1B2A),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: reservaFormal ? Colors.lightBlueAccent : Colors.amber.withValues(alpha: 0.6),
+          color: reservaFormal
+              ? Colors.lightBlueAccent
+              : Colors.amber.withValues(alpha: 0.6),
           width: 1.2,
         ),
       ),
@@ -106,7 +116,8 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
             children: [
               Icon(
                 Icons.queue_play_next,
-                color: reservaFormal ? Colors.lightBlueAccent : Colors.amberAccent,
+                color:
+                    reservaFormal ? Colors.lightBlueAccent : Colors.amberAccent,
                 size: 22,
               ),
               const SizedBox(width: 8),
@@ -114,7 +125,9 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
                 child: Text(
                   titulo,
                   style: TextStyle(
-                    color: reservaFormal ? Colors.lightBlueAccent : Colors.amberAccent,
+                    color: reservaFormal
+                        ? Colors.lightBlueAccent
+                        : Colors.amberAccent,
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
                     height: 1.25,
@@ -129,7 +142,10 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
               origen,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15),
             ),
             if (destino.isNotEmpty)
               Text(
@@ -141,11 +157,14 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
           ],
           if (ventanaLine.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(ventanaLine, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            Text(ventanaLine,
+                style: const TextStyle(color: Colors.white54, fontSize: 12)),
           ],
           if (gananciaLine.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text(gananciaLine, style: const TextStyle(color: Colors.greenAccent, fontSize: 13)),
+            Text(gananciaLine,
+                style:
+                    const TextStyle(color: Colors.greenAccent, fontSize: 13)),
           ],
         ],
       ),

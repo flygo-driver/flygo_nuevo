@@ -25,7 +25,14 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
   final _mCtrl = TextEditingController(text: '3');
   final _kCtrl = TextEditingController(text: '1');
 
-  final List<String> _presets = const ['1x1', '3x1', '4x2', '5x1', '10x1', '3x2'];
+  final List<String> _presets = const [
+    '1x1',
+    '3x1',
+    '4x2',
+    '5x1',
+    '10x1',
+    '3x2'
+  ];
 
   @override
   void initState() {
@@ -56,7 +63,8 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
       if (m <= 0 || k <= 0) {
         final String modo = (data?['modo'] ?? '3x1').toString();
         final (mm, kk) = _parseMxK(modo);
-        m = mm; k = kk;
+        m = mm;
+        k = kk;
       }
 
       setState(() {
@@ -109,8 +117,8 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
         'activa': _activa,
         'porcentaje': porc,
         'modo': modo, // compat
-        'm': m,       // preferido por ViajesRepo
-        'k': k,       // preferido por ViajesRepo
+        'm': m, // preferido por ViajesRepo
+        'k': k, // preferido por ViajesRepo
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -132,7 +140,8 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text('Promociones (M×K)', style: TextStyle(color: Colors.white)),
+        title: const Text('Promociones (M×K)',
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
       ),
       body: _cargando
@@ -146,22 +155,21 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
                     const Text('Config global: /config/promo_3x1',
                         style: TextStyle(color: Colors.white54)),
                     const SizedBox(height: 12),
-
                     SwitchListTile(
                       value: _activa,
                       onChanged: (v) => setState(() => _activa = v),
-                      title: const Text('Promo activa', style: TextStyle(color: Colors.white)),
+                      title: const Text('Promo activa',
+                          style: TextStyle(color: Colors.white)),
                       subtitle: const Text(
                         'Si está OFF, el sistema cobra precio normal.',
                         style: TextStyle(color: Colors.white60),
                       ),
                       activeColor: Colors.greenAccent,
                     ),
-
                     const SizedBox(height: 12),
-                    const Text('Presets rápidos', style: TextStyle(color: Colors.white70)),
+                    const Text('Presets rápidos',
+                        style: TextStyle(color: Colors.white70)),
                     const SizedBox(height: 8),
-
                     Wrap(
                       spacing: 10,
                       runSpacing: 6,
@@ -176,21 +184,21 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
                         );
                       }).toList(),
                     ),
-
                     const SizedBox(height: 16),
                     const Divider(color: Colors.white10),
                     const SizedBox(height: 8),
-
-                    const Text('Config manual M×K', style: TextStyle(color: Colors.white70)),
+                    const Text('Config manual M×K',
+                        style: TextStyle(color: Colors.white70)),
                     const SizedBox(height: 8),
-
                     Row(
                       children: [
                         Expanded(
                           child: TextFormField(
                             controller: _mCtrl,
                             keyboardType: TextInputType.number,
-                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly
+                            ],
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'M (con descuento)',
@@ -217,7 +225,9 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
                           child: TextFormField(
                             controller: _kCtrl,
                             keyboardType: TextInputType.number,
-                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly
+                            ],
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'K (normales)',
@@ -241,9 +251,7 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
                         ),
                       ],
                     ),
-
                     const SizedBox(height: 16),
-
                     TextFormField(
                       controller: _porcCtrl,
                       keyboardType: TextInputType.number,
@@ -274,15 +282,14 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
                         if (n != null) _porcentaje = n;
                       },
                     ),
-
                     const SizedBox(height: 24),
                     _PreviewCard(
                       activa: _activa,
                       m: _m,
                       k: _k,
-                      porcentaje: int.tryParse(_porcCtrl.text.trim()) ?? _porcentaje,
+                      porcentaje:
+                          int.tryParse(_porcCtrl.text.trim()) ?? _porcentaje,
                     ),
-
                     const SizedBox(height: 24),
                     SizedBox(
                       height: 48,
@@ -328,11 +335,14 @@ class _PreviewCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Previsualización', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const Text('Previsualización',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Text('Estado: ${activa ? 'ACTIVA' : 'INACTIVA'}'),
-              Text('Modo: ${m}x$k  → ciclo $L ( $m con descuento + $k normales )'),
-              Text('Descuento: $porcentaje%  → paga ${(factor * 100).toStringAsFixed(0)}%'),
+              Text(
+                  'Modo: ${m}x$k  → ciclo $L ( $m con descuento + $k normales )'),
+              Text(
+                  'Descuento: $porcentaje%  → paga ${(factor * 100).toStringAsFixed(0)}%'),
               const SizedBox(height: 12),
               const Text('Ciclo (posiciones):'),
               const SizedBox(height: 6),
@@ -342,7 +352,8 @@ class _PreviewCard extends StatelessWidget {
                   final idx = i + 1;
                   final conDesc = (idx <= m);
                   return Chip(
-                    label: Text('#$idx ${conDesc ? '-$porcentaje%' : 'normal'}'),
+                    label:
+                        Text('#$idx ${conDesc ? '-$porcentaje%' : 'normal'}'),
                     // reemplazo de withOpacity -> withValues (Flutter 3.24+)
                     backgroundColor: conDesc
                         ? Colors.green.withValues(alpha: 0.22)

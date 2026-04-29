@@ -95,11 +95,10 @@ class _P extends StatelessWidget {
     return Text(
       t,
       style: TextStyle(
-        color: cs.onSurface.withOpacity(0.85),
+        color: cs.onSurface.withValues(alpha: 0.85),
         fontSize: 14.5,
         height: 1.4,
       ),
     );
   }
-  
 }

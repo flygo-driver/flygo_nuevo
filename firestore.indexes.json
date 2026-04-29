@@ -157,6 +157,14 @@
         { "fieldPath": "fechaHora", "order": "ASCENDING" }
       ]
     },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" }
+      ]
+    },
 
     {
       "collectionGroup": "reservas_siguiente",

@@ -72,12 +72,12 @@ class _TermsPolicyScreenState extends State<TermsPolicyScreen> {
               color: cs.surfaceContainerHighest,
               child: Text(
                 'Version $kTermsVersion  ·  Ultima actualizacion: $kTermsLastUpdate',
-                style: TextStyle(color: cs.onSurface.withOpacity(0.7)),
+                style: TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
               ),
             ),
             Expanded(
               child: SingleChildScrollView(
-                padding: EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
                 child: SelectableText(
                   kTermsFullText,
                   style: TextStyle(color: cs.onSurface, height: 1.5),
@@ -90,7 +90,7 @@ class _TermsPolicyScreenState extends State<TermsPolicyScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
                 decoration: BoxDecoration(
                   border: Border(
-                    top: BorderSide(color: cs.outline.withOpacity(0.35)),
+                    top: BorderSide(color: cs.outline.withValues(alpha: 0.35)),
                   ),
                   color: cs.surface,
                 ),

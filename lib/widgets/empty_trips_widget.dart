@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class EmptyTripsWidget extends StatelessWidget {
   final bool esTabAhora;
-  
+
   const EmptyTripsWidget({
     Key? key,
     required this.esTabAhora,
@@ -47,7 +47,7 @@ class EmptyTripsWidget extends StatelessWidget {
             },
           ),
           const SizedBox(height: 30),
-          
+
           // Título
           Text(
             esTabAhora ? "No hay viajes ahora" : "No hay viajes programados",
@@ -59,12 +59,12 @@ class EmptyTripsWidget extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          
+
           // Descripción
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 40),
             child: Text(
-              esTabAhora 
+              esTabAhora
                   ? "Los viajes disponibles aparecerán aquí automáticamente"
                   : "Los viajes que reserves con anticipación se mostrarán aquí",
               style: TextStyle(
@@ -76,7 +76,7 @@ class EmptyTripsWidget extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 20),
-          
+
           // Mensaje motivacional
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

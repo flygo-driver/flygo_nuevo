@@ -4,7 +4,7 @@ import 'dart:async';
 class LoadingProfessional extends StatefulWidget {
   final String? mensajePersonalizado;
   final bool mostrarAnimacionAuto;
-  
+
   const LoadingProfessional({
     Key? key,
     this.mensajePersonalizado,
@@ -15,12 +15,13 @@ class LoadingProfessional extends StatefulWidget {
   State<LoadingProfessional> createState() => _LoadingProfessionalState();
 }
 
-class _LoadingProfessionalState extends State<LoadingProfessional> with SingleTickerProviderStateMixin {
+class _LoadingProfessionalState extends State<LoadingProfessional>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   int _mensajeIndex = 0;
   Timer? _timer;
-  
+
   final List<String> _mensajesProfesionales = [
     "Buscando los mejores viajes para ti",
     "Conectando con conductores cercanos",
@@ -29,7 +30,7 @@ class _LoadingProfessionalState extends State<LoadingProfessional> with SingleTi
     "Casi listo, un momento por favor",
     "Optimizando tu experiencia",
   ];
-  
+
   final List<String> _subMensajes = [
     "Estamos analizando la demanda en tu zona",
     "Encontrando la mejor ruta disponible",
@@ -46,11 +47,11 @@ class _LoadingProfessionalState extends State<LoadingProfessional> with SingleTi
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     )..repeat();
-    
+
     _fadeAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
     );
-    
+
     if (widget.mostrarAnimacionAuto) {
       _timer = Timer.periodic(const Duration(seconds: 3), (timer) {
         if (mounted) {
@@ -115,11 +116,11 @@ class _LoadingProfessionalState extends State<LoadingProfessional> with SingleTi
                 },
               ),
               const SizedBox(height: 40),
-              
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 500),
                 child: Text(
-                  widget.mensajePersonalizado ?? _mensajesProfesionales[_mensajeIndex],
+                  widget.mensajePersonalizado ??
+                      _mensajesProfesionales[_mensajeIndex],
                   key: ValueKey(_mensajeIndex),
                   style: const TextStyle(
                     color: Colors.white,
@@ -131,7 +132,6 @@ class _LoadingProfessionalState extends State<LoadingProfessional> with SingleTi
                 ),
               ),
               const SizedBox(height: 12),
-              
               FadeTransition(
                 opacity: _fadeAnimation,
                 child: Text(
@@ -144,7 +144,6 @@ class _LoadingProfessionalState extends State<LoadingProfessional> with SingleTi
                 ),
               ),
               const SizedBox(height: 30),
-              
               Container(
                 width: 200,
                 height: 2,

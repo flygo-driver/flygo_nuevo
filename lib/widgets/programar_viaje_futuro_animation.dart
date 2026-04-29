@@ -10,7 +10,8 @@ class ProgramarViajeFuturoAnimation extends StatefulWidget {
       _ProgramarViajeFuturoAnimationState();
 }
 
-class _ProgramarViajeFuturoAnimationState extends State<ProgramarViajeFuturoAnimation>
+class _ProgramarViajeFuturoAnimationState
+    extends State<ProgramarViajeFuturoAnimation>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
 
@@ -67,7 +68,10 @@ class _ProgramarViajeFuturoAnimationState extends State<ProgramarViajeFuturoAnim
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.2,
                         shadows: const [
-                          Shadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 1)),
+                          Shadow(
+                              color: Colors.black26,
+                              blurRadius: 4,
+                              offset: Offset(0, 1)),
                         ],
                       ),
                     ),
@@ -140,7 +144,8 @@ class _FuturoPainter extends CustomPainter {
       Rect.fromLTWH(calLeft, calTop, calW, calH),
       const Radius.circular(8),
     );
-    canvas.drawRRect(calR, Paint()..color = Colors.white.withValues(alpha: 0.92));
+    canvas.drawRRect(
+        calR, Paint()..color = Colors.white.withValues(alpha: 0.92));
     canvas.drawRRect(
       calR,
       Paint()
@@ -154,14 +159,20 @@ class _FuturoPainter extends CustomPainter {
       ..strokeWidth = 2.8
       ..strokeCap = StrokeCap.round;
     canvas.drawArc(
-      Rect.fromCenter(center: Offset(calLeft + calW * 0.35, calTop + 2), width: 12, height: 8),
+      Rect.fromCenter(
+          center: Offset(calLeft + calW * 0.35, calTop + 2),
+          width: 12,
+          height: 8),
       math.pi * 0.85,
       math.pi * 0.65,
       false,
       hook,
     );
     canvas.drawArc(
-      Rect.fromCenter(center: Offset(calLeft + calW * 0.65, calTop + 2), width: 12, height: 8),
+      Rect.fromCenter(
+          center: Offset(calLeft + calW * 0.65, calTop + 2),
+          width: 12,
+          height: 8),
       math.pi * 0.85,
       math.pi * 0.65,
       false,
@@ -202,16 +213,19 @@ class _FuturoPainter extends CustomPainter {
         final double a = (1.0 - pulse.clamp(0.0, 1.0)) * 0.4;
         canvas.drawRRect(
           RRect.fromRectAndRadius(rct, const Radius.circular(2)),
-          Paint()..color = Color.lerp(Colors.white, const Color(0xFF7986CB), a)!,
+          Paint()
+            ..color = Color.lerp(Colors.white, const Color(0xFF7986CB), a)!,
         );
-        canvas.drawRRect(RRect.fromRectAndRadius(rct, const Radius.circular(2)), cellStroke);
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(rct, const Radius.circular(2)), cellStroke);
       }
     }
 
     final double cx = w - math.min(34, w * 0.09);
     final double cy = h * 0.5;
     final double rClock = math.min(26.0, h * 0.30);
-    canvas.drawCircle(Offset(cx, cy), rClock, Paint()..color = Colors.white.withValues(alpha: 0.95));
+    canvas.drawCircle(Offset(cx, cy), rClock,
+        Paint()..color = Colors.white.withValues(alpha: 0.95));
     canvas.drawCircle(
       Offset(cx, cy),
       rClock,
@@ -228,10 +242,12 @@ class _FuturoPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
     canvas.drawLine(
       Offset(cx, cy),
-      Offset(cx + math.cos(ang) * (rClock - 5), cy + math.sin(ang) * (rClock - 5)),
+      Offset(
+          cx + math.cos(ang) * (rClock - 5), cy + math.sin(ang) * (rClock - 5)),
       hand,
     );
-    canvas.drawCircle(Offset(cx, cy), 3.2, Paint()..color = const Color(0xFF5C6BC0));
+    canvas.drawCircle(
+        Offset(cx, cy), 3.2, Paint()..color = const Color(0xFF5C6BC0));
   }
 
   @override

@@ -38,7 +38,8 @@ class _DetalleViajeState extends State<DetalleViaje> {
     await telefonoLaunchUri(telefonoUriWhatsAppWeb(tel, mensaje));
   }
 
-  Widget _infoRow(String label, String value, {Color valueColor = Colors.white}) {
+  Widget _infoRow(String label, String value,
+      {Color valueColor = Colors.white}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -71,12 +72,16 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
   Widget _buildUsuarioInfo(String uid, String rol) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('usuarios').doc(uid).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .snapshots(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
-            child: Center(child: CircularProgressIndicator(color: Colors.greenAccent)),
+            child: Center(
+                child: CircularProgressIndicator(color: Colors.greenAccent)),
           );
         }
         final data = snap.data?.data() ?? {};
@@ -93,7 +98,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(rol, style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+              Text(rol,
+                  style: const TextStyle(
+                      color: Colors.greenAccent, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               _infoRow('Nombre:', nombre),
               _infoRow('Teléfono:', telefono),
@@ -114,7 +121,8 @@ class _DetalleViajeState extends State<DetalleViaje> {
                       ),
                       if (uid != FirebaseAuth.instance.currentUser?.uid)
                         IconButton(
-                          icon: const Icon(Icons.message, color: Colors.blueAccent),
+                          icon: const Icon(Icons.message,
+                              color: Colors.blueAccent),
                           onPressed: () {
                             Navigator.push(
                               context,
@@ -152,7 +160,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('📍 Paradas intermedias', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+          const Text('📍 Paradas intermedias',
+              style: TextStyle(
+                  color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           ...v.waypoints!.asMap().entries.map((entry) {
             final idx = entry.key + 1;
@@ -162,9 +172,12 @@ class _DetalleViajeState extends State<DetalleViaje> {
               padding: const EdgeInsets.only(left: 8, bottom: 4),
               child: Row(
                 children: [
-                  const Icon(Icons.flag_circle, size: 16, color: Colors.orangeAccent),
+                  const Icon(Icons.flag_circle,
+                      size: 16, color: Colors.orangeAccent),
                   const SizedBox(width: 8),
-                  Expanded(child: Text('$idx. $label', style: const TextStyle(color: Colors.white70))),
+                  Expanded(
+                      child: Text('$idx. $label',
+                          style: const TextStyle(color: Colors.white70))),
                 ],
               ),
             );
@@ -179,7 +192,8 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
     final chips = <Widget>[];
     if (v.extras!['pasajeros'] != null) {
-      chips.add(_chip('👥 ${v.extras!['pasajeros']} pasajero${v.extras!['pasajeros'] != 1 ? 's' : ''}'));
+      chips.add(_chip(
+          '👥 ${v.extras!['pasajeros']} pasajero${v.extras!['pasajeros'] != 1 ? 's' : ''}'));
     }
     if (v.extras!['peaje'] != null) {
       chips.add(_chip('💰 Peaje: ${FormatosMoneda.rd(v.extras!['peaje'])}'));
@@ -195,13 +209,15 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
   @override
   Widget build(BuildContext context) {
-    final ref = FirebaseFirestore.instance.collection('viajes').doc(widget.viajeId);
+    final ref =
+        FirebaseFirestore.instance.collection('viajes').doc(widget.viajeId);
 
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text('Detalle de viaje', style: TextStyle(color: Colors.white)),
+        title: const Text('Detalle de viaje',
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
         actions: [
           IconButton(
@@ -214,11 +230,13 @@ class _DetalleViajeState extends State<DetalleViaje> {
         stream: ref.snapshots(),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
+            return const Center(
+                child: CircularProgressIndicator(color: Colors.greenAccent));
           }
           if (snap.hasError || !snap.hasData || !snap.data!.exists) {
             return const Center(
-              child: Text('No se encontró el viaje', style: TextStyle(color: Colors.white70)),
+              child: Text('No se encontró el viaje',
+                  style: TextStyle(color: Colors.white70)),
             );
           }
           final v = Viaje.fromMap(snap.data!.id, snap.data!.data()!);
@@ -231,7 +249,10 @@ class _DetalleViajeState extends State<DetalleViaje> {
                 // Título con origen → destino
                 Text(
                   '${v.origen} → ${v.destino}',
-                  style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -245,15 +266,19 @@ class _DetalleViajeState extends State<DetalleViaje> {
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
-                          color: _getEstadoColor(v.estado).withValues(alpha: 0.2),
+                          color:
+                              _getEstadoColor(v.estado).withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: _getEstadoColor(v.estado)),
                         ),
                         child: Text(
                           'Estado: ${_getEstadoLabel(v.estado)}',
-                          style: TextStyle(color: _getEstadoColor(v.estado), fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                              color: _getEstadoColor(v.estado),
+                              fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
@@ -277,16 +302,24 @@ class _DetalleViajeState extends State<DetalleViaje> {
                       _infoRow('Destino:', v.destino),
                       // La distancia la obtenemos de extras si existe
                       if (v.extras != null && v.extras!['distanciaKm'] != null)
-                        _infoRow('Distancia:', '${v.extras!['distanciaKm'].toStringAsFixed(2)} km'),
-                      _infoRow('Precio:', FormatosMoneda.rd(v.precio), valueColor: Colors.greenAccent),
+                        _infoRow('Distancia:',
+                            '${v.extras!['distanciaKm'].toStringAsFixed(2)} km'),
+                      _infoRow('Precio:', FormatosMoneda.rd(v.precio),
+                          valueColor: Colors.greenAccent),
                       if (v.precioFinal > 0 && v.precioFinal != v.precio)
-                        _infoRow('Precio final:', FormatosMoneda.rd(v.precioFinal), valueColor: Colors.greenAccent),
-                      _infoRow('Comisión:', FormatosMoneda.rd(v.comision), valueColor: Colors.orangeAccent),
-                      _infoRow('Ganancia taxista:', FormatosMoneda.rd(v.gananciaTaxista), valueColor: Colors.greenAccent),
+                        _infoRow(
+                            'Precio final:', FormatosMoneda.rd(v.precioFinal),
+                            valueColor: Colors.greenAccent),
+                      _infoRow('Comisión:', FormatosMoneda.rd(v.comision),
+                          valueColor: Colors.orangeAccent),
+                      _infoRow('Ganancia taxista:',
+                          FormatosMoneda.rd(v.gananciaTaxista),
+                          valueColor: Colors.greenAccent),
                       _infoRow('Método de pago:', v.metodoPago),
                       _infoRow('Vehículo:', v.tipoVehiculo),
                       if (v.marca.isNotEmpty || v.modelo.isNotEmpty)
-                        _infoRow('Marca/Modelo:', '${v.marca} ${v.modelo}'.trim()),
+                        _infoRow(
+                            'Marca/Modelo:', '${v.marca} ${v.modelo}'.trim()),
                       if (v.placa.isNotEmpty) _infoRow('Placa:', v.placa),
                       if (v.color.isNotEmpty) _infoRow('Color:', v.color),
                     ],
@@ -301,7 +334,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
                   const SizedBox(height: 16),
                 ],
                 if (v.extras != null && v.extras!.isNotEmpty) ...[
-                  const Text('Extras', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  const Text('Extras',
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   _buildExtras(v),
                   const SizedBox(height: 16),
@@ -320,7 +355,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
                       children: [
                         Icon(
                           v.codigoVerificado ? Icons.verified : Icons.qr_code,
-                          color: v.codigoVerificado ? Colors.greenAccent : Colors.purple,
+                          color: v.codigoVerificado
+                              ? Colors.greenAccent
+                              : Colors.purple,
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -330,14 +367,20 @@ class _DetalleViajeState extends State<DetalleViaje> {
                               Text(
                                 'Código de verificación',
                                 style: TextStyle(
-                                  color: v.codigoVerificado ? Colors.greenAccent : Colors.purple,
+                                  color: v.codigoVerificado
+                                      ? Colors.greenAccent
+                                      : Colors.purple,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                               Text(
-                                v.codigoVerificado ? 'Verificado' : v.codigoVerificacion!,
+                                v.codigoVerificado
+                                    ? 'Verificado'
+                                    : v.codigoVerificacion!,
                                 style: TextStyle(
-                                  color: v.codigoVerificado ? Colors.greenAccent : Colors.white,
+                                  color: v.codigoVerificado
+                                      ? Colors.greenAccent
+                                      : Colors.white,
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 4,
@@ -354,7 +397,11 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
                 // Cliente
                 if (v.uidCliente.isNotEmpty) ...[
-                  const Text('Cliente', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  const Text('Cliente',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16)),
                   const SizedBox(height: 8),
                   _buildUsuarioInfo(v.uidCliente, 'Cliente'),
                   const SizedBox(height: 16),
@@ -362,14 +409,20 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
                 // Taxista
                 if (v.uidTaxista.isNotEmpty) ...[
-                  const Text('Taxista', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  const Text('Taxista',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16)),
                   const SizedBox(height: 8),
                   _buildUsuarioInfo(v.uidTaxista, 'Taxista'),
                   const SizedBox(height: 16),
                 ],
 
                 // Botón de PIN/Abordaje (si aplica)
-                if (v.uidTaxista.isNotEmpty && v.estado == EstadosViaje.aBordo && !v.codigoVerificado)
+                if (v.uidTaxista.isNotEmpty &&
+                    v.estado == EstadosViaje.aBordo &&
+                    !v.codigoVerificado)
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -377,7 +430,8 @@ class _DetalleViajeState extends State<DetalleViaje> {
                         context: context,
                         backgroundColor: Colors.black,
                         shape: const RoundedRectangleBorder(
-                          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                          borderRadius:
+                              BorderRadius.vertical(top: Radius.circular(16)),
                         ),
                         builder: (_) => BoardingPinSheet(tripId: v.id),
                       ),
@@ -448,7 +502,8 @@ class _DetalleViajeState extends State<DetalleViaje> {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 6),
-          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+          Text(label,
+              style: TextStyle(color: color, fontWeight: FontWeight.bold)),
         ],
       ),
     );

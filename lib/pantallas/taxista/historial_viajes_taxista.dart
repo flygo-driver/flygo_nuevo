@@ -5,8 +5,6 @@ import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 
-import '../../widgets/taxista_drawer.dart';
-
 class HistorialViajesTaxista extends StatefulWidget {
   const HistorialViajesTaxista({super.key});
 
@@ -31,7 +29,7 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
 
   double _calcularGanancia(Viaje v) {
     if (v.gananciaTaxista > 0) return v.gananciaTaxista;
-    
+
     if (v.tipoServicio == 'turismo') {
       return v.precio * 0.85;
     }
@@ -110,20 +108,12 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
 
     return Scaffold(
       backgroundColor: cs.surface,
-      drawer: const TaxistaDrawer(),
       appBar: AppBar(
         backgroundColor: cs.surface,
         foregroundColor: cs.onSurface,
         surfaceTintColor: cs.surfaceTint,
         elevation: 0,
         scrolledUnderElevation: 1,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: Icon(Icons.menu, color: cs.onSurface),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-            tooltip: 'Menú',
-          ),
-        ),
         title: Text(
           'Historial de Viajes',
           style: TextStyle(
@@ -159,8 +149,10 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                       final v = historial[index];
                       final Color servicioColor =
                           _getColorForTipo(context, v.tipoServicio);
-                      final IconData servicioIcon = _getIconForTipo(v.tipoServicio);
-                      final String servicioLabel = _getLabelForTipo(v.tipoServicio);
+                      final IconData servicioIcon =
+                          _getIconForTipo(v.tipoServicio);
+                      final String servicioLabel =
+                          _getLabelForTipo(v.tipoServicio);
                       final double ganancia = _calcularGanancia(v);
 
                       return Card(
@@ -190,7 +182,8 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: servicioColor.withValues(alpha: 0.2),
+                                      color:
+                                          servicioColor.withValues(alpha: 0.2),
                                       borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Icon(
@@ -216,7 +209,8 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                       vertical: 4,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: servicioColor.withValues(alpha: 0.2),
+                                      color:
+                                          servicioColor.withValues(alpha: 0.2),
                                       borderRadius: BorderRadius.circular(16),
                                       border: Border.all(color: servicioColor),
                                     ),
@@ -232,7 +226,6 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                 ],
                               ),
                               const SizedBox(height: 12),
-                              
                               if (v.clienteId.isNotEmpty) ...[
                                 Text(
                                   "Cliente: ${v.clienteId}",
@@ -243,7 +236,6 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                 ),
                                 const SizedBox(height: 4),
                               ],
-                              
                               Row(
                                 children: [
                                   Icon(
@@ -262,12 +254,13 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                 ],
                               ),
                               const SizedBox(height: 8),
-                              
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         "Total",
@@ -308,16 +301,18 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                   ),
                                 ],
                               ),
-                              
-                              if (v.tipoServicio == 'turismo' && v.extras != null) ...[
+                              if (v.tipoServicio == 'turismo' &&
+                                  v.extras != null) ...[
                                 const SizedBox(height: 8),
                                 Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: servicioColor.withValues(alpha: 0.12),
+                                    color:
+                                        servicioColor.withValues(alpha: 0.12),
                                     borderRadius: BorderRadius.circular(8),
                                     border: Border.all(
-                                      color: servicioColor.withValues(alpha: 0.4),
+                                      color:
+                                          servicioColor.withValues(alpha: 0.4),
                                     ),
                                   ),
                                   child: Row(

@@ -55,13 +55,15 @@ class ChoferTurismo {
       calificacion: (map['calificacion'] ?? 0.0).toDouble(),
       viajesCompletados: map['viajesCompletados'] ?? 0,
       zonas: List<String>.from(map['zonas'] ?? []),
-      fechaRegistro: (map['fechaRegistro'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      fechaRegistro:
+          (map['fechaRegistro'] as Timestamp?)?.toDate() ?? DateTime.now(),
       documentos: map['documentos'] ?? {},
       verificadoPor: map['verificadoPor']?.toString(),
       verificadoEn: (map['verificadoEn'] as Timestamp?)?.toDate(),
       notaAdmin: map['notaAdmin']?.toString(),
       ultimaUbicacion: map['ultimaUbicacion'] as GeoPoint?,
-      ultimaUbicacionActualizada: (map['ultimaUbicacionActualizada'] as Timestamp?)?.toDate(),
+      ultimaUbicacionActualizada:
+          (map['ultimaUbicacionActualizada'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -80,7 +82,8 @@ class ChoferTurismo {
       'fechaRegistro': Timestamp.fromDate(fechaRegistro),
       'documentos': documentos,
       'verificadoPor': verificadoPor,
-      'verificadoEn': verificadoEn != null ? Timestamp.fromDate(verificadoEn!) : null,
+      'verificadoEn':
+          verificadoEn != null ? Timestamp.fromDate(verificadoEn!) : null,
       'notaAdmin': notaAdmin,
       'ultimaUbicacion': ultimaUbicacion,
       'ultimaUbicacionActualizada': ultimaUbicacionActualizada != null

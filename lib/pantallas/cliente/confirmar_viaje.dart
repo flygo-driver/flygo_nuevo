@@ -1,11 +1,14 @@
-// lib/pantallas/cliente/confirmar_viaje_page.dart
+// lib/pantallas/cliente/confirmar_viaje.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 
 class ConfirmarViajePage extends StatefulWidget {
   final String origenTexto;
@@ -150,7 +153,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
         final msg = (rol == Roles.taxista || rol == Roles.admin)
             ? 'Esta cuenta es de $rol. Usa una cuenta de cliente para solicitar viajes.'
             : 'Tu cuenta no es de cliente. Cambia de cuenta para solicitar viajes.';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
         return;
       }
 
@@ -177,7 +181,15 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('✅ Viaje confirmado: ${id.substring(0, 6)}…')),
       );
-      Navigator.of(context).pop(true);
+      final bool esProgramadoConfirm =
+          _fechaHora.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+      if (esProgramadoConfirm) {
+        await NavigationService.clearAndGo(
+          ViajeProgramadoPendiente(viajeId: id),
+        );
+      } else {
+        await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+      }
     } on FirebaseException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -195,14 +207,15 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
 
   @override
   Widget build(BuildContext context) {
-    final esProgramado =
+    final bool esProgramado =
         _fechaHora.isAfter(DateTime.now().add(const Duration(minutes: 10)));
 
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text('Confirmar viaje', style: TextStyle(color: Colors.white)),
+        title: const Text('Confirmar viaje',
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
       ),
       body: ListView(
@@ -211,7 +224,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
           // Origen/Destino
           Card(
             color: const Color(0xFF121212),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
@@ -229,7 +243,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                       Expanded(
                         child: Text(
                           widget.origenTexto,
-                          style: const TextStyle(color: Colors.white, fontSize: 16),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 16),
                         ),
                       ),
                     ],
@@ -244,7 +259,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                       Expanded(
                         child: Text(
                           widget.destinoTexto,
-                          style: const TextStyle(color: Colors.white, fontSize: 16),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 16),
                         ),
                       ),
                     ],
@@ -259,14 +275,16 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
           // Fecha/Hora
           Card(
             color: const Color(0xFF121212),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Row(
                 children: [
                   Icon(
                     esProgramado ? Icons.schedule : Icons.flash_on,
-                    color: esProgramado ? Colors.orangeAccent : Colors.greenAccent,
+                    color:
+                        esProgramado ? Colors.orangeAccent : Colors.greenAccent,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -275,12 +293,15 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                       children: [
                         Text(
                           esProgramado ? 'Programado para' : 'Para ahora',
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          DateFormat('EEE d MMM, HH:mm', 'es').format(_fechaHora),
-                          style: const TextStyle(color: Colors.white, fontSize: 16),
+                          DateFormat('EEE d MMM, HH:mm', 'es')
+                              .format(_fechaHora),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 16),
                         ),
                       ],
                     ),
@@ -299,7 +320,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
           // Método de pago y tipo de vehículo
           Card(
             color: const Color(0xFF121212),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
@@ -313,10 +335,14 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                           dropdownColor: const Color(0xFF1E1E1E),
                           value: _metodoPago,
                           items: const [
-                            DropdownMenuItem(value: 'Efectivo', child: Text('Efectivo')),
-                            DropdownMenuItem(value: 'Transferencia', child: Text('Transferencia')),
+                            DropdownMenuItem(
+                                value: 'Efectivo', child: Text('Efectivo')),
+                            DropdownMenuItem(
+                                value: 'Transferencia',
+                                child: Text('Transferencia')),
                           ],
-                          onChanged: (v) => setState(() => _metodoPago = v ?? 'Efectivo'),
+                          onChanged: (v) =>
+                              setState(() => _metodoPago = v ?? 'Efectivo'),
                           decoration: const InputDecoration(
                             labelText: 'Método de pago',
                             labelStyle: TextStyle(color: Colors.white70),
@@ -337,11 +363,14 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                           dropdownColor: const Color(0xFF1E1E1E),
                           value: _tipoVehiculo,
                           items: const [
-                            DropdownMenuItem(value: 'Carro', child: Text('Carro')),
+                            DropdownMenuItem(
+                                value: 'Carro', child: Text('Carro')),
                             DropdownMenuItem(value: 'SUV', child: Text('SUV')),
-                            DropdownMenuItem(value: 'Moto', child: Text('Moto')),
+                            DropdownMenuItem(
+                                value: 'Moto', child: Text('Moto')),
                           ],
-                          onChanged: (v) => setState(() => _tipoVehiculo = v ?? 'Carro'),
+                          onChanged: (v) =>
+                              setState(() => _tipoVehiculo = v ?? 'Carro'),
                           decoration: const InputDecoration(
                             labelText: 'Tipo de vehículo',
                             labelStyle: TextStyle(color: Colors.white70),
@@ -356,7 +385,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                   SwitchListTile(
                     value: _idaYVuelta,
                     onChanged: (v) => setState(() => _idaYVuelta = v),
-                    title: const Text('Ida y vuelta', style: TextStyle(color: Colors.white)),
+                    title: const Text('Ida y vuelta',
+                        style: TextStyle(color: Colors.white)),
                     activeColor: Colors.greenAccent,
                   ),
                 ],
@@ -369,7 +399,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
           // Total
           Card(
             color: const Color(0xFF121212),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Row(
@@ -401,7 +432,9 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
               onPressed: _cargando ? null : _confirmar,
               icon: _cargando
                   ? const SizedBox(
-                      width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.check_circle, color: Colors.green),
               label: Text(
                 _cargando ? 'Confirmando...' : 'Confirmar viaje',

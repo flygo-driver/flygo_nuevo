@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 
 /// Datos para [ViajesRepo.claimTripWithReason] tras validar pool turístico.
 class DatosClaimPoolTurismo {
@@ -40,7 +41,8 @@ class AsignacionTurismoRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   /// Alinea `subtipoTurismo` / `tipoVehiculo` del documento con `vehiculos[].tipo` en `choferes_turismo`.
-  static String normalizarCodigoTipoTurismo(String? subtipo, String? tipoVehiculoDoc) {
+  static String normalizarCodigoTipoTurismo(
+      String? subtipo, String? tipoVehiculoDoc) {
     String from(String raw) {
       final t = raw.trim().toLowerCase();
       if (t.isEmpty) return '';
@@ -53,8 +55,12 @@ class AsignacionTurismoRepo {
         return 'bus';
       }
       if (t.contains('carro')) return 'carro';
-      if (t == 'carro' || t == 'jeepeta' || t == 'minivan' || t == 'bus') return t;
-      if (t == 'viaje_multi' || t == 'ciudad' || t == 'interior') return 'carro';
+      if (t == 'carro' || t == 'jeepeta' || t == 'minivan' || t == 'bus') {
+        return t;
+      }
+      if (t == 'viaje_multi' || t == 'ciudad' || t == 'interior') {
+        return 'carro';
+      }
       return '';
     }
 
@@ -89,6 +95,16 @@ class AsignacionTurismoRepo {
         if (!vSnap.exists) throw 'viaje-no-existe';
 
         final vData = vSnap.data()!;
+        if ((vData['tipoServicio'] ?? '').toString() != 'turismo') {
+          throw 'no-turismo';
+        }
+        final String canalRaw =
+            (vData['canalAsignacion'] ?? 'admin').toString().trim();
+        final String canalAsign = canalRaw.isEmpty ? 'admin' : canalRaw;
+        if (canalAsign != 'admin') {
+          throw 'canal-invalido';
+        }
+
         final String estadoRaw = vData['estado']?.toString() ?? '';
         final String estadoNorm = EstadosViaje.normalizar(estadoRaw);
         final bool estadoOk = estadoRaw == 'pendiente_admin' ||
@@ -98,7 +114,8 @@ class AsignacionTurismoRepo {
           throw 'estado-invalido';
         }
 
-        if ((vData['uidTaxista'] ?? '').toString().isNotEmpty) {
+        if ((vData['uidTaxista'] ?? '').toString().trim().isNotEmpty ||
+            (vData['taxistaId'] ?? '').toString().trim().isNotEmpty) {
           throw 'ya-asignado';
         }
 
@@ -108,6 +125,15 @@ class AsignacionTurismoRepo {
         final cData = cSnap.data()!;
         if (cData['estado'] != 'aprobado') throw 'chofer-no-aprobado';
         if (cData['disponible'] != true) throw 'chofer-no-disponible';
+
+        final uRef = _db.collection('usuarios').doc(uidChofer);
+        final uSnap = await tx.get(uRef);
+        final bSnap =
+            await tx.get(_db.collection('billeteras_taxista').doc(uidChofer));
+        if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+            uSnap.data(), bSnap.data())) {
+          throw 'chofer-bloqueo-prepago';
+        }
 
         final Map<String, dynamic> updViaje = {
           'uidTaxista': uidChofer,
@@ -125,7 +151,8 @@ class AsignacionTurismoRepo {
           'aceptadoEn': FieldValue.serverTimestamp(),
           'asignadoPor': FirebaseAuth.instance.currentUser?.uid,
           'asignadoEn': FieldValue.serverTimestamp(),
-          if (notaAdmin != null && notaAdmin.isNotEmpty) 'notaAdminAsignacion': notaAdmin,
+          if (notaAdmin != null && notaAdmin.isNotEmpty)
+            'notaAdminAsignacion': notaAdmin,
           'updatedAt': FieldValue.serverTimestamp(),
           'actualizadoEn': FieldValue.serverTimestamp(),
         };
@@ -144,22 +171,28 @@ class AsignacionTurismoRepo {
         });
 
         // Actualizar usuario del chofer
-        final uRef = _db.collection('usuarios').doc(uidChofer);
-        tx.set(uRef, {
-          'viajeActivoId': viajeId,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        tx.set(
+            uRef,
+            {
+              'viajeActivoId': viajeId,
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true));
 
         // Actualizar usuario del cliente
         final uidCliente = vData['uidCliente'] ?? vData['clienteId'];
         if (uidCliente != null && uidCliente.toString().isNotEmpty) {
-          final clienteRef = _db.collection('usuarios').doc(uidCliente.toString());
-          tx.set(clienteRef, {
-            'viajeActivoId': viajeId,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+          final clienteRef =
+              _db.collection('usuarios').doc(uidCliente.toString());
+          tx.set(
+              clienteRef,
+              {
+                'viajeActivoId': viajeId,
+                'updatedAt': FieldValue.serverTimestamp(),
+                'actualizadoEn': FieldValue.serverTimestamp(),
+              },
+              SetOptions(merge: true));
         }
       });
 
@@ -197,51 +230,55 @@ class AsignacionTurismoRepo {
         .where('disponible', isEqualTo: true)
         .snapshots()
         .map((snapshot) {
-          final List<Map<String, dynamic>> choferes = [];
+      final List<Map<String, dynamic>> choferes = [];
 
-          for (final doc in snapshot.docs) {
-            final data = doc.data();
-            final vehiculos = (data['vehiculos'] as List?) ?? [];
-            
-            // Verificar si tiene el tipo de vehículo requerido
-            final bool tieneVehiculo = vehiculos.any((v) {
-              if (v is Map) {
-                return v['tipo'] == tipoVehiculo;
-              }
-              return false;
-            });
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final vehiculos = (data['vehiculos'] as List?) ?? [];
 
-            if (!tieneVehiculo) continue;
-
-            double? distancia;
-            if (latOrigen != null && lonOrigen != null && data['ultimaUbicacion'] != null) {
-              final ubicacion = data['ultimaUbicacion'] as GeoPoint;
-              distancia = Geolocator.distanceBetween(
-                    latOrigen,
-                    lonOrigen,
-                    ubicacion.latitude,
-                    ubicacion.longitude,
-                  ) / 1000;
-              
-              if (distancia > radioKm) continue;
-            }
-
-            choferes.add({
-              'uid': doc.id,
-              ...data,
-              'distanciaKm': distancia,
-            });
+        // Verificar si tiene el tipo de vehículo requerido
+        final bool tieneVehiculo = vehiculos.any((v) {
+          if (v is Map) {
+            return v['tipo'] == tipoVehiculo;
           }
-
-          // Ordenar por distancia
-          choferes.sort((a, b) {
-            if (a['distanciaKm'] == null) return 1;
-            if (b['distanciaKm'] == null) return -1;
-            return (a['distanciaKm'] as double).compareTo(b['distanciaKm'] as double);
-          });
-
-          return choferes;
+          return false;
         });
+
+        if (!tieneVehiculo) continue;
+
+        double? distancia;
+        if (latOrigen != null &&
+            lonOrigen != null &&
+            data['ultimaUbicacion'] != null) {
+          final ubicacion = data['ultimaUbicacion'] as GeoPoint;
+          distancia = Geolocator.distanceBetween(
+                latOrigen,
+                lonOrigen,
+                ubicacion.latitude,
+                ubicacion.longitude,
+              ) /
+              1000;
+
+          if (distancia > radioKm) continue;
+        }
+
+        choferes.add({
+          'uid': doc.id,
+          ...data,
+          'distanciaKm': distancia,
+        });
+      }
+
+      // Ordenar por distancia
+      choferes.sort((a, b) {
+        if (a['distanciaKm'] == null) return 1;
+        if (b['distanciaKm'] == null) return -1;
+        return (a['distanciaKm'] as double)
+            .compareTo(b['distanciaKm'] as double);
+      });
+
+      return choferes;
+    });
   }
 
   // ==============================================================
@@ -254,7 +291,7 @@ class AsignacionTurismoRepo {
         .where('activo', isEqualTo: true)
         .limit(1)
         .get();
-    
+
     return query.docs.isNotEmpty;
   }
 
@@ -345,7 +382,8 @@ class AsignacionTurismoRepo {
     }
   }
 
-  static int _capacidadDesdeVehiculoMap(Map<String, dynamic> v, String tipoFallback) {
+  static int _capacidadDesdeVehiculoMap(
+      Map<String, dynamic> v, String tipoFallback) {
     final dynamic c = v['capacidad'] ?? v['capacidadPasajeros'];
     if (c is num) return c.round().clamp(1, 60);
     if (c != null) {
@@ -368,7 +406,8 @@ class AsignacionTurismoRepo {
     return 1;
   }
 
-  static Map<String, dynamic>? _vehiculoQueCoincide(List<dynamic>? vehiculos, String tipoReq) {
+  static Map<String, dynamic>? _vehiculoQueCoincide(
+      List<dynamic>? vehiculos, String tipoReq) {
     final String t = tipoReq.toLowerCase();
     if (vehiculos == null) return null;
     for (final dynamic v in vehiculos) {
@@ -380,7 +419,8 @@ class AsignacionTurismoRepo {
     return null;
   }
 
-  static double? _distanciaKmHastaOrigen(Map<String, dynamic> chofer, double latO, double lonO) {
+  static double? _distanciaKmHastaOrigen(
+      Map<String, dynamic> chofer, double latO, double lonO) {
     double? lat;
     double? lon;
     final dynamic u = chofer['ultimaUbicacion'];
@@ -388,7 +428,8 @@ class AsignacionTurismoRepo {
       lat = u.latitude;
       lon = u.longitude;
     } else {
-      final Map<String, dynamic>? ubic = chofer['ubicacion'] as Map<String, dynamic>?;
+      final Map<String, dynamic>? ubic =
+          chofer['ubicacion'] as Map<String, dynamic>?;
       if (ubic != null) {
         lat = (ubic['lat'] as num?)?.toDouble();
         lon = (ubic['lon'] as num?)?.toDouble();
@@ -407,14 +448,16 @@ class AsignacionTurismoRepo {
     double radioKm = 55,
     int maxCandidatos = 18,
   }) async {
-    final DocumentReference<Map<String, dynamic>> vRef = _db.collection('viajes').doc(viajeId);
+    final DocumentReference<Map<String, dynamic>> vRef =
+        _db.collection('viajes').doc(viajeId);
     final DocumentSnapshot<Map<String, dynamic>> vSnap = await vRef.get();
     if (!vSnap.exists) return null;
     final Map<String, dynamic> v0 = vSnap.data()!;
 
     if ((v0['tipoServicio'] ?? '').toString() != 'turismo') return null;
     if ((v0['estado'] ?? '').toString() != 'pendiente_admin') return null;
-    if ((v0['uidTaxista'] ?? '').toString().isNotEmpty || (v0['taxistaId'] ?? '').toString().isNotEmpty) {
+    if ((v0['uidTaxista'] ?? '').toString().isNotEmpty ||
+        (v0['taxistaId'] ?? '').toString().isNotEmpty) {
       return null;
     }
 
@@ -458,7 +501,8 @@ class AsignacionTurismoRepo {
     for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in ordenados) {
       if (intentos >= maxCandidatos) break;
       final Map<String, dynamic> cData = doc.data();
-      final Map<String, dynamic>? veh = _vehiculoQueCoincide(cData['vehiculos'] as List<dynamic>?, subtipo);
+      final Map<String, dynamic>? veh =
+          _vehiculoQueCoincide(cData['vehiculos'] as List<dynamic>?, subtipo);
       if (veh == null) continue;
       if (_capacidadDesdeVehiculoMap(veh, subtipo) < pax) continue;
 
@@ -485,9 +529,12 @@ class AsignacionTurismoRepo {
     required Map<String, dynamic> vehiculo,
     required String subtipoTurismo,
   }) async {
-    final DocumentReference<Map<String, dynamic>> vRef = _db.collection('viajes').doc(viajeId);
-    final DocumentReference<Map<String, dynamic>> cRef = _db.collection('choferes_turismo').doc(uidChofer);
-    final DocumentReference<Map<String, dynamic>> uRef = _db.collection('usuarios').doc(uidChofer);
+    final DocumentReference<Map<String, dynamic>> vRef =
+        _db.collection('viajes').doc(viajeId);
+    final DocumentReference<Map<String, dynamic>> cRef =
+        _db.collection('choferes_turismo').doc(uidChofer);
+    final DocumentReference<Map<String, dynamic>> uRef =
+        _db.collection('usuarios').doc(uidChofer);
 
     bool asignado = false;
     try {
@@ -499,8 +546,9 @@ class AsignacionTurismoRepo {
 
         if ((d['tipoServicio'] ?? '').toString() != 'turismo') return;
         if ((d['estado'] ?? '').toString() != 'pendiente_admin') return;
-        final bool yaAsignado = ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
-            ((d['taxistaId'] ?? '') as String).isNotEmpty;
+        final bool yaAsignado =
+            ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
+                ((d['taxistaId'] ?? '') as String).isNotEmpty;
         if (yaAsignado) return;
 
         final DateTime now = DateTime.now();
@@ -513,8 +561,8 @@ class AsignacionTurismoRepo {
         DateTime? reservadoHasta;
         final dynamic rh = d['reservadoHasta'];
         if (rh is Timestamp) reservadoHasta = rh.toDate();
-        final bool reservaVigente =
-            reservadoPor.isNotEmpty && (reservadoHasta == null || reservadoHasta.isAfter(now));
+        final bool reservaVigente = reservadoPor.isNotEmpty &&
+            (reservadoHasta == null || reservadoHasta.isAfter(now));
         if (reservaVigente && reservadoPor != uidChofer) return;
 
         final DocumentSnapshot<Map<String, dynamic>> cSnap = await tx.get(cRef);
@@ -524,7 +572,8 @@ class AsignacionTurismoRepo {
         if (cLive['disponible'] != true) return;
 
         final int pax = _pasajerosRequeridos(d);
-        final Map<String, dynamic>? vMatch = _vehiculoQueCoincide(cLive['vehiculos'] as List<dynamic>?, subtipoTurismo);
+        final Map<String, dynamic>? vMatch = _vehiculoQueCoincide(
+            cLive['vehiculos'] as List<dynamic>?, subtipoTurismo);
         if (vMatch == null) return;
         if (_capacidadDesdeVehiculoMap(vMatch, subtipoTurismo) < pax) return;
 
@@ -532,15 +581,38 @@ class AsignacionTurismoRepo {
         final Map<String, dynamic> uData = uSnap.data() ?? <String, dynamic>{};
         if ((uData['viajeActivoId'] ?? '').toString().isNotEmpty) return;
 
-        final String nombreChofer = (choferData['nombre'] ?? cLive['nombre'] ?? '').toString();
-        final String telChofer = (choferData['telefono'] ?? cLive['telefono'] ?? '').toString();
-        final String placa = (vehiculo['placa'] ?? vMatch['placa'] ?? '').toString();
-        final String marca = (vehiculo['marca'] ?? uData['marca'] ?? uData['vehiculoMarca'] ?? '').toString();
-        final String modelo = (vehiculo['modelo'] ?? uData['modelo'] ?? uData['vehiculoModelo'] ?? '').toString();
-        final String color = (vehiculo['color'] ?? uData['color'] ?? uData['vehiculoColor'] ?? '').toString();
+        final bSnapAuto =
+            await tx.get(_db.collection('billeteras_taxista').doc(uidChofer));
+        if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+            uData, bSnapAuto.data())) {
+          return;
+        }
+
+        final String nombreChofer =
+            (choferData['nombre'] ?? cLive['nombre'] ?? '').toString();
+        final String telChofer =
+            (choferData['telefono'] ?? cLive['telefono'] ?? '').toString();
+        final String placa =
+            (vehiculo['placa'] ?? vMatch['placa'] ?? '').toString();
+        final String marca = (vehiculo['marca'] ??
+                uData['marca'] ??
+                uData['vehiculoMarca'] ??
+                '')
+            .toString();
+        final String modelo = (vehiculo['modelo'] ??
+                uData['modelo'] ??
+                uData['vehiculoModelo'] ??
+                '')
+            .toString();
+        final String color = (vehiculo['color'] ??
+                uData['color'] ??
+                uData['vehiculoColor'] ??
+                '')
+            .toString();
         final String tipoOriginal = subtipoTurismo;
 
-        final String uidCliente = (d['uidCliente'] ?? d['clienteId'] ?? '').toString();
+        final String uidCliente =
+            (d['uidCliente'] ?? d['clienteId'] ?? '').toString();
 
         tx.update(vRef, {
           'uidTaxista': uidChofer,

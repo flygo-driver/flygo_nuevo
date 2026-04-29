@@ -1,6 +1,7 @@
 // lib/pantallas/taxista/panel_taxista.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kDebugMode, debugPrint;
 import 'viaje_disponible.dart';
 
 // Firebase + picker
@@ -67,7 +68,8 @@ class PerfilFotoScreen extends StatefulWidget {
 class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
   final _auth = FirebaseAuth.instance;
   final _db = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance; // bucket por defecto
+  final FirebaseStorage _storage =
+      FirebaseStorage.instance; // bucket por defecto
 
   bool _subiendo = false;
   String? _cacheBuster;
@@ -105,7 +107,8 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
                 _subiendo
                     ? const Padding(
                         padding: EdgeInsets.all(24),
-                        child: CircularProgressIndicator(color: Colors.greenAccent),
+                        child: CircularProgressIndicator(
+                            color: Colors.greenAccent),
                       )
                     : AvatarCircle(
                         imageUrl: fotoUrl,
@@ -126,7 +129,8 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
                 const SizedBox(height: 8),
                 TextButton.icon(
                   onPressed: _subiendo ? null : _eliminarFoto,
-                  icon: const Icon(Icons.delete_outline, color: Colors.greenAccent),
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.greenAccent),
                   label: const Text('Eliminar foto',
                       style: TextStyle(color: Colors.greenAccent)),
                 ),
@@ -135,7 +139,8 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
                   // Boton de prueba solo en debug.
                   OutlinedButton.icon(
                     onPressed: _subiendo ? null : _pruebaSubidaSimple,
-                    icon: const Icon(Icons.upload_file, color: Colors.greenAccent),
+                    icon: const Icon(Icons.upload_file,
+                        color: Colors.greenAccent),
                     label: const Text(
                       'PRUEBA SUBIDA (test.txt)',
                       style: TextStyle(color: Colors.greenAccent),
@@ -153,28 +158,34 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
     );
   }
 
-  Future<bool> _ensurePhotoPermissions() async {
-    final camera = await Permission.camera.request();
-    // En iOS se usa `photos`. En Android, `storage` cubre la galería (según versión).
-    final photos = await Permission.photos.request().onError((_, __) async {
-      return PermissionStatus.granted;
-    });
-    final storage = await Permission.storage.request().onError((_, __) async {
-      return PermissionStatus.granted;
-    });
-    final ok =
-        camera.isGranted && (photos.isGranted || photos.isLimited || storage.isGranted);
-    return ok;
+  /// Cámara: pide [Permission.camera]. Galería en Android usa el selector del sistema
+  /// (sin READ_MEDIA_*). En iOS se pide acceso a la fototeca.
+  Future<bool> _ensurePermissionsForSource(ImageSource source) async {
+    if (source == ImageSource.camera) {
+      final camera = await Permission.camera.request();
+      if (!camera.isGranted) {
+        if (mounted) {
+          _toast('Concede permiso de cámara para continuar');
+        }
+        return false;
+      }
+      return true;
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      final photos = await Permission.photos.request().onError((_, __) async {
+        return PermissionStatus.granted;
+      });
+      if (!photos.isGranted && !photos.isLimited) {
+        if (mounted) {
+          _toast('Concede acceso a fotos para continuar');
+        }
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _elegirOrigenYSubir() async {
-    final ok = await _ensurePhotoPermissions();
-    if (!ok) {
-      if (!mounted) return;
-      _toast('Concede permisos de fotos/cámara para continuar');
-      return;
-    }
-
     if (!mounted) return;
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -193,8 +204,10 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
         ]),
       ),
     );
-    if (!mounted) return;
-    if (source != null) await _subirImagen(source);
+    if (!mounted || source == null) return;
+    final ok = await _ensurePermissionsForSource(source);
+    if (!ok) return;
+    await _subirImagen(source);
   }
 
   Future<void> _subirImagen(ImageSource source) async {
@@ -228,7 +241,8 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
           'perfiles/${user.uid}/avatar_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final ref = _storage.ref().child(path);
       if (kDebugMode) {
-        debugPrint('[UPLOAD] path=$path  bucket(ref)=${ref.bucket}  size=${bytes.length}');
+        debugPrint(
+            '[UPLOAD] path=$path  bucket(ref)=${ref.bucket}  size=${bytes.length}');
       }
 
       final snap = await ref.putData(
@@ -253,7 +267,8 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
       if (!mounted) return;
       setState(() => _subiendo = false);
       if (kDebugMode) {
-        debugPrint('[UPLOAD][FirebaseException] code=${e.code} message=${e.message}');
+        debugPrint(
+            '[UPLOAD][FirebaseException] code=${e.code} message=${e.message}');
       }
       _toast('Error subiendo foto: [${e.code}] ${e.message}');
     } catch (e) {
@@ -292,7 +307,8 @@ class _PerfilFotoScreenState extends State<PerfilFotoScreen> {
       _toast('✅ Test subido. Revisa Storage → archivos.');
     } on FirebaseException catch (e) {
       if (kDebugMode) {
-        debugPrint('[TEST][FirebaseException] code=${e.code} message=${e.message}');
+        debugPrint(
+            '[TEST][FirebaseException] code=${e.code} message=${e.message}');
       }
       _toast('Test falló: [${e.code}] ${e.message}');
     } catch (e) {

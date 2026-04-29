@@ -43,7 +43,7 @@ class VehiculoTurismo {
   }
 
   String get nombreCompleto => '$marca $modelo ($color)';
-  
+
   String get tipoLabel {
     switch (tipo) {
       case 'carro':

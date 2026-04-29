@@ -1,9 +1,740 @@
-// WARNING: Solo para emulador, no producción
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuth() && request.auth.uid == uid;
+    }
+
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/usuarios/$(uid));
+    }
+
+    function myUserDoc() {
+      return userDoc(request.auth.uid);
+    }
+
+    function myUserDocExists() {
+      return isAuth() &&
+        exists(/databases/$(database)/documents/usuarios/$(request.auth.uid));
+    }
+
+    function myRole() {
+      return myUserDocExists()
+        ? (myUserDoc().data.rol is string ? myUserDoc().data.rol : "")
+        : "";
+    }
+
+    function isAdmin() {
+      return isAuth() && (myRole() == "admin");
+    }
+
+    function isTaxista() {
+      return isAuth() && (myRole() == "taxista");
+    }
+
+    function isCliente() {
+      return isAuth() && (myRole() == "cliente");
+    }
+
+    /// taxista o driver (misma convención que la app y Cloud Functions).
+    function esRolChoferEnSesion() {
+      return isAuth() && (myRole() == "taxista" || myRole() == "driver");
+    }
+
+    /// Pedido = solo cliente publica; Oferta «Voy para» = solo chofer publica.
+    function bolaPuebloCreateRolTipoCoherente() {
+      return (request.resource.data.tipo == "pedido" &&
+          myRole() == "cliente" &&
+          request.resource.data.createdByRol == "cliente") ||
+        (request.resource.data.tipo == "oferta" &&
+          esRolChoferEnSesion() &&
+          (request.resource.data.createdByRol == "taxista" ||
+            request.resource.data.createdByRol == "driver"));
+    }
+
+    /// Cierre contable y estado finalizada solo vía Admin SDK (Cloud Function), no desde el cliente.
+    function bolaCierreFinancieroSoloServidor() {
+      return (request.resource.data.estado == "finalizada" &&
+          resource.data.estado != "finalizada") ||
+        (request.resource.data.comisionAplicada == true &&
+          (!resource.data.keys().hasAny(["comisionAplicada"]) ||
+            resource.data.comisionAplicada != true));
+    }
+
+    function taxistaSinDeuda(uid) {
+      return exists(/databases/$(database)/documents/usuarios/$(uid)) &&
+        !(userDoc(uid).data.tienePagoPendiente == true);
+    }
+
+    function changedOnly(allowed) {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(allowed);
+    }
+
+    // Bola pueblo: cierre y comisión solo tras en_curso + código verificado (anti-fraude).
+    function bolaCierreBaseOk() {
+      return resource.data.estado == "en_curso" &&
+        resource.data.codigoVerificado == true &&
+        request.resource.data.confirmacionTaxistaFinal == true &&
+        request.resource.data.confirmacionClienteFinal == true;
+    }
+
+    function bolaMarcandoFinalizada() {
+      return request.resource.data.estado == "finalizada";
+    }
+
+    function bolaActivandoComisionPorPrimeraVez() {
+      return request.resource.data.comisionAplicada == true &&
+        (!resource.data.keys().hasAny(["comisionAplicada"]) ||
+          resource.data.comisionAplicada != true);
+    }
+
+    function bolaFinalizacionPermitida() {
+      return !bolaMarcandoFinalizada() || bolaCierreBaseOk();
+    }
+
+    function bolaComisionPermitida() {
+      return !bolaActivandoComisionPorPrimeraVez() || (
+        bolaCierreBaseOk() &&
+        request.resource.data.estado == "finalizada"
+      );
+    }
+
+    function bolaPickupCamposCambiados() {
+      return request.resource.data.diff(resource.data).changedKeys()
+        .hasAny(['pickupConfirmadoTaxista', 'pickupConfirmadoTaxistaEn']);
+    }
+
+    // Al aceptar oferta, el dueño (cliente o conductor publicador) escribe uidTaxista y
+    // reinicia pickup en el mismo update; resource.uidTaxista aún no existe → debe permitirse
+    // si solo es la transición abierta → acordada por quien publicó.
+    function bolaPickupSoloTaxistaAsignado() {
+      return !bolaPickupCamposCambiados() ||
+        resource.data.uidTaxista == request.auth.uid ||
+        (
+          resource.data.createdByUid == request.auth.uid &&
+          resource.data.estado == "abierta" &&
+          request.resource.data.estado == "acordada"
+        );
+    }
+
+    // Cancelar acordada solo antes de abordo / inicio (sin código verificado).
+    function bolaCancelacionDesdeAcordadaOk() {
+      return request.resource.data.estado != "cancelada" ||
+        (
+          resource.data.estado == "acordada" &&
+          resource.data.pickupConfirmadoTaxista != true &&
+          resource.data.codigoVerificado != true
+        );
+    }
+
+    function bolaDocExists(bolaId) {
+      return exists(/databases/$(database)/documents/bolas_pueblo/$(bolaId));
+    }
+
+    function bolaDocData(bolaId) {
+      return get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data;
+    }
+
+    function bolaPuedeChatMensajes(bolaId) {
+      return isAuth() && bolaDocExists(bolaId) &&
+        bolaDocData(bolaId).estado in ['acordada', 'en_curso'] &&
+        (
+          bolaDocData(bolaId).uidTaxista == request.auth.uid ||
+          bolaDocData(bolaId).uidCliente == request.auth.uid
+        );
+    }
+
+    // Mensaje nuevo: solo de/texto/ts; ts debe ser serverTimestamp (en reglas: == request.time).
+    function bolaMensajeCreateOk() {
+      return request.resource.data.keys().hasOnly(['de', 'texto', 'ts']) &&
+        request.resource.data.de == request.auth.uid &&
+        request.resource.data.texto is string &&
+        request.resource.data.texto.size() > 0 &&
+        request.resource.data.texto.size() <= 4000 &&
+        request.resource.data.ts == request.time;
+    }
+
+    function hasKeys(obj, keys) {
+      return obj.keys().hasAll(keys);
+    }
+
+    // Anti‑fraude: no cancelar/liberar desde app una vez a bordo o en curso (cliente → cancelado; taxista → pendiente republicado).
+    function viajeEstadoActual() {
+      return 'estado' in resource.data ? resource.data.estado : '';
+    }
+
+    function viajeTrasAbordarOEnRuta() {
+      return viajeEstadoActual() in ['a_bordo', 'abordo', 'en_curso', 'encurso'];
+    }
+
+    function clienteIntentaMarcarCancelado() {
+      return 'estado' in request.resource.data && request.resource.data.estado == 'cancelado';
+    }
+
+    function taxistaIntentaRepublicarPendiente() {
+      return 'estado' in request.resource.data && request.resource.data.estado == 'pendiente';
+    }
+
+    // Rol auxiliar (GoogleAuth / admin). Sin esta regla, el catch-all denegaba la lectura y el login con Google fallaba después de Auth.
+    match /roles/{uid} {
+      allow read: if isAuth() && (request.auth.uid == uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /usuarios/{uid} {
+      allow read: if isAuth();
+      // Crear en dos líneas: evita OR con isAdmin() + get(usuarios/uid) mientras se crea el mismo uid.
+      allow create: if isOwner(uid);
+      allow create: if isAdmin();
+      // Actualizar perfil / disponibilidad: solo dueño + whitelist (sin isAdmin() en la misma expresión OR,
+      // porque isAdmin() hace get(usuarios/auth.uid) y al escribir el propio doc eso es circular → permission-denied).
+      allow update: if isOwner(uid) &&
+        changedOnly([
+          "nombre", "telefono", "fotoUrl", "direccion",
+          "email", "proveedor", "lastLogin",
+          "banco", "numeroCuenta", "titularCuenta",
+          "disponible",
+          "ultimaActivacion",
+          "viajeActivoId", "siguienteViajeId",
+          "updatedAt", "actualizadoEn",
+          "pushToken", "notificaciones",
+          "aceptacionTerminos",
+          "phoneVerified", "lastPhoneReauthAt"
+        ]);
+      // Completar rol vacío al primer login (p. ej. Google); no permite cambiar a admin.
+      allow update: if isOwner(uid) &&
+        (!("rol" in resource.data) || resource.data.rol == "") &&
+        changedOnly(["rol", "updatedAt", "actualizadoEn"]) &&
+        request.resource.data.rol is string &&
+        request.resource.data.rol in ["cliente", "taxista"];
+      // Expediente de documentos de taxista (dueño).
+      allow update: if isOwner(uid) &&
+        changedOnly([
+          "docs",
+          "docsEstado",
+          "estadoDocumentos",
+          "docsEnviadosEn",
+          "docsComentarioAdmin",
+          "updatedAt",
+          "actualizadoEn"
+        ]);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /viajes/{viajeId} {
+      allow read: if isAdmin() ||
+        // Lectura para taxista (requerida para query/listener del pool disponible).
+        isTaxista() ||
+        // Dueños directos del viaje (cliente/taxista asignado)
+        (isAuth() && (
+          resource.data.uidCliente == request.auth.uid ||
+          resource.data.clienteId == request.auth.uid ||
+          resource.data.uidTaxista == request.auth.uid ||
+          resource.data.taxistaId == request.auth.uid
+        )) ||
+        // Pool visible para taxista (no asignado, no turismo/admin)
+        (
+          isTaxista() &&
+          (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
+          (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data)) &&
+          (
+            resource.data.estado in [
+              "pendiente",
+              "pendiente_pago",
+              "pendiente_admin",
+              "pendienteAdmin",
+              "buscando",
+              "disponible"
+            ]
+          ) &&
+          (
+            !("tipoServicio" in resource.data) || resource.data.tipoServicio != "turismo"
+          ) &&
+          (
+            !("canalAsignacion" in resource.data) || resource.data.canalAsignacion != "admin"
+          )
+        );
+
+      allow create: if isCliente() &&
+        request.resource.data.uidCliente == request.auth.uid &&
+        request.resource.data.clienteId == request.auth.uid &&
+        request.resource.data.uidTaxista == "" &&
+        request.resource.data.taxistaId == "";
+
+      allow update: if isAdmin() ||
+        (
+          // CLAIM explícito y tolerante para viajes legacy del pool
+          isTaxista() &&
+          taxistaSinDeuda(request.auth.uid) &&
+          (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
+          (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data)) &&
+          request.resource.data.uidTaxista == request.auth.uid &&
+          request.resource.data.taxistaId == request.auth.uid &&
+          request.resource.data.aceptado == true &&
+          request.resource.data.activo == true &&
+          (request.resource.data.estado in ["aceptado", "en_camino_pickup", "enCaminoPickup"])
+        ) ||
+        (
+          isCliente() &&
+          (
+            resource.data.uidCliente == request.auth.uid ||
+            resource.data.clienteId == request.auth.uid
+          ) &&
+          changedOnly([
+            "estado", "aceptado", "rechazado", "activo",
+            "uidTaxista", "taxistaId", "nombreTaxista",
+            "telefono", "placa", "marca", "modelo", "color",
+            "canceladoPor", "motivoCancelacion", "canceladoClienteEn",
+            "updatedAt", "actualizadoEn"
+          ]) &&
+          !(clienteIntentaMarcarCancelado() && viajeTrasAbordarOEnRuta())
+        ) ||
+        (
+          isTaxista() &&
+          (
+            // Toma de viaje desde pool: requiere estar al día.
+            (
+              taxistaSinDeuda(request.auth.uid) &&
+              (
+                (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
+                (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data))
+              ) &&
+              request.resource.data.uidTaxista == request.auth.uid &&
+              request.resource.data.taxistaId == request.auth.uid &&
+              changedOnly([
+                "uidTaxista", "taxistaId", "nombreTaxista",
+                "telefono", "placa", "tipoVehiculo", "tipoVehiculoOriginal",
+                "marca", "modelo", "color",
+                "latTaxista", "lonTaxista", "driverLat", "driverLon",
+                "estado", "aceptado", "rechazado", "activo",
+                "aceptadoEn", "updatedAt", "actualizadoEn",
+                "reservadoPor", "reservadoHasta", "ignoradosPor"
+              ])
+            ) ||
+            // Operación de viaje ya asignado (GPS/estado): NO bloquear por deuda.
+            (
+              (resource.data.uidTaxista == request.auth.uid || resource.data.taxistaId == request.auth.uid)
+              &&
+              changedOnly([
+                "estado", "aceptado", "rechazado", "activo",
+                "updatedAt", "actualizadoEn",
+                "latTaxista", "lonTaxista", "driverLat", "driverLon",
+                "pickupConfirmadoEn", "inicioEnRutaEn", "viajeIniciadoEn", "finalizadoEn",
+                "codigoVerificado",
+                "clienteAbordo", "clienteAbordoEn",
+                "canceladoPor", "canceladoTaxistaEn", "motivoCancelacion",
+                "uidTaxista", "taxistaId", "nombreTaxista",
+                "telefono", "placa", "marca", "modelo", "color",
+                "reservadoPor", "reservadoHasta", "ignoradosPor",
+                "republicado", "completado",
+                "metodoPago", "payment", "pagoRegistrado",
+                "transferenciaConfirmada", "pagoATaxistaPendiente", "liquidado",
+                "pagoDetalle", "settlement",
+                "precio_cents", "comision_cents", "ganancia_cents",
+                "precio", "total", "comision", "comisionFlygo", "gananciaTaxista",
+                "comisionCalculada", "comisionCalculadaEn"
+              ])
+              &&
+              !(viajeTrasAbordarOEnRuta() && taxistaIntentaRepublicarPendiente())
+            )
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    match /pagos/{pagoId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidTaxista == request.auth.uid);
+      allow create: if isAdmin() &&
+        hasKeys(request.resource.data, [
+          "tipo", "viajeId", "uidTaxista", "monto",
+          "metodo", "estado", "fecha", "createdAt"
+        ]);
+      // Asiento al completar viaje (ViajesRepo.completarViajePorTaxista)
+      allow create: if isTaxista() &&
+        request.resource.data.uidTaxista == request.auth.uid &&
+        request.resource.data.tipo == "taxista" &&
+        request.resource.data.viajeId is string &&
+        hasKeys(request.resource.data, [
+          "tipo", "viajeId", "uidTaxista", "monto",
+          "metodo", "estado", "fecha", "createdAt"
+        ]);
+      // Recibo firmado (FirmarPago)
+      allow create: if isTaxista() &&
+        request.resource.data.keys().hasAll([
+          "emailTaxista", "monto", "metodo", "fecha", "firmaUrl"
+        ]) &&
+        request.resource.data.monto is number &&
+        request.resource.data.metodo is string &&
+        request.resource.data.firmaUrl is string;
+      allow update, delete: if false;
+    }
+
+    match /billeteras_taxista/{uidTaxista} {
+      allow read: if isAdmin() || isOwner(uidTaxista);
+      allow create: if isAdmin() || (isOwner(uidTaxista) && isTaxista());
+      allow update: if isAdmin() || (
+        isOwner(uidTaxista) && isTaxista() &&
+        changedOnly([
+          "comisionPendiente", "saldoPrepagoComisionRd", "primerViajeComisionGratisConsumido",
+          "saldoAcumulado",
+          "ultimoViajeId", "ultimaComisionCents", "ultimaGananciaCents",
+          "ultimaBolaFinalizadaId", "ultimaComisionBolaRd",
+          "updatedAt"
+        ])
+      );
+      allow delete: if false;
+
+      // Auditoría prepago comisión (solo escritura inicial; sin update/delete).
+      match /movimientos_prepago/{movId} {
+        allow read: if isAdmin() || isOwner(uidTaxista);
+        allow create: if isAdmin() || (isOwner(uidTaxista) && isTaxista());
+        allow update, delete: if false;
+      }
+    }
+
+    match /pagos_taxistas/{pagoId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidTaxista == request.auth.uid);
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        isTaxista() &&
+        resource.data.uidTaxista == request.auth.uid &&
+        changedOnly(["comprobanteUrl", "metodoPago", "estado", "updatedAt"]) &&
+        (resource.data.estado in ["pendiente", "rechazado"]) &&
+        request.resource.data.estado == "pendiente_verificacion"
+      );
+      allow delete: if false;
+    }
+
+    // Recarga de comisión por viajes en efectivo: taxista crea con comprobante; solo admin actualiza.
+    match /recargas_comision_taxista/{id} {
+      allow read: if isAdmin() ||
+        (isTaxista() && resource.data.uidTaxista == request.auth.uid);
+      allow create: if isTaxista() &&
+        request.resource.data.uidTaxista == request.auth.uid &&
+        request.resource.data.estado == "pendiente_verificacion" &&
+        request.resource.data.comprobanteUrl is string &&
+        request.resource.data.comprobanteUrl.size() > 10 &&
+        request.resource.data.montoDeclaradoRd is number &&
+        request.resource.data.montoDeclaradoRd > 0 &&
+        request.resource.data.comisionPendienteAlEnviar is number &&
+        request.resource.data.saldoPrepagoAlEnviar is number &&
+        hasKeys(request.resource.data, [
+          "uidTaxista", "nombreTaxista", "comisionPendienteAlEnviar",
+          "saldoPrepagoAlEnviar",
+          "montoDeclaradoRd", "comprobanteUrl", "metodoPago", "estado",
+          "createdAt", "updatedAt"
+        ]);
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Liquidaciones administrativas (tabs: pendiente/aprobado/rechazado)
+    match /liquidaciones/{liqId} {
+      allow read: if isAdmin() || (
+        isAuth() &&
+        resource.data.uidTaxista == request.auth.uid
+      );
+      allow create: if isAdmin() || (
+        isAuth() &&
+        request.resource.data.uidTaxista == request.auth.uid
+      );
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Promociones de comisión por taxista (lectura del propio taxista para cálculo)
+    match /promociones_taxistas/{promoId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidTaxista == request.auth.uid);
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /reportes_viaje/{id} {
+      allow read: if isAdmin();
+      allow create: if isCliente() &&
+        request.resource.data.uidCliente == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Configuración operativa (promociones, flags, etc.)
+    match /config/{docId} {
+      // Clientes/taxistas/admin deben poder leer promociones activas
+      allow read: if isAuth();
+      // Solo admin puede crear/editar configuración
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Tarifas generales (usadas por cálculo de precio en app)
+    match /tarifas/{docId} {
+      allow read: if isAuth();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Tarifario de turismo por tipo de vehículo
+    match /tarifa_turismo/{docId} {
+      allow read: if isAuth();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Viajes por cupos (chofer crea, clientes reservan asientos)
+    match /viajes_pool/{poolId} {
+      allow read: if isAuth();
+
+      // Solo taxista o admin crea viajes por cupos
+      allow create: if isAdmin() || (
+        isTaxista() &&
+        request.resource.data.ownerTaxistaId == request.auth.uid
+      );
+
+      // El dueño del pool (taxista) o admin puede actualizar metadata operativa.
+      // Campos financieros sensibles quedan reservados al backend/admin.
+      allow update: if isAdmin() || (
+        isTaxista() &&
+        resource.data.ownerTaxistaId == request.auth.uid &&
+        changedOnly([
+          "tipo", "sentido", "origenTown", "destino",
+          "fechaSalida", "fechaVuelta", "pickupPoints",
+          "capacidad", "minParaConfirmar", "precioPorAsiento",
+          "depositPct", "feePct", "estado", "taxistaNombre",
+          "asientosReservados", "asientosPagados",
+          "montoReservado", "montoPagado",
+          "updatedAt", "confirmadoAt", "canceladoAt"
+        ])
+      );
+
+      allow delete: if isAdmin();
+
+      match /reservas/{reservaId} {
+        allow read: if isAdmin() ||
+          (isAuth() && (
+            resource.data.uidCliente == request.auth.uid ||
+            get(/databases/$(database)/documents/viajes_pool/$(poolId)).data.ownerTaxistaId == request.auth.uid
+          ));
+
+        // Cliente autenticado puede crear su propia reserva
+        allow create: if isAuth() &&
+          request.resource.data.uidCliente == request.auth.uid;
+
+        // Cliente solo puede cancelar su reserva; taxista/admin pueden gestionar estado
+        allow update: if isAdmin() || (
+          isAuth() && (
+            resource.data.uidCliente == request.auth.uid ||
+            get(/databases/$(database)/documents/viajes_pool/$(poolId)).data.ownerTaxistaId == request.auth.uid
+          )
+        );
+
+        allow delete: if isAdmin();
+      }
+    }
+
+    // Chat del viaje: doc id == viajeId (ViajesRepo / ChatRepo)
+    function esParticipanteViajeChat(viajeId) {
+      return isAuth() && exists(/databases/$(database)/documents/viajes/$(viajeId)) &&
+        (
+          get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidCliente == request.auth.uid ||
+          get(/databases/$(database)/documents/viajes/$(viajeId)).data.clienteId == request.auth.uid ||
+          get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidTaxista == request.auth.uid ||
+          get(/databases/$(database)/documents/viajes/$(viajeId)).data.taxistaId == request.auth.uid
+        );
+    }
+
+    match /chats/{chatId} {
+      allow read: if esParticipanteViajeChat(chatId);
+      allow create: if esParticipanteViajeChat(chatId) &&
+        request.resource.data.viajeId == chatId &&
+        request.resource.data.participantes is list &&
+        request.auth.uid in request.resource.data.participantes;
+      allow update: if esParticipanteViajeChat(chatId) &&
+        changedOnly(["lastMessage", "lastAt", "participantes", "viajeId"]);
+    }
+
+    match /chats/{chatId}/mensajes/{msgId} {
+      allow read: if esParticipanteViajeChat(chatId);
+      allow create: if esParticipanteViajeChat(chatId) &&
+        request.resource.data.de == request.auth.uid &&
+        request.resource.data.texto is string &&
+        request.resource.data.texto.size() > 0 &&
+        request.resource.data.texto.size() <= 4000;
+      allow update, delete: if false;
+    }
+
+    // --- Colecciones usadas por la app y no cubiertas arriba ---
+
+    match /choferes_turismo/{uid} {
+      allow read: if isAuth();
+      allow create, update: if isAdmin() || (isOwner(uid) && isTaxista());
+      allow delete: if isAdmin();
+    }
+
+    match /seguridad/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    match /app_config/{docId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    match /drivers_location/{uid} {
+      allow read: if isAuth();
+      allow write: if isOwner(uid);
+    }
+
+    match /taxistas/{uid} {
+      allow read: if isAuth();
+      allow write: if isOwner(uid);
+    }
+
+    match /pagos_taxista/{pagoId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidTaxista == request.auth.uid);
+      allow create: if isTaxista() &&
+        request.resource.data.uidTaxista == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /billeteras/{uidTaxista}/movimientos/{movId} {
+      allow read: if isAdmin() || isOwner(uidTaxista);
+      allow create, update: if isAdmin() || (isOwner(uidTaxista) && isTaxista());
+      allow delete: if isAdmin();
+    }
+
+    match /push_tokens/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    match /solicitudes_turismo/{id} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidChofer == request.auth.uid);
+      allow create: if isAuth() &&
+        request.resource.data.uidChofer == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // Módulo aislado: "Pide tu bola (pueblo a pueblo)".
+    match /bolas_pueblo/{bolaId} {
+      allow read: if isAuth();
+
+      allow create: if isAuth() &&
+        myUserDocExists() &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.tipo in ["pedido", "oferta"] &&
+        bolaPuebloCreateRolTipoCoherente() &&
+        request.resource.data.estado == "abierta" &&
+        request.resource.data.distanciaKm is number &&
+        request.resource.data.distanciaKm > 0 &&
+        request.resource.data.tarifaNormalRd is number &&
+        request.resource.data.tarifaBaseBolaRd is number &&
+        request.resource.data.ofertaMinRd is number &&
+        request.resource.data.ofertaMaxRd is number &&
+        request.resource.data.ofertaMinRd <= request.resource.data.ofertaMaxRd;
+
+      // Dueño: puede cerrar/cancelar y actualizar metadata operativa.
+      allow update: if isAdmin() || (
+        isAuth() &&
+        !bolaCierreFinancieroSoloServidor() &&
+        (
+          resource.data.createdByUid == request.auth.uid ||
+          resource.data.uidTaxista == request.auth.uid ||
+          resource.data.uidCliente == request.auth.uid
+        ) &&
+        changedOnly([
+          "estado", "ofertaAceptadaId", "nota", "updatedAt",
+          "montoAcordadoRd", "comisionPct", "comisionRd",
+          "gananciaNetaChoferRd", "acordadaEn",
+          "uidTaxista", "uidCliente", "estadoViajeBola",
+          "inicioEn", "finalizadaEn",
+          "confirmacionTaxistaFinal", "confirmacionClienteFinal",
+          "confirmacionTaxistaFinalEn", "confirmacionClienteFinalEn",
+          "comisionAplicada",
+          "codigoVerificacionBola", "codigoGeneradoEn",
+          "codigoVerificado", "codigoVerificadoEn",
+          "pickupConfirmadoTaxista", "pickupConfirmadoTaxistaEn",
+          "canceladaEn",
+          "metodoPago", "metodoPagoUpdatedBy", "metodoPagoUpdatedAt"
+        ]) &&
+        bolaFinalizacionPermitida() &&
+        bolaComisionPermitida() &&
+        bolaPickupSoloTaxistaAsignado() &&
+        bolaCancelacionDesdeAcordadaOk()
+      );
+
+      allow delete: if false;
+
+      match /ofertas/{ofertaId} {
+        allow read: if isAuth();
+
+        // Ofertas: en [pedido] solo choferes; en [oferta] «Voy para» solo pasajeros.
+        // Contraoferta (pedido): el publicador cliente responde a un chofer.
+        allow create: if isAuth() &&
+          myUserDocExists() &&
+          get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.estado == "abierta" &&
+          request.resource.data.estado == "pendiente" &&
+          request.resource.data.fromUid == request.auth.uid &&
+          request.resource.data.fromRol is string &&
+          request.resource.data.fromRol == myRole() &&
+          request.resource.data.montoRd is number &&
+          request.resource.data.montoRd > 0 &&
+          request.resource.data.montoRd >= get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.ofertaMinRd &&
+          request.resource.data.montoRd <= get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.ofertaMaxRd &&
+          (
+            (
+              get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.createdByUid != request.auth.uid &&
+              (!("esContraofertaCliente" in request.resource.data) || request.resource.data.esContraofertaCliente != true) &&
+              (
+                (
+                  get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.tipo == "pedido" &&
+                  esRolChoferEnSesion()
+                ) ||
+                (
+                  get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.tipo == "oferta" &&
+                  myRole() == "cliente"
+                )
+              )
+            ) ||
+            (
+              get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.tipo == "pedido" &&
+              get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.createdByUid == request.auth.uid &&
+              myRole() == "cliente" &&
+              request.resource.data.esContraofertaCliente == true &&
+              request.resource.data.contraOfertaParaUid is string &&
+              request.resource.data.contraOfertaParaUid.size() > 0 &&
+              request.resource.data.contraOfertaParaUid != request.auth.uid
+            )
+          );
+
+        // Dueño de la publicación (o admin) puede aceptar/rechazar; ofertante puede retirar.
+        allow update: if isAdmin() || (
+          isAuth() &&
+          (
+            get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.createdByUid == request.auth.uid ||
+            resource.data.fromUid == request.auth.uid
+          ) &&
+          changedOnly(["estado", "updatedAt"])
+        );
+
+        allow delete: if false;
+      }
+
+      match /mensajes_bola/{msgId} {
+        allow read: if bolaPuedeChatMensajes(bolaId);
+        allow create: if bolaPuedeChatMensajes(bolaId) && bolaMensajeCreateOk();
+        allow update, delete: if false;
+      }
+    }
+
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

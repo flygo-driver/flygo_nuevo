@@ -19,13 +19,13 @@ import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/auto_trip_router.dart';
 import 'package:flygo_nuevo/widgets/empty_trips_widget.dart';
 import 'package:flygo_nuevo/widgets/error_professional.dart';
 import 'package:flygo_nuevo/widgets/loading_professional.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
-import 'package:flygo_nuevo/widgets/taxista_drawer.dart';
 
 extension _PoolTurismoThemeX on BuildContext {
   ({
@@ -99,7 +99,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     with WidgetsBindingObserver {
   final Set<String> _aceptandoIds = <String>{};
 
-  StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _activeTripListener;
+  StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>?
+      _activeTripListener;
 
   bool _usarFallbackSinIndiceAhora = false;
   bool _usarFallbackSinIndiceProg = false;
@@ -377,11 +378,15 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       final p = DateTime.tryParse(raw);
       if (p != null) return p;
     }
-    return fecha.subtract(const Duration(hours: 2));
+    return fecha.subtract(
+      const Duration(minutes: TripPublishWindows.poolLeadMinutesProgramado),
+    );
   }
 
-  bool _calcEsAhora(DateTime fecha) =>
-      !fecha.isAfter(DateTime.now().add(const Duration(minutes: 15)));
+  bool _calcEsAhora(DateTime fecha) => TripPublishWindows.esAhoraPorFechaPickup(
+        fecha,
+        DateTime.now(),
+      );
 
   Future<void> _aceptarViajeTurismo(
     Viaje v,
@@ -525,24 +530,22 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     BuildContext context, {
     TabBar? bottom,
     List<Widget>? actions,
-    bool useDrawerMenu = true,
   }) {
     final cs = Theme.of(context).colorScheme;
+    final canPop = Navigator.canPop(context);
     return AppBar(
       backgroundColor: cs.surface,
       foregroundColor: cs.onSurface,
       surfaceTintColor: cs.surfaceTint,
       elevation: 0,
       scrolledUnderElevation: 1,
-      leading: useDrawerMenu
-          ? Builder(
-              builder: (ctx) => IconButton(
-                icon: Icon(Icons.menu, color: cs.onSurface),
-                onPressed: () => Scaffold.of(ctx).openDrawer(),
-              ),
+      leading: canPop
+          ? IconButton(
+              icon: Icon(Icons.arrow_back, color: cs.onSurface),
+              onPressed: () => Navigator.maybePop(context),
             )
-          : null,
-      automaticallyImplyLeading: !useDrawerMenu,
+          : const SizedBox(width: 48),
+      automaticallyImplyLeading: false,
       title: Text(
         'Pool turístico',
         style: TextStyle(
@@ -715,7 +718,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
             final distancia = it.distancia;
             final aceptando = _aceptandoIds.contains(v.id);
 
-            final puedeAceptar = esAhora || !DateTime.now().isBefore(acceptAfter);
+            final puedeAceptar =
+                esAhora || !DateTime.now().isBefore(acceptAfter);
             final subtipo =
                 v.subtipoTurismo.isEmpty ? 'carro' : v.subtipoTurismo;
             final pax = _pasajerosDesde(v);
@@ -776,9 +780,12 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        _chip(context, Icons.directions_car, 'Vehículo: $subtipo'),
-                        if (pax != null) _chip(context, Icons.people, '$pax pasajeros'),
-                        _chip(context, Icons.near_me, 'A ${distancia.toStringAsFixed(1)} km'),
+                        _chip(context, Icons.directions_car,
+                            'Vehículo: $subtipo'),
+                        if (pax != null)
+                          _chip(context, Icons.people, '$pax pasajeros'),
+                        _chip(context, Icons.near_me,
+                            'A ${distancia.toStringAsFixed(1)} km'),
                         _chip(
                           context,
                           Icons.straighten,
@@ -802,7 +809,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                             children: [
                               Text(
                                 'Total',
-                                style: TextStyle(color: pal.textMuted, fontSize: 12),
+                                style: TextStyle(
+                                    color: pal.textMuted, fontSize: 12),
                               ),
                               Text(
                                 FormatosMoneda.rd(precioTotal),
@@ -820,7 +828,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                           children: [
                             Text(
                               'Ganas',
-                              style: TextStyle(color: pal.textMuted, fontSize: 12),
+                              style:
+                                  TextStyle(color: pal.textMuted, fontSize: 12),
                             ),
                             Text(
                               FormatosMoneda.rd(ganancia),
@@ -878,7 +887,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                                       color: pal.onAcceptBtn,
                                     ),
                                   )
-                                : Icon(Icons.check_circle, color: pal.onAcceptBtn),
+                                : Icon(Icons.check_circle,
+                                    color: pal.onAcceptBtn),
                             label: Text(
                               aceptando
                                   ? 'Aceptando...'
@@ -915,7 +925,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
   Widget _chip(BuildContext context, IconData icon, String text) {
     final p = context._poolTurismoPal;
-    final double maxW = (MediaQuery.sizeOf(context).width - 48).clamp(120.0, 600.0);
+    final double maxW =
+        (MediaQuery.sizeOf(context).width - 48).clamp(120.0, 600.0);
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxW),
       child: Container(
@@ -947,7 +958,6 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     final p = context._poolTurismoPal;
     return Scaffold(
       backgroundColor: p.scaffoldBg,
-      drawer: const TaxistaDrawer(),
       appBar: _poolAppBar(context),
       body: Center(
         child: Padding(
@@ -986,7 +996,6 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         length: 2,
         child: Scaffold(
           backgroundColor: p.scaffoldBg,
-          drawer: const TaxistaDrawer(),
           appBar: _poolAppBar(
             context,
             actions: const [SaldoGananciasChip()],
@@ -1054,7 +1063,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       final p = context._poolTurismoPal;
       return Scaffold(
         backgroundColor: p.scaffoldBg,
-        appBar: _poolAppBar(context, useDrawerMenu: false),
+        appBar: _poolAppBar(context),
         body: Center(
           child: Text(
             'Inicia sesión',
@@ -1108,7 +1117,6 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
               final p = context._poolTurismoPal;
               return Scaffold(
                 backgroundColor: p.scaffoldBg,
-                drawer: const TaxistaDrawer(),
                 appBar: _poolAppBar(context),
                 body: const LoadingProfessional(
                   mensajePersonalizado: 'Obteniendo tu ubicación',

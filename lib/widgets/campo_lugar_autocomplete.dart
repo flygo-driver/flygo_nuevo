@@ -30,6 +30,14 @@ class CampoLugarAutocomplete extends StatefulWidget {
   final Color? fieldAccent;
   final Color? fieldFill;
 
+  /// Si se define, sustituye el icono de lupa del campo (p. ej. caja GPS estilo “múltiples paradas”).
+  final Widget? prefixIcon;
+
+  /// Color del texto que escribe el usuario (si es null y el fondo es oscuro, se usa blanco).
+  final Color? fieldTextColor;
+  final Color? fieldHintColor;
+  final Color? fieldLabelColor;
+
   const CampoLugarAutocomplete({
     super.key,
     required this.label,
@@ -45,6 +53,10 @@ class CampoLugarAutocomplete extends StatefulWidget {
     this.showCategories = true, // Activado por defecto
     this.fieldAccent,
     this.fieldFill,
+    this.prefixIcon,
+    this.fieldTextColor,
+    this.fieldHintColor,
+    this.fieldLabelColor,
   });
 
   @override
@@ -619,25 +631,47 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     }
   }
 
+  Color? _fillFromInputTheme(ThemeData theme) {
+    final Object? fill = theme.inputDecorationTheme.fillColor;
+    if (fill == null) return null;
+    if (fill is Color) return fill;
+    if (fill is WidgetStateProperty<Color?>) {
+      return fill.resolve(const <WidgetState>{});
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final accent = widget.fieldAccent ??
-        (isDark ? Colors.greenAccent : const Color(0xFF7C3AED));
+    final accent =
+        widget.fieldAccent ?? (isDark ? Colors.greenAccent : scheme.primary);
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.circular(14),
       borderSide:
           BorderSide(color: accent.withValues(alpha: isDark ? 0.9 : 0.55)),
     );
-    final textColor = isDark ? Colors.white : scheme.onSurface;
-    final labelColor =
-        isDark ? Colors.white70 : scheme.onSurface.withValues(alpha: 0.72);
-    final hintColor =
-        isDark ? Colors.white38 : scheme.onSurface.withValues(alpha: 0.45);
     final fillColor = widget.fieldFill ??
-        (isDark ? Colors.grey[900]! : const Color(0xFFF5F3FF));
+        _fillFromInputTheme(theme) ??
+        (isDark ? Colors.grey[900]! : scheme.surfaceContainerHigh);
+
+    // Contraste fijo según luminancia del fondo (claro u oscuro), sin depender solo del tema.
+    const Color textoSobreClaro = Color(0xFF101828);
+    const Color hintSobreClaro = Color(0xFF667085);
+    const Color etiquetaSobreClaro = Color(0xFF475467);
+    final double lum = fillColor.computeLuminance();
+    final bool fondoOscuro = lum < 0.45;
+
+    final Color textoCampo =
+        widget.fieldTextColor ?? (fondoOscuro ? Colors.white : textoSobreClaro);
+    final Color hintCampo = widget.fieldHintColor ??
+        (fondoOscuro ? const Color(0x99FFFFFF) : hintSobreClaro);
+    final Color etiquetaCampo = widget.fieldLabelColor ??
+        (fondoOscuro ? Colors.white70 : etiquetaSobreClaro);
+    final Color iconoLimpiar =
+        fondoOscuro ? Colors.white54 : const Color(0xFF667085);
 
     final kbInset = MediaQuery.of(context).viewInsets.bottom;
 
@@ -653,16 +687,19 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
               key: _fieldKey,
               controller: _controller,
               focusNode: _focus,
-              style: TextStyle(color: textColor, fontSize: 16),
+              style: TextStyle(color: textoCampo, fontSize: 16),
+              cursorColor: accent,
               scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 320),
               decoration: InputDecoration(
                 labelText: widget.label,
                 hintText: widget.hint ?? 'Ej: Santo Domingo, Punta Cana...',
-                labelStyle: TextStyle(color: labelColor),
-                hintStyle: TextStyle(color: hintColor),
+                labelStyle: TextStyle(color: etiquetaCampo),
+                floatingLabelStyle: TextStyle(color: etiquetaCampo),
+                hintStyle: TextStyle(color: hintCampo),
                 filled: true,
                 fillColor: fillColor,
-                prefixIcon: Icon(Icons.search_rounded, color: accent),
+                prefixIcon: widget.prefixIcon ??
+                    Icon(Icons.search_rounded, color: accent),
                 suffixIcon: _loading
                     ? Padding(
                         padding: const EdgeInsets.all(12),
@@ -679,9 +716,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                         ? IconButton(
                             icon: Icon(
                               Icons.clear_rounded,
-                              color: isDark
-                                  ? Colors.white54
-                                  : scheme.onSurface.withValues(alpha: 0.45),
+                              color: iconoLimpiar,
                             ),
                             onPressed: () {
                               _controller.clear();
@@ -697,7 +732,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                 ),
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              ),
+              ).applyDefaults(theme.inputDecorationTheme),
               onChanged: _onChanged,
               onTap: () {
                 if (_sugs.isNotEmpty && _focus.hasFocus) _showOverlay();

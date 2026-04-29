@@ -121,7 +121,8 @@ class TripsService {
       await callable.call(<String, dynamic>{'tripId': tripId, 'pin': pin});
     } catch (e) {
       debugPrint('[CF plugin] confirmBoarding FALLÓ -> $e');
-      await _callCallableHttp('confirmBoarding', {'tripId': tripId, 'pin': pin});
+      await _callCallableHttp(
+          'confirmBoarding', {'tripId': tripId, 'pin': pin});
     }
   }
 
@@ -132,9 +133,11 @@ class TripsService {
         .collection('viajes')
         .where('uidTaxista', isEqualTo: uidTaxista)
         .where('fechaHora', isGreaterThanOrEqualTo: Timestamp.fromDate(desde))
-        .where('estado', whereIn: ['aceptado', 'en_camino_pickup', 'encaminopickup'])
+        .where('estado',
+            whereIn: ['aceptado', 'en_camino_pickup', 'encaminopickup'])
         .orderBy('fechaHora', descending: false)
         .snapshots()
-        .map((snap) => snap.docs.map((d) => Viaje.fromMap(d.id, d.data())).toList());
+        .map((snap) =>
+            snap.docs.map((d) => Viaje.fromMap(d.id, d.data())).toList());
   }
 }

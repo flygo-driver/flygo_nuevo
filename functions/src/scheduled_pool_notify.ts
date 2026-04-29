@@ -26,7 +26,8 @@ function shouldSkipTrip(data: Record<string, unknown>): boolean {
   if (canal === "admin") return true;
 
   const tipo = str(data.tipoServicio) || "normal";
-  if (tipo === "turismo") return true;
+  // Turismo solo por admin: no aviso de pool hasta que exista pool turístico.
+  if (tipo === "turismo" && canal !== "turismo_pool") return true;
 
   const estado = str(data.estado).toLowerCase();
   if (estado !== "pendiente" && estado !== "pendiente_pago") return true;
@@ -69,6 +70,8 @@ export const scheduledNotifyClienteViajeProgramadoEnPool = onSchedule(
       const uid = str(data.uidCliente) || str(data.clienteId);
       if (!uid) continue;
 
+      const tipoServicio = str(data.tipoServicio) || "normal";
+
       try {
         const tokSnap = await db().collection("push_tokens").doc(uid).get();
         const raw = tokSnap.data()?.tokens;
@@ -80,7 +83,10 @@ export const scheduledNotifyClienteViajeProgramadoEnPool = onSchedule(
         const origen = str(data.origen) || "Origen";
         const destino = str(data.destino) || "Destino";
         const title = "Tu viaje ya está en búsqueda de conductor";
-        const body = `${origen} → ${destino}. Los conductores cercanos pueden aceptarlo ahora.`;
+        const body =
+          tipoServicio === "turismo"
+            ? `${origen} → ${destino}. Los conductores de turismo habilitados ya pueden ver tu viaje.`
+            : `${origen} → ${destino}. Los conductores cercanos pueden aceptarlo ahora.`;
 
         const res = await messaging().sendEachForMulticast({
           tokens,

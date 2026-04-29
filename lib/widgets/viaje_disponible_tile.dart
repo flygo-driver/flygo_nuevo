@@ -8,8 +8,8 @@ class ViajeDisponibleTile extends StatelessWidget {
     required this.viajeId,
     required this.uidTaxista,
     required this.tieneViajeActivo, // pásalo desde tu estado actual (true/false)
-    required this.onAceptar,        // tu aceptar original (cuando NO hay viaje activo)
-    this.db,                        // opcional; no se usa aquí
+    required this.onAceptar, // tu aceptar original (cuando NO hay viaje activo)
+    this.db, // opcional; no se usa aquí
   });
 
   final String viajeId;
@@ -18,13 +18,15 @@ class ViajeDisponibleTile extends StatelessWidget {
   final Future<void> Function()? onAceptar;
 
   // ignore: unused_field
-  final FirebaseFirestore? db; // mantenemos la firma para no romper llamadas existentes
+  final FirebaseFirestore?
+      db; // mantenemos la firma para no romper llamadas existentes
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
       title: Text('Viaje $viajeId'),
-      subtitle: Text(tieneViajeActivo ? 'Reserva como siguiente' : 'Disponible'),
+      subtitle:
+          Text(tieneViajeActivo ? 'Reserva como siguiente' : 'Disponible'),
       trailing: ElevatedButton(
         onPressed: () async {
           try {

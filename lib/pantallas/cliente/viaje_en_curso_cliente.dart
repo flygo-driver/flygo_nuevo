@@ -2,11 +2,11 @@
 
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -20,13 +20,14 @@ import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
-import 'package:flygo_nuevo/widgets/cliente_drawer.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
-import 'package:flygo_nuevo/pantallas/cliente/calificar_servicio.dart';
+import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_live_conductores.dart';
+import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 
 // ===== Helpers =====
 LatLng _latLng(double lat, double lon) => LatLng(lat, lon);
@@ -115,12 +116,17 @@ class ViajeEnCursoCliente extends StatefulWidget {
 
 class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     with TickerProviderStateMixin {
+  /// Altura mínima del sheet (tap en mapa / pickup) — mapa casi a pantalla completa.
+  static const double _kSheetMinPickupNav = 0.11;
+
+  /// Apertura por defecto a media pantalla.
+  static const double _kSheetInitialMitad = 0.5;
+
   GoogleMapController? _map;
   bool _myLoc = false;
 
   final Map<PolylineId, Polyline> _polylines = {};
   Timer? _routeDebounce;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _pagoSub;
 
   String _lastRouteKey = '';
   String _lastBoundsKey = '';
@@ -138,18 +144,47 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   double? _ultimoSeguimientoTaxLat;
   double? _ultimoSeguimientoTaxLon;
 
-  final DraggableScrollableController _sheetController = DraggableScrollableController();
+  final DraggableScrollableController _sheetController =
+      DraggableScrollableController();
+
+  /// Cámara movida por código (no colapsar/expandir tarjeta como si fuera gesto del usuario).
+  int _programmaticCameraDepth = 0;
+  Timer? _mapGestureEndDebounce;
+
+  /// Evita animar el colapso del sheet más de una vez por viaje (espera conductor o viene al pickup).
+  String? _sheetCollapsedPickupForViajeId;
+
+  /// ETA taxista → pickup (Directions con tráfico, con fallback).
+  String? _pickupEtaTitulo;
+  String? _pickupEtaDetalle;
+  bool _pickupEtaMinimizado = false;
+  Timer? _pickupEtaDebounce;
+  String _pickupEtaSigPendiente = '';
+  DateTime? _pickupEtaUltimoHttp;
+  String _pickupEtaSigUltimoHttp = '';
 
   // Variables para control de auto-centrado y cercanía
   bool _mostrarMensajeCercania = false;
   Timer? _mensajeCercaniaTimer;
   bool? _lastPickupProximity;
   bool _subiendoComprobanteTransfer = false;
+  bool _cancelandoViajeCliente = false;
+
+  /// Último viaje activo visto (para pantalla de cierre cuando `viajeActivoId` ya se limpió en servidor).
+  String _lastNonEmptyViajeActivoId = '';
+  DocumentSnapshot<Map<String, dynamic>>? _viajeCierreDocSnap;
+  String? _viajeCierreFetchKey;
+
+  /// Evita abrir dos veces el flujo post-viaje para el mismo id.
+  String? _navPostViajeParaId;
+  bool _abriendoFlujoPostViaje = false;
 
   // 🚀 NUEVO: Conductores disponibles
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _driversSub;
   List<DocumentSnapshot<Map<String, dynamic>>> _driversList = [];
   String _lastDriversPoolSig = '';
+  Map<String, String?> _driverFotoPorUid = <String, String?>{};
+  Timer? _fotosDebounce;
   late final AnimationController _radarCtrl;
   late final AnimationController _progresoBrilloCtrl;
 
@@ -165,22 +200,23 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       duration: const Duration(milliseconds: 2200),
     )..repeat();
     _enableMyLocation();
-    _listenPagoFinal();
     _lastNotifiedState = '';
   }
 
   @override
   void dispose() {
     _map?.dispose();
-    _pagoSub?.cancel();
     _routeDebounce?.cancel();
     _disposeDocWatch();
     _stopClienteUbicacionEnViaje();
     _sheetController.dispose();
     _mensajeCercaniaTimer?.cancel();
     _driversSub?.cancel();
+    _fotosDebounce?.cancel();
     _radarCtrl.dispose();
     _progresoBrilloCtrl.dispose();
+    _pickupEtaDebounce?.cancel();
+    _mapGestureEndDebounce?.cancel();
     super.dispose();
   }
 
@@ -191,7 +227,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   Future<void> _ensureClienteUbicacionEnViaje(String viajeId) async {
-    if (_clienteViajePosViajeId == viajeId && _clienteViajePosSub != null) return;
+    if (_clienteViajePosViajeId == viajeId && _clienteViajePosSub != null) {
+      return;
+    }
 
     await _clienteViajePosSub?.cancel();
     _clienteViajePosViajeId = viajeId;
@@ -200,7 +238,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
     }
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
       return;
     }
     if (!await Geolocator.isLocationServiceEnabled()) {
@@ -220,7 +259,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               );
 
     final ref = FirebaseFirestore.instance.collection('viajes').doc(viajeId);
-    _clienteViajePosSub = Geolocator.getPositionStream(locationSettings: settings).listen(
+    _clienteViajePosSub =
+        Geolocator.getPositionStream(locationSettings: settings).listen(
       (Position p) async {
         try {
           await ref.set(
@@ -242,18 +282,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (!_seguirTaxistaCamara) return;
     if (!_isValidCoord(v.latTaxista, v.lonTaxista)) return;
     if (v.uidTaxista.isEmpty) return;
-    if (!(estadoBase == EstadosViaje.aceptado || estadoBase == EstadosViaje.enCaminoPickup)) {
+    // Pickup + trayecto al destino: el pasajero puede seguir al conductor en el mapa.
+    if (!(estadoBase == EstadosViaje.aceptado ||
+        estadoBase == EstadosViaje.enCaminoPickup ||
+        estadoBase == EstadosViaje.enCurso)) {
       return;
     }
 
     final DateTime now = DateTime.now();
     if (_ultimoSeguimientoTaxistaMs != null &&
-        now.difference(_ultimoSeguimientoTaxistaMs!) < const Duration(milliseconds: 850)) {
+        now.difference(_ultimoSeguimientoTaxistaMs!) <
+            const Duration(milliseconds: 850)) {
       return;
     }
 
-    if (_ultimoSeguimientoTaxLat != null &&
-        _ultimoSeguimientoTaxLon != null) {
+    if (_ultimoSeguimientoTaxLat != null && _ultimoSeguimientoTaxLon != null) {
       final double dKm = _haversineKm(
         _ultimoSeguimientoTaxLat!,
         _ultimoSeguimientoTaxLon!,
@@ -271,9 +314,135 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
     final GoogleMapController? c = _map;
     if (c == null) return;
-    c.animateCamera(
+    _programmaticCameraDepth++;
+    c
+        .animateCamera(
       CameraUpdate.newLatLngZoom(LatLng(v.latTaxista, v.lonTaxista), 16),
+    )
+        .then((_) {}, onError: (_) {
+      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
+    });
+  }
+
+  /// Mientras interactúas con el mapa: tarjeta al mínimo; al soltar (cámara idle) vuelve a la mitad.
+  void _colapsarSheetPorTapMapa() {
+    if (!_sheetController.isAttached) return;
+    _sheetController.animateTo(
+      _kSheetMinPickupNav,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
     );
+  }
+
+  void _expandirSheetTrasMapaInteract() {
+    if (!_sheetController.isAttached) return;
+    _sheetController.animateTo(
+      _kSheetInitialMitad,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _maybeColapsarSheetPickupNav(Viaje v, String estadoBase) {
+    if (_sheetCollapsedPickupForViajeId == v.id) return;
+    final bool esperandoPool = !v.esTurismo &&
+        v.uidTaxista.isEmpty &&
+        (estadoBase == EstadosViaje.pendiente ||
+            estadoBase == EstadosViaje.pendientePago);
+    final bool turismoSinConductor = v.esTurismo && v.uidTaxista.isEmpty;
+    final bool fasePickup = v.uidTaxista.isNotEmpty &&
+        (estadoBase == EstadosViaje.aceptado ||
+            estadoBase == EstadosViaje.enCaminoPickup) &&
+        _isValidCoord(v.latTaxista, v.lonTaxista);
+    if (!esperandoPool && !turismoSinConductor && !fasePickup) return;
+    if (!_sheetController.isAttached) return;
+    _sheetCollapsedPickupForViajeId = v.id;
+    _sheetController.animateTo(
+      _kSheetMinPickupNav,
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+    );
+    if (fasePickup && !_seguirTaxistaCamara) {
+      setState(() => _seguirTaxistaCamara = true);
+    }
+  }
+
+  void _schedulePickupEtaRefresh(Viaje v, String estadoBase) {
+    final bool fase = v.uidTaxista.isNotEmpty &&
+        _isValidCoord(v.latTaxista, v.lonTaxista) &&
+        _isValidCoord(v.latCliente, v.lonCliente) &&
+        (estadoBase == EstadosViaje.aceptado ||
+            estadoBase == EstadosViaje.enCaminoPickup);
+    if (!fase) {
+      _pickupEtaDebounce?.cancel();
+      _pickupEtaSigPendiente = '';
+      if (_pickupEtaTitulo != null || _pickupEtaDetalle != null) {
+        if (mounted) {
+          setState(() {
+            _pickupEtaTitulo = null;
+            _pickupEtaDetalle = null;
+            _pickupEtaMinimizado = false;
+          });
+        }
+      }
+      return;
+    }
+    final String sig =
+        '${v.latTaxista.toStringAsFixed(4)},${v.lonTaxista.toStringAsFixed(4)}';
+    if (sig == _pickupEtaSigPendiente) return;
+    _pickupEtaSigPendiente = sig;
+    _pickupEtaDebounce?.cancel();
+    _pickupEtaDebounce = Timer(const Duration(milliseconds: 1600), () {
+      if (!mounted) return;
+      unawaited(_fetchPickupEtaHttp(v, sig));
+    });
+  }
+
+  Future<void> _fetchPickupEtaHttp(Viaje v, String sig) async {
+    if (!mounted) return;
+    final DateTime now = DateTime.now();
+    if (_pickupEtaUltimoHttp != null &&
+        now.difference(_pickupEtaUltimoHttp!) < const Duration(seconds: 24) &&
+        sig == _pickupEtaSigUltimoHttp) {
+      return;
+    }
+    _pickupEtaUltimoHttp = now;
+    _pickupEtaSigUltimoHttp = sig;
+    try {
+      final DirectionsResult? dir = await DirectionsService.drivingDistanceKm(
+        originLat: v.latTaxista,
+        originLon: v.lonTaxista,
+        destLat: v.latCliente,
+        destLon: v.lonCliente,
+        withTraffic: true,
+        region: 'do',
+      );
+      if (!mounted) return;
+      if (dir != null && dir.seconds > 0) {
+        final int min = (dir.seconds / 60).ceil().clamp(1, 240);
+        final String kmTxt =
+            dir.distanceText ?? '${dir.km.toStringAsFixed(1)} km';
+        setState(() {
+          _pickupEtaTitulo = 'Tu conductor llega en unos $min min';
+          _pickupEtaDetalle =
+              dir.durationText != null ? '${dir.durationText} · $kmTxt' : kmTxt;
+        });
+        return;
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    final double km = _haversineKm(
+      v.latTaxista,
+      v.lonTaxista,
+      v.latCliente,
+      v.lonCliente,
+    );
+    final int min = (km / 0.45).ceil().clamp(1, 240);
+    setState(() {
+      _pickupEtaTitulo = 'Tu conductor llega en unos $min min';
+      _pickupEtaDetalle =
+          '${km.toStringAsFixed(1)} km aprox. (sin tráfico en vivo)';
+    });
   }
 
   // 🚀 NUEVO: Iniciar escucha de conductores disponibles
@@ -285,7 +454,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         .where('online', isEqualTo: true)
         .snapshots()
         .listen((snapshot) {
-      final String sig = snapshot.docs.map((DocumentSnapshot<Map<String, dynamic>> doc) {
+      final String sig =
+          snapshot.docs.map((DocumentSnapshot<Map<String, dynamic>> doc) {
         final Map<String, dynamic>? data = doc.data();
         final GeoPoint? gp = data?['location'] as GeoPoint?;
         if (gp == null) return doc.id;
@@ -297,6 +467,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         setState(() {
           _driversList = snapshot.docs;
         });
+        _schedulePrefetchDriverFotos();
       }
     }, onError: (error) {
       debugPrint('Error cargando conductores: $error');
@@ -305,44 +476,61 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   // 🚀 NUEVO: Detener escucha de conductores
   void _stopListeningDrivers() {
+    _fotosDebounce?.cancel();
+    _fotosDebounce = null;
     _driversSub?.cancel();
     _driversSub = null;
     _lastDriversPoolSig = '';
-    if (mounted) setState(() => _driversList = []);
+    if (mounted) {
+      setState(() {
+        _driversList = [];
+        _driverFotoPorUid = <String, String?>{};
+      });
+    }
   }
 
-  // 🚀 NUEVO: Contador de conductores
+  void _schedulePrefetchDriverFotos() {
+    _fotosDebounce?.cancel();
+    _fotosDebounce =
+        Timer(const Duration(milliseconds: 500), _prefetchDriverFotos);
+  }
+
+  Future<void> _prefetchDriverFotos() async {
+    if (!mounted) return;
+    final List<DocumentSnapshot<Map<String, dynamic>>> docs =
+        List<DocumentSnapshot<Map<String, dynamic>>>.from(_driversList);
+    if (docs.isEmpty) {
+      if (mounted) setState(() => _driverFotoPorUid = <String, String?>{});
+      return;
+    }
+    final List<String> ids = docs
+        .map((DocumentSnapshot<Map<String, dynamic>> d) => d.id)
+        .take(14)
+        .toList(growable: false);
+    final Map<String, String?> next = <String, String?>{};
+    for (int i = 0; i < ids.length; i += 4) {
+      final List<String> chunk =
+          ids.sublist(i, i + 4 > ids.length ? ids.length : i + 4);
+      await Future.wait(chunk.map((String uid) async {
+        try {
+          final DocumentSnapshot<Map<String, dynamic>> s =
+              await FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(uid)
+                  .get();
+          final String? url = s.data()?['fotoUrl']?.toString();
+          if (url != null && url.isNotEmpty) {
+            next[uid] = url;
+          }
+        } catch (_) {}
+      }));
+      if (!mounted) return;
+    }
+    if (!mounted) return;
+    setState(() => _driverFotoPorUid = next);
+  }
+
   int get _driversCount => _driversList.length;
-
-  // 🚀 NUEVO: Widget flotante con el contador
-  Widget _driversCounter() {
-    if (_driversCount == 0) return const SizedBox.shrink();
-    return Positioned(
-      bottom: 100,
-      right: 16,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black87,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: const [
-            BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.person_pin_circle, color: Colors.greenAccent, size: 20),
-            const SizedBox(width: 4),
-            Text(
-              '$_driversCount taxistas cerca',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _radarSearchingOverlay() {
     return IgnorePointer(
@@ -413,320 +601,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       p = await Geolocator.requestPermission();
     }
     if (!mounted) return;
-    final bool denied = (p == LocationPermission.denied || p == LocationPermission.deniedForever);
+    final bool denied = (p == LocationPermission.denied ||
+        p == LocationPermission.deniedForever);
     setState(() => _myLoc = !denied);
-  }
-
-  void _listenPagoFinal() {
-    final User? u = FirebaseAuth.instance.currentUser;
-    if (u == null) return;
-
-    // Mismo criterio que listas de viajes: dueño por uidCliente o clienteId (legacy).
-    final Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-        .collection('viajes')
-        .where(
-          Filter.or(
-            Filter('uidCliente', isEqualTo: u.uid),
-            Filter('clienteId', isEqualTo: u.uid),
-          ),
-        )
-        .where('completado', isEqualTo: true)
-        .orderBy('finalizadoEn', descending: true)
-        .limit(1);
-
-    String? ultimoId;
-    _pagoSub = q.snapshots().listen((QuerySnapshot<Map<String, dynamic>> snap) async {
-      if (snap.docs.isEmpty) return;
-      final Map<String, dynamic> d = snap.docs.first.data();
-      final String id = snap.docs.first.id;
-      if (ultimoId == id) return;
-      ultimoId = id;
-
-      final Timestamp? finTs = d['finalizadoEn'] as Timestamp?;
-      if (finTs == null) return;
-      final bool esRec = DateTime.now().difference(finTs.toDate()).inMinutes <= 10;
-      if (!esRec) return;
-
-      final double total = (d['precioFinal'] is num)
-          ? (d['precioFinal'] as num).toDouble()
-          : ((d['precio'] is num) ? (d['precio'] as num).toDouble() : 0.0);
-
-      if (!mounted) return;
-
-      final String metodoRaw = (d['metodoPago'] ?? '').toString().toLowerCase();
-      final bool esEfectivo = metodoRaw.contains('efectivo');
-      final bool yaVioFacturaEfectivo = d['clienteFacturaEfectivoVistaEn'] != null;
-
-      if (esEfectivo) {
-        if (!yaVioFacturaEfectivo) {
-          await _showFacturaEfectivoModal(
-            context,
-            viajeId: id,
-            data: d,
-            total: total,
-            uidCliente: u.uid,
-          );
-        }
-      } else {
-        await _showPagoModal(context, total);
-      }
-      if (!mounted) return;
-
-      final bool yaCalificado = d['calificado'] == true;
-      final String uidTaxista = (d['uidTaxista'] ?? '').toString();
-      if (!yaCalificado && uidTaxista.isNotEmpty) {
-        final Viaje viaje = Viaje.fromMap(id, Map<String, dynamic>.from(d));
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => CalificarServicio(viaje: viaje),
-          ),
-        );
-      }
-    });
-  }
-
-  /// Recibo en pantalla solo para efectivo; al OK se registra en el viaje (auditoría / historial).
-  Future<void> _showFacturaEfectivoModal(
-    BuildContext ctx, {
-    required String viajeId,
-    required Map<String, dynamic> data,
-    required double total,
-    required String uidCliente,
-  }) async {
-    if (!mounted) return;
-
-    final Timestamp? finTs = data['finalizadoEn'] as Timestamp?;
-    final String cuando =
-        finTs != null ? _safeFecha(finTs.toDate()) : _safeFecha(DateTime.now());
-    final String refCorta =
-        viajeId.length >= 8 ? viajeId.substring(0, 8).toUpperCase() : viajeId.toUpperCase();
-    final String origen = _s(data['origen']).trim();
-    final String destino = _s(data['destino']).trim();
-    final String taxistaNombre = _s(data['nombreTaxista']).trim();
-
-    await showModalBottomSheet<void>(
-      context: ctx,
-      isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
-      backgroundColor: Theme.of(ctx).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (BuildContext bctx) {
-        final cs = Theme.of(bctx).colorScheme;
-        final onSurface = cs.onSurface;
-        final muted = onSurface.withValues(alpha: 0.72);
-        final isDark = Theme.of(bctx).brightness == Brightness.dark;
-
-        Widget linea(String etiqueta, String valor) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  flex: 2,
-                  child: Text(etiqueta, style: TextStyle(color: muted, fontSize: 13)),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    valor.isEmpty ? '—' : valor,
-                    style: TextStyle(color: onSurface, fontWeight: FontWeight.w600, fontSize: 13),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(20, 16, 20, 24 + MediaQuery.paddingOf(bctx).bottom),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 5,
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: cs.outline.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                  ),
-                ),
-                Text(
-                  'Recibo de viaje',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: onSurface,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Pago en efectivo — conserva este resumen si lo necesitas',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: muted, fontSize: 13, height: 1.3),
-                ),
-                const SizedBox(height: 20),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: cs.outline.withValues(alpha: 0.35)),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        linea('Referencia', refCorta),
-                        linea('Fecha de cierre', cuando),
-                        linea('Método', 'Efectivo'),
-                        if (origen.isNotEmpty) linea('Origen', origen),
-                        if (destino.isNotEmpty) linea('Destino', destino),
-                        if (taxistaNombre.isNotEmpty) linea('Conductor', taxistaNombre),
-                        const Divider(height: 24),
-                        Text(
-                          'Total pagado',
-                          style: TextStyle(color: muted, fontSize: 13),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _safeMoney(total),
-                          style: TextStyle(
-                            color: cs.primary,
-                            fontSize: 36,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      Navigator.of(bctx).maybePop();
-                      try {
-                        await FirebaseFirestore.instance
-                            .collection('viajes')
-                            .doc(viajeId)
-                            .set(
-                              {
-                                'clienteFacturaEfectivoVistaEn': FieldValue.serverTimestamp(),
-                                'clienteFacturaEfectivoVistaPorUid': uidCliente,
-                              },
-                              SetOptions(merge: true),
-                            );
-                      } catch (e) {
-                        if (!mounted) return;
-                        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                          SnackBar(content: Text('No se pudo guardar el recibo: $e')),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: cs.primary,
-                      foregroundColor: isDark ? Colors.black87 : Colors.white,
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    child: const Text('OK'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _showPagoModal(BuildContext ctx, double total) async {
-    if (!mounted) return;
-    await showModalBottomSheet(
-      context: ctx,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(ctx).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (BuildContext bctx) {
-        final cs = Theme.of(bctx).colorScheme;
-        final onSurface = cs.onSurface;
-        final muted = onSurface.withValues(alpha: 0.72);
-        final isDark = Theme.of(bctx).brightness == Brightness.dark;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
-              Container(
-                width: 48,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: cs.outline.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Viaje finalizado',
-                style: TextStyle(
-                  color: onSurface,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Total a pagar',
-                style: TextStyle(color: muted, fontSize: 14),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _safeMoney(total),
-                style: TextStyle(
-                  color: cs.primary,
-                  fontSize: 40,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Gracias por viajar con RAI',
-                style: TextStyle(color: muted),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.of(bctx).maybePop(),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: cs.primary,
-                    foregroundColor: isDark ? Colors.black87 : Colors.white,
-                    minimumSize: const Size(double.infinity, 50),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  child: const Text('Entendido'),
-                ),
-              ),
-            ]),
-          ),
-        );
-      },
-    );
   }
 
   // Navegación externa
@@ -746,14 +623,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       if (ok2) return true;
 
       if (uri.scheme.startsWith('http')) {
-        final bool ok3 = await launchUrl(uri, mode: LaunchMode.externalApplication);
+        final bool ok3 =
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
         if (ok3) return true;
       }
     } catch (_) {}
     return false;
   }
 
-  Future<void> _openGoogleMapsTo(double lat, double lon, {String? label}) async {
+  Future<void> _openGoogleMapsTo(double lat, double lon,
+      {String? label}) async {
     final String la = _fmtCoord(lat), lo = _fmtCoord(lon);
     final String qLabel = (label == null || label.trim().isEmpty)
         ? '$la,$lo'
@@ -780,20 +659,76 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     await _openGoogleMapsTo(lat, lon);
   }
 
+  /// Abre Google Maps en el punto del conductor (vista / marcador), sin forzar ruta en la app RAI.
+  Future<void> _openGoogleMapsVerUbicacionConductor(
+      double lat, double lon) async {
+    final String la = _fmtCoord(lat), lo = _fmtCoord(lon);
+    final Uri geoIntent = Uri.parse('geo:$la,$lo');
+    final Uri mapsSearch = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$la,$lo',
+    );
+    if (await _tryLaunch(geoIntent)) return;
+    await _tryLaunch(mapsSearch, preferExternalApp: false);
+  }
+
   Future<void> abrirNavegacionAlDestino(Viaje v) async {
     if (!_isValidCoord(v.latDestino, v.lonDestino)) return;
-    await _openWazeTo(v.latDestino, v.lonDestino);
+    if (!mounted) return;
+    await showNavegacionWazeMapsSheet(
+      context,
+      title: 'Navegar al destino',
+      addressLine: v.destino.trim().isNotEmpty ? 'Destino: ${v.destino}' : null,
+      tieneCoords: true,
+      gpsCoordinatesLine:
+          'GPS: ${_fmtCoord(v.latDestino)}, ${_fmtCoord(v.lonDestino)}',
+      footerHint: 'Elige Waze o Google Maps.',
+      onWaze: () => unawaited(_openWazeTo(v.latDestino, v.lonDestino)),
+      onMaps: () => unawaited(
+        _openGoogleMapsTo(v.latDestino, v.lonDestino, label: v.destino),
+      ),
+    );
   }
 
   // ===== Centrar cámara en el taxista =====
   Future<void> _centrarEnTaxista(Viaje v) async {
     if (!mounted) return;
+    final GoogleMapController? mapRef = _map;
+    if (mapRef == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cargando mapa... intenta de nuevo.')),
+      );
+      return;
+    }
+
+    if (!_isValidCoord(v.latTaxista, v.lonTaxista)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Esperando ubicación GPS del conductor en tiempo real.'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _seguirTaxistaCamara = true);
-    if (_isValidCoord(v.latTaxista, v.lonTaxista)) {
-      await _map?.animateCamera(CameraUpdate.newLatLngZoom(
+    _programmaticCameraDepth++;
+    try {
+      await mapRef.animateCamera(CameraUpdate.newLatLngZoom(
         LatLng(v.latTaxista, v.lonTaxista),
         16,
       ));
+      _colapsarSheetPorTapMapa();
+      HapticFeedback.lightImpact();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            duration: Duration(seconds: 2),
+            content: Text('Seguimiento en vivo activado'),
+          ),
+        );
+    } catch (_) {
+      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
     }
   }
 
@@ -818,8 +753,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       ),
     );
     try {
+      _programmaticCameraDepth++;
       await mapRef.animateCamera(CameraUpdate.newLatLngBounds(bounds, 90));
     } catch (_) {
+      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
       await _fitBoundsFor(v);
     }
   }
@@ -830,7 +767,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           ? v.estado
           : (v.completado
               ? EstadosViaje.completado
-              : (v.aceptado ? EstadosViaje.enCurso : EstadosViaje.pendiente)),
+              : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
   }
 
@@ -870,6 +807,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         _latLng(v.latTaxista, v.lonTaxista),
         _latLng(v.latCliente, v.lonCliente),
         id: 'pickup',
+        color: const Color(0xFF00E5FF),
+        width: 7,
       );
     }
 
@@ -914,7 +853,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final List<LatLng> pts = <LatLng>[
       if (_isValidCoord(v.latCliente, v.lonCliente))
         _latLng(v.latCliente, v.lonCliente),
-      if (_mostrarRutaHaciaDestinoCliente(v) && _isValidCoord(v.latDestino, v.lonDestino))
+      if (_mostrarRutaHaciaDestinoCliente(v) &&
+          _isValidCoord(v.latDestino, v.lonDestino))
         _latLng(v.latDestino, v.lonDestino),
       if (_isValidCoord(v.latTaxista, v.lonTaxista))
         _latLng(v.latTaxista, v.lonTaxista),
@@ -934,21 +874,46 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       northeast: LatLng(maxLat, maxLng),
     );
 
+    final String estFit = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado ? EstadosViaje.enCurso : EstadosViaje.pendiente)),
+    );
+    final bool fasePickupCam = (estFit == EstadosViaje.aceptado ||
+            estFit == EstadosViaje.enCaminoPickup) &&
+        _isValidCoord(v.latTaxista, v.lonTaxista) &&
+        _isValidCoord(v.latCliente, v.lonCliente);
+    final double edgePad = fasePickupCam ? 88.0 : 60.0;
+
     try {
-      await mapRef.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
+      _programmaticCameraDepth++;
+      await mapRef.animateCamera(CameraUpdate.newLatLngBounds(bounds, edgePad));
     } catch (_) {
+      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
       await Future.delayed(const Duration(milliseconds: 200));
       if (!mounted) return;
       final GoogleMapController? mapRef2 = _map;
       if (mapRef2 != null) {
         try {
-          await mapRef2.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
-        } catch (_) {}
+          _programmaticCameraDepth++;
+          await mapRef2
+              .animateCamera(CameraUpdate.newLatLngBounds(bounds, edgePad));
+        } catch (_) {
+          if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
+        }
       }
     }
   }
 
-  Future<void> _drawRoute(LatLng a, LatLng b, {required String id}) async {
+  Future<void> _drawRoute(
+    LatLng a,
+    LatLng b, {
+    required String id,
+    Color color = const Color(0xFF49F18B),
+    int width = 6,
+  }) async {
     try {
       final dynamic dir = await DirectionsService.drivingDistanceKm(
         originLat: a.latitude,
@@ -986,18 +951,18 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       final PolylineId polyId = PolylineId(id);
       _polylines[polyId] = Polyline(
         polylineId: polyId,
-        width: 6,
+        width: width,
         points: pts.isNotEmpty ? pts : [a, b],
         geodesic: true,
-        color: const Color(0xFF49F18B),
+        color: color,
       );
     } catch (_) {
       _polylines[PolylineId(id)] = Polyline(
         polylineId: PolylineId(id),
-        width: 5,
+        width: width.clamp(4, 12),
         points: [a, b],
         geodesic: true,
-        color: const Color(0xFF49F18B),
+        color: color,
       );
     }
   }
@@ -1005,8 +970,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   // Cancelación
   Future<int> _segundosRestantesBorradoDesdeServidor(String viajeId) async {
     try {
-      final DocumentSnapshot<Map<String, dynamic>> ds =
-          await FirebaseFirestore.instance.collection('viajes').doc(viajeId).get();
+      final DocumentSnapshot<Map<String, dynamic>> ds = await FirebaseFirestore
+          .instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get();
       if (!ds.exists) return 0;
       final Map<String, dynamic> d = ds.data() ?? {};
       Timestamp? baseTs;
@@ -1046,83 +1014,193 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     } catch (_) {}
   }
 
+  void _limpiarCacheCierreViaje() {
+    _lastNonEmptyViajeActivoId = '';
+    _viajeCierreDocSnap = null;
+    _viajeCierreFetchKey = null;
+  }
+
+  Future<void> _abrirFlujoPostViaje(
+      {required String viajeId, required String uid}) async {
+    try {
+      await _limpiarActivoDelUsuario(uid);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(_limpiarCacheCierreViaje);
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => PostViajeClienteFlow(viajeId: viajeId),
+      ),
+    );
+  }
+
+  void _programarFlujoPostViaje(
+      {required String viajeId, required String uid}) {
+    if (_abriendoFlujoPostViaje) return;
+    if (_navPostViajeParaId == viajeId) return;
+    _navPostViajeParaId = viajeId;
+    _abriendoFlujoPostViaje = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        if (!mounted) return;
+        await _abrirFlujoPostViaje(viajeId: viajeId, uid: uid);
+      } finally {
+        _abriendoFlujoPostViaje = false;
+      }
+    });
+  }
+
+  /// Transferencia: mostrar cuenta del taxista en cuanto hay conductor y el viaje no terminó (antes solo a bordo / en ruta).
+  bool _mostrarDatosTransferenciaCliente(Viaje v, String estadoBase) {
+    if (!v.metodoPago.toLowerCase().contains('transfer')) return false;
+    if (v.uidTaxista.isEmpty) return false;
+    if (EstadosViaje.esTerminal(estadoBase)) return false;
+    return true;
+  }
+
   Future<void> _deleteOrCancelEstricto(Viaje v) async {
+    if (_cancelandoViajeCliente) return;
     final String uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     if (uid.isEmpty) return;
+    if (mounted) setState(() => _cancelandoViajeCliente = true);
 
-    final bool? confirmar = await showDialog<bool>(
-      context: context,
-      barrierDismissible: true,
-      builder: (BuildContext ctx) {
-        final cs = Theme.of(ctx).colorScheme;
-        final onSurface = cs.onSurface;
-        return AlertDialog(
-          backgroundColor: cs.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Row(
-            children: [
-              Icon(Icons.cancel_outlined, color: Colors.redAccent.shade200, size: 26),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Cancelar viaje',
-                  style: TextStyle(
-                    color: onSurface,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
+    final TextEditingController motivoCtrl = TextEditingController();
+    String? errorMotivo;
+    String? motivo;
+    try {
+      motivo = await showDialog<String>(
+        context: context,
+        barrierDismissible: true,
+        builder: (BuildContext ctx) {
+          final cs = Theme.of(ctx).colorScheme;
+          final onSurface = cs.onSurface;
+          return StatefulBuilder(
+            builder:
+                (BuildContext ctx, void Function(void Function()) setLocal) {
+              return AlertDialog(
+                backgroundColor: cs.surface,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20)),
+                title: Row(
+                  children: [
+                    Icon(Icons.cancel_outlined,
+                        color: Colors.redAccent.shade200, size: 26),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Cancelar viaje',
+                        style: TextStyle(
+                          color: onSurface,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Solo puedes cancelar antes de que el viaje esté a bordo o en ruta. '
+                        'Si ya vas en marcha con el conductor, usa soporte ante una emergencia real.',
+                        style: TextStyle(
+                          color: onSurface.withValues(alpha: 0.88),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Si cancelas ahora:',
+                        style: TextStyle(
+                          color: onSurface.withValues(alpha: 0.9),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _cancelBullet(
+                        'Si hay conductor asignado, recibirá la cancelación.',
+                        onSurface,
+                      ),
+                      _cancelBullet(
+                        'Las cancelaciones frecuentes o sin causa clara pueden revisarse y afectar el uso de la app.',
+                        onSurface,
+                      ),
+                      _cancelBullet(
+                        'En los primeros 60 s el pedido a veces se elimina; después queda registro de cancelación.',
+                        onSurface,
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Escribe el motivo (obligatorio, mínimo 12 caracteres):',
+                        style: TextStyle(
+                            color: onSurface.withValues(alpha: 0.85),
+                            fontSize: 13),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: motivoCtrl,
+                        maxLines: 3,
+                        style: TextStyle(color: onSurface),
+                        decoration: InputDecoration(
+                          hintText:
+                              'Ej.: Cambio de planes / dirección incorrecta / demora…',
+                          hintStyle: TextStyle(
+                              color: onSurface.withValues(alpha: 0.45)),
+                          filled: true,
+                          fillColor: onSurface.withValues(alpha: 0.06),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          errorText: errorMotivo,
+                        ),
+                        onChanged: (_) {
+                          if (errorMotivo != null) {
+                            setLocal(() => errorMotivo = null);
+                          }
+                        },
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Si cancelas este viaje:',
-                  style: TextStyle(
-                    color: onSurface.withValues(alpha: 0.9),
-                    fontWeight: FontWeight.w600,
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop<String>(ctx),
+                    style: TextButton.styleFrom(foregroundColor: cs.primary),
+                    child: const Text('No, conservar viaje'),
                   ),
-                ),
-                const SizedBox(height: 10),
-                _cancelBullet(
-                  'Si ya hay conductor asignado, recibirá la notificación de cancelación.',
-                  onSurface,
-                ),
-                _cancelBullet(
-                  'Durante los primeros 60 segundos el pedido puede eliminarse sin registro; después se aplicará la cancelación estándar.',
-                  onSurface,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '¿Seguro que deseas continuar?',
-                  style: TextStyle(color: onSurface.withValues(alpha: 0.85)),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              style: TextButton.styleFrom(foregroundColor: cs.primary),
-              child: const Text('No, conservar viaje'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Sí, cancelar'),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmar != true) return;
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () {
+                      final t = motivoCtrl.text.trim();
+                      if (t.length < 12) {
+                        setLocal(() => errorMotivo =
+                            'Indica un motivo de al menos 12 caracteres.');
+                        return;
+                      }
+                      Navigator.pop<String>(ctx, t);
+                    },
+                    child: const Text('Confirmar cancelación'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      motivoCtrl.dispose();
+    }
+
+    if (motivo == null || motivo.isEmpty) {
+      if (mounted) setState(() => _cancelandoViajeCliente = false);
+      return;
+    }
 
     try {
       await _runWithBlocking(() async {
@@ -1131,17 +1209,24 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
         if (segundos > 0) {
           try {
-            final ds = await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
+            final ds = await FirebaseFirestore.instance
+                .collection('viajes')
+                .doc(v.id)
+                .get();
             final d = ds.data() ?? const <String, dynamic>{};
-            final String estado = EstadosViaje.normalizar((d['estado'] ?? '').toString());
-            final String uidTx = (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
-            final bool puedeBorrarRapido =
-                uidTx.isEmpty &&
+            final String estado =
+                EstadosViaje.normalizar((d['estado'] ?? '').toString());
+            final String uidTx =
+                (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
+            final bool puedeBorrarRapido = uidTx.isEmpty &&
                 (estado == EstadosViaje.pendiente ||
                     estado == EstadosViaje.pendientePago ||
                     estado == 'pendiente_admin');
             if (puedeBorrarRapido) {
-              await FirebaseFirestore.instance.collection('viajes').doc(v.id).delete();
+              await FirebaseFirestore.instance
+                  .collection('viajes')
+                  .doc(v.id)
+                  .delete();
               deleted = true;
             }
           } catch (_) {}
@@ -1151,7 +1236,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           await ViajesRepo.cancelarPorCliente(
             viajeId: v.id,
             uidCliente: uid,
-            motivo: 'cancelado_por_cliente',
+            motivo: motivo,
           );
         }
 
@@ -1164,6 +1249,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         ..showSnackBar(
           SnackBar(content: Text('No se pudo cancelar: ${e.code}')),
         );
+      if (mounted) setState(() => _cancelandoViajeCliente = false);
+      return;
+    } on TimeoutException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text(e.message ?? 'La cancelación tardó demasiado.')),
+        );
+      if (mounted) setState(() => _cancelandoViajeCliente = false);
       return;
     } catch (e) {
       if (!mounted) return;
@@ -1172,15 +1267,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         ..showSnackBar(
           SnackBar(content: Text('No se pudo cancelar el viaje: $e')),
         );
+      if (mounted) setState(() => _cancelandoViajeCliente = false);
       return;
     }
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Viaje cancelado')));
-
-    if (!mounted) return;
+    setState(() => _cancelandoViajeCliente = false);
     Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
   }
 
@@ -1206,10 +1298,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       final String estado = (d['estado'] ?? '').toString();
       final String estN = EstadosViaje.normalizar(estado);
 
-      final bool tieneTaxista = (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().isNotEmpty;
-      final bool esEstadoValido = (estN == EstadosViaje.aceptado || estN == EstadosViaje.enCaminoPickup);
+      final bool tieneTaxista =
+          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().isNotEmpty;
+      final bool esEstadoValido = (estN == EstadosViaje.aceptado ||
+          estN == EstadosViaje.enCaminoPickup);
       final bool esCambioEstado = _lastNotifiedState != estN;
-      final bool noEsPendiente = estN != EstadosViaje.pendiente && estN != EstadosViaje.cancelado;
+      final bool noEsPendiente =
+          estN != EstadosViaje.pendiente && estN != EstadosViaje.cancelado;
 
       if (esEstadoValido && esCambioEstado && tieneTaxista && noEsPendiente) {
         _lastNotifiedState = estN;
@@ -1222,7 +1317,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           );
         }
       }
-
     }, onError: (Object _) {});
   }
 
@@ -1249,7 +1343,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               SizedBox(width: 8),
               Text(
                 '📍 Ruta con paradas:',
-                style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 14),
+                style: TextStyle(
+                    color: Colors.blueAccent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14),
               ),
             ],
           ),
@@ -1273,7 +1370,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           ...v.waypoints!.asMap().entries.map((entry) {
             final int index = entry.key + 1;
             final Map<String, dynamic> waypoint = entry.value;
-            final String label = waypoint['label']?.toString() ?? 'Parada $index';
+            final String label =
+                waypoint['label']?.toString() ?? 'Parada $index';
             return Padding(
               padding: const EdgeInsets.only(left: 8, bottom: 4, top: 2),
               child: Row(
@@ -1283,7 +1381,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   Expanded(
                     child: Text(
                       'Parada $index: $label',
-                      style: const TextStyle(color: Colors.white70, fontSize: 13),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 13),
                     ),
                   ),
                 ],
@@ -1312,6 +1411,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   Future<void> _runWithBlocking(Future<void> Function() task) async {
     if (!mounted) return;
+    final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
     final barrier = Theme.of(context).brightness == Brightness.dark
         ? Colors.black54
         : Colors.black26;
@@ -1329,11 +1429,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       ),
     );
     try {
-      await task();
+      await task().timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => throw TimeoutException(
+          'Tiempo de espera agotado. Verifica tu conexión e inténtalo de nuevo.',
+        ),
+      );
     } finally {
-      if (mounted) {
-        final NavigatorState nav = Navigator.of(context, rootNavigator: true);
-        if (nav.canPop()) nav.pop();
+      if (rootNav.mounted && rootNav.canPop()) {
+        rootNav.pop();
       }
     }
   }
@@ -1357,7 +1461,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (EstadosViaje.esCompletado(estadoBase)) return 4;
     if (EstadosViaje.esEnCurso(estadoBase)) return 3;
     if (EstadosViaje.esAbordo(estadoBase)) return 2;
-    if (EstadosViaje.esEnCaminoPickup(estadoBase) || EstadosViaje.esAceptado(estadoBase)) return 1;
+    if (EstadosViaje.esEnCaminoPickup(estadoBase) ||
+        EstadosViaje.esAceptado(estadoBase)) {
+      return 1;
+    }
     return 0;
   }
 
@@ -1386,7 +1493,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       children: [
         Text(
           'PROGRESO DEL VIAJE',
-          style: TextStyle(color: tituloProgreso, fontSize: 12, fontWeight: FontWeight.w600),
+          style: TextStyle(
+              color: tituloProgreso, fontSize: 12, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 10),
         ClipRRect(
@@ -1443,29 +1551,37 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               animation: _progresoBrilloCtrl,
               builder: (BuildContext context, Widget? child) {
                 final double t = _progresoBrilloCtrl.value;
-                final double pulse =
-                    activo ? (0.45 + 0.55 * (0.5 + 0.5 * math.sin(t * math.pi * 2))) : 0.0;
+                final double pulse = activo
+                    ? (0.45 + 0.55 * (0.5 + 0.5 * math.sin(t * math.pi * 2)))
+                    : 0.0;
                 final Color fillDone = Color.lerp(
                   cs.primary.withValues(alpha: 0.22),
                   cs.tertiary.withValues(alpha: 0.28),
                   0.5 + 0.5 * math.sin(t * math.pi * 2),
                 )!;
-                final Color borderDone = Color.lerp(cs.primary, cs.tertiary, t)!;
-                final Color textoDone =
-                    Color.lerp(cs.primary, const Color(0xFF69F0AE), 0.35 + 0.25 * math.sin(t * math.pi * 2))!;
+                final Color borderDone =
+                    Color.lerp(cs.primary, cs.tertiary, t)!;
+                final Color textoDone = Color.lerp(
+                    cs.primary,
+                    const Color(0xFF69F0AE),
+                    0.35 + 0.25 * math.sin(t * math.pi * 2))!;
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: done ? fillDone : chipBgIdle,
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(
-                      color: done ? borderDone.withValues(alpha: 0.75 + 0.2 * pulse) : chipBorderIdle,
+                      color: done
+                          ? borderDone.withValues(alpha: 0.75 + 0.2 * pulse)
+                          : chipBorderIdle,
                       width: activo ? 1.4 : 1,
                     ),
                     boxShadow: activo
                         ? <BoxShadow>[
                             BoxShadow(
-                              color: cs.primary.withValues(alpha: 0.12 + 0.22 * pulse),
+                              color: cs.primary
+                                  .withValues(alpha: 0.12 + 0.22 * pulse),
                               blurRadius: 10 + 6 * pulse,
                               spreadRadius: 0.5 * pulse,
                             ),
@@ -1520,7 +1636,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   String? _pasajerosDesdeExtras(Viaje v) {
     final Map<String, dynamic>? ex = v.extras;
     if (ex == null) return null;
-    final dynamic p = ex['pasajeros'] ?? ex['numPasajeros'] ?? ex['pasajeros_count'];
+    final dynamic p =
+        ex['pasajeros'] ?? ex['numPasajeros'] ?? ex['pasajeros_count'];
     if (p == null) return null;
     final String t = p.toString().trim();
     return t.isEmpty ? null : t;
@@ -1543,15 +1660,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('ORIGEN', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    const Text('ORIGEN',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     const SizedBox(height: 4),
-                    Text(v.origen, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
+                    Text(v.origen,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500)),
                   ],
                 ),
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.greenAccent.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(30),
@@ -1559,7 +1682,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 ),
                 child: Text(
                   _labelEstado(estadoBase),
-                  style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold),
                 ),
               ),
             ],
@@ -1573,9 +1699,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('DESTINO', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    const Text('DESTINO',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     const SizedBox(height: 4),
-                    Text(v.destino, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
+                    Text(v.destino,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500)),
                   ],
                 ),
               ),
@@ -1588,23 +1719,32 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('FECHA', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  const Text('FECHA',
+                      style: TextStyle(color: Colors.white54, fontSize: 12)),
                   const SizedBox(height: 4),
-                  Text(_safeFecha(v.fechaHora), style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                  Text(_safeFecha(v.fechaHora),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 14)),
                 ],
               ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text('TOTAL', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  const Text('TOTAL',
+                      style: TextStyle(color: Colors.white54, fontSize: 12)),
                   const SizedBox(height: 4),
-                  Text(_safeMoney(v.precio), style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text(_safeMoney(v.precio),
+                      style: const TextStyle(
+                          color: Colors.greenAccent,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
                 ],
               ),
             ],
           ),
           const SizedBox(height: 12),
-          const Text('MÉTODO DE PAGO', style: TextStyle(color: Colors.white54, fontSize: 12)),
+          const Text('MÉTODO DE PAGO',
+              style: TextStyle(color: Colors.white54, fontSize: 12)),
           const SizedBox(height: 4),
           Text(
             v.metodoPago.trim().isEmpty ? '—' : v.metodoPago,
@@ -1617,7 +1757,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.people_outline, color: Colors.white54, size: 18),
+                const Icon(Icons.people_outline,
+                    color: Colors.white54, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -1631,6 +1772,38 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         ],
       ),
     );
+  }
+
+  /// ETA aproximada hacia el punto de recogida (solo lectura; ~28 km/h urbano RD).
+  String _lineaEtaPickupCliente(Viaje v, String estadoBase) {
+    if (!_isValidCoord(v.latTaxista, v.lonTaxista) ||
+        !_isValidCoord(v.latCliente, v.lonCliente)) {
+      return 'Ubicación del conductor actualizándose…';
+    }
+    final double km = DistanciaService.calcularDistancia(
+      v.latTaxista,
+      v.lonTaxista,
+      v.latCliente,
+      v.lonCliente,
+    );
+    if (estadoBase == EstadosViaje.aceptado ||
+        estadoBase == EstadosViaje.enCaminoPickup) {
+      // En pruebas reales (o cuando ya está al frente), evita texto ambiguo.
+      if (km <= 0.03) {
+        return 'Tu conductor ya llegó a tu ubicación';
+      }
+      final int min = (km / 28.0 * 60).clamp(1, 180).round();
+      final String distTxt =
+          km < 1 ? '${(km * 1000).round()} m' : '${km.toStringAsFixed(1)} km';
+      return 'Llega en ~$min min · te queda $distTxt';
+    }
+    if (estadoBase == EstadosViaje.aBordo) {
+      return 'A bordo · confirma el código con tu conductor si aplica';
+    }
+    if (estadoBase == EstadosViaje.enCurso) {
+      return 'Viaje en marcha hacia tu destino';
+    }
+    return 'Conductor asignado';
   }
 
   Widget _buildDriverCard(Viaje v) {
@@ -1666,9 +1839,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             ? v.nombreTaxista
             : (tx['nombre'] ?? tx['displayName'] ?? '').toString();
 
-        final String telFromViaje = v.telefonoTaxista.isNotEmpty
-            ? v.telefonoTaxista
-            : v.telefono;
+        final String telFromViaje =
+            v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono;
         String tel = telFromViaje.trim();
         if (tel.isEmpty) {
           tel = telefonoCrudoDesdeMapa(tx);
@@ -1703,48 +1875,122 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         ].join(' · ');
 
         final ColorScheme cs = Theme.of(context).colorScheme;
+        final String estCard = EstadosViaje.normalizar(v.estado);
 
         return Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: cs.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: cs.outlineVariant),
+            gradient: LinearGradient(
+              colors: [
+                cs.surfaceContainerHighest,
+                Color.lerp(
+                    cs.surfaceContainerHighest, cs.primaryContainer, 0.08)!,
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.9)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 16,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: cs.surfaceContainerHigh,
-                    backgroundImage: tx['fotoUrl'] != null && tx['fotoUrl'].toString().isNotEmpty
-                        ? NetworkImage(tx['fotoUrl'].toString())
-                        : null,
-                    child: tx['fotoUrl'] == null || tx['fotoUrl'].toString().isEmpty
-                        ? Icon(Icons.person, color: cs.onSurfaceVariant, size: 28)
-                        : null,
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      CircleAvatar(
+                        radius: 30,
+                        backgroundColor: cs.surfaceContainerHigh,
+                        backgroundImage: tx['fotoUrl'] != null &&
+                                tx['fotoUrl'].toString().isNotEmpty
+                            ? NetworkImage(tx['fotoUrl'].toString())
+                            : null,
+                        child: tx['fotoUrl'] == null ||
+                                tx['fotoUrl'].toString().isEmpty
+                            ? Icon(Icons.person,
+                                color: cs.onSurfaceVariant, size: 30)
+                            : null,
+                      ),
+                      Positioned(
+                        right: -2,
+                        bottom: -2,
+                        child: Container(
+                          width: 14,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00E676),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color: cs.surfaceContainerHighest, width: 2),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          nombre.isEmpty ? 'Conductor' : nombre,
-                          style: TextStyle(color: cs.onSurface, fontSize: 18, fontWeight: FontWeight.bold),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                nombre.isEmpty ? 'Tu conductor' : nombre,
+                                style: TextStyle(
+                                    color: cs.onSurface,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: cs.primary.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.bolt, size: 14, color: cs.primary),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'En vivo',
+                                    style: TextStyle(
+                                      color: cs.primary,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          vehiculoLinea.isEmpty ? 'Vehículo no especificado' : vehiculoLinea,
-                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 14),
+                          vehiculoLinea.isEmpty ? 'Vehículo' : vehiculoLinea,
+                          style: TextStyle(
+                              color: cs.onSurfaceVariant, fontSize: 14),
                         ),
-                        if (placa.isNotEmpty || color.isNotEmpty) ...[
-                          const SizedBox(height: 4),
+                        if (color.isNotEmpty) ...[
+                          const SizedBox(height: 2),
                           Text(
-                            [if (placa.isNotEmpty) 'Placa $placa', if (color.isNotEmpty) 'Color $color'].join(' • '),
-                            style: TextStyle(color: cs.onSurfaceVariant.withValues(alpha: 0.85), fontSize: 12),
+                            'Color $color',
+                            style: TextStyle(
+                                color:
+                                    cs.onSurfaceVariant.withValues(alpha: 0.85),
+                                fontSize: 12),
                           ),
                         ],
                       ],
@@ -1752,7 +1998,102 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              if (placa.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: cs.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border:
+                        Border.all(color: cs.primary.withValues(alpha: 0.45)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.directions_car_filled,
+                          color: cs.primary, size: 26),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'PLACAS',
+                              style: TextStyle(
+                                fontSize: 10,
+                                letterSpacing: 1.2,
+                                color: cs.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              placa.toUpperCase(),
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 3,
+                                color: cs.onSurface,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              AnimatedBuilder(
+                animation: _progresoBrilloCtrl,
+                builder: (BuildContext context, Widget? _) {
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: _isValidCoord(v.latTaxista, v.lonTaxista)
+                        ? () => _centrarEnTaxista(v)
+                        : null,
+                    child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      color: Color.lerp(
+                        const Color(0xFF0E1F16),
+                        const Color(0xFF152B1F),
+                        _progresoBrilloCtrl.value,
+                      ),
+                      border: Border.all(
+                          color: Colors.greenAccent.withValues(alpha: 0.28)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.route_rounded,
+                            color: Colors.greenAccent.shade200, size: 22),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _lineaEtaPickupCliente(v, estCard),
+                            key: ValueKey<String>(
+                              '${v.latTaxista}_${v.lonTaxista}_${v.latCliente}_${v.lonCliente}_$estCard',
+                            ),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  );
+                },
+              ),
+              const SizedBox(height: 18),
               Row(
                 children: [
                   Expanded(
@@ -1761,7 +2102,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       icon: Icons.phone,
                       label: 'Llamar',
                       onPressed: () async {
-                        final String raw = tel.trim().isNotEmpty ? tel : telefonoCrudoDesdeMapa(tx);
+                        final String raw = tel.trim().isNotEmpty
+                            ? tel
+                            : telefonoCrudoDesdeMapa(tx);
                         final String tc = telefonoNormalizarDigitos(raw);
                         if (tc.isEmpty) {
                           if (!context.mounted) return;
@@ -1785,7 +2128,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       icon: Icons.chat_bubble_outline,
                       label: 'WhatsApp',
                       onPressed: () async {
-                        final String raw = tel.trim().isNotEmpty ? tel : telefonoCrudoDesdeMapa(tx);
+                        final String raw = tel.trim().isNotEmpty
+                            ? tel
+                            : telefonoCrudoDesdeMapa(tx);
                         final String tc = telefonoNormalizarDigitos(raw);
                         if (tc.isEmpty) {
                           if (!context.mounted) return;
@@ -1800,8 +2145,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         }
                         const String waMsg = 'Hola, soy tu cliente de RAI.';
                         if (await telefonoLaunchUri(
-                              telefonoUriWhatsAppApp(tc, waMsg),
-                            )) {
+                          telefonoUriWhatsAppApp(tc, waMsg),
+                        )) {
                           return;
                         }
                         await telefonoLaunchUri(
@@ -1833,19 +2178,45 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 ],
               ),
               const SizedBox(height: 10),
-              if (_isValidCoord(v.latTaxista, v.lonTaxista))
+              if (_isValidCoord(v.latTaxista, v.lonTaxista)) ...[
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     onPressed: () => _centrarEnTaxista(v),
                     icon: Icon(Icons.navigation, color: cs.primary),
-                    label: Text('Ver taxista en el mapa', style: TextStyle(color: cs.primary)),
+                    label: Text(
+                      'Ver conductor en tiempo real',
+                      style: TextStyle(color: cs.primary),
+                    ),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: cs.primary),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
                 ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => unawaited(_openGoogleMapsVerUbicacionConductor(
+                          v.latTaxista,
+                          v.lonTaxista,
+                        )),
+                    icon: Icon(Icons.map_outlined, color: cs.onSurfaceVariant),
+                    label: Text(
+                      'Ver ubicación en Google Maps',
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: cs.outlineVariant),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         );
@@ -1873,12 +2244,18 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           ),
           child: Column(
             children: [
-              Icon(icon, color: onPressed == null ? cs.onSurface.withValues(alpha: 0.38) : cs.primary, size: 20),
+              Icon(icon,
+                  color: onPressed == null
+                      ? cs.onSurface.withValues(alpha: 0.38)
+                      : cs.primary,
+                  size: 20),
               const SizedBox(height: 4),
               Text(
                 label,
                 style: TextStyle(
-                  color: onPressed == null ? cs.onSurface.withValues(alpha: 0.38) : cs.onSurfaceVariant,
+                  color: onPressed == null
+                      ? cs.onSurface.withValues(alpha: 0.38)
+                      : cs.onSurfaceVariant,
                   fontSize: 12,
                 ),
               ),
@@ -1952,7 +2329,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (telClean.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El taxista no tiene WhatsApp configurado.')),
+        const SnackBar(
+            content: Text('El taxista no tiene WhatsApp configurado.')),
       );
       return;
     }
@@ -1965,9 +2343,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   // Datos bancarios (recibe el monto)
-  Widget _buildDatosBancarios(Viaje v, String taxistaId, double monto, Map<String, dynamic> viajeData) {
+  Widget _buildDatosBancarios(
+      Viaje v, String taxistaId, double monto, Map<String, dynamic> viajeData) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('usuarios').doc(taxistaId).snapshots().distinct(),
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(taxistaId)
+          .snapshots()
+          .distinct(),
       builder: (context, snap) {
         if (!snap.hasData || !snap.data!.exists) {
           return const SizedBox.shrink();
@@ -1975,7 +2358,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         final data = snap.data!.data() ?? {};
         final banco = data['banco'] ?? '';
         final cuenta = data['numeroCuenta'] ?? '';
-        final titular = (data['titularCuenta'] ?? data['titular'] ?? '').toString();
+        final titular =
+            (data['titularCuenta'] ?? data['titular'] ?? '').toString();
 
         if (banco.isEmpty || cuenta.isEmpty || titular.isEmpty) {
           return Container(
@@ -2003,33 +2387,76 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('DATOS PARA TRANSFERENCIA', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+              const Text('DATOS PARA TRANSFERENCIA',
+                  style: TextStyle(
+                      color: Colors.greenAccent, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
-              Text('Monto a pagar: ${_safeMoney(monto)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              Text('Monto a pagar: ${_safeMoney(monto)}',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              Text('Banco: $banco', style: const TextStyle(color: Colors.white70)),
+              Text('Banco: $banco',
+                  style: const TextStyle(color: Colors.white70)),
               const SizedBox(height: 4),
-              Text('Cuenta: $cuenta', style: const TextStyle(color: Colors.white70)),
+              Text('Cuenta: $cuenta',
+                  style: const TextStyle(color: Colors.white70)),
               const SizedBox(height: 4),
-              Text('Titular: $titular', style: const TextStyle(color: Colors.white70)),
+              Text('Titular: $titular',
+                  style: const TextStyle(color: Colors.white70)),
               const SizedBox(height: 8),
-              const Text('Realiza el pago directamente al taxista.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+              const Text('Realiza el pago directamente al taxista.',
+                  style: TextStyle(color: Colors.white54, fontSize: 12)),
               const SizedBox(height: 12),
               Builder(
                 builder: (_) {
-                  final String estadoTransfer = (viajeData['estado'] ?? '').toString();
-                  final String comprobante = (viajeData['comprobanteTransferenciaUrl'] ?? '').toString();
-                  final bool confirmada = viajeData['transferenciaConfirmada'] == true;
+                  final String estadoTransfer =
+                      (viajeData['estado'] ?? '').toString();
+                  final String comprobante =
+                      (viajeData['comprobanteTransferenciaUrl'] ?? '')
+                          .toString();
+                  final String motivoRechazo =
+                      (viajeData['motivoRechazoTransferencia'] ?? '')
+                          .toString()
+                          .trim();
+                  final bool confirmada =
+                      viajeData['transferenciaConfirmada'] == true;
                   if (confirmada) {
                     return const Text(
                       'Transferencia validada por Administracion.',
-                      style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                          color: Colors.greenAccent,
+                          fontWeight: FontWeight.w700),
                     );
                   }
                   if (estadoTransfer == 'pendiente_confirmacion') {
                     return const Text(
                       'Comprobante enviado. Pendiente de validacion.',
-                      style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                          color: Colors.amberAccent,
+                          fontWeight: FontWeight.w700),
+                    );
+                  }
+                  if (estadoTransfer == 'transferencia_rechazada') {
+                    return Column(
+                      children: [
+                        Text(
+                          motivoRechazo.isEmpty
+                              ? 'Transferencia rechazada por administración. Revisa el comprobante y vuelve a enviarlo.'
+                              : 'Transferencia rechazada: $motivoRechazo',
+                          style: const TextStyle(
+                              color: Colors.redAccent,
+                              fontWeight: FontWeight.w700),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 8),
+                        ElevatedButton.icon(
+                          onPressed: _subiendoComprobanteTransfer
+                              ? null
+                              : () => _reportarTransferencia(v: v),
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Reenviar comprobante'),
+                        ),
+                      ],
                     );
                   }
                   return SizedBox(
@@ -2067,15 +2494,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
   }
 
-@override
+  @override
   Widget build(BuildContext context) {
     final User? u = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
       backgroundColor: Colors.black,
-      drawer: const ClienteDrawer(),
       appBar: RaiAppBar(
         title: 'Mi viaje en curso',
+        backWhenCanPop: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white70),
@@ -2097,7 +2524,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               builder: (context, userSnap) {
                 if (userSnap.connectionState == ConnectionState.waiting) {
                   return const Center(
-                      child: CircularProgressIndicator(color: Colors.greenAccent));
+                      child:
+                          CircularProgressIndicator(color: Colors.greenAccent));
                 }
                 if (userSnap.hasError ||
                     !userSnap.hasData ||
@@ -2107,17 +2535,89 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           style: TextStyle(color: Colors.white70)));
                 }
 
-                final Map<String, dynamic> userData = userSnap.data!.data() ?? {};
-                final String activoId = (userData['viajeActivoId'] ?? '').toString();
+                final Map<String, dynamic> userData =
+                    userSnap.data!.data() ?? {};
+                final String activoId =
+                    (userData['viajeActivoId'] ?? '').toString();
 
                 if (activoId.isEmpty) {
                   _disposeDocWatch();
                   _stopClienteUbicacionEnViaje();
+                  final String lost = _lastNonEmptyViajeActivoId;
+
+                  if (lost.isNotEmpty) {
+                    DocumentSnapshot<Map<String, dynamic>>? docSnap =
+                        _viajeCierreDocSnap;
+                    if (docSnap == null || docSnap.id != lost) {
+                      final String fetchKey = '${u.uid}|$lost';
+                      if (_viajeCierreFetchKey != fetchKey) {
+                        _viajeCierreFetchKey = fetchKey;
+                        WidgetsBinding.instance.addPostFrameCallback((_) async {
+                          try {
+                            final DocumentSnapshot<Map<String, dynamic>> d =
+                                await FirebaseFirestore.instance
+                                    .collection('viajes')
+                                    .doc(lost)
+                                    .get();
+                            if (!mounted) return;
+                            setState(() => _viajeCierreDocSnap = d);
+                          } catch (_) {
+                            if (mounted) {
+                              setState(() => _viajeCierreFetchKey = null);
+                            }
+                          }
+                        });
+                      }
+                      docSnap = _viajeCierreDocSnap;
+                    }
+
+                    if (docSnap != null &&
+                        docSnap.exists &&
+                        docSnap.id == lost) {
+                      final Map<String, dynamic> d =
+                          docSnap.data() ?? <String, dynamic>{};
+                      final String st = EstadosViaje.normalizar(
+                          (d['estado'] ?? '').toString());
+                      final bool done = (d['completado'] == true) ||
+                          st == EstadosViaje.completado;
+                      final bool canc = st == EstadosViaje.cancelado ||
+                          st == EstadosViaje.rechazado;
+                      if (done || canc) {
+                        _programarFlujoPostViaje(
+                            viajeId: docSnap.id, uid: u.uid);
+                        return const Center(
+                          child: CircularProgressIndicator(
+                              color: Colors.greenAccent),
+                        );
+                      }
+                    }
+
+                    if (docSnap == null ||
+                        !docSnap.exists ||
+                        docSnap.id != lost) {
+                      return const Center(
+                        child: CircularProgressIndicator(
+                            color: Colors.greenAccent),
+                      );
+                    }
+                  }
+
                   return const Center(
                     child: Text('No tienes viaje activo en este momento.',
                         style: TextStyle(color: Colors.white70)),
                   );
                 }
+
+                if (_viajeCierreDocSnap != null &&
+                    _viajeCierreDocSnap!.id != activoId) {
+                  _viajeCierreDocSnap = null;
+                  _viajeCierreFetchKey = null;
+                }
+                if (_lastNonEmptyViajeActivoId.isNotEmpty &&
+                    _lastNonEmptyViajeActivoId != activoId) {
+                  _navPostViajeParaId = null;
+                }
+                _lastNonEmptyViajeActivoId = activoId;
 
                 return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance
@@ -2130,10 +2630,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   builder: (context, vSnap) {
                     if (vSnap.connectionState == ConnectionState.waiting) {
                       return const Center(
-                          child: CircularProgressIndicator(color: Colors.greenAccent));
+                          child: CircularProgressIndicator(
+                              color: Colors.greenAccent));
                     }
 
-                    if (vSnap.hasError || !vSnap.hasData || !vSnap.data!.exists) {
+                    if (vSnap.hasError ||
+                        !vSnap.hasData ||
+                        !vSnap.data!.exists) {
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
                         await _limpiarActivoDelUsuario(u.uid);
                       });
@@ -2150,8 +2653,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     );
 
                     final String uidClienteViaje =
-                        (data['uidCliente'] ?? data['clienteId'] ?? '').toString();
-                    if (uidClienteViaje.isNotEmpty && uidClienteViaje != u.uid) {
+                        (data['uidCliente'] ?? data['clienteId'] ?? '')
+                            .toString();
+                    if (uidClienteViaje.isNotEmpty &&
+                        uidClienteViaje != u.uid) {
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
                         await _limpiarActivoDelUsuario(u.uid);
                       });
@@ -2169,18 +2674,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           : (v.completado
                               ? EstadosViaje.completado
                               : (v.aceptado
-                                  ? EstadosViaje.enCurso
+                                  ? EstadosViaje.aceptado
                                   : EstadosViaje.pendiente)),
                     );
 
                     if (EstadosViaje.esTerminal(estadoBase)) {
                       _stopClienteUbicacionEnViaje();
-                      WidgetsBinding.instance.addPostFrameCallback((_) async {
-                        await _limpiarActivoDelUsuario(u.uid);
-                      });
+                      _programarFlujoPostViaje(viajeId: v.id, uid: u.uid);
                       return const Center(
-                        child: Text('No tienes viaje activo en este momento.',
-                            style: TextStyle(color: Colors.white70)),
+                        child: CircularProgressIndicator(
+                            color: Colors.greenAccent),
                       );
                     }
 
@@ -2190,7 +2693,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     // Pool de conductores: solo viajes normales/motor en espera (turismo va por ADM)
                     final bool esperandoTaxista = !v.esTurismo &&
                         v.uidTaxista.isEmpty &&
-                        (estadoBase == EstadosViaje.pendiente || estadoBase == EstadosViaje.pendientePago);
+                        (estadoBase == EstadosViaje.pendiente ||
+                            estadoBase == EstadosViaje.pendientePago);
 
                     // Iniciar o detener escucha de conductores según corresponda
                     if (esperandoTaxista && _driversSub == null) {
@@ -2205,18 +2709,23 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         Marker(
                           markerId: const MarkerId('destino'),
                           position: _latLng(v.latDestino, v.lonDestino),
-                          infoWindow: InfoWindow(title: 'Destino: ${v.destino}'),
-                          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+                          infoWindow:
+                              InfoWindow(title: 'Destino: ${v.destino}'),
+                          icon: BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueGreen),
                         ),
                       if (_isValidCoord(v.latCliente, v.lonCliente))
                         Marker(
                           markerId: const MarkerId('pickup'),
                           position: _latLng(v.latCliente, v.lonCliente),
-                          infoWindow: InfoWindow(title: 'Punto de recogida: ${v.origen}'),
-                          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+                          infoWindow: InfoWindow(
+                              title: 'Punto de recogida: ${v.origen}'),
+                          icon: BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueAzure),
                         ),
                       // Si tenemos taxista, mostrar su marcador
-                      if (v.uidTaxista.isNotEmpty && _isValidCoord(v.latTaxista, v.lonTaxista))
+                      if (v.uidTaxista.isNotEmpty &&
+                          _isValidCoord(v.latTaxista, v.lonTaxista))
                         Marker(
                           markerId: const MarkerId('taxista'),
                           position: _latLng(v.latTaxista, v.lonTaxista),
@@ -2228,28 +2737,50 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     };
                     final Set<Circle> circles = <Circle>{};
 
-                    // 🚀 AGREGAR MARCADORES DE CONDUCTORES DISPONIBLES (solo si esperando)
+                    // Conductores en pool: orden por cercanía al pickup + marcadores con tono distinto
+                    final List<DocumentSnapshot<Map<String, dynamic>>>
+                        driversSortedMapa = esperandoTaxista &&
+                                _isValidCoord(v.latCliente, v.lonCliente)
+                            ? conductoresOrdenadosPorPickup(
+                                _driversList,
+                                pickupLat: v.latCliente,
+                                pickupLon: v.lonCliente,
+                              )
+                            : List<DocumentSnapshot<Map<String, dynamic>>>.from(
+                                _driversList);
+
                     if (esperandoTaxista) {
-                      for (var doc in _driversList) {
-                        final docData = doc.data();
-                        final location = docData?['location'] as GeoPoint?;
-                        if (location != null && _isValidCoord(location.latitude, location.longitude)) {
+                      for (final DocumentSnapshot<Map<String, dynamic>> doc
+                          in driversSortedMapa) {
+                        final Map<String, dynamic>? docData = doc.data();
+                        final GeoPoint? location =
+                            docData?['location'] as GeoPoint?;
+                        if (location != null &&
+                            _isValidCoord(
+                                location.latitude, location.longitude)) {
+                          final double hue =
+                              35 + (doc.id.hashCode % 115).abs().toDouble();
                           markers.add(
                             Marker(
-                              markerId: MarkerId(doc.id),
-                              position: LatLng(location.latitude, location.longitude),
-                              icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-                              infoWindow: const InfoWindow(title: 'Taxista disponible'),
+                              markerId: MarkerId('pool_${doc.id}'),
+                              position:
+                                  LatLng(location.latitude, location.longitude),
+                              icon: BitmapDescriptor.defaultMarkerWithHue(
+                                  hue.clamp(15.0, 330.0)),
+                              infoWindow:
+                                  const InfoWindow(title: 'Conductor en línea'),
                             ),
                           );
                         }
                       }
                     }
 
+                    // Banner / pulso / FABs: conductor yendo al pickup o en viaje al destino.
                     final bool pulsoTaxistaEnMapa = v.uidTaxista.isNotEmpty &&
                         _isValidCoord(v.latTaxista, v.lonTaxista) &&
                         (estadoBase == EstadosViaje.aceptado ||
-                            estadoBase == EstadosViaje.enCaminoPickup);
+                            estadoBase == EstadosViaje.enCaminoPickup ||
+                            estadoBase == EstadosViaje.enCurso);
                     if (pulsoTaxistaEnMapa) {
                       final LatLng txPos = _latLng(v.latTaxista, v.lonTaxista);
                       circles.add(
@@ -2258,7 +2789,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           center: txPos,
                           radius: 120,
                           fillColor: Colors.greenAccent.withValues(alpha: 0.18),
-                          strokeColor: Colors.greenAccent.withValues(alpha: 0.55),
+                          strokeColor:
+                              Colors.greenAccent.withValues(alpha: 0.55),
                           strokeWidth: 2,
                         ),
                       );
@@ -2267,18 +2799,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           circleId: const CircleId('taxista_pulse_outer'),
                           center: txPos,
                           radius: 220,
-                          fillColor: Colors.lightBlueAccent.withValues(alpha: 0.08),
-                          strokeColor: Colors.lightBlueAccent.withValues(alpha: 0.35),
+                          fillColor:
+                              Colors.lightBlueAccent.withValues(alpha: 0.08),
+                          strokeColor:
+                              Colors.lightBlueAccent.withValues(alpha: 0.35),
                           strokeWidth: 1,
                         ),
                       );
                     }
 
-                    final LatLng initialTarget = _isValidCoord(v.latCliente, v.lonCliente)
-                        ? _latLng(v.latCliente, v.lonCliente)
-                        : (_isValidCoord(v.latDestino, v.lonDestino)
-                            ? _latLng(v.latDestino, v.lonDestino)
-                            : const LatLng(18.4861, -69.9312));
+                    final LatLng initialTarget =
+                        _isValidCoord(v.latCliente, v.lonCliente)
+                            ? _latLng(v.latCliente, v.lonCliente)
+                            : (_isValidCoord(v.latDestino, v.lonDestino)
+                                ? _latLng(v.latDestino, v.lonDestino)
+                                : const LatLng(18.4861, -69.9312));
 
                     final String routeKey =
                         '${v.id}|${EstadosViaje.normalizar(v.estado)}|'
@@ -2302,19 +2837,27 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (!mounted) return;
+                      _maybeColapsarSheetPickupNav(v, estadoBase);
                       _maybeAnimarCamaraAlTaxista(v, estadoBase);
+                      _schedulePickupEtaRefresh(v, estadoBase);
                     });
 
-                    final bool cancelarHabilitado = !EstadosViaje.esTerminal(estadoBase);
-                    final String codigoVerificacion = v.codigoVerificacion ?? '';
+                    final bool cancelarHabilitado =
+                        EstadosViaje.clientePuedeCancelarViajeDesdeApp(
+                            estadoBase);
+                    final String codigoVerificacion =
+                        v.codigoVerificacion ?? '';
                     final bool codigoVerificado = v.codigoVerificado;
 
                     // ===== DETECCIÓN DE CERCANÍA (nunca setState durante build) =====
                     if (_isValidCoord(v.latTaxista, v.lonTaxista) &&
                         _isValidCoord(v.latCliente, v.lonCliente)) {
-                      final double distanciaTaxista = DistanciaService.calcularDistancia(
-                        v.latTaxista, v.lonTaxista,
-                        v.latCliente, v.lonCliente,
+                      final double distanciaTaxista =
+                          DistanciaService.calcularDistancia(
+                        v.latTaxista,
+                        v.lonTaxista,
+                        v.latCliente,
+                        v.lonCliente,
                       );
                       final bool cerca = distanciaTaxista < 0.2; // 200 metros
                       if (_lastPickupProximity != cerca) {
@@ -2324,8 +2867,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           if (cerca && !_mostrarMensajeCercania) {
                             setState(() => _mostrarMensajeCercania = true);
                             _mensajeCercaniaTimer?.cancel();
-                            _mensajeCercaniaTimer = Timer(const Duration(seconds: 10), () {
-                              if (mounted) setState(() => _mostrarMensajeCercania = false);
+                            _mensajeCercaniaTimer =
+                                Timer(const Duration(seconds: 10), () {
+                              if (mounted) {
+                                setState(() => _mostrarMensajeCercania = false);
+                              }
                             });
                           } else if (!cerca && _mostrarMensajeCercania) {
                             setState(() => _mostrarMensajeCercania = false);
@@ -2340,16 +2886,26 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         RepaintBoundary(
                           child: GoogleMap(
                             key: ValueKey<String>('gmap-${v.id}'),
-                            initialCameraPosition: CameraPosition(target: initialTarget, zoom: 14),
+                            initialCameraPosition:
+                                CameraPosition(target: initialTarget, zoom: 14),
                             onMapCreated: (GoogleMapController c) {
                               _map = c;
-                              WidgetsBinding.instance.addPostFrameCallback((_) async {
+                              WidgetsBinding.instance
+                                  .addPostFrameCallback((_) async {
                                 final GoogleMapController? mapRef = _map;
                                 if (!mounted || mapRef == null) return;
                                 try {
-                                  await mapRef.animateCamera(CameraUpdate.newLatLngZoom(initialTarget, 14));
-                                } catch (_) {}
-                                final String bk = '${v.id}|${v.latCliente},${v.lonCliente}|'
+                                  _programmaticCameraDepth++;
+                                  await mapRef.animateCamera(
+                                      CameraUpdate.newLatLngZoom(
+                                          initialTarget, 14));
+                                } catch (_) {
+                                  if (_programmaticCameraDepth > 0) {
+                                    _programmaticCameraDepth--;
+                                  }
+                                }
+                                final String bk =
+                                    '${v.id}|${v.latCliente},${v.lonCliente}|'
                                     '${v.latDestino},${v.lonDestino}|'
                                     '${v.latTaxista},${v.lonTaxista}';
                                 if (_lastBoundsKey != bk) {
@@ -2359,9 +2915,32 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                               });
                             },
                             onCameraMoveStarted: () {
+                              _mapGestureEndDebounce?.cancel();
+                              if (_programmaticCameraDepth == 0) {
+                                _colapsarSheetPorTapMapa();
+                              }
                               if (_seguirTaxistaCamara) {
                                 setState(() => _seguirTaxistaCamara = false);
                               }
+                            },
+                            onCameraIdle: () {
+                              if (_programmaticCameraDepth > 0) {
+                                _programmaticCameraDepth--;
+                                return;
+                              }
+                              _mapGestureEndDebounce?.cancel();
+                              _expandirSheetTrasMapaInteract();
+                            },
+                            onTap: (_) {
+                              if (_programmaticCameraDepth > 0) return;
+                              _colapsarSheetPorTapMapa();
+                              _mapGestureEndDebounce?.cancel();
+                              _mapGestureEndDebounce = Timer(
+                                const Duration(milliseconds: 420),
+                                () {
+                                  if (mounted) _expandirSheetTrasMapaInteract();
+                                },
+                              );
                             },
                             myLocationEnabled: _myLoc,
                             myLocationButtonEnabled: false,
@@ -2374,26 +2953,274 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           ),
                         ),
                         // ===== BOTÓN FLOTANTE "VER TAXISTA" (siempre visible) =====
-                        if (_isValidCoord(v.latTaxista, v.lonTaxista))
+                        if (pulsoTaxistaEnMapa)
                           Positioned(
-                            top: 16,
-                            right: 16,
-                            child: FloatingActionButton.extended(
-                              onPressed: () => _centrarEnTaxista(v),
-                              icon: const Icon(Icons.person_pin_circle, color: Colors.white),
-                              label: const Text('Ver taxista', style: TextStyle(color: Colors.white)),
-                              backgroundColor: Colors.black54,
-                              heroTag: null,
+                            top: 0,
+                            left: 10,
+                            right: 10,
+                            child: SafeArea(
+                              bottom: false,
+                              child: Material(
+                                color: Colors.black.withValues(alpha: 0.88),
+                                elevation: 6,
+                                borderRadius: BorderRadius.circular(16),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(16),
+                                  onTap: () => setState(
+                                    () => _pickupEtaMinimizado =
+                                        !_pickupEtaMinimizado,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 12,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            const Icon(
+                                              Icons.local_taxi_rounded,
+                                              color: Color(0xFF49F18B),
+                                              size: 22,
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: AnimatedSwitcher(
+                                                duration: const Duration(
+                                                    milliseconds: 280),
+                                                switchInCurve:
+                                                    Curves.easeOutCubic,
+                                                switchOutCurve:
+                                                    Curves.easeInCubic,
+                                                transitionBuilder:
+                                                    (child, animation) {
+                                                  return FadeTransition(
+                                                    opacity: animation,
+                                                    child: SlideTransition(
+                                                      position: Tween<Offset>(
+                                                        begin: const Offset(
+                                                            0, 0.08),
+                                                        end: Offset.zero,
+                                                      ).animate(animation),
+                                                      child: child,
+                                                    ),
+                                                  );
+                                                },
+                                                child: Text(
+                                                  estadoBase ==
+                                                          EstadosViaje.enCurso
+                                                      ? 'Viaje en marcha · conductor en tiempo real'
+                                                      : (_pickupEtaTitulo ??
+                                                          'Tu conductor va hacia tu punto de recogida'),
+                                                  key: ValueKey<String>(
+                                                    estadoBase ==
+                                                            EstadosViaje.enCurso
+                                                        ? 'en-curso-title'
+                                                        : (_pickupEtaTitulo ??
+                                                            'pickup-title-default'),
+                                                  ),
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 15,
+                                                    height: 1.25,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            Icon(
+                                              _pickupEtaMinimizado
+                                                  ? Icons.expand_more_rounded
+                                                  : Icons.expand_less_rounded,
+                                              color: Colors.white70,
+                                            ),
+                                          ],
+                                        ),
+                                        if (!_pickupEtaMinimizado &&
+                                            (estadoBase ==
+                                                    EstadosViaje.enCurso ||
+                                                _pickupEtaDetalle != null ||
+                                                _pickupEtaTitulo == null))
+                                          Padding(
+                                            padding:
+                                                const EdgeInsets.only(top: 8),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                AnimatedSwitcher(
+                                                  duration: const Duration(
+                                                      milliseconds: 260),
+                                                  switchInCurve:
+                                                      Curves.easeOutCubic,
+                                                  switchOutCurve:
+                                                      Curves.easeInCubic,
+                                                  transitionBuilder:
+                                                      (child, animation) {
+                                                    return FadeTransition(
+                                                      opacity: animation,
+                                                      child: child,
+                                                    );
+                                                  },
+                                                  child: Text(
+                                                    estadoBase ==
+                                                            EstadosViaje.enCurso
+                                                        ? 'Seguí la ubicación del conductor en el mapa; '
+                                                            'tocá «Seguir conductor» si soltaste el seguimiento.'
+                                                        : (_pickupEtaDetalle ??
+                                                            'Mapa en vivo: podés seguir el desplazamiento y '
+                                                                'subir o bajar la tarjeta inferior arrastrando.'),
+                                                    key: ValueKey<String>(
+                                                      estadoBase ==
+                                                              EstadosViaje
+                                                                  .enCurso
+                                                          ? 'en-curso-detail'
+                                                          : (_pickupEtaDetalle ??
+                                                              'pickup-detail-default'),
+                                                    ),
+                                                    style: const TextStyle(
+                                                      color: Colors.white70,
+                                                      fontSize: 13,
+                                                      height: 1.35,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (_isValidCoord(
+                                                    v.latTaxista, v.lonTaxista))
+                                                  Align(
+                                                    alignment:
+                                                        Alignment.centerLeft,
+                                                    child: TextButton.icon(
+                                                      onPressed: () => unawaited(
+                                                        _openGoogleMapsVerUbicacionConductor(
+                                                          v.latTaxista,
+                                                          v.lonTaxista,
+                                                        ),
+                                                      ),
+                                                      style:
+                                                          TextButton.styleFrom(
+                                                        foregroundColor:
+                                                            const Color(
+                                                                0xFF49F18B),
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                horizontal: 0,
+                                                                vertical: 6),
+                                                        tapTargetSize:
+                                                            MaterialTapTargetSize
+                                                                .shrinkWrap,
+                                                      ),
+                                                      icon: const Icon(
+                                                          Icons.map_rounded,
+                                                          size: 18),
+                                                      label: const Text(
+                                                        'Navegar con mapa',
+                                                        style: TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                         if (_isValidCoord(v.latTaxista, v.lonTaxista))
                           Positioned(
-                            top: 72,
+                            top: pulsoTaxistaEnMapa ? 108 : 16,
+                            right: 16,
+                            child: FloatingActionButton.extended(
+                              onPressed: () => _centrarEnTaxista(v),
+                              icon: const Icon(Icons.my_location,
+                                  color: Colors.white),
+                              label: const Text('Seguir conductor',
+                                  style: TextStyle(color: Colors.white)),
+                              backgroundColor: Colors.black87,
+                              heroTag: null,
+                            ),
+                          ),
+                        if (_isValidCoord(v.latTaxista, v.lonTaxista) &&
+                            _seguirTaxistaCamara)
+                          Positioned(
+                            top: pulsoTaxistaEnMapa ? 108 : 16,
+                            left: 16,
+                            child: AnimatedBuilder(
+                              animation: _radarCtrl,
+                              builder: (_, __) {
+                                final double t = _radarCtrl.value;
+                                final double pulso = 0.55 + (0.45 * math.sin(t * 2 * math.pi)).abs();
+                                return AnimatedContainer(
+                                  duration: const Duration(milliseconds: 220),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF0D2B1A).withValues(
+                                      alpha: 0.78 + (0.18 * pulso),
+                                    ),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: Colors.greenAccent.withValues(
+                                        alpha: 0.55 + (0.4 * pulso),
+                                      ),
+                                      width: 1.1,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.greenAccent.withValues(
+                                          alpha: 0.12 + (0.22 * pulso),
+                                        ),
+                                        blurRadius: 8 + (8 * pulso),
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.fiber_manual_record_rounded,
+                                        size: 12,
+                                        color: Colors.greenAccent,
+                                      ),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'EN VIVO',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        if (_isValidCoord(v.latTaxista, v.lonTaxista))
+                          Positioned(
+                            top: pulsoTaxistaEnMapa ? 164 : 72,
                             right: 16,
                             child: FloatingActionButton.extended(
                               onPressed: () => _centrarClienteYTaxista(v),
-                              icon: const Icon(Icons.center_focus_strong, color: Colors.white),
-                              label: const Text('Centrar ambos', style: TextStyle(color: Colors.white)),
+                              icon: const Icon(Icons.center_focus_strong,
+                                  color: Colors.white),
+                              label: const Text('Centrar ambos',
+                                  style: TextStyle(color: Colors.white)),
                               backgroundColor: Colors.black54,
                               heroTag: null,
                             ),
@@ -2401,11 +3228,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         // ===== MENSAJE DE CERCANÍA =====
                         if (_mostrarMensajeCercania)
                           Positioned(
-                            top: 80,
+                            top: pulsoTaxistaEnMapa ? 188 : 80,
                             left: 16,
                             right: 16,
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 12),
                               decoration: BoxDecoration(
                                 color: Colors.greenAccent,
                                 borderRadius: BorderRadius.circular(30),
@@ -2428,20 +3256,25 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                               ),
                             ),
                           ),
-                        // 🚀 CONTADOR DE CONDUCTORES
-                        if (esperandoTaxista && _driversCount > 0)
-                          _driversCounter(),
                         if (esperandoTaxista) _radarSearchingOverlay(),
                         DraggableScrollableSheet(
                           controller: _sheetController,
-                          initialChildSize: 0.35,
-                          minChildSize: 0.2,
+                          initialChildSize: _kSheetInitialMitad,
+                          minChildSize: _kSheetMinPickupNav,
                           maxChildSize: 0.9,
+                          snap: true,
+                          snapSizes: const [
+                            _kSheetMinPickupNav,
+                            0.35,
+                            _kSheetInitialMitad,
+                            0.9,
+                          ],
                           builder: (context, scrollController) {
                             return Container(
                               decoration: BoxDecoration(
                                 color: Colors.black,
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(24)),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Colors.black.withValues(alpha: 0.5),
@@ -2452,7 +3285,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                               ),
                               child: ListView(
                                 controller: scrollController,
-                                padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+                                padding: EdgeInsets.fromLTRB(
+                                  16,
+                                  8,
+                                  16,
+                                  20 +
+                                      MediaQuery.of(context).viewPadding.bottom +
+                                      76,
+                                ),
                                 children: [
                                   Center(
                                     child: Container(
@@ -2467,23 +3307,29 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   const SizedBox(height: 8),
 
                                   // Mensaje de viaje programado
-                                  if (estadoBase == EstadosViaje.pendiente && v.uidTaxista.isEmpty)
+                                  if (estadoBase == EstadosViaje.pendiente &&
+                                      v.uidTaxista.isEmpty)
                                     Container(
                                       padding: const EdgeInsets.all(12),
                                       margin: const EdgeInsets.only(bottom: 16),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF1E1A0F),
                                         borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(color: Colors.orangeAccent.withAlpha(120)),
+                                        border: Border.all(
+                                            color: Colors.orangeAccent
+                                                .withAlpha(120)),
                                       ),
                                       child: const Row(
                                         children: [
-                                          Icon(Icons.schedule, color: Colors.orangeAccent),
+                                          Icon(Icons.schedule,
+                                              color: Colors.orangeAccent),
                                           SizedBox(width: 10),
                                           Expanded(
                                             child: Text(
                                               'Tu viaje está programado. Te avisaremos cuando un taxista lo acepte.',
-                                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                              style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w700),
                                             ),
                                           ),
                                         ],
@@ -2493,68 +3339,276 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   if (esperandoTaxista)
                                     Container(
                                       margin: const EdgeInsets.only(bottom: 14),
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        gradient: const LinearGradient(
+                                          colors: [
+                                            Color(0xFF0F2818),
+                                            Color(0xFF0A1A12)
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: Colors.greenAccent
+                                              .withValues(alpha: 0.45),
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.greenAccent
+                                                .withValues(alpha: 0.12),
+                                            blurRadius: 18,
+                                            offset: const Offset(0, 8),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Row(
+                                            children: [
+                                              Icon(Icons.radar,
+                                                  color: Colors.greenAccent,
+                                                  size: 22),
+                                              SizedBox(width: 10),
+                                              Expanded(
+                                                child: Text(
+                                                  'Buscando conductor cercano',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 16,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            _driversCount > 0
+                                                ? 'Hay actividad en tu zona en este momento.'
+                                                : 'Notificando a conductores en la zona…',
+                                            style: const TextStyle(
+                                                color: Colors.white60,
+                                                fontSize: 13),
+                                          ),
+                                          if (_driversCount > 0) ...[
+                                            const SizedBox(height: 14),
+                                            ClienteConductoresCercaStrip(
+                                              docsOrdenados: _isValidCoord(
+                                                      v.latCliente,
+                                                      v.lonCliente)
+                                                  ? conductoresOrdenadosPorPickup(
+                                                      _driversList,
+                                                      pickupLat: v.latCliente,
+                                                      pickupLon: v.lonCliente,
+                                                    )
+                                                  : List<
+                                                      DocumentSnapshot<
+                                                          Map<String,
+                                                              dynamic>>>.from(
+                                                      _driversList,
+                                                    ),
+                                              fotoPorUid: _driverFotoPorUid,
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+
+                                  if (v.uidTaxista.isNotEmpty &&
+                                      _isValidCoord(v.latTaxista, v.lonTaxista))
+                                    Container(
+                                      margin: const EdgeInsets.only(bottom: 16),
                                       padding: const EdgeInsets.all(14),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF10231A),
-                                        borderRadius: BorderRadius.circular(16),
+                                        gradient: const LinearGradient(
+                                          colors: [
+                                            Color(0xFF0F3B27),
+                                            Color(0xFF0B261A),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        borderRadius: BorderRadius.circular(18),
                                         border: Border.all(
-                                          color: Colors.greenAccent.withValues(alpha: 0.35),
+                                          color:
+                                              Colors.greenAccent.withValues(alpha: 0.45),
                                         ),
                                       ),
-                                      child: const Row(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          Icon(Icons.timelapse, color: Colors.greenAccent),
-                                          SizedBox(width: 10),
-                                          Expanded(
-                                            child: Text(
-                                              'Buscando taxista cercano…',
-                                              style: TextStyle(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.w700,
+                                          const Row(
+                                            children: [
+                                              Icon(Icons.local_taxi_rounded,
+                                                  color: Colors.greenAccent,
+                                                  size: 22),
+                                              SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  'Ahi viene tu taxi',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 16,
+                                                  ),
+                                                ),
                                               ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            _lineaEtaPickupCliente(v, estadoBase),
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                              height: 1.3,
                                             ),
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: OutlinedButton.icon(
+                                                  onPressed: () => _centrarClienteYTaxista(v),
+                                                  icon: const Icon(Icons.center_focus_strong),
+                                                  label: const Text('Centrar mapa'),
+                                                  style: OutlinedButton.styleFrom(
+                                                    foregroundColor: Colors.white,
+                                                    side: BorderSide(
+                                                      color: Colors.white.withValues(alpha: 0.35),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: ElevatedButton.icon(
+                                                  onPressed: () => _centrarEnTaxista(v),
+                                                  icon: const Icon(Icons.my_location),
+                                                  label: const Text('Ver en tiempo real'),
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor: Colors.greenAccent,
+                                                    foregroundColor: Colors.black,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ],
                                       ),
                                     ),
 
-                                  // Código de verificación
-                                  if (v.uidTaxista.isNotEmpty && !codigoVerificado && estadoBase == EstadosViaje.aBordo && codigoVerificacion.isNotEmpty)
+                                  // Código de verificación y estado post-abordo
+                                  if (v.uidTaxista.isNotEmpty &&
+                                      !codigoVerificado &&
+                                      estadoBase == EstadosViaje.aBordo &&
+                                      codigoVerificacion.isNotEmpty)
                                     Container(
                                       margin: const EdgeInsets.only(bottom: 16),
                                       padding: const EdgeInsets.all(16),
                                       decoration: BoxDecoration(
-                                        color: Colors.purple.withValues(alpha: 0.1),
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(color: Colors.purple, width: 2),
+                                        gradient: const LinearGradient(
+                                          colors: [
+                                            Color(0xFF2A1338),
+                                            Color(0xFF1B0F2E),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        borderRadius: BorderRadius.circular(18),
+                                        border: Border.all(
+                                            color: Colors.purpleAccent,
+                                            width: 1.6),
                                       ),
                                       child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
                                         children: [
-                                          const Text(
-                                            '🔐 CÓDIGO DE VERIFICACIÓN',
-                                            style: TextStyle(color: Colors.purple, fontWeight: FontWeight.bold, fontSize: 16),
+                                          const Row(
+                                            children: [
+                                              Icon(Icons.verified_user_rounded,
+                                                  color: Colors.purpleAccent),
+                                              SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  'Confirma tu abordo',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 16,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                          const SizedBox(height: 8),
+                                          const SizedBox(height: 6),
                                           const Text(
-                                            'Dale este código al conductor para iniciar el viaje',
-                                            style: TextStyle(color: Colors.white70),
-                                            textAlign: TextAlign.center,
+                                            'Comparte este código con tu conductor para iniciar el viaje.',
+                                            style: TextStyle(
+                                                color: Colors.white70,
+                                                height: 1.3),
+                                          ),
+                                          const SizedBox(height: 14),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                vertical: 14, horizontal: 20),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black
+                                                  .withValues(alpha: 0.45),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                  color: Colors.purpleAccent),
+                                            ),
+                                            child: Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                Flexible(
+                                                  child: Text(
+                                                    codigoVerificacion,
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 30,
+                                                      fontWeight:
+                                                          FontWeight.w900,
+                                                      letterSpacing: 8,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
                                           const SizedBox(height: 12),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-                                            decoration: BoxDecoration(
-                                              color: Colors.black,
-                                              borderRadius: BorderRadius.circular(10),
-                                              border: Border.all(color: Colors.purple),
-                                            ),
-                                            child: Text(
-                                              codigoVerificacion,
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 32,
-                                                fontWeight: FontWeight.bold,
-                                                letterSpacing: 8,
+                                          Align(
+                                            alignment: Alignment.centerRight,
+                                            child: TextButton.icon(
+                                              onPressed: () {
+                                                Clipboard.setData(
+                                                  ClipboardData(
+                                                    text: codigoVerificacion,
+                                                  ),
+                                                );
+                                                if (!mounted) return;
+                                                ScaffoldMessenger.of(context)
+                                                    .showSnackBar(
+                                                  const SnackBar(
+                                                    content: Text(
+                                                        'Código copiado.'),
+                                                  ),
+                                                );
+                                              },
+                                              icon: const Icon(Icons.copy_rounded,
+                                                  size: 18),
+                                              label: const Text(
+                                                'Copiar código',
+                                                style: TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w700),
                                               ),
                                             ),
                                           ),
@@ -2570,15 +3624,53 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       margin: const EdgeInsets.only(bottom: 16),
                                       padding: const EdgeInsets.all(14),
                                       decoration: BoxDecoration(
-                                        color: Colors.orange.withValues(alpha: 0.12),
+                                        color: Colors.orange
+                                            .withValues(alpha: 0.12),
                                         borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+                                        border: Border.all(
+                                            color: Colors.orange
+                                                .withValues(alpha: 0.5)),
                                       ),
                                       child: const Text(
                                         'Estás a bordo, pero este viaje no muestra un código de verificación en la app. '
                                         'Si el conductor lo necesita, contacta soporte.',
-                                        style: TextStyle(color: Colors.white70, height: 1.35),
+                                        style: TextStyle(
+                                            color: Colors.white70,
+                                            height: 1.35),
                                         textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  if (v.uidTaxista.isNotEmpty &&
+                                      codigoVerificado &&
+                                      (estadoBase == EstadosViaje.aBordo ||
+                                          estadoBase == EstadosViaje.enCurso))
+                                    Container(
+                                      margin: const EdgeInsets.only(bottom: 16),
+                                      padding: const EdgeInsets.all(14),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            Colors.greenAccent.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: Colors.greenAccent
+                                              .withValues(alpha: 0.55),
+                                        ),
+                                      ),
+                                      child: const Row(
+                                        children: [
+                                          Icon(Icons.check_circle_rounded,
+                                              color: Colors.greenAccent),
+                                          SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              'Código validado. Tu viaje está en marcha, sigue el avance del conductor en tiempo real.',
+                                              style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w600,
+                                                  height: 1.28),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
 
@@ -2587,47 +3679,85 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       margin: const EdgeInsets.only(bottom: 16),
                                       padding: const EdgeInsets.all(14),
                                       decoration: BoxDecoration(
-                                        color: Colors.deepPurple.withValues(alpha: 0.15),
+                                        color: Colors.deepPurple
+                                            .withValues(alpha: 0.15),
                                         borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(color: Colors.purpleAccent.withValues(alpha: 0.45)),
+                                        border: Border.all(
+                                            color: Colors.purpleAccent
+                                                .withValues(alpha: 0.45)),
                                       ),
                                       child: const Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
-                                          Icon(Icons.travel_explore, color: Colors.purpleAccent, size: 26),
+                                          Icon(Icons.travel_explore,
+                                              color: Colors.purpleAccent,
+                                              size: 26),
                                           SizedBox(width: 12),
                                           Expanded(
                                             child: Text(
                                               'Viaje turístico: asignación y seguimiento coordinados por administración. '
                                               'Cronómetro, código y comisiones siguen el mismo flujo que un viaje normal.',
-                                              style: TextStyle(color: Colors.white70, height: 1.35, fontSize: 13),
+                                              style: TextStyle(
+                                                  color: Colors.white70,
+                                                  height: 1.35,
+                                                  fontSize: 13),
                                             ),
                                           ),
                                         ],
                                       ),
                                     ),
 
-                                  // Transferencia: solo cuando ya va a bordo o en ruta (tiempo de procesar el pago antes del fin).
-                                  if (v.metodoPago.toLowerCase().contains('transfer') &&
-                                      v.uidTaxista.isNotEmpty &&
-                                      (EstadosViaje.esAbordo(estadoBase) ||
-                                          EstadosViaje.esEnCurso(estadoBase))) ...[
+                                  // Transferencia: desde que hay conductor hasta el fin (no en estados terminales).
+                                  if (_mostrarDatosTransferenciaCliente(
+                                      v, estadoBase)) ...[
+                                    if (EstadosViaje.esAceptado(estadoBase) &&
+                                        !EstadosViaje.esAbordo(estadoBase) &&
+                                        !EstadosViaje.esEnCurso(estadoBase))
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 10),
+                                        child: Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF10231A),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: Colors.greenAccent
+                                                  .withValues(alpha: 0.35),
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            'Puedes transferir al conductor ya: cuando vaya en camino o a bordo, '
+                                            'el monto sigue siendo el mismo. Conserva tu comprobante.',
+                                            style: TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 13,
+                                              height: 1.35,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                     const SizedBox(height: 4),
-                                    _buildDatosBancarios(v, v.uidTaxista, v.precio, data),
+                                    _buildDatosBancarios(
+                                        v, v.uidTaxista, v.precio, data),
+                                    const SizedBox(height: 16),
+                                  ],
+
+                                  // Conductor primero: placa, llamada, WhatsApp y mapa visibles antes del detalle del viaje.
+                                  if (v.uidTaxista.isNotEmpty) ...[
+                                    _buildDriverCard(v),
                                     const SizedBox(height: 16),
                                   ],
 
                                   // Tarjeta de información del viaje
                                   _buildTripInfoCard(v, estadoBase),
 
-                                  // Tarjeta del conductor
-                                  if (v.uidTaxista.isNotEmpty) ...[
-                                    const SizedBox(height: 16),
-                                    _buildDriverCard(v),
-                                  ],
-
                                   // Paradas intermedias
-                                  if (v.waypoints != null && v.waypoints!.isNotEmpty) ...[
+                                  if (v.waypoints != null &&
+                                      v.waypoints!.isNotEmpty) ...[
                                     const SizedBox(height: 16),
                                     _buildParadasWidget(v),
                                   ],
@@ -2635,25 +3765,34 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   const SizedBox(height: 20),
 
                                   // ========== BOTONES ORGANIZADOS PROFESIONALMENTE ==========
-                                  
+
                                   // BOTÓN PRINCIPAL: Navegar al destino (solo en curso)
-                                  if (estadoBase == EstadosViaje.enCurso && _isValidCoord(v.latDestino, v.lonDestino))
+                                  if (estadoBase == EstadosViaje.enCurso &&
+                                      _isValidCoord(v.latDestino, v.lonDestino))
                                     Container(
                                       margin: const EdgeInsets.only(bottom: 16),
                                       child: SizedBox(
                                         width: double.infinity,
                                         child: ElevatedButton.icon(
-                                          onPressed: () => abrirNavegacionAlDestino(v),
-                                          icon: const Icon(Icons.navigation, color: Colors.black, size: 24),
+                                          onPressed: () =>
+                                              abrirNavegacionAlDestino(v),
+                                          icon: const Icon(Icons.navigation,
+                                              color: Colors.black, size: 24),
                                           label: const Text(
                                             'NAVEGAR AL DESTINO',
-                                            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
+                                            style: TextStyle(
+                                                color: Colors.black,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 16),
                                           ),
                                           style: ElevatedButton.styleFrom(
                                             backgroundColor: Colors.greenAccent,
                                             foregroundColor: Colors.black,
-                                            minimumSize: const Size(double.infinity, 56),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                            minimumSize:
+                                                const Size(double.infinity, 56),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(16)),
                                             elevation: 0,
                                           ),
                                         ),
@@ -2664,16 +3803,49 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   if (cancelarHabilitado)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 8),
-                                      child: Center(
+                                      child: SizedBox(
+                                        width: double.infinity,
                                         child: OutlinedButton.icon(
-                                          onPressed: () => _deleteOrCancelEstricto(v),
-                                          icon: const Icon(Icons.cancel_outlined, size: 20),
-                                          label: const Text('Cancelar viaje', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                                          onPressed: _cancelandoViajeCliente
+                                              ? null
+                                              : () => _deleteOrCancelEstricto(v),
+                                          icon: _cancelandoViajeCliente
+                                              ? const SizedBox(
+                                                  width: 18,
+                                                  height: 18,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                  ),
+                                                )
+                                              : const Icon(
+                                                  Icons.cancel_outlined,
+                                                  size: 20,
+                                                ),
+                                          label: Text(
+                                            _cancelandoViajeCliente
+                                                ? 'Cancelando...'
+                                                : 'Cancelar viaje',
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
                                           style: OutlinedButton.styleFrom(
                                             foregroundColor: Colors.redAccent,
-                                            side: const BorderSide(color: Colors.redAccent, width: 1.2),
-                                            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                            side: const BorderSide(
+                                              color: Colors.redAccent,
+                                              width: 1.4,
+                                            ),
+                                            minimumSize:
+                                                const Size(double.infinity, 52),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 18,
+                                              vertical: 14,
+                                            ),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -2683,6 +3855,40 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             );
                           },
                         ),
+                        if (pulsoTaxistaEnMapa)
+                          Positioned(
+                            left: 12,
+                            right: 12,
+                            bottom: MediaQuery.sizeOf(context).height *
+                                (_kSheetMinPickupNav + 0.02),
+                            child: Material(
+                              elevation: 8,
+                              borderRadius: BorderRadius.circular(14),
+                              color: Colors.black.withValues(alpha: 0.88),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.local_taxi,
+                                        color: Colors.greenAccent, size: 22),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        _lineaEtaPickupCliente(v, estadoBase),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                          height: 1.25,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     );
                   },
@@ -2692,4 +3898,3 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
   }
 }
-

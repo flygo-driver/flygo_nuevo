@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 // Si tu AdminHome vive en lib/pantallas/admin/admin_home.dart,
 // este import relativo es correcto:
 import '../pantallas/admin/admin_home.dart';
+import '../servicios/roles_service.dart';
 
 class AdminGate extends StatelessWidget {
   const AdminGate({super.key});
@@ -16,8 +17,9 @@ class AdminGate extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return const _NoAuth();
 
-    final refUsuario = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-    final refRol     = FirebaseFirestore.instance.collection('roles').doc(uid);
+    final refUsuario =
+        FirebaseFirestore.instance.collection('usuarios').doc(uid);
+    final refRol = FirebaseFirestore.instance.collection('roles').doc(uid);
 
     // 1er stream: usuarios/{uid}
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -30,10 +32,12 @@ class AdminGate extends StatelessWidget {
           return _Error(msg: 'Error usuarios: ${snapUser.error}');
         }
 
-        final rolUsuario = (snapUser.data?.data()?['rol'] ?? '').toString().trim().toLowerCase();
+        final rolUsuario = (snapUser.data?.data()?['rol'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase();
 
-        // Si ya es admin en usuarios → pasa de una
-        if (rolUsuario == 'admin') {
+        if (RolesService.esRolAdmin(rolUsuario)) {
           return const AdminHome();
         }
 
@@ -48,8 +52,11 @@ class AdminGate extends StatelessWidget {
               return _Error(msg: 'Error roles: ${snapRol.error}');
             }
 
-            final rolDoc = (snapRol.data?.data()?['rol'] ?? '').toString().trim().toLowerCase();
-            if (rolDoc == 'admin') {
+            final rolDoc = (snapRol.data?.data()?['rol'] ?? '')
+                .toString()
+                .trim()
+                .toLowerCase();
+            if (RolesService.esRolAdmin(rolDoc)) {
               return const AdminHome();
             }
 

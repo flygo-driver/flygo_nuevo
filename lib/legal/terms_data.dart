@@ -1,6 +1,7 @@
 const String kTermsVersion = '1.0';
 const String kTaxistaContractVersion = '1.0';
-const String kTaxistaContractPdfUrl = 'https://rai-driver.app/legal/contrato-taxista-v1.pdf';
+const String kTaxistaContractPdfUrl =
+    'https://rai-driver.app/legal/contrato-taxista-v1.pdf';
 const String kTermsLastUpdate = '31/03/2026';
 const String kTermsContactEmail = 'ventasopenask@gmail.com';
 const String kTermsContactPhone = '18094201481';

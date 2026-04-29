@@ -61,7 +61,10 @@ class _GirasCuposAnimationState extends State<GirasCuposAnimation>
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
                     shadows: const [
-                      Shadow(color: Colors.black45, blurRadius: 3, offset: Offset(0, 1)),
+                      Shadow(
+                          color: Colors.black45,
+                          blurRadius: 3,
+                          offset: Offset(0, 1)),
                     ],
                   ),
                 ),
@@ -110,7 +113,8 @@ class _BusCrowdPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
     final double scroll = (1 - t) * 36;
     for (double x = -20; x < w + 40; x += 16) {
-      canvas.drawLine(Offset(x + scroll, h * 0.28), Offset(x + scroll - 8, h * 0.42), streak);
+      canvas.drawLine(Offset(x + scroll, h * 0.28),
+          Offset(x + scroll - 8, h * 0.42), streak);
     }
 
     canvas.drawRect(
@@ -135,7 +139,8 @@ class _BusCrowdPainter extends CustomPainter {
     const double busH = 36;
     const double cx = 0;
     const double cy = -6;
-    final Rect busRect = Rect.fromCenter(center: const Offset(0, -6), width: busW, height: busH);
+    final Rect busRect =
+        Rect.fromCenter(center: const Offset(0, -6), width: busW, height: busH);
 
     void wheel(double wx, double wy, double r) {
       canvas.drawCircle(
@@ -169,7 +174,8 @@ class _BusCrowdPainter extends CustomPainter {
     wheel(cx - busW * 0.32, groundY, 7);
     wheel(cx + busW * 0.28, groundY, 7);
 
-    final RRect body = RRect.fromRectAndRadius(busRect, const Radius.circular(8));
+    final RRect body =
+        RRect.fromRectAndRadius(busRect, const Radius.circular(8));
     canvas.drawRRect(
       body,
       Paint()..color = const Color(0xFFFFD54F),
@@ -212,7 +218,8 @@ class _BusCrowdPainter extends CustomPainter {
       );
       for (var i = 0; i < locals.length; i++) {
         final Offset p = locals[i];
-        final double wobble = math.sin(t * math.pi * 2 + p.dx * 0.4 + i * 0.7) * 1.6;
+        final double wobble =
+            math.sin(t * math.pi * 2 + p.dx * 0.4 + i * 0.7) * 1.6;
         final Offset c = wr.center + p + Offset(0, wobble);
         const double headR = 3.2;
         canvas.drawCircle(
@@ -233,9 +240,11 @@ class _BusCrowdPainter extends CustomPainter {
     }
 
     headsInWindow(wins[0], const [Offset(-4, 2), Offset(4, 1), Offset(0, -3)]);
-    headsInWindow(wins[1], const [Offset(-3, 0), Offset(5, 2), Offset(-1, -4), Offset(2, -2)]);
+    headsInWindow(wins[1],
+        const [Offset(-3, 0), Offset(5, 2), Offset(-1, -4), Offset(2, -2)]);
     headsInWindow(wins[2], const [Offset(-4, 1), Offset(3, -2), Offset(4, 3)]);
-    headsInWindow(wins[3], const [Offset(-2, 0), Offset(4, 1), Offset(0, -3), Offset(-4, -2)]);
+    headsInWindow(wins[3],
+        const [Offset(-2, 0), Offset(4, 1), Offset(0, -3), Offset(-4, -2)]);
 
     // Parabrisas / frente
     final Path front = Path()
@@ -260,5 +269,6 @@ class _BusCrowdPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _BusCrowdPainter oldDelegate) => oldDelegate.t != t;
+  bool shouldRepaint(covariant _BusCrowdPainter oldDelegate) =>
+      oldDelegate.t != t;
 }

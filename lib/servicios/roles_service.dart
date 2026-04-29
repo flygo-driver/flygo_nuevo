@@ -4,31 +4,49 @@ import 'package:flygo_nuevo/servicios/disponibilidad_service.dart';
 class Roles {
   static const String cliente = 'cliente';
   static const String taxista = 'taxista';
-  static const String admin   = 'admin';
+  static const String admin = 'admin';
 }
 
 class RolesService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
-  static CollectionReference<Map<String, dynamic>> get _usuarios => _db.collection('usuarios');
+  static CollectionReference<Map<String, dynamic>> get _usuarios =>
+      _db.collection('usuarios');
+
+  /// `admin` o `administrador` en Firestore cuentan como administrador.
+  static bool esRolAdmin(String? raw) {
+    final r = (raw ?? '').toString().trim().toLowerCase();
+    return r == 'admin' || r == 'administrador';
+  }
+
+  /// Igual que en Firestore / consola: acepta `admin` y `administrador`.
+  static String? normalizarRolLeido(String? rol) {
+    if (rol == null) return null;
+    final r = rol.toLowerCase().trim();
+    if (r.isEmpty) return null;
+    if (r == 'administrador') return Roles.admin;
+    return r;
+  }
 
   static Future<String?> getRol(String uid) async {
     final doc = await _usuarios.doc(uid).get();
     if (!doc.exists) return null;
     final rol = (doc.data()?['rol'] as String?)?.toLowerCase().trim();
-    return (rol?.isNotEmpty ?? false) ? rol : null;
+    return normalizarRolLeido(rol);
   }
 
   static Stream<String?> streamRol(String uid) {
     return _usuarios.doc(uid).snapshots().map((snap) {
       if (!snap.exists) return null;
       final rol = (snap.data()?['rol'] as String?)?.toLowerCase().trim();
-      return (rol?.isNotEmpty ?? false) ? rol : null;
+      return normalizarRolLeido(rol);
     });
   }
 
-  static Future<bool> isCliente(String uid) async => (await getRol(uid)) == Roles.cliente;
+  static Future<bool> isCliente(String uid) async =>
+      (await getRol(uid)) == Roles.cliente;
 
-  static Future<void> setRol(String uid, String rol, {Map<String, dynamic>? extra}) async {
+  static Future<void> setRol(String uid, String rol,
+      {Map<String, dynamic>? extra}) async {
     await _usuarios.doc(uid).set({
       'rol': rol.toLowerCase().trim(),
       'actualizadoEn': FieldValue.serverTimestamp(),
@@ -36,7 +54,8 @@ class RolesService {
     }, SetOptions(merge: true));
   }
 
-  static Future<void> ensureUserDoc(String uid, {String defaultRol = Roles.cliente}) async {
+  static Future<void> ensureUserDoc(String uid,
+      {String defaultRol = Roles.cliente}) async {
     final ref = _usuarios.doc(uid);
     final snap = await ref.get();
     if (!snap.exists) {
@@ -53,10 +72,13 @@ class RolesService {
   static Future<void> syncRolConColeccionRoles(String uid) async {
     final rolesDoc = await _db.collection('roles').doc(uid).get();
     if (!rolesDoc.exists) return;
-    final r = (rolesDoc.data()?['rol'] as String?)?.toLowerCase().trim();
+    var r = (rolesDoc.data()?['rol'] as String?)?.toLowerCase().trim();
     if (r == null) return;
+    if (r == 'administrador') r = Roles.admin;
     if ([Roles.admin, Roles.taxista, Roles.cliente].contains(r)) {
-      await _usuarios.doc(uid).set({'rol': r, 'actualizadoEn': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      await _usuarios.doc(uid).set(
+          {'rol': r, 'actualizadoEn': FieldValue.serverTimestamp()},
+          SetOptions(merge: true));
     }
   }
 
@@ -69,11 +91,7 @@ class RolesService {
     if (d is num) return d != 0;
     if (d is String) {
       final s = d.toLowerCase().trim();
-      return s == 'true' ||
-          s == '1' ||
-          s == 'si' ||
-          s == 'sí' ||
-          s == 'yes';
+      return s == 'true' || s == '1' || s == 'si' || s == 'sí' || s == 'yes';
     }
     return false;
   }

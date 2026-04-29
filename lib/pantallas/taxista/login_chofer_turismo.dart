@@ -17,7 +17,7 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
   final _nombreCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _telefonoCtrl = TextEditingController();
-  
+
   final List<VehiculoTurismo> _vehiculos = [];
   bool _cargando = false;
   String? _error;
@@ -288,57 +288,59 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
               )
             else
               ..._vehiculos.map((v) => Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey[900],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.purple.withAlpha(128)),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _tiposVehiculo.firstWhere(
-                              (t) => t['tipo'] == v.tipo,
-                              orElse: () => const {'label': ''},
-                            )['label'] ?? v.tipo,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.purple,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            '${v.marca} ${v.modelo} ${v.anio}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                          Text(
-                            '${v.color} • ${v.placa}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white54),
-                          ),
-                        ],
-                      ),
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[900],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.purple.withAlpha(128)),
                     ),
-                    IconButton(
-                      onPressed: () {
-                        setState(() {
-                          _vehiculos.remove(v);
-                        });
-                      },
-                      icon: const Icon(Icons.delete, color: Colors.redAccent),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _tiposVehiculo.firstWhere(
+                                      (t) => t['tipo'] == v.tipo,
+                                      orElse: () => const {'label': ''},
+                                    )['label'] ??
+                                    v.tipo,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.purple,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                '${v.marca} ${v.modelo} ${v.anio}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                              Text(
+                                '${v.color} • ${v.placa}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white54),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () {
+                            setState(() {
+                              _vehiculos.remove(v);
+                            });
+                          },
+                          icon:
+                              const Icon(Icons.delete, color: Colors.redAccent),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              )),
+                  )),
 
             const SizedBox(height: 24),
 
@@ -439,189 +441,189 @@ class __FormularioVehiculoState extends State<_FormularioVehiculo> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Agregar Vehículo',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Tipo de vehículo
-            DropdownButtonFormField<String>(
-              value: _tipo,
-              items: widget.tiposVehiculo.map<DropdownMenuItem<String>>((t) {
-                return DropdownMenuItem<String>(
-                  value: t['tipo'] as String,
-                  child: Text('${t['icon']} ${t['label']}'),
-                );
-              }).toList(),
-              onChanged: (v) {
-                if (v != null) {
-                  setState(() => _tipo = v);
-                }
-              },
-              dropdownColor: Colors.grey[900],
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Tipo de vehículo',
-                labelStyle: TextStyle(color: Colors.white70),
-                filled: true,
-                fillColor: Color(0xFF1E1E1E),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                  borderSide: BorderSide.none,
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-
-            // Marca
-            TextFormField(
-              controller: _marcaCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Marca',
-                labelStyle: TextStyle(color: Colors.white70),
-                filled: true,
-                fillColor: Color(0xFF1E1E1E),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                  borderSide: BorderSide.none,
+              const SizedBox(height: 16),
+              const Text(
+                'Agregar Vehículo',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 16),
 
-            // Modelo
-            TextFormField(
-              controller: _modeloCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Modelo',
-                labelStyle: TextStyle(color: Colors.white70),
-                filled: true,
-                fillColor: Color(0xFF1E1E1E),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
-            ),
-            const SizedBox(height: 12),
-
-            // Color
-            TextFormField(
-              controller: _colorCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: 'Color',
-                labelStyle: TextStyle(color: Colors.white70),
-                filled: true,
-                fillColor: Color(0xFF1E1E1E),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
-            ),
-            const SizedBox(height: 12),
-
-            // Placa
-            TextFormField(
-              controller: _placaCtrl,
-              style: const TextStyle(color: Colors.white),
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Placa',
-                labelStyle: TextStyle(color: Colors.white70),
-                filled: true,
-                fillColor: Color(0xFF1E1E1E),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
-            ),
-            const SizedBox(height: 12),
-
-            // Año
-            TextFormField(
-              controller: _anioCtrl,
-              style: const TextStyle(color: Colors.white),
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Año',
-                labelStyle: TextStyle(color: Colors.white70),
-                filled: true,
-                fillColor: Color(0xFF1E1E1E),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              validator: (v) {
-                if (v == null || v.isEmpty) return 'Requerido';
-                final anio = int.tryParse(v);
-                if (anio == null) return 'Número inválido';
-                if (anio < 1990 || anio > DateTime.now().year + 1) {
-                  return 'Año inválido';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 20),
-
-            Row(
-              children: [
-                Expanded(
-                  child: TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancelar'),
+              // Tipo de vehículo
+              DropdownButtonFormField<String>(
+                value: _tipo,
+                items: widget.tiposVehiculo.map<DropdownMenuItem<String>>((t) {
+                  return DropdownMenuItem<String>(
+                    value: t['tipo'] as String,
+                    child: Text('${t['icon']} ${t['label']}'),
+                  );
+                }).toList(),
+                onChanged: (v) {
+                  if (v != null) {
+                    setState(() => _tipo = v);
+                  }
+                },
+                dropdownColor: Colors.grey[900],
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Tipo de vehículo',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Color(0xFF1E1E1E),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide.none,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      if (_formKey.currentState!.validate()) {
-                        widget.onGuardar(VehiculoTurismo(
-                          tipo: _tipo,
-                          marca: _marcaCtrl.text.trim(),
-                          modelo: _modeloCtrl.text.trim(),
-                          color: _colorCtrl.text.trim(),
-                          placa: _placaCtrl.text.trim().toUpperCase(),
-                          anio: int.parse(_anioCtrl.text.trim()),
-                        ));
-                        Navigator.pop(context);
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.purple,
-                      foregroundColor: Colors.white,
+              ),
+              const SizedBox(height: 12),
+
+              // Marca
+              TextFormField(
+                controller: _marcaCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Marca',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Color(0xFF1E1E1E),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+
+              // Modelo
+              TextFormField(
+                controller: _modeloCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Modelo',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Color(0xFF1E1E1E),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+
+              // Color
+              TextFormField(
+                controller: _colorCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Color',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Color(0xFF1E1E1E),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+
+              // Placa
+              TextFormField(
+                controller: _placaCtrl,
+                style: const TextStyle(color: Colors.white),
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Placa',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Color(0xFF1E1E1E),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                validator: (v) => v == null || v.isEmpty ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+
+              // Año
+              TextFormField(
+                controller: _anioCtrl,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Año',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Color(0xFF1E1E1E),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Requerido';
+                  final anio = int.tryParse(v);
+                  if (anio == null) return 'Número inválido';
+                  if (anio < 1990 || anio > DateTime.now().year + 1) {
+                    return 'Año inválido';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancelar'),
                     ),
-                    child: const Text('Guardar'),
                   ),
-                ),
-              ],
-            ),
-          ],
-        ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        if (_formKey.currentState!.validate()) {
+                          widget.onGuardar(VehiculoTurismo(
+                            tipo: _tipo,
+                            marca: _marcaCtrl.text.trim(),
+                            modelo: _modeloCtrl.text.trim(),
+                            color: _colorCtrl.text.trim(),
+                            placa: _placaCtrl.text.trim().toUpperCase(),
+                            anio: int.parse(_anioCtrl.text.trim()),
+                          ));
+                          Navigator.pop(context);
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.purple,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Guardar'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

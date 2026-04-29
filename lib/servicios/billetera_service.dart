@@ -82,7 +82,8 @@ class BilleteraService {
   }
 
   /// Resumen estático (compat)
-  static Future<ResumenCalculado> calcularResumenTaxista(String uidTaxista) async {
+  static Future<ResumenCalculado> calcularResumenTaxista(
+      String uidTaxista) async {
     if (uidTaxista.trim().isEmpty) {
       return const ResumenCalculado(
         gananciaTotal: 0,
@@ -115,7 +116,8 @@ class BilleteraService {
 
   // ===================== Streams (tiempo real) =====================
 
-  static Stream<List<Liquidacion>> streamLiquidacionesPorTaxista(String uidTaxista) {
+  static Stream<List<Liquidacion>> streamLiquidacionesPorTaxista(
+      String uidTaxista) {
     if (uidTaxista.trim().isEmpty) {
       return Stream.value(const <Liquidacion>[]);
     }
@@ -229,7 +231,8 @@ class BilleteraService {
     });
   }
 
-  static Stream<ResumenBilleteraLive> streamResumenBilletera(String uidTaxista) {
+  static Stream<ResumenBilleteraLive> streamResumenBilletera(
+      String uidTaxista) {
     if (uidTaxista.trim().isEmpty) {
       return Stream.value(const ResumenBilleteraLive(
         saldoDisponible: 0,
@@ -268,7 +271,7 @@ class BilleteraService {
 
     return Stream<ResumenBilleteraLive>.multi((controller) {
       (int, int, int)? viajes; // (ganC, comC, cnt)
-      int? liq;                // solicitadoCents
+      int? liq; // solicitadoCents
       late final StreamSubscription<(int, int, int)> subViajes;
       late final StreamSubscription<int> subLiq;
 

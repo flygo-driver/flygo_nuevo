@@ -15,7 +15,7 @@ class SolicitarTurismo extends StatefulWidget {
 
 class _SolicitarTurismoState extends State<SolicitarTurismo> {
   final _formKey = GlobalKey<FormState>();
-  
+
   final List<String> _vehiculosSeleccionados = [];
   static const List<Map<String, String>> _vehiculosDisponibles = [
     {'value': 'carro', 'label': 'Carro Turismo', 'icon': '🚗'},
@@ -26,11 +26,11 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
 
   final _telefonoCtrl = TextEditingController();
   final _notasCtrl = TextEditingController();
-  
+
   File? _licenciaFile;
   File? _seguroFile;
   File? _fotoVehiculoFile;
-  
+
   bool _enviando = false;
   final _picker = ImagePicker();
 
@@ -41,7 +41,7 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
       maxHeight: 1024,
       imageQuality: 85,
     );
-    
+
     if (pickedFile != null) {
       setState(() {
         if (tipo == 'licencia') {
@@ -63,7 +63,9 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
       );
       return;
     }
-    if (_licenciaFile == null || _seguroFile == null || _fotoVehiculoFile == null) {
+    if (_licenciaFile == null ||
+        _seguroFile == null ||
+        _fotoVehiculoFile == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Debes subir todos los documentos')),
       );
@@ -71,7 +73,7 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
     }
 
     setState(() => _enviando = true);
-    
+
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw Exception('No hay sesión');
@@ -99,11 +101,13 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
       });
 
       if (!mounted) return;
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ Solicitud enviada. Espera la aprobación del admin.')),
+        const SnackBar(
+            content:
+                Text('✅ Solicitud enviada. Espera la aprobación del admin.')),
       );
-      
+
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
@@ -133,25 +137,24 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
             ),
             const SizedBox(height: 8),
             ..._vehiculosDisponibles.map((v) => CheckboxListTile(
-              value: _vehiculosSeleccionados.contains(v['value']),
-              onChanged: (checked) {
-                setState(() {
-                  if (checked == true) {
-                    _vehiculosSeleccionados.add(v['value']!);
-                  } else {
-                    _vehiculosSeleccionados.remove(v['value']);
-                  }
-                });
-              },
-              title: Text(
-                '${v['icon']} ${v['label']}',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              activeColor: Colors.purple,
-              checkColor: Colors.white,
-            )),
-            
+                  value: _vehiculosSeleccionados.contains(v['value']),
+                  onChanged: (checked) {
+                    setState(() {
+                      if (checked == true) {
+                        _vehiculosSeleccionados.add(v['value']!);
+                      } else {
+                        _vehiculosSeleccionados.remove(v['value']);
+                      }
+                    });
+                  },
+                  title: Text(
+                    '${v['icon']} ${v['label']}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  activeColor: Colors.purple,
+                  checkColor: Colors.white,
+                )),
             const SizedBox(height: 20),
             TextFormField(
               controller: _telefonoCtrl,
@@ -168,14 +171,15 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
               ),
               validator: (v) => v!.isEmpty ? 'Requerido' : null,
             ),
-            
             const SizedBox(height: 20),
-            _buildFilePicker('Licencia de conducir', _licenciaFile, () => _seleccionarArchivo(ImageSource.gallery, 'licencia')),
+            _buildFilePicker('Licencia de conducir', _licenciaFile,
+                () => _seleccionarArchivo(ImageSource.gallery, 'licencia')),
             const SizedBox(height: 12),
-            _buildFilePicker('Seguro del vehículo', _seguroFile, () => _seleccionarArchivo(ImageSource.gallery, 'seguro')),
+            _buildFilePicker('Seguro del vehículo', _seguroFile,
+                () => _seleccionarArchivo(ImageSource.gallery, 'seguro')),
             const SizedBox(height: 12),
-            _buildFilePicker('Foto del vehículo', _fotoVehiculoFile, () => _seleccionarArchivo(ImageSource.camera, 'foto')),
-            
+            _buildFilePicker('Foto del vehículo', _fotoVehiculoFile,
+                () => _seleccionarArchivo(ImageSource.camera, 'foto')),
             const SizedBox(height: 20),
             TextFormField(
               controller: _notasCtrl,
@@ -192,7 +196,6 @@ class _SolicitarTurismoState extends State<SolicitarTurismo> {
                 ),
               ),
             ),
-            
             const SizedBox(height: 30),
             SizedBox(
               width: double.infinity,

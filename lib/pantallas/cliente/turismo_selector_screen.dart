@@ -54,6 +54,7 @@ class TurismoSelectorScreen extends StatelessWidget {
       backgroundColor: Colors.black,
       appBar: const RaiAppBar(
         title: '🏝️ Turismo RAI',
+        backWhenCanPop: true,
       ),
       body: SafeArea(
         child: Padding(
@@ -78,7 +79,7 @@ class TurismoSelectorScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-              
+
               Expanded(
                 child: ListView.separated(
                   itemCount: _destinos.length,
@@ -96,16 +97,17 @@ class TurismoSelectorScreen extends StatelessWidget {
                   },
                 ),
               ),
-              
+
               const SizedBox(height: 16),
-              
+
               // Información adicional
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: Colors.purple.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.purple.withValues(alpha: 0.3)),
+                  border:
+                      Border.all(color: Colors.purple.withValues(alpha: 0.3)),
                 ),
                 child: const Row(
                   children: [

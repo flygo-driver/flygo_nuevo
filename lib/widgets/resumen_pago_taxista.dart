@@ -32,7 +32,10 @@ class ResumenPagoTaxista extends StatelessWidget {
           children: [
             const Text(
               'Resumen de Pago (viaje)',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             _row('💰 Precio Total del Viaje:', FormatosMoneda.rd(precioTotal)),
@@ -41,7 +44,6 @@ class ResumenPagoTaxista extends StatelessWidget {
             const SizedBox(height: 12),
             const Divider(color: Colors.white12),
             const SizedBox(height: 8),
-
             if (uid != null)
               _PendienteDeComision(uidTaxista: uid)
             else
@@ -64,7 +66,9 @@ class ResumenPagoTaxista extends StatelessWidget {
             child: Text(k, style: const TextStyle(color: Colors.white70)),
           ),
           const SizedBox(width: 8),
-          Text(v, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+          Text(v,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -117,7 +121,8 @@ class _PendienteDeComision extends StatelessWidget {
           children: [
             Text(
               'Comisión pendiente con FlyGo: ${FormatosMoneda.rd(monto)}',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Row(
@@ -125,7 +130,8 @@ class _PendienteDeComision extends StatelessWidget {
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: () => _mostrarDatosBancarios(context),
-                    icon: const Icon(Icons.account_balance, color: Colors.green),
+                    icon:
+                        const Icon(Icons.account_balance, color: Colors.green),
                     label: const Text('Ver datos bancarios'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.white,
@@ -210,22 +216,23 @@ Future<void> _mostrarDatosBancarios(BuildContext context) async {
                 );
               }
               final b = snap.data!;
-              final banco   = (b['banco_nombre'] ?? '').toString();
-              final tipo    = (b['tipo_cuenta'] ?? '').toString();
-              final numero  = (b['numero_cuenta'] ?? '').toString();
+              final banco = (b['banco_nombre'] ?? '').toString();
+              final tipo = (b['tipo_cuenta'] ?? '').toString();
+              final numero = (b['numero_cuenta'] ?? '').toString();
               final titular = (b['titular'] ?? '').toString();
-              final rnc     = (b['rnc'] ?? '').toString();
-              final alias   = (b['alias'] ?? '').toString();
-              final nota    = (b['nota'] ?? '').toString();
-              final qrUrl   = (b['qr_url'] ?? '').toString();
-              final wa      = (b['whatsapp_soporte'] ?? '').toString();
+              final rnc = (b['rnc'] ?? '').toString();
+              final alias = (b['alias'] ?? '').toString();
+              final nota = (b['nota'] ?? '').toString();
+              final qrUrl = (b['qr_url'] ?? '').toString();
+              final wa = (b['whatsapp_soporte'] ?? '').toString();
 
               return ListView(
                 shrinkWrap: true,
                 children: [
                   Center(
                     child: Container(
-                      width: 46, height: 5,
+                      width: 46,
+                      height: 5,
                       decoration: BoxDecoration(
                         color: Colors.white24,
                         borderRadius: BorderRadius.circular(3),
@@ -235,7 +242,10 @@ Future<void> _mostrarDatosBancarios(BuildContext context) async {
                   const SizedBox(height: 12),
                   const Text(
                     'Datos para transferencia',
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 12),
                   _kv('Banco', banco),
@@ -245,8 +255,7 @@ Future<void> _mostrarDatosBancarios(BuildContext context) async {
                   if (rnc.isNotEmpty) _kv('RNC', rnc),
                   if (alias.isNotEmpty) _kv('Alias', alias),
                   const SizedBox(height: 8),
-                  if (nota.isNotEmpty)
-                    const SizedBox(height: 2),
+                  if (nota.isNotEmpty) const SizedBox(height: 2),
                   if (nota.isNotEmpty)
                     Text(nota, style: const TextStyle(color: Colors.white70)),
                   const SizedBox(height: 12),
@@ -270,12 +279,15 @@ Future<void> _mostrarDatosBancarios(BuildContext context) async {
                         if (await canLaunchUrl(app)) {
                           await launchUrl(app);
                         } else {
-                          await launchUrl(web, mode: LaunchMode.externalApplication);
+                          await launchUrl(web,
+                              mode: LaunchMode.externalApplication);
                         }
                       },
                       // No existe Icons.whatsapp en Material; usamos genérico
-                      icon: const Icon(Icons.chat_bubble, color: Colors.greenAccent),
-                      label: const Text('WhatsApp Soporte', style: TextStyle(color: Colors.white)),
+                      icon: const Icon(Icons.chat_bubble,
+                          color: Colors.greenAccent),
+                      label: const Text('WhatsApp Soporte',
+                          style: TextStyle(color: Colors.white)),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.white24),
                       ),
@@ -295,7 +307,9 @@ Widget _kv(String k, String v) {
     padding: const EdgeInsets.symmetric(vertical: 4),
     child: Row(
       children: [
-        SizedBox(width: 140, child: Text(k, style: const TextStyle(color: Colors.white70))),
+        SizedBox(
+            width: 140,
+            child: Text(k, style: const TextStyle(color: Colors.white70))),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -322,13 +336,15 @@ Future<void> _confirmarLiquidacion({
     context: context,
     builder: (ctx) => AlertDialog(
       backgroundColor: Colors.black,
-      title: const Text('Confirmar transferencia', style: TextStyle(color: Colors.white)),
+      title: const Text('Confirmar transferencia',
+          style: TextStyle(color: Colors.white)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             'Monto: ${FormatosMoneda.rd(monto)}',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
           TextField(
@@ -342,8 +358,12 @@ Future<void> _confirmarLiquidacion({
         ],
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Enviar')),
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar')),
+        ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Enviar')),
       ],
     ),
   );

@@ -16,9 +16,8 @@ class AdminService {
         .orderBy('solicitadoEn', descending: true);
 
     return base.snapshots().map((s) {
-      final list = s.docs
-          .map((d) => Liquidacion.fromMap(d.id, d.data()))
-          .toList();
+      final list =
+          s.docs.map((d) => Liquidacion.fromMap(d.id, d.data())).toList();
       if (query == null || query.trim().isEmpty) return list;
 
       final q = query.trim().toLowerCase();

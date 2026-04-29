@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../data/pago_data.dart';
 import '../../widgets/rai_app_bar.dart';
+import '../../servicios/pay_config.dart';
 
 class PagoMetodo extends StatefulWidget {
   /// Modo simple: sin viajeId/clienteId/montoDop -> solo selecciona y devuelve el método.
@@ -43,8 +44,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
     try {
       // Si es "Tarjeta" y hay datos de viaje, autorizamos (mock) ahora
       if (_metodo == 'Tarjeta' && _esFlujoConViaje) {
-        final email =
-            widget.emailClienteInicial ??
+        final email = widget.emailClienteInicial ??
             FirebaseAuth.instance.currentUser?.email;
         await PagoData.autorizarPago(
           viajeId: widget.viajeId!,
@@ -102,7 +102,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
             ),
             const SizedBox(height: 8),
             RadioListTile<String>(
-              value: 'Tarjeta',
+              value: 'Transferencia',
               groupValue: _metodo,
               onChanged: _procesando
                   ? null
@@ -110,16 +110,36 @@ class _PagoMetodoState extends State<PagoMetodo> {
               activeColor: Colors.greenAccent,
               tileColor: Colors.grey[900],
               title: const Text(
-                'Tarjeta',
+                'Transferencia',
                 style: TextStyle(color: Colors.white),
               ),
-              subtitle: Text(
-                _esFlujoConViaje
-                    ? 'Se autoriza ahora y se captura al completar.'
-                    : 'Se autorizará al confirmar tu viaje.',
-                style: const TextStyle(color: Colors.white70),
+              subtitle: const Text(
+                'Subes el comprobante según las instrucciones del viaje.',
+                style: TextStyle(color: Colors.white70),
               ),
             ),
+            if (PayConfig.pagosConTarjetaHabilitados) ...[
+              const SizedBox(height: 8),
+              RadioListTile<String>(
+                value: 'Tarjeta',
+                groupValue: _metodo,
+                onChanged: _procesando
+                    ? null
+                    : (String? v) => setState(() => _metodo = v!),
+                activeColor: Colors.greenAccent,
+                tileColor: Colors.grey[900],
+                title: const Text(
+                  'Tarjeta',
+                  style: TextStyle(color: Colors.white),
+                ),
+                subtitle: Text(
+                  _esFlujoConViaje
+                      ? 'Se autoriza ahora y se captura al completar.'
+                      : 'Se autorizará al confirmar tu viaje.',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ),
+            ],
             const Spacer(),
             if (_error != null)
               Padding(

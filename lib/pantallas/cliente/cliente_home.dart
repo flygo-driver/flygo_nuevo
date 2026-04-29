@@ -22,8 +22,10 @@ class _ClienteHomeState extends State<ClienteHome> {
     }
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream:
-          FirebaseFirestore.instance.collection('usuarios').doc(uid).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .snapshots(),
       builder: (context, snap) {
         final data = snap.data?.data();
         final pendiente =

@@ -13,7 +13,8 @@ class EsperaAsignacionTurismo extends StatefulWidget {
   const EsperaAsignacionTurismo({super.key, required this.viajeId});
 
   @override
-  State<EsperaAsignacionTurismo> createState() => _EsperaAsignacionTurismoState();
+  State<EsperaAsignacionTurismo> createState() =>
+      _EsperaAsignacionTurismoState();
 }
 
 class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
@@ -68,6 +69,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
       backgroundColor: Colors.black,
       appBar: const RaiAppBar(
         title: '🏝️ Turismo RAI',
+        backWhenCanPop: true,
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
@@ -84,9 +86,11 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
             return _buildLoadingState();
           }
 
-          final Map<String, dynamic> data = snapshot.data!.data() as Map<String, dynamic>;
+          final Map<String, dynamic> data =
+              snapshot.data!.data() as Map<String, dynamic>;
           final String estado = (data['estado'] ?? '').toString();
-          final String taxistaId = (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+          final String taxistaId =
+              (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
           final String estadoNorm = EstadosViaje.normalizar(estado);
 
           if (EstadosViaje.esCancelado(estado)) {
@@ -100,13 +104,15 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
           }
 
           // Chofer asignado por ADM: mismo flujo que viajes normales (aceptado → en curso)
-          if (taxistaId.isNotEmpty && EstadosViaje.activos.contains(estadoNorm)) {
+          if (taxistaId.isNotEmpty &&
+              EstadosViaje.activos.contains(estadoNorm)) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
-                  builder: (BuildContext innerContext) => const ViajeEnCursoCliente(),
+                  builder: (BuildContext innerContext) =>
+                      const ViajeEnCursoCliente(),
                 ),
               );
             });
@@ -159,11 +165,15 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
+              const Icon(Icons.error_outline,
+                  color: Colors.redAccent, size: 64),
               const SizedBox(height: 16),
               const Text(
                 '¡Ups! Algo salió mal',
-                style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               Text(
@@ -206,11 +216,15 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 64),
+              const Icon(Icons.check_circle_outline,
+                  color: Colors.greenAccent, size: 64),
               const SizedBox(height: 16),
               const Text(
                 'Viaje finalizado',
-                style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               const Text(
@@ -222,7 +236,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
               ElevatedButton(
                 onPressed: () {
                   if (context.mounted) {
-                    Navigator.of(context).popUntil((Route<dynamic> r) => r.isFirst);
+                    Navigator.of(context)
+                        .popUntil((Route<dynamic> r) => r.isFirst);
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -250,7 +265,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     final dynamic ex = data['extras'];
     if (ex is! Map) return null;
     final Map map = ex;
-    final dynamic p = map['pasajeros'] ?? map['numPasajeros'] ?? map['pasajeros_count'];
+    final dynamic p =
+        map['pasajeros'] ?? map['numPasajeros'] ?? map['pasajeros_count'];
     if (p == null) return null;
     final String t = p.toString().trim();
     return t.isEmpty ? null : t;
@@ -261,11 +277,13 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     final origen = data['origen'] ?? 'Origen no especificado';
     final fechaHora = data['fechaHora'] as Timestamp?;
     final precio = (data['precio'] ?? 0).toDouble();
-    final tipoVehiculo = _getTipoVehiculoLabel(data['subtipoTurismo'] ?? 'carro');
+    final tipoVehiculo =
+        _getTipoVehiculoLabel(data['subtipoTurismo'] ?? 'carro');
     final distancia = (data['distanciaKm'] ?? 0).toDouble();
     final String estadoRaw = (data['estado'] ?? '').toString();
     final String? pasajeros = _pasajerosDesdeExtras(data);
-    final String metodoPago = _metodoPagoLabel((data['metodoPago'] ?? '').toString());
+    final String metodoPago =
+        _metodoPagoLabel((data['metodoPago'] ?? '').toString());
 
     return Container(
       decoration: const BoxDecoration(
@@ -299,7 +317,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                               height: 120,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: Colors.purple.withValues(alpha: _pulseAnimation.value * 0.3),
+                                color: Colors.purple.withValues(
+                                    alpha: _pulseAnimation.value * 0.3),
                               ),
                             );
                           },
@@ -328,7 +347,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                   Center(
                     child: Text(
                       estadoRaw.toLowerCase() == 'pendiente_admin'
-                          ? 'Viaje solicitado'
+                          ? 'Tu viaje esta en ADM'
                           : '✅ ¡Viaje solicitado!',
                       style: const TextStyle(
                         color: Colors.greenAccent,
@@ -343,8 +362,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                   Center(
                     child: Text(
                       estadoRaw.toLowerCase() == 'pendiente_admin'
-                          ? 'Buscamos un chofer de turismo aprobado cerca de ti (asignación automática). '
-                              'Si no hay disponibilidad inmediata, un administrador completará la asignación.'
+                          ? 'Solicitud recibida correctamente.\nEn breve te asignamos un chofer de turismo.'
                           : 'Buscando el mejor chofer para ti',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
@@ -359,16 +377,19 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     const SizedBox(height: 12),
                     Center(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
                           color: Colors.deepPurple.withValues(alpha: 0.25),
                           borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.purpleAccent.withValues(alpha: 0.5)),
+                          border: Border.all(
+                              color:
+                                  Colors.purpleAccent.withValues(alpha: 0.5)),
                         ),
-                        child: Text(
-                          EstadosViaje.descripcion(estadoRaw),
+                        child: const Text(
+                          'Estado: pendiente de asignacion por ADM',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: Colors.white,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -386,7 +407,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.05),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.purple.withValues(alpha: 0.3)),
+                      border: Border.all(
+                          color: Colors.purple.withValues(alpha: 0.3)),
                     ),
                     child: Column(
                       children: [
@@ -433,7 +455,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.03),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                      border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.1)),
                     ),
                     child: Column(
                       children: [
@@ -467,29 +490,35 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                         // Origen y destino
                         _infoRow(Icons.flag, 'Origen', origen),
                         const SizedBox(height: 8),
-                        _infoRow(Icons.flag, 'Destino', destino, color: Colors.greenAccent),
+                        _infoRow(Icons.flag, 'Destino', destino,
+                            color: Colors.greenAccent),
 
                         const SizedBox(height: 12),
 
                         // Más detalles
                         if (fechaHora != null) ...[
-                          _infoRow(Icons.calendar_today, 'Fecha', _formatFecha(fechaHora)),
+                          _infoRow(Icons.calendar_today, 'Fecha',
+                              _formatFecha(fechaHora)),
                           const SizedBox(height: 8),
                         ],
 
-                        _infoRow(Icons.directions_car, 'Vehículo', tipoVehiculo),
+                        _infoRow(
+                            Icons.directions_car, 'Vehículo', tipoVehiculo),
 
                         if (pasajeros != null) ...[
                           const SizedBox(height: 8),
-                          _infoRow(Icons.people_outline, 'Pasajeros', pasajeros),
+                          _infoRow(
+                              Icons.people_outline, 'Pasajeros', pasajeros),
                         ],
 
                         const SizedBox(height: 8),
-                        _infoRow(Icons.payments_outlined, 'Método de pago', metodoPago),
+                        _infoRow(Icons.payments_outlined, 'Método de pago',
+                            metodoPago),
 
                         if (distancia > 0) ...[
                           const SizedBox(height: 8),
-                          _infoRow(Icons.straighten, 'Distancia', FormatosMoneda.km(distancia)),
+                          _infoRow(Icons.straighten, 'Distancia',
+                              FormatosMoneda.km(distancia)),
                         ],
 
                         const Divider(color: Colors.white24, height: 24),
@@ -544,7 +573,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                       ),
                       child: const Text(
                         'CANCELAR VIAJE',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                     ),
                   ),
@@ -567,7 +597,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     );
   }
 
-  Widget _infoRow(IconData icon, String label, String value, {Color color = Colors.white70}) {
+  Widget _infoRow(IconData icon, String label, String value,
+      {Color color = Colors.white70}) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

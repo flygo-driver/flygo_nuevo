@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
 class ProgramarViajeLogic {
   static Future<void> programar({
@@ -21,14 +22,14 @@ class ProgramarViajeLogic {
     await RolesService.ensureUserDoc(clienteId, defaultRol: Roles.cliente);
 
     final metodo = viaje.metodoPago.toLowerCase().trim();
-    final estadoInicial =
-        (metodo == 'tarjeta') ? EstadosViaje.pendientePago : EstadosViaje.pendiente;
+    final estadoInicial = (metodo == 'tarjeta')
+        ? EstadosViaje.pendientePago
+        : EstadosViaje.pendiente;
 
     // Flags de “ahora” vs “programado”
     final DateTime now = DateTime.now();
-    final bool esAhora = viaje.fechaHora.isBefore(
-      now.add(const Duration(minutes: 15)),
-    );
+    final bool esAhora =
+        TripPublishWindows.esAhoraPorFechaPickup(viaje.fechaHora, now);
     final DateTime publishInstant = esAhora
         ? now
         : ViajesRepo.poolOpensAtForScheduledPickup(viaje.fechaHora, now);
@@ -36,7 +37,8 @@ class ProgramarViajeLogic {
 
     final data = viaje
         .copyWith(
-          uidCliente: viaje.uidCliente.isNotEmpty ? viaje.uidCliente : clienteId,
+          uidCliente:
+              viaje.uidCliente.isNotEmpty ? viaje.uidCliente : clienteId,
           clienteId: clienteId,
           estado: estadoInicial,
           aceptado: false,
@@ -61,6 +63,7 @@ class ProgramarViajeLogic {
       if (lat is! num || lon is! num) return false;
       return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
     }
+
     if (!_okLL(data['latCliente'], data['lonCliente']) ||
         !_okLL(data['latDestino'], data['lonDestino'])) {
       throw Exception('Coordenadas inválidas.');

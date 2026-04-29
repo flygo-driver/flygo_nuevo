@@ -56,11 +56,16 @@ class _SeguridadAccesoPanelState extends State<SeguridadAccesoPanel> {
         content: TextField(
           controller: ctrl,
           obscureText: true,
-          decoration: const InputDecoration(hintText: 'Nueva contraseña (min. 6)'),
+          decoration:
+              const InputDecoration(hintText: 'Nueva contraseña (min. 6)'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Guardar')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancelar')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Guardar')),
         ],
       ),
     );
@@ -76,7 +81,8 @@ class _SeguridadAccesoPanelState extends State<SeguridadAccesoPanel> {
     }
 
     try {
-      final tienePassword = user.providerData.any((p) => p.providerId == 'password');
+      final tienePassword =
+          user.providerData.any((p) => p.providerId == 'password');
       if (!tienePassword) {
         final cred = EmailAuthProvider.credential(email: email, password: pwd);
         await user.linkWithCredential(cred); // añade proveedor password
@@ -101,8 +107,10 @@ class _SeguridadAccesoPanelState extends State<SeguridadAccesoPanel> {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
-    final tieneGoogle = user?.providerData.any((p) => p.providerId == 'google.com') ?? false;
-    final tienePassword = user?.providerData.any((p) => p.providerId == 'password') ?? false;
+    final tieneGoogle =
+        user?.providerData.any((p) => p.providerId == 'google.com') ?? false;
+    final tienePassword =
+        user?.providerData.any((p) => p.providerId == 'password') ?? false;
 
     return Card(
       color: const Color(0xFF121212),
@@ -115,7 +123,10 @@ class _SeguridadAccesoPanelState extends State<SeguridadAccesoPanel> {
           children: [
             const Text(
               'Seguridad y acceso',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 12),
             Row(
@@ -124,12 +135,15 @@ class _SeguridadAccesoPanelState extends State<SeguridadAccesoPanel> {
                   child: OutlinedButton.icon(
                     onPressed: tieneGoogle ? null : _vincularGoogle,
                     icon: const Icon(Icons.link),
-                    label: Text(tieneGoogle ? 'Google vinculado' : 'Vincular con Google'),
+                    label: Text(tieneGoogle
+                        ? 'Google vinculado'
+                        : 'Vincular con Google'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
                       side: const BorderSide(color: Colors.white24),
                       padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
                 ),
@@ -142,12 +156,15 @@ class _SeguridadAccesoPanelState extends State<SeguridadAccesoPanel> {
                   child: ElevatedButton.icon(
                     onPressed: _agregarOCambiarContrasena,
                     icon: const Icon(Icons.password, color: Colors.green),
-                    label: Text(tienePassword ? 'Cambiar contraseña' : 'Agregar contraseña'),
+                    label: Text(tienePassword
+                        ? 'Cambiar contraseña'
+                        : 'Agregar contraseña'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.white,
                       foregroundColor: Colors.green,
                       padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
                 ),

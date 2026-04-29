@@ -38,13 +38,15 @@ void showPoolPromoImageDialog(
                 children: [
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
                     color: headerBg,
                     child: Text(
                       title.isEmpty ? 'Banner del viaje' : title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: onSurface, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                          color: onSurface, fontWeight: FontWeight.w700),
                     ),
                   ),
                   ConstrainedBox(
@@ -57,7 +59,9 @@ void showPoolPromoImageDialog(
                         fit: BoxFit.contain,
                         errorBuilder: (_, __, ___) => SizedBox(
                           height: 220,
-                          child: Center(child: Icon(Icons.broken_image, color: muted, size: 40)),
+                          child: Center(
+                              child: Icon(Icons.broken_image,
+                                  color: muted, size: 40)),
                         ),
                       ),
                     ),
@@ -132,7 +136,9 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
       return;
     }
 
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && _urlLooksLikeMov(widget.videoUrl)) {
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        _urlLooksLikeMov(widget.videoUrl)) {
       _codecLikelyUnsupported = true;
     }
 
@@ -223,13 +229,15 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
             children: [
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 color: headerBg,
                 child: Text(
                   widget.title.isEmpty ? 'Video promocional' : widget.title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: onSurface, fontWeight: FontWeight.w700),
+                  style:
+                      TextStyle(color: onSurface, fontWeight: FontWeight.w700),
                 ),
               ),
               if (_codecLikelyUnsupported && _error == null && !_inited)
@@ -237,7 +245,8 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                   child: Text(
                     'En Android los videos .mov de iPhone a veces no se ven aquí. Si pasa, usa MP4 o "Abrir fuera de la app".',
-                    style: TextStyle(color: onSurface.withValues(alpha: 0.75), fontSize: 12),
+                    style: TextStyle(
+                        color: onSurface.withValues(alpha: 0.75), fontSize: 12),
                     textAlign: TextAlign.center,
                   ),
                 ),
@@ -274,7 +283,9 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                         color: Colors.black,
                         child: Center(
                           child: AspectRatio(
-                            aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
+                            aspectRatio: c.value.aspectRatio == 0
+                                ? 16 / 9
+                                : c.value.aspectRatio,
                             child: VideoPlayer(c),
                           ),
                         ),
@@ -299,7 +310,9 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                           if (mounted) setState(() {});
                         },
                         icon: Icon(
-                          _controller!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                          _controller!.value.isPlaying
+                              ? Icons.pause
+                              : Icons.play_arrow,
                           color: onSurface,
                         ),
                       ),
@@ -308,7 +321,9 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                           _controller!,
                           allowScrubbing: true,
                           colors: VideoProgressColors(
-                            playedColor: isDark ? Colors.greenAccent : const Color(0xFF0F9D58),
+                            playedColor: isDark
+                                ? Colors.greenAccent
+                                : const Color(0xFF0F9D58),
                           ),
                         ),
                       ),
@@ -320,8 +335,11 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                   alignment: Alignment.centerRight,
                   child: TextButton.icon(
                     onPressed: _openVideoExternally,
-                    icon: Icon(Icons.open_in_new, size: 18, color: onSurface.withValues(alpha: 0.7)),
-                    label: Text('Abrir fuera', style: TextStyle(color: onSurface.withValues(alpha: 0.7))),
+                    icon: Icon(Icons.open_in_new,
+                        size: 18, color: onSurface.withValues(alpha: 0.7)),
+                    label: Text('Abrir fuera',
+                        style:
+                            TextStyle(color: onSurface.withValues(alpha: 0.7))),
                   ),
                 ),
             ],
@@ -397,14 +415,16 @@ class PoolPromoStrip extends StatelessWidget {
                 if (hasI)
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () => showPoolPromoImageDialog(context, imageUrl: b, title: title),
+                    onTap: () => showPoolPromoImageDialog(context,
+                        imageUrl: b, title: title),
                     child: Image.network(
                       b,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => Container(
                         color: softFill,
                         alignment: Alignment.center,
-                        child: Icon(Icons.image_not_supported, color: textMuted),
+                        child:
+                            Icon(Icons.image_not_supported, color: textMuted),
                       ),
                     ),
                   )
@@ -412,9 +432,12 @@ class PoolPromoStrip extends StatelessWidget {
                   Material(
                     color: Colors.black.withValues(alpha: 0.75),
                     child: InkWell(
-                      onTap: () => showPoolPromoVideoDialog(context, videoUrl: v, title: title),
+                      onTap: () => showPoolPromoVideoDialog(context,
+                          videoUrl: v, title: title),
                       child: Center(
-                        child: Icon(Icons.play_circle_fill, size: 64, color: textPrimary.withValues(alpha: 0.9)),
+                        child: Icon(Icons.play_circle_fill,
+                            size: 64,
+                            color: textPrimary.withValues(alpha: 0.9)),
                       ),
                     ),
                   ),
@@ -428,8 +451,10 @@ class PoolPromoStrip extends StatelessWidget {
                       clipBehavior: Clip.antiAlias,
                       child: IconButton(
                         tooltip: 'Ver video',
-                        onPressed: () => showPoolPromoVideoDialog(context, videoUrl: v, title: title),
-                        icon: Icon(Icons.play_circle_outline, size: 36, color: textPrimary),
+                        onPressed: () => showPoolPromoVideoDialog(context,
+                            videoUrl: v, title: title),
+                        icon: Icon(Icons.play_circle_outline,
+                            size: 36, color: textPrimary),
                       ),
                     ),
                   ),
@@ -438,7 +463,8 @@ class PoolPromoStrip extends StatelessWidget {
                   bottom: 8,
                   child: IgnorePointer(
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: Colors.black54,
                         borderRadius: BorderRadius.circular(999),

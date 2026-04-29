@@ -8,30 +8,34 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugPrint, defaultTargetPlatform, kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
-
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_disponible.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
-import 'package:flygo_nuevo/servicios/viajes_repo.dart';   // 🔥 ESTA LÍNEA
+import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart'; // 🔥 ESTA LÍNEA
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
-import 'package:flygo_nuevo/widgets/taxista_drawer.dart';
+import 'package:flygo_nuevo/shell/taxista_shell.dart';
+import 'package:flygo_nuevo/widgets/cliente_perfil_conductor_chip.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
+import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
 const bool kLog = true;
-void logDbg(String msg) { if (kLog) debugPrint('[VIAJE_TX] $msg'); }
+void logDbg(String msg) {
+  if (kLog) debugPrint('[VIAJE_TX] $msg');
+}
+
 const bool _diagTripFlow =
     bool.fromEnvironment('TRIP_FLOW_DIAG', defaultValue: false);
 void _diag(String msg) {
@@ -40,7 +44,8 @@ void _diag(String msg) {
 
 /// Solo en debug/profile: ignorar distancias muy pequeñas (mismo dispositivo).
 const double kDebugMinDistance = 0.01; // ~10 m
-const double kFinalizarRadioMetros = 250; // Produccion: finalizar solo cerca del destino
+const double kFinalizarRadioMetros =
+    250; // Produccion: finalizar solo cerca del destino
 
 class ViajeEnCursoTaxista extends StatefulWidget {
   const ViajeEnCursoTaxista({super.key});
@@ -50,12 +55,19 @@ class ViajeEnCursoTaxista extends StatefulWidget {
 
 // ... resto del código igual
 
-class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with AutomaticKeepAliveClientMixin {
-  
+class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
+    with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
 
   GoogleMapController? _map;
+
+  /// Tarjeta de acciones/navegación: arrastrable; por defecto ~40% para dejar mapa visible.
+  final DraggableScrollableController _viajeNavSheetCtrl =
+      DraggableScrollableController();
+
+  static const double _kViajeNavSheetMin = 0.14;
+  static const double _kViajeNavSheetInitialMitad = 0.5;
 
   // ===== GPS =====
   StreamSubscription<Position>? _gpsSub;
@@ -77,16 +89,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
   Timer? _routeDebounce;
 
   // ===== Viajes cercanos / cola: aislado en [ViajesCercanosTaxistaLayer] (no setState aquí) =====
-  final ViajesCercanosTaxistaController _viajesCercanosCtl = ViajesCercanosTaxistaController();
+  final ViajesCercanosTaxistaController _viajesCercanosCtl =
+      ViajesCercanosTaxistaController();
   final ValueNotifier<bool> _viajesCercanosEscucha = ValueNotifier<bool>(false);
-  final ValueNotifier<(double, double)?> _taxistaPosCola = ValueNotifier<(double, double)?>(null);
+  final ValueNotifier<(double, double)?> _taxistaPosCola =
+      ValueNotifier<(double, double)?>(null);
 
   // 🚀 Variables para detección de cercanía del cliente
   bool _clienteCerca = false;
   bool _navegacionIniciada = false;
   bool _selectorNavegacionAbierto = false;
+  /// Evita ver la tarjeta del viaje y el modal Waze/Maps apilados a la vez.
+  bool _viajeSheetOcultoPorModalNav = false;
   static const double DISTANCIA_CERCANIA_KM = 0.1;
-  
+
   // Cache del viaje actual
   Viaje? _cachedViaje;
   bool _isUpdatingLocation = false;
@@ -95,17 +111,21 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
   Stream<Viaje?> _stream() {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return const Stream<Viaje?>.empty();
-    return ViajesRepo.streamViajeEnCursoPorTaxista(u.uid).distinct(_mismoViajeParaUiTaxista);
+    return ViajesRepo.streamViajeEnCursoPorTaxista(u.uid)
+        .distinct(_mismoViajeParaUiTaxista);
   }
 
-  static bool _mismoViajeParaUiTaxista(Viaje? a, Viaje? b) => _firmaViajeUiTaxista(a) == _firmaViajeUiTaxista(b);
+  static bool _mismoViajeParaUiTaxista(Viaje? a, Viaje? b) =>
+      _firmaViajeUiTaxista(a) == _firmaViajeUiTaxista(b);
 
   static String _firmaViajeUiTaxista(Viaje? v) {
     if (v == null) return '';
     final est = EstadosViaje.normalizar(
       v.estado.isNotEmpty
           ? v.estado
-          : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
     String r6(double x) => (x.isFinite) ? x.toStringAsFixed(6) : 'x';
     final int wp = v.waypoints?.length ?? 0;
@@ -123,22 +143,40 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     final est = EstadosViaje.normalizar(
       v.estado.isNotEmpty
           ? v.estado
-          : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
     return '$est|${r6(v.latCliente)}|${r6(v.lonCliente)}|${r6(v.latDestino)}|${r6(v.lonDestino)}|${v.codigoVerificado}';
   }
 
   // ===== Utilidades =====
   bool _coordsValid(double lat, double lon) =>
-      lat.isFinite && lon.isFinite &&
+      lat.isFinite &&
+      lon.isFinite &&
       !(lat == 0 && lon == 0) &&
-      lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180;
 
   String _cleanPhone(String raw) => telefonoNormalizarDigitos(raw);
 
   String _digitsOnlyCode(String? s) => (s ?? '').replaceAll(RegExp(r'\D'), '');
 
-  bool _codigoEsperadoValido(String? codigo) => _digitsOnlyCode(codigo).length == 6;
+  bool _codigoEsperadoValido(String? codigo) =>
+      _digitsOnlyCode(codigo).length == 6;
+
+  void _tripFlowSnack(String msg, {Color backgroundColor = Colors.orange}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: backgroundColor,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   double? _waypointLat(Map<String, dynamic> w) {
     final x = w['lat'];
@@ -159,18 +197,24 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     return b;
   }
 
-  void _verificarCercaniaCliente(double latTaxista, double lonTaxista, double latCliente, double lonCliente) {
-    if (!_coordsValid(latTaxista, lonTaxista) || !_coordsValid(latCliente, lonCliente)) return;
-    
-    final distancia = _calcularDistanciaKm(latTaxista, lonTaxista, latCliente, lonCliente);
-    final bool ahoraCerca = distancia <= DISTANCIA_CERCANIA_KM;
-    
-    // Modo desarrollo: ignorar distancias muy pequeñas (mismo dispositivo)
-    if (kDebugMode && distancia < kDebugMinDistance) {
-      logDbg('⚠️ Modo desarrollo: ignorando distancia muy pequeña (${(distancia * 1000).toStringAsFixed(0)}m)');
+  void _verificarCercaniaCliente(double latTaxista, double lonTaxista,
+      double latCliente, double lonCliente) {
+    if (!_coordsValid(latTaxista, lonTaxista) ||
+        !_coordsValid(latCliente, lonCliente)) {
       return;
     }
-    
+
+    final distancia =
+        _calcularDistanciaKm(latTaxista, lonTaxista, latCliente, lonCliente);
+    final bool ahoraCerca = distancia <= DISTANCIA_CERCANIA_KM;
+
+    // Modo desarrollo: ignorar distancias muy pequeñas (mismo dispositivo)
+    if (kDebugMode && distancia < kDebugMinDistance) {
+      logDbg(
+          '⚠️ Modo desarrollo: ignorando distancia muy pequeña (${(distancia * 1000).toStringAsFixed(0)}m)');
+      return;
+    }
+
     if (ahoraCerca != _clienteCerca && mounted && !_isUpdatingLocation) {
       _isUpdatingLocation = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -179,7 +223,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             _clienteCerca = ahoraCerca;
           });
           _isUpdatingLocation = false;
-          
+
           if (ahoraCerca) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -208,11 +252,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           _isUpdatingLocation = false;
         }
       });
-      logDbg('🎯 Cambio de cercanía: $ahoraCerca, distancia: ${(distancia * 1000).toStringAsFixed(0)}m');
+      logDbg(
+          '🎯 Cambio de cercanía: $ahoraCerca, distancia: ${(distancia * 1000).toStringAsFixed(0)}m');
     }
   }
 
-  double _calcularDistanciaKm(double lat1, double lon1, double lat2, double lon2) {
+  double _calcularDistanciaKm(
+      double lat1, double lon1, double lat2, double lon2) {
     const double R = 6371.0;
     final double dLat = (lat2 - lat1) * pi / 180.0;
     final double dLon = (lon2 - lon1) * pi / 180.0;
@@ -233,16 +279,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     _gpsParaViajeId = viajeId;
 
     final ref = FirebaseFirestore.instance.collection('viajes').doc(viajeId);
-    final LocationSettings gpsSettings = (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
-        ? AndroidSettings(
-            accuracy: LocationAccuracy.bestForNavigation,
-            distanceFilter: 8,
-            intervalDuration: const Duration(seconds: 2),
-          )
-        : const LocationSettings(
-            accuracy: LocationAccuracy.bestForNavigation,
-            distanceFilter: 8,
-          );
+    final LocationSettings gpsSettings =
+        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+            ? AndroidSettings(
+                accuracy: LocationAccuracy.bestForNavigation,
+                distanceFilter: 8,
+                intervalDuration: const Duration(seconds: 2),
+              )
+            : const LocationSettings(
+                accuracy: LocationAccuracy.bestForNavigation,
+                distanceFilter: 8,
+              );
     _gpsSub = Geolocator.getPositionStream(
       locationSettings: gpsSettings,
     ).listen((p) async {
@@ -259,11 +306,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         _taxistaPosCola.value = (p.latitude, p.longitude);
 
         if (mounted && _cachedViaje != null && _cachedViaje!.id == viajeId) {
-          _cachedViaje = _cachedViaje!.copyWith(latTaxista: p.latitude, lonTaxista: p.longitude);
+          _cachedViaje = _cachedViaje!
+              .copyWith(latTaxista: p.latitude, lonTaxista: p.longitude);
         }
 
-        if (mounted && _cachedViaje != null && _coordsValid(_cachedViaje!.latCliente, _cachedViaje!.lonCliente)) {
-          _verificarCercaniaCliente(p.latitude, p.longitude, _cachedViaje!.latCliente, _cachedViaje!.lonCliente);
+        if (mounted &&
+            _cachedViaje != null &&
+            _coordsValid(_cachedViaje!.latCliente, _cachedViaje!.lonCliente)) {
+          _verificarCercaniaCliente(p.latitude, p.longitude,
+              _cachedViaje!.latCliente, _cachedViaje!.lonCliente);
           _scheduleDrawRoute();
         }
       } catch (e) {
@@ -282,7 +333,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
   Future<bool> _asegurarGps(String viajeId) async {
     logDbg('_asegurarGps($viajeId) - _gpsActivo: $_gpsActivo');
-    
+
     if (_gpsActivo && _gpsParaViajeId == viajeId) {
       logDbg('✅ GPS ya activo');
       return true;
@@ -292,12 +343,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
     }
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
       if (!mounted) return false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Permiso de ubicación requerido para navegar')),
+            const SnackBar(
+                content: Text('Permiso de ubicación requerido para navegar')),
           );
         }
       });
@@ -327,34 +380,39 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
   // ===== RUTAS =====
   void _scheduleDrawRoute() {
     _routeDebounce?.cancel();
-    _routeDebounce = Timer(const Duration(milliseconds: 500), () => _drawRoutes());
+    _routeDebounce =
+        Timer(const Duration(milliseconds: 500), () => _drawRoutes());
   }
 
   Future<void> _drawRoutes() async {
     if (!mounted || _cachedViaje == null) return;
-    
+
     final v = _cachedViaje!;
-    
+
     final estadoBase = EstadosViaje.normalizar(
       v.estado.isNotEmpty
           ? v.estado
-          : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
-    
+
     final oldPolylines = Set<Polyline>.from(_polylines);
     _polylines.clear();
-    
-    if ((EstadosViaje.esAceptado(estadoBase) || EstadosViaje.esEnCaminoPickup(estadoBase)) &&
+
+    if ((EstadosViaje.esAceptado(estadoBase) ||
+            EstadosViaje.esEnCaminoPickup(estadoBase)) &&
         _coordsValid(v.latTaxista, v.lonTaxista) &&
         _coordsValid(v.latCliente, v.lonCliente)) {
       await _drawRoute(
         LatLng(v.latTaxista, v.lonTaxista),
         LatLng(v.latCliente, v.lonCliente),
         id: 'to_cliente',
-        color: const Color(0xFF49F18B),
+        color: const Color(0xFF00E5FF),
+        width: 6,
       );
     }
-    
+
     final bool rutaAlDestino = EstadosViaje.esEnCurso(estadoBase) ||
         (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
     if (rutaAlDestino &&
@@ -367,22 +425,28 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         color: const Color(0xFF49F18B),
       );
     }
-    
+
     if (mounted && !_polylinesEquals(oldPolylines, _polylines)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() {});
       });
     }
   }
-  
+
   bool _polylinesEquals(Set<Polyline> a, Set<Polyline> b) {
     if (a.length != b.length) return false;
     final aIds = a.map((p) => p.polylineId.value).toSet();
     final bIds = b.map((p) => p.polylineId.value).toSet();
     return aIds.containsAll(bIds) && bIds.containsAll(aIds);
   }
-  
-  Future<void> _drawRoute(LatLng a, LatLng b, {required String id, required Color color}) async {
+
+  Future<void> _drawRoute(
+    LatLng a,
+    LatLng b, {
+    required String id,
+    required Color color,
+    int width = 5,
+  }) async {
     try {
       final result = await DirectionsService.drivingDistanceKm(
         originLat: a.latitude,
@@ -392,17 +456,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         withTraffic: true,
         region: 'do',
       );
-      
+
       List<LatLng> points = [];
       if (result != null && result.path != null && result.path!.isNotEmpty) {
         points = result.path!;
       }
-      
+
       _polylines.add(
         Polyline(
           polylineId: PolylineId(id),
           points: points.isNotEmpty ? points : [a, b],
-          width: 5,
+          width: width,
           color: color,
           geodesic: true,
         ),
@@ -412,7 +476,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         Polyline(
           polylineId: PolylineId(id),
           points: [a, b],
-          width: 5,
+          width: width,
           color: color,
           geodesic: true,
         ),
@@ -420,10 +484,45 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     }
   }
 
+  void _colapsarTarjetaViajePorMapa() {
+    if (!_viajeNavSheetCtrl.isAttached) return;
+    _viajeNavSheetCtrl.animateTo(
+      _kViajeNavSheetMin,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _expandirTarjetaViajeTrasMapa() {
+    if (!_viajeNavSheetCtrl.isAttached) return;
+    _viajeNavSheetCtrl.animateTo(
+      _kViajeNavSheetInitialMitad,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// Evita dos “tarjetas” a la vez: la hoja Waze/Maps encima de la del viaje.
+  void _plegarTarjetaViajeAntesNavSheet() {
+    if (!_viajeNavSheetCtrl.isAttached) return;
+    _viajeNavSheetCtrl.jumpTo(_kViajeNavSheetMin);
+  }
+
+  void _restaurarTarjetaViajeTrasNavSheet() {
+    if (!mounted) return;
+    if (!_viajeNavSheetCtrl.isAttached) return;
+    _viajeNavSheetCtrl.animateTo(
+      _kViajeNavSheetInitialMitad,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   @override
   void dispose() {
     _cancelSub?.cancel();
     _map?.dispose();
+    _viajeNavSheetCtrl.dispose();
     _stopGps();
     _codigoCtrl.dispose();
     _routeDebounce?.cancel();
@@ -433,85 +532,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     super.dispose();
   }
 
-  // ===================== Navegación externa =====================
-
-  Future<bool> _tryLaunch(Uri uri, {bool preferExternalApp = true}) async {
-    try {
-      final ok1 = await launchUrl(
-        uri,
-        mode: preferExternalApp ? LaunchMode.externalApplication : LaunchMode.platformDefault,
-      );
-      if (ok1) return true;
-
-      final ok2 = await launchUrl(uri, mode: LaunchMode.platformDefault);
-      if (ok2) return true;
-
-      if (uri.scheme.startsWith('http')) {
-        final ok3 = await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (ok3) return true;
-      }
-    } catch (e) {
-      logDbg('launch fail: $e');
-    }
-    return false;
-  }
-
-  Future<void> _abrirGoogleMapsDestino(double lat, double lon) async {
-    final googleIntent = Uri(
-      scheme: 'google.navigation',
-      queryParameters: {'q': '$lat,$lon', 'mode': 'd'},
-    );
-    final geoQuery = Uri.parse('geo:0,0?q=$lat,$lon');
-    final googleWeb = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=driving');
-
-    if (await _tryLaunch(googleIntent)) return;
-    if (await _tryLaunch(geoQuery)) return;
-    await _tryLaunch(googleWeb, preferExternalApp: false);
-  }
-
-  Future<void> _abrirGoogleMapsDireccion(String direccion) async {
-    final q = Uri.encodeComponent(direccion);
-    final geoQuery = Uri.parse('geo:0,0?q=$q');
-    final web = Uri.parse('https://www.google.com/maps/search/?api=1&query=$q');
-
-    if (await _tryLaunch(geoQuery)) return;
-    await _tryLaunch(web, preferExternalApp: false);
-  }
-
-  Future<void> _abrirWazeDestino(double lat, double lon) async {
-    final wazeDeep = Uri.parse('waze://?ll=$lat,$lon&navigate=yes');
-    final wazeWeb  = Uri.parse('https://waze.com/ul?ll=$lat,$lon&navigate=yes');
-
-    if (await _tryLaunch(wazeDeep)) return;
-    if (await _tryLaunch(wazeWeb, preferExternalApp: false)) return;
-
-    await _abrirGoogleMapsDestino(lat, lon);
-  }
-
-  Future<void> _abrirWazeBusqueda(String query) async {
-    final q = Uri.encodeComponent(query);
-    final wazeDeep = Uri.parse('waze://?q=$q&navigate=yes');
-    final wazeWeb  = Uri.parse('https://waze.com/ul?q=%s&navigate=yes'.replaceFirst('%s', q));
-
-    if (await _tryLaunch(wazeDeep)) return;
-    if (await _tryLaunch(wazeWeb, preferExternalApp: false)) return;
-
-    await _abrirGoogleMapsDireccion(query);
-  }
-
   // ===================== Acciones Principales =====================
 
   Future<void> _iniciarNavegacionPickup(Viaje v) async {
     if (_actionBusy) return;
     _actionBusy = true;
-    
+
     try {
       // Si el backend ya está en `en_camino_pickup`, el botón no debe fallar.
       // Esto evita que `marcarEnCaminoPickup()` intente una transición inválida
       // (de `en_camino_pickup` a `en_camino_pickup`) y dispare el snackbar genérico.
       final estadoN = EstadosViaje.normalizar(v.estado);
       final bool yaEnCaminoPickup = estadoN == EstadosViaje.enCaminoPickup;
-      if (estadoN == EstadosViaje.cancelado || estadoN == EstadosViaje.completado) {
+      if (estadoN == EstadosViaje.cancelado ||
+          estadoN == EstadosViaje.completado) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -527,7 +561,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _navegacionIniciada = true);
       });
-      
+
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (!yaEnCaminoPickup) {
         if (uid != null) {
@@ -552,7 +586,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           }
         }
       }
-      
+
       final gpsOk = await _asegurarGps(v.id);
       if (!gpsOk && mounted) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -561,119 +595,68 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         _actionBusy = false;
         return;
       }
-      
+
       final tieneCoords = _coordsValid(v.latCliente, v.lonCliente);
-      
+
+      /// Si el sheet se cierra sin elegir app (gesto, barrier, etc.), no dejar
+      /// `_navegacionIniciada` en true: desbloquea de nuevo «Navegar» y abordo coherente.
+      var eligioAppExterna = false;
+
       if (mounted) {
-        await showModalBottomSheet(
-          context: context,
-          backgroundColor: Colors.black,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          builder: (context) => SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.white30,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Selecciona tu app de navegación',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Punto de recogida: ${v.origen}',
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        if (tieneCoords) {
-                          _abrirWazeDestino(v.latCliente, v.lonCliente);
-                        } else {
-                          _abrirWazeBusqueda(v.origen);
-                        }
-                      },
-                      icon: const Icon(Icons.waves, color: Colors.blue),
-                      label: const Text(
-                        'Waze',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black87,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        if (tieneCoords) {
-                          _abrirGoogleMapsDestino(v.latCliente, v.lonCliente);
-                        } else {
-                          _abrirGoogleMapsDireccion(v.origen);
-                        }
-                      },
-                      icon: const Icon(Icons.map, color: Colors.green),
-                      label: const Text(
-                        'Google Maps',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black87,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) setState(() => _navegacionIniciada = false);
-                      });
-                    },
-                    child: const Text(
-                      'Cancelar',
-                      style: TextStyle(color: Colors.white54),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
+        setState(() => _viajeSheetOcultoPorModalNav = true);
+        _plegarTarjetaViajeAntesNavSheet();
+        try {
+          await showNavegacionWazeMapsSheet(
+            context,
+            title: 'Abrir navegación',
+            addressLine: 'Punto de recogida: ${v.origen}',
+            tieneCoords: tieneCoords,
+            gpsCoordinatesLine: tieneCoords
+                ? 'GPS: ${NavegacionExternaLauncher.fmtCoord(v.latCliente)}, ${NavegacionExternaLauncher.fmtCoord(v.lonCliente)}'
+                : null,
+            showSinGpsBanner: !tieneCoords,
+            footerHint:
+                'Elige Waze o Maps; al llegar, vuelve a RAI para marcar abordo y el código.',
+            onWaze: () {
+              eligioAppExterna = true;
+              if (tieneCoords) {
+                unawaited(NavegacionExternaLauncher.abrirWazeDestino(
+                    v.latCliente, v.lonCliente));
+              } else {
+                unawaited(
+                    NavegacionExternaLauncher.abrirWazeBusqueda(v.origen));
+              }
+            },
+            onMaps: () {
+              eligioAppExterna = true;
+              if (tieneCoords) {
+                unawaited(NavegacionExternaLauncher.abrirGoogleMapsDestino(
+                    v.latCliente, v.lonCliente));
+              } else {
+                unawaited(NavegacionExternaLauncher.abrirGoogleMapsDireccion(
+                    v.origen));
+              }
+            },
+            onCancel: () {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) setState(() => _navegacionIniciada = false);
+              });
+            },
+          );
+        } finally {
+          if (mounted) {
+            setState(() => _viajeSheetOcultoPorModalNav = false);
+            _restaurarTarjetaViajeTrasNavSheet();
+          }
+        }
       }
-      
+
+      if (mounted && !eligioAppExterna) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _navegacionIniciada = false);
+        });
+      }
+
       if (mounted && _navegacionIniciada) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
@@ -685,7 +668,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                     SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Navegación iniciada. Cuando llegues al punto de recogida, presiona "Cliente a bordo".',
+                        'Navegación hacia el cliente lista. Al llegar, en RAI: «Cliente a bordo» y luego el código.',
                         style: TextStyle(fontSize: 13),
                       ),
                     ),
@@ -702,7 +685,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           }
         });
       }
-      
     } catch (e) {
       logDbg('Error iniciando navegación: $e');
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -724,7 +706,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
   Future<void> _marcarClienteAbordo(Viaje v) async {
     if (_actionBusy) return;
     _actionBusy = true;
-    
+
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) {
@@ -762,7 +744,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
-      
+
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -784,9 +766,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           );
         }
       });
-      
+
       // Recargar viaje
-      final snapshot = await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
+      final snapshot =
+          await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && snapshot.exists) {
           final viajeActualizado = Viaje.fromMap(v.id, snapshot.data()!);
@@ -797,12 +780,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           });
         }
       });
-      
     } catch (e) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: ${errorAuthEs(e)}'), backgroundColor: Colors.red),
+            SnackBar(
+                content: Text('Error: ${errorAuthEs(e)}'),
+                backgroundColor: Colors.red),
           );
         }
       });
@@ -813,40 +797,25 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
   Future<void> _verificarCodigo(String viajeId, String codigoCorrecto) async {
     if (_actionBusy) return;
+    FocusManager.instance.primaryFocus?.unfocus();
 
     final esperado = _digitsOnlyCode(codigoCorrecto);
     final ingresado = _digitsOnlyCode(_codigoCtrl.text);
     if (esperado.length != 6) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Este viaje no tiene un código válido en el sistema. Contacta soporte.'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      });
+      _tripFlowSnack(
+        'Este viaje no tiene código de 6 dígitos en el sistema. '
+        'Pide al cliente que abra su viaje y confirme el PIN; si sigue igual, contacta soporte.',
+      );
       return;
     }
     if (ingresado.length != 6) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Ingresa los 6 dígitos del código'), backgroundColor: Colors.red),
-          );
-        }
-      });
+      _tripFlowSnack('Ingresa los 6 dígitos que te dicta el cliente.',
+          backgroundColor: Colors.redAccent);
       return;
     }
     if (ingresado != esperado) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('❌ Código incorrecto'), backgroundColor: Colors.red),
-          );
-        }
-      });
+      _tripFlowSnack('Código incorrecto. Vuelve a pedírselo al cliente.',
+          backgroundColor: Colors.redAccent);
       return;
     }
 
@@ -858,9 +827,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       _actionBusy = false;
       return;
     }
-    
+
     try {
-      await FirebaseFirestore.instance.collection('viajes').doc(viajeId).update({
+      await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .update({
         'codigoVerificado': true,
         'viajeIniciadoEn': FieldValue.serverTimestamp(),
       });
@@ -882,23 +854,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         return;
       }
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ Código verificado. Viaje en ruta.'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      });
+      _tripFlowSnack('Código correcto. Iniciando ruta hacia el destino…',
+          backgroundColor: Colors.green);
 
       if (!mounted) {
         return;
       }
 
-      final viajeSnap = await FirebaseFirestore.instance.collection('viajes').doc(viajeId).get();
-      
+      final viajeSnap = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get();
+
       if (!mounted) {
         _actionBusy = false;
         return;
@@ -906,27 +873,35 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
       final data = viajeSnap.data();
       if (data != null) {
+        if (mounted && _cachedViaje?.id == viajeId) {
+          setState(() {
+            _cachedViaje = Viaje.fromMap(viajeId, data);
+          });
+          _scheduleDrawRoute();
+        }
         final latDestino = (data['latDestino'] ?? 0).toDouble();
         final lonDestino = (data['lonDestino'] ?? 0).toDouble();
         final destinoTexto = data['destino']?.toString() ?? 'destino';
-        
+
         if (_coordsValid(latDestino, lonDestino)) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('🧳 Viaje iniciado. Navegando a: $destinoTexto')),
-              );
-            }
-          });
-          
+          if (mounted) {
+            _tripFlowSnack('Abre navegación hacia: $destinoTexto',
+                backgroundColor: Colors.blueGrey);
+          }
           await _selectorNavegacionDestino(latDestino, lonDestino);
+        } else if (mounted) {
+          _tripFlowSnack(
+              'Código verificado. Usa la dirección de destino en el mapa si no hay GPS.',
+              backgroundColor: Colors.orange);
         }
       }
     } catch (e) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error al iniciar: $e'), backgroundColor: Colors.red),
+            SnackBar(
+                content: Text('Error al iniciar: $e'),
+                backgroundColor: Colors.red),
           );
         }
       });
@@ -996,7 +971,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       if (_coordsValid(v.latTaxista, v.lonTaxista)) {
         latTx = v.latTaxista;
         lonTx = v.lonTaxista;
-      } else if (_cachedViaje != null && _coordsValid(_cachedViaje!.latTaxista, _cachedViaje!.lonTaxista)) {
+      } else if (_cachedViaje != null &&
+          _coordsValid(_cachedViaje!.latTaxista, _cachedViaje!.lonTaxista)) {
         latTx = _cachedViaje!.latTaxista;
         lonTx = _cachedViaje!.lonTaxista;
       } else {
@@ -1053,21 +1029,30 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     }
 
     final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('Finalizar viaje', style: TextStyle(color: Colors.white)),
-        content: const Text('¿Confirmas que el viaje terminó correctamente?', style: TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No', style: TextStyle(color: Colors.white70))),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sí, finalizar')),
-        ],
-      ),
-    ) ?? false;
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Colors.black,
+            title: const Text('Finalizar viaje',
+                style: TextStyle(color: Colors.white)),
+            content: const Text(
+                '¿Confirmas que el viaje terminó correctamente?',
+                style: TextStyle(color: Colors.white70)),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('No',
+                      style: TextStyle(color: Colors.white70))),
+              ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Sí, finalizar')),
+            ],
+          ),
+        ) ??
+        false;
 
-    if (!ok) { 
-      _actionBusy = false; 
-      return; 
+    if (!ok) {
+      _actionBusy = false;
+      return;
     }
 
     try {
@@ -1112,9 +1097,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             .doc(v.id)
             .get();
         final data = doc.data() ?? {};
-        double _toDouble(dynamic x) => x is num
-            ? x.toDouble()
-            : (double.tryParse('$x') ?? 0.0);
+        double _toDouble(dynamic x) =>
+            x is num ? x.toDouble() : (double.tryParse('$x') ?? 0.0);
 
         total = _toDouble(data['precioFinal'] ?? data['precio'] ?? v.precio);
 
@@ -1204,13 +1188,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         context: context,
         uidTaxista: uid,
       );
-
     } catch (e) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          messenger.showSnackBar(
-            SnackBar(content: Text('❌ ${errorAuthEs(e)}'))
-          );
+          messenger
+              .showSnackBar(SnackBar(content: Text('❌ ${errorAuthEs(e)}')));
         }
       });
     } finally {
@@ -1227,12 +1209,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       return;
     }
 
-    final navigator = Navigator.of(context);
+    final navigator = Navigator.of(context, rootNavigator: true);
     final messenger = ScaffoldMessenger.of(context);
 
     final String estado = EstadosViaje.normalizar(v.estado);
-    final bool cancelable =
-        estado == EstadosViaje.aceptado || estado == EstadosViaje.enCaminoPickup;
+    final bool cancelable = estado == EstadosViaje.aceptado ||
+        estado == EstadosViaje.enCaminoPickup;
     if (!cancelable) {
       _actionBusy = false;
       if (mounted) {
@@ -1248,28 +1230,36 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     }
 
     final confirmar = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('Cancelar viaje', style: TextStyle(color: Colors.white)),
-        content: const Text('¿Seguro que deseas cancelar este viaje?',
-            style: TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('No', style: TextStyle(color: Colors.white70)),
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Colors.black,
+            title: const Text('Cancelar viaje',
+                style: TextStyle(color: Colors.white)),
+            content: const Text(
+              'Solo puedes cancelar antes de que el cliente esté a bordo o el viaje esté en ruta. '
+              'Si cancelas ahora, el pedido vuelve al pool y el cliente es notificado.\n\n'
+              'Las cancelaciones frecuentes o sin causa pueden revisarse. '
+              '¿Confirmas que deseas cancelar en este punto del servicio?',
+              style: TextStyle(color: Colors.white70, height: 1.35),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child:
+                    const Text('No', style: TextStyle(color: Colors.white70)),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Sí, cancelar'),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Sí, cancelar'),
-          ),
-        ],
-      ),
-    ) ?? false;
+        ) ??
+        false;
 
     if (!confirmar) {
-      _actionBusy = false; 
-      return; 
+      _actionBusy = false;
+      return;
     }
 
     try {
@@ -1288,20 +1278,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               ),
             ),
           );
-          
+
           navigator.pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+            MaterialPageRoute(builder: (_) => const TaxistaShell()),
             (route) => false,
           );
         }
       });
-
     } catch (e) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          messenger.showSnackBar(
-            SnackBar(content: Text('❌ ${errorAuthEs(e)}'))
-          );
+          messenger
+              .showSnackBar(SnackBar(content: Text('❌ ${errorAuthEs(e)}')));
         }
       });
     } finally {
@@ -1323,22 +1311,37 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance.collection('usuarios').doc(uidCliente).snapshots(),
+              stream: FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(uidCliente)
+                  .snapshots(),
               builder: (ctx, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
+                  return const Center(
+                      child:
+                          CircularProgressIndicator(color: Colors.greenAccent));
                 }
-                
+
                 final u = snap.data?.data() ?? {};
                 final nombre = (u['nombre'] ?? '—').toString().trim();
                 final telefono = (u['telefono'] ?? '—').toString().trim();
-                
+
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Center(child: Container(width: 46, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)))),
+                    Center(
+                        child: Container(
+                            width: 46,
+                            height: 5,
+                            decoration: BoxDecoration(
+                                color: Colors.white24,
+                                borderRadius: BorderRadius.circular(3)))),
                     const SizedBox(height: 16),
-                    const Text('Información del Cliente', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                    const Text('Información del Cliente',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold)),
                     const SizedBox(height: 24),
                     Container(
                       padding: const EdgeInsets.all(16),
@@ -1350,14 +1353,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.person, color: Colors.greenAccent, size: 24),
+                              const Icon(Icons.person,
+                                  color: Colors.greenAccent, size: 24),
                               const SizedBox(width: 16),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text('Nombre', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                                    Text(nombre, style: const TextStyle(color: Colors.white, fontSize: 18)),
+                                    const Text('Nombre',
+                                        style: TextStyle(
+                                            color: Colors.white54,
+                                            fontSize: 12)),
+                                    Text(nombre,
+                                        style: const TextStyle(
+                                            color: Colors.white, fontSize: 18)),
                                   ],
                                 ),
                               ),
@@ -1366,14 +1375,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                           const SizedBox(height: 16),
                           Row(
                             children: [
-                              const Icon(Icons.phone, color: Colors.greenAccent, size: 24),
+                              const Icon(Icons.phone,
+                                  color: Colors.greenAccent, size: 24),
                               const SizedBox(width: 16),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text('Teléfono', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                                    Text(telefono, style: const TextStyle(color: Colors.white, fontSize: 18)),
+                                    const Text('Teléfono',
+                                        style: TextStyle(
+                                            color: Colors.white54,
+                                            fontSize: 12)),
+                                    Text(telefono,
+                                        style: const TextStyle(
+                                            color: Colors.white, fontSize: 18)),
                                   ],
                                 ),
                               ),
@@ -1406,7 +1421,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
   }
 
   // ===== Contactar cliente =====
-  Future<void> _contactarCliente({required String uidCliente, required String viajeId}) async {
+  Future<void> _contactarCliente(
+      {required String uidCliente, required String viajeId}) async {
     if (!mounted) return;
     final ColorScheme sheetScheme = Theme.of(context).colorScheme;
     await showModalBottomSheet(
@@ -1425,9 +1441,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           maxChildSize: 0.95,
           builder: (ctx, controller) => SafeArea(
             child: Padding(
-              padding: EdgeInsets.only(left: 16, right: 16, top: 16, bottom: MediaQuery.of(sheetCtx).viewPadding.bottom + 16),
+              padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 16,
+                  bottom: MediaQuery.of(sheetCtx).viewPadding.bottom + 16),
               child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance.collection('usuarios').doc(uidCliente).snapshots(),
+                stream: FirebaseFirestore.instance
+                    .collection('usuarios')
+                    .doc(uidCliente)
+                    .snapshots(),
                 builder: (ctx2, snap) {
                   if (snap.connectionState == ConnectionState.waiting) {
                     return Center(
@@ -1441,7 +1464,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                   final u = snap.data?.data() ?? {};
                   final nombre = (u['nombre'] ?? '—').toString().trim();
 
-                  String telClienteLimpio() => _cleanPhone(telefonoCrudoDesdeMapa(u));
+                  String telClienteLimpio() =>
+                      _cleanPhone(telefonoCrudoDesdeMapa(u));
 
                   return ListView(
                     controller: controller,
@@ -1459,12 +1483,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                       const SizedBox(height: 12),
                       Text(
                         'Contactar cliente',
-                        style: TextStyle(color: cs.onSurface, fontSize: 18, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            color: cs.onSurface,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
                       Text(
                         nombre.isEmpty ? 'Cliente' : nombre,
-                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 15),
+                        style:
+                            TextStyle(color: cs.onSurfaceVariant, fontSize: 15),
                       ),
                       const SizedBox(height: 16),
                       FilledButton.icon(
@@ -1486,7 +1514,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                         label: const Text('Llamar'),
                         style: FilledButton.styleFrom(
                           minimumSize: const Size(double.infinity, 52),
-                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                          textStyle: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -1505,19 +1534,21 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                           }
                           const String waMsg = 'Hola, soy tu taxista de RAI.';
                           if (await telefonoLaunchUri(
-                                telefonoUriWhatsAppApp(tel, waMsg),
-                              )) {
+                            telefonoUriWhatsAppApp(tel, waMsg),
+                          )) {
                             return;
                           }
                           await telefonoLaunchUri(
                             telefonoUriWhatsAppWeb(tel, waMsg),
                           );
                         },
-                        icon: Icon(Icons.chat_bubble_outline, color: cs.primary),
+                        icon:
+                            Icon(Icons.chat_bubble_outline, color: cs.primary),
                         label: const Text('WhatsApp'),
                         style: FilledButton.styleFrom(
                           minimumSize: const Size(double.infinity, 52),
-                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                          textStyle: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -1531,7 +1562,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                               MaterialPageRoute(
                                 builder: (_) => ChatScreen(
                                   otroUid: uidCliente,
-                                  otroNombre: nombre.isEmpty ? 'Cliente' : nombre,
+                                  otroNombre:
+                                      nombre.isEmpty ? 'Cliente' : nombre,
                                   viajeId: viajeId,
                                 ),
                               ),
@@ -1548,7 +1580,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                       const SizedBox(height: 10),
                       TextButton(
                         onPressed: () => Navigator.pop(sheetCtx),
-                        child: Text('Cerrar', style: TextStyle(color: cs.primary)),
+                        child:
+                            Text('Cerrar', style: TextStyle(color: cs.primary)),
                       ),
                     ],
                   );
@@ -1566,45 +1599,30 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     if (_selectorNavegacionAbierto) return;
     _selectorNavegacionAbierto = true;
     try {
-      await showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.black,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        builder: (_) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Wrap(
-              runSpacing: 12,
-              children: [
-                Center(child: Container(width: 44, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3)))),
-                const SizedBox(height: 8),
-                const Text('Abrir navegación', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    unawaited(_abrirWazeDestino(lat, lon));
-                  },
-                  icon: const Icon(Icons.directions_car, color: Colors.green),
-                  label: const Text('Waze'),
-                  style: _styleBase(),
-                ),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    unawaited(_abrirGoogleMapsDestino(lat, lon));
-                  },
-                  icon: const Icon(Icons.map, color: Colors.green),
-                  label: const Text('Google Maps'),
-                  style: _styleBase(),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
+      if (mounted) setState(() => _viajeSheetOcultoPorModalNav = true);
+      _plegarTarjetaViajeAntesNavSheet();
+      try {
+        await showNavegacionWazeMapsSheet(
+          context,
+          title: 'Abrir navegación',
+          tieneCoords: true,
+          gpsCoordinatesLine:
+              'GPS: ${NavegacionExternaLauncher.fmtCoord(lat)}, ${NavegacionExternaLauncher.fmtCoord(lon)}',
+          footerHint: 'Elige Waze o Google Maps para ir al destino del viaje.',
+          onWaze: () {
+            unawaited(NavegacionExternaLauncher.abrirWazeDestino(lat, lon));
+          },
+          onMaps: () {
+            unawaited(
+                NavegacionExternaLauncher.abrirGoogleMapsDestino(lat, lon));
+          },
+        );
+      } finally {
+        if (mounted) {
+          setState(() => _viajeSheetOcultoPorModalNav = false);
+          _restaurarTarjetaViajeTrasNavSheet();
+        }
+      }
     } finally {
       _selectorNavegacionAbierto = false;
     }
@@ -1619,7 +1637,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: Colors.white12),
         ),
-        child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+        child: Text(text,
+            style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.w600)),
       );
 
   Widget _servicioBadge(Viaje v) {
@@ -1658,7 +1680,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           const SizedBox(width: 6),
           Text(
             label,
-            style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: color, fontSize: 12, fontWeight: FontWeight.bold),
           ),
         ],
       ),
@@ -1683,7 +1706,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         children: [
           const Text(
             '📍 Paradas intermedias:',
-            style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: Colors.orangeAccent, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           ...v.waypoints!.asMap().entries.map((entry) {
@@ -1692,14 +1716,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             final label = waypoint['label']?.toString() ?? 'Parada $index';
             final lat = _waypointLat(waypoint);
             final lon = _waypointLon(waypoint);
-            final navOk = enRuta && lat != null && lon != null && _coordsValid(lat, lon);
+            final navOk =
+                enRuta && lat != null && lon != null && _coordsValid(lat, lon);
             final wLat = lat;
             final wLon = lon;
             return Padding(
               padding: const EdgeInsets.only(left: 8, bottom: 4),
               child: Row(
                 children: [
-                  const Icon(Icons.flag_circle, size: 16, color: Colors.orangeAccent),
+                  const Icon(Icons.flag_circle,
+                      size: 16, color: Colors.orangeAccent),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1711,9 +1737,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                     IconButton(
                       tooltip: 'Navegar a esta parada',
                       padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      constraints:
+                          const BoxConstraints(minWidth: 36, minHeight: 36),
                       onPressed: () => _selectorNavegacionDestino(wLat, wLon),
-                      icon: const Icon(Icons.navigation, size: 20, color: Colors.greenAccent),
+                      icon: const Icon(Icons.navigation,
+                          size: 20, color: Colors.greenAccent),
                     ),
                 ],
               ),
@@ -1731,7 +1759,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
     final List<Widget> chips = [];
     if (v.extras!['pasajeros'] != null) {
-      chips.add(_chip('👥 ${v.extras!['pasajeros']} pasajero${v.extras!['pasajeros'] != 1 ? 's' : ''}'));
+      chips.add(_chip(
+          '👥 ${v.extras!['pasajeros']} pasajero${v.extras!['pasajeros'] != 1 ? 's' : ''}'));
     }
     if (v.extras!['peaje'] != null) {
       chips.add(_chip('💰 Peaje: ${FormatosMoneda.rd(v.extras!['peaje'])}'));
@@ -1753,19 +1782,36 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: taxistaId.isEmpty
           ? const Stream.empty()
-          : FirebaseFirestore.instance.collection('usuarios').doc(taxistaId).snapshots(),
+          : FirebaseFirestore.instance
+              .collection('usuarios')
+              .doc(taxistaId)
+              .snapshots(),
       builder: (context, snap) {
-        final tx = (snap.hasData && snap.data!.exists) ? (snap.data!.data() ?? const {}) : const {};
+        final tx = (snap.hasData && snap.data!.exists)
+            ? (snap.data!.data() ?? const {})
+            : const {};
 
-        final tipo   = _s(v.tipoVehiculo).trim().isNotEmpty ? _s(v.tipoVehiculo).trim() : _s(tx['tipoVehiculo']).trim();
-        final marca  = _s((v as dynamic).marca).trim().isNotEmpty ? _s((v as dynamic).marca).trim()
-                       : _s(tx['marca']).trim().isNotEmpty ? _s(tx['marca']).trim() : _s(tx['vehiculoMarca']).trim();
-        final modelo = _s((v as dynamic).modelo).trim().isNotEmpty ? _s((v as dynamic).modelo).trim()
-                       : _s(tx['modelo']).trim().isNotEmpty ? _s(tx['modelo']).trim() : _s(tx['vehiculoModelo']).trim();
-        final color  = _s((v as dynamic).color).trim().isNotEmpty ? _s((v as dynamic).color).trim()
-                       : _s(tx['color']).trim().isNotEmpty ? _s(tx['color']).trim() : _s(tx['vehiculoColor']).trim();
-        final placa  = _s((v as dynamic).placa).trim().isNotEmpty ? _s((v as dynamic).placa).trim()
-                       : _s(tx['placa']).trim();
+        final tipo = _s(v.tipoVehiculo).trim().isNotEmpty
+            ? _s(v.tipoVehiculo).trim()
+            : _s(tx['tipoVehiculo']).trim();
+        final marca = _s((v as dynamic).marca).trim().isNotEmpty
+            ? _s((v as dynamic).marca).trim()
+            : _s(tx['marca']).trim().isNotEmpty
+                ? _s(tx['marca']).trim()
+                : _s(tx['vehiculoMarca']).trim();
+        final modelo = _s((v as dynamic).modelo).trim().isNotEmpty
+            ? _s((v as dynamic).modelo).trim()
+            : _s(tx['modelo']).trim().isNotEmpty
+                ? _s(tx['modelo']).trim()
+                : _s(tx['vehiculoModelo']).trim();
+        final color = _s((v as dynamic).color).trim().isNotEmpty
+            ? _s((v as dynamic).color).trim()
+            : _s(tx['color']).trim().isNotEmpty
+                ? _s(tx['color']).trim()
+                : _s(tx['vehiculoColor']).trim();
+        final placa = _s((v as dynamic).placa).trim().isNotEmpty
+            ? _s((v as dynamic).placa).trim()
+            : _s(tx['placa']).trim();
 
         final linea = [
           if (tipo.isNotEmpty) tipo,
@@ -1784,9 +1830,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text('Tu vehículo (visible al cliente)',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
               const SizedBox(height: 6),
-              Text(linea.isEmpty ? '—' : linea, style: const TextStyle(color: Colors.white70)),
+              Text(linea.isEmpty ? '—' : linea,
+                  style: const TextStyle(color: Colors.white70)),
               const SizedBox(height: 8),
               Wrap(children: [
                 if (color.isNotEmpty) _chip('Color: $color'),
@@ -1815,7 +1863,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     if (EstadosViaje.esCompletado(estadoBase)) return 4;
     if (EstadosViaje.esEnCurso(estadoBase)) return 3;
     if (EstadosViaje.esAbordo(estadoBase)) return 2;
-    if (EstadosViaje.esEnCaminoPickup(estadoBase) || EstadosViaje.esAceptado(estadoBase)) return 1;
+    if (EstadosViaje.esEnCaminoPickup(estadoBase) ||
+        EstadosViaje.esAceptado(estadoBase)) {
+      return 1;
+    }
     return 0;
   }
 
@@ -1833,7 +1884,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       children: [
         const Text(
           'Progreso del viaje',
-          style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+          style: TextStyle(
+              color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
         ClipRRect(
@@ -1854,10 +1906,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: done ? Colors.greenAccent.withValues(alpha: 0.18) : Colors.white10,
+                color: done
+                    ? Colors.greenAccent.withValues(alpha: 0.18)
+                    : Colors.white10,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(
-                  color: done ? Colors.greenAccent.withValues(alpha: 0.6) : Colors.white24,
+                  color: done
+                      ? Colors.greenAccent.withValues(alpha: 0.6)
+                      : Colors.white24,
                 ),
               ),
               child: Text(
@@ -1893,7 +1949,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: StreamBuilder<DateTime>(
-        stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
+        stream:
+            Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
         builder: (BuildContext context, _) {
           final Duration elapsed = DateTime.now().difference(start);
           return Row(
@@ -1917,14 +1974,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
     _cancelSub?.cancel();
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
-    final navigator = Navigator.of(context);
+    final navigator = Navigator.of(context, rootNavigator: true);
     final messenger = ScaffoldMessenger.of(context);
 
-    _cancelSub = FirebaseFirestore.instance.collection('viajes').doc(viajeId).snapshots().listen((ds) {
+    _cancelSub = FirebaseFirestore.instance
+        .collection('viajes')
+        .doc(viajeId)
+        .snapshots()
+        .listen((ds) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         _diag('remote snapshot id=$viajeId exists=${ds.exists}');
-        
+
         if (!ds.exists) {
           if (_procesandoRemocion) return;
           _procesandoRemocion = true;
@@ -1936,9 +1997,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           _procesandoRemocion = false;
           if (!ausenciaConfirmada) return;
           _stopGps();
-          messenger.showSnackBar(const SnackBar(content: Text('El viaje ya no está disponible.')));
+          messenger.showSnackBar(
+              const SnackBar(content: Text('El viaje ya no está disponible.')));
           navigator.pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+            MaterialPageRoute(builder: (_) => const TaxistaShell()),
             (route) => false,
           );
           return;
@@ -1950,8 +2012,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         final est = (d['estado'] ?? '').toString();
         final estN = EstadosViaje.normalizar(est);
         final taxistaId = (d['taxistaId'] ?? d['uidTaxista'] ?? '').toString();
-        final bool teRemovieron = uid.isNotEmpty && (taxistaId.isEmpty || taxistaId != uid);
-        _diag('state id=$viajeId estado=$estN taxistaDoc=$taxistaId me=$uid teRemovieron=$teRemovieron');
+        final bool teRemovieron =
+            uid.isNotEmpty && (taxistaId.isEmpty || taxistaId != uid);
+        _diag(
+            'state id=$viajeId estado=$estN taxistaDoc=$taxistaId me=$uid teRemovieron=$teRemovieron');
 
         if (estN == EstadosViaje.cancelado || teRemovieron) {
           // Evita flicker por estados transitorios/reconciliaciones rápidas.
@@ -1969,7 +2033,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           _stopGps();
           if (uid.isNotEmpty) {
             try {
-              await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+              await FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(uid)
+                  .set({
                 'viajeActivoId': '',
                 'updatedAt': FieldValue.serverTimestamp(),
                 'actualizadoEn': FieldValue.serverTimestamp(),
@@ -1978,18 +2045,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               await ErrorReporting.reportError(
                 e,
                 stack: st,
-                context: 'viaje_en_curso_taxista: reset viajeActivoId (removido)',
+                context:
+                    'viaje_en_curso_taxista: reset viajeActivoId (removido)',
               );
             }
           }
-          final bool esRemocion = motivoConfirmado == 'removido' || (motivoConfirmado != 'cancelado' && teRemovieron);
+          final bool esRemocion = motivoConfirmado == 'removido' ||
+              (motivoConfirmado != 'cancelado' && teRemovieron);
           messenger.showSnackBar(
             SnackBar(
-              content: Text(esRemocion ? 'Fuiste removido del viaje.' : 'El cliente canceló el viaje.'),
+              content: Text(esRemocion
+                  ? 'Fuiste removido del viaje.'
+                  : 'El cliente canceló el viaje.'),
             ),
           );
           navigator.pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+            MaterialPageRoute(builder: (_) => const TaxistaShell()),
             (route) => false,
           );
         }
@@ -2047,7 +2118,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       }
       // Solo confirmamos remoción cuando el viaje sigue sin pertenecerme.
       if (taxista.isEmpty || taxista != uidTaxista) {
-        _diag('confirmRemocion server-removed id=$viajeId taxista=$taxista me=$uidTaxista');
+        _diag(
+            'confirmRemocion server-removed id=$viajeId taxista=$taxista me=$uidTaxista');
         return 'removido';
       }
       return null;
@@ -2074,7 +2146,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       final String taxista =
           (data['taxistaId'] ?? data['uidTaxista'] ?? '').toString();
       if (estado == EstadosViaje.cancelado) return true;
-      return taxista.isEmpty || (uidTaxista.isNotEmpty && taxista != uidTaxista);
+      return taxista.isEmpty ||
+          (uidTaxista.isNotEmpty && taxista != uidTaxista);
     } catch (_) {
       return false;
     }
@@ -2087,19 +2160,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
     return Scaffold(
       backgroundColor: Colors.black,
-      drawer: const TaxistaDrawer(),
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
         title: const Text(
           'Mi viaje en curso',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        leading: Builder(
-          builder: (context) => IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
-            onPressed: () => Scaffold.of(context).openDrawer(),
-          ),
         ),
         actions: [
           ViajesCercanosTaxistaAppBarAction(
@@ -2115,308 +2181,426 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             child: StreamBuilder<Viaje?>(
               stream: _stream(),
               builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
-          }
-
-          if (snap.hasError) {
-            if (_cachedViaje != null) {
-              final v = _cachedViaje!;
-              final fecha = formato.format(v.fechaHora);
-              final total = FormatosMoneda.rd(v.precio);
-              final estadoBase = EstadosViaje.normalizar(
-                v.estado.isNotEmpty
-                    ? v.estado
-                    : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
-              );
-              return Column(
-                children: [
-                  const Expanded(
-                    flex: 3,
-                    child: RepaintBoundary(
-                      child: MapaTiempoReal(
-                        key: ValueKey<String>('mapa-cache-viaje'),
-                        esTaxista: true,
-                        esCliente: false,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    flex: 2,
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('🧭 ${v.origen} → ${v.destino}', style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
-                          const SizedBox(height: 8),
-                          Text('🕓 Fecha: $fecha', style: const TextStyle(fontSize: 16, color: Colors.white70)),
-                          const SizedBox(height: 8),
-                          Text('💰 Total: $total', style: const TextStyle(fontSize: 18, color: Colors.greenAccent)),
-                          const SizedBox(height: 8),
-                          Text('📍 Estado: ${_labelEstado(estadoBase)}', style: const TextStyle(fontSize: 16, color: Colors.white70)),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'Reconectando viaje en tiempo real...',
-                            style: TextStyle(color: Colors.white54),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }
-            return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
-          }
-
-          final v = snap.data;
-
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            final bool escucharPendientes = v != null &&
-                (() {
-                  final String est = EstadosViaje.normalizar(
-                    v.estado.isNotEmpty
-                        ? v.estado
-                        : (v.completado
-                            ? EstadosViaje.completado
-                            : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
-                  );
-                  return EstadosViaje.esAbordo(est) || EstadosViaje.esEnCurso(est);
-                })();
-            if (_viajesCercanosEscucha.value != escucharPendientes) {
-              _viajesCercanosEscucha.value = escucharPendientes;
-              if (!escucharPendientes) {
-                _viajesCercanosCtl.resetListeningUi();
-              }
-            }
-          });
-          
-          if (v == null) {
-            _cachedViaje = null;
-            _stopGps();
-            return Column(
-              children: [
-                const Expanded(
-                  flex: 3,
-                  child: RepaintBoundary(
-                    child: MapaTiempoReal(
-                      key: ValueKey<String>('mapa-sin-viaje'),
-                      esTaxista: true,
-                      esCliente: false,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.taxi_alert,
-                            color: Colors.greenAccent,
-                            size: 60,
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'No tienes viaje en curso',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'Puedes buscar viajes disponibles\nen el botón verde',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                          const SizedBox(height: 20),
-                          ElevatedButton.icon(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => const ViajeDisponible()),
-                              );
-                            },
-                            icon: const Icon(Icons.search),
-                            label: const Text('Buscar viajes'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.greenAccent,
-                              foregroundColor: Colors.black,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          }
-
-          // Actualizar cache
-          if (_cachedViaje?.id != v.id) {
-            _cachedViaje = v;
-            _escucharCancelacionRemota(v.id);
-            
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _asegurarGps(v.id).then((_) {
-                if (mounted) {
-                  _scheduleDrawRoute();
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                      child:
+                          CircularProgressIndicator(color: Colors.greenAccent));
                 }
-              });
-            });
-          } else {
-            final String prevSig =
-                _cachedViaje != null ? _firmaRutaMapaTaxista(_cachedViaje!) : '';
-            _cachedViaje = v;
-            final String newSig = _firmaRutaMapaTaxista(v);
-            if (prevSig != newSig && mounted) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) _scheduleDrawRoute();
-              });
-            }
-          }
 
-          final fecha = formato.format(v.fechaHora);
-          final total = FormatosMoneda.rd(v.precio);
-
-          final estadoBase = EstadosViaje.normalizar(
-            v.estado.isNotEmpty
-                ? v.estado
-                : (v.completado ? EstadosViaje.completado : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
-          );
-
-          if (estadoBase == EstadosViaje.cancelado) {
-            final cancelNavigator = Navigator.of(context);
-            
-            WidgetsBinding.instance.addPostFrameCallback((_) async {
-              _stopGps();
-              final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-              if (uid.isNotEmpty) {
-                try {
-                  await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
-                    'viajeActivoId': '',
-                    'updatedAt': FieldValue.serverTimestamp(),
-                    'actualizadoEn': FieldValue.serverTimestamp(),
-                  }, SetOptions(merge: true));
-                } catch (e, st) {
-                  await ErrorReporting.reportError(
-                    e,
-                    stack: st,
-                    context: 'viaje_en_curso_taxista: set viajeActivoId (cancelado)',
-                  );
-                }
-              }
-              if (mounted) {
-                cancelNavigator.pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => const ViajeDisponible()),
-                  (route) => false,
-                );
-              }
-            });
-            return const SizedBox.shrink();
-          }
-
-          final mostrarOrigen = EstadosViaje.esAceptado(estadoBase) || 
-                                 EstadosViaje.esEnCaminoPickup(estadoBase) ||
-                                 EstadosViaje.esAbordo(estadoBase);
-          
-          final mostrarDestino = EstadosViaje.esEnCurso(estadoBase) ||
-              (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
-
-          final LatLng? puntoOrigen = _coordsValid(v.latCliente, v.lonCliente) 
-              ? LatLng(v.latCliente, v.lonCliente) 
-              : null;
-          
-          final LatLng? puntoDestino = _coordsValid(v.latDestino, v.lonDestino) 
-              ? LatLng(v.latDestino, v.lonDestino) 
-              : null;
-
-          return Column(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: RepaintBoundary(
-                      child: MapaTiempoReal(
-                        key: ValueKey<String>('mapa-${v.id}'),
-                        origen: puntoOrigen,
-                        origenNombre: v.origen,
-                        destino: puntoDestino,
-                        destinoNombre: v.destino,
-                        mostrarOrigen: mostrarOrigen,
-                        mostrarDestino: mostrarDestino,
-                        esTaxista: true,
-                        esCliente: false,
-                        mostrarTaxista: false,
-                        ubicacionTaxista: _coordsValid(v.latTaxista, v.lonTaxista)
-                            ? LatLng(v.latTaxista, v.lonTaxista)
-                            : null,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    flex: 2,
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: ListView(
-                        children: [
-                          if (FirebaseAuth.instance.currentUser?.uid != null)
-                            ColaSiguienteViajeBannerTaxista(
-                              uidTaxista: FirebaseAuth.instance.currentUser!.uid,
+                if (snap.hasError) {
+                  if (_cachedViaje != null) {
+                    final v = _cachedViaje!;
+                    final fecha = formato.format(v.fechaHora);
+                    final total = FormatosMoneda.rd(v.precio);
+                    final estadoBase = EstadosViaje.normalizar(
+                      v.estado.isNotEmpty
+                          ? v.estado
+                          : (v.completado
+                              ? EstadosViaje.completado
+                              : (v.aceptado
+                                  ? EstadosViaje.aceptado
+                                  : EstadosViaje.pendiente)),
+                    );
+                    return Column(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: RepaintBoundary(
+                            child: MapaTiempoReal(
+                              key: const ValueKey<String>('mapa-cache-viaje'),
+                              esTaxista: true,
+                              esCliente: false,
+                              onUserInteractWithMap:
+                                  _colapsarTarjetaViajePorMapa,
+                              onUserMapGestureEnd:
+                                  _expandirTarjetaViajeTrasMapa,
                             ),
-                          Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[900],
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Colors.white12),
-                            ),
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text('🧭 ${v.origen} → ${v.destino}',
-                                          style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
-                                    ),
-                                    _servicioBadge(v),
-                                  ],
+                                Text('🧭 ${v.origen} → ${v.destino}',
+                                    style: const TextStyle(
+                                        fontSize: 18,
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600)),
+                                const SizedBox(height: 8),
+                                Text('🕓 Fecha: $fecha',
+                                    style: const TextStyle(
+                                        fontSize: 16, color: Colors.white70)),
+                                const SizedBox(height: 8),
+                                Text('💰 Total: $total',
+                                    style: const TextStyle(
+                                        fontSize: 18,
+                                        color: Colors.greenAccent)),
+                                const SizedBox(height: 8),
+                                Text('📍 Estado: ${_labelEstado(estadoBase)}',
+                                    style: const TextStyle(
+                                        fontSize: 16, color: Colors.white70)),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'Reconectando viaje en tiempo real...',
+                                  style: TextStyle(color: Colors.white54),
                                 ),
-                                const SizedBox(height: 8),
-                                Text('🕓 Fecha: $fecha', style: const TextStyle(fontSize: 16, color: Colors.white70)),
-                                const SizedBox(height: 8),
-                                Text('💰 Total: $total', style: const TextStyle(fontSize: 18, color: Colors.greenAccent)),
-                                const SizedBox(height: 8),
-                                Text('📍 Estado: ${_labelEstado(estadoBase)}', style: const TextStyle(fontSize: 16, color: Colors.white70)),
-                                const SizedBox(height: 10),
-                                _progresoOperativoViaje(estadoBase),
-                                _buildDuracionEnRuta(v, estadoBase),
-                                _buildWaypoints(v, enRuta: EstadosViaje.esEnCurso(estadoBase)),
-                                _buildExtras(v),
                               ],
                             ),
                           ),
-                          const SizedBox(height: 12),
-                          _tarjetaVehiculoVisibleAlCliente(v),
-                          const SizedBox(height: 16),
-                          _actionBar(v, estadoBase),
-                          const SizedBox(height: 8),
-                          _botonRescate(v.id),
-                        ],
+                        ),
+                      ],
+                    );
+                  }
+                  return const Center(
+                      child:
+                          CircularProgressIndicator(color: Colors.greenAccent));
+                }
+
+                final v = snap.data;
+
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  final bool escucharPendientes = v != null &&
+                      (() {
+                        final String est = EstadosViaje.normalizar(
+                          v.estado.isNotEmpty
+                              ? v.estado
+                              : (v.completado
+                                  ? EstadosViaje.completado
+                                  : (v.aceptado
+                                      ? EstadosViaje.aceptado
+                                      : EstadosViaje.pendiente)),
+                        );
+                        // Desde aceptado / en camino al pickup hasta a bordo / en curso: puede reservar el siguiente.
+                        return EstadosViaje.esActivo(est);
+                      })();
+                  if (_viajesCercanosEscucha.value != escucharPendientes) {
+                    _viajesCercanosEscucha.value = escucharPendientes;
+                    if (!escucharPendientes) {
+                      _viajesCercanosCtl.resetListeningUi();
+                    }
+                  }
+                });
+
+                if (v == null) {
+                  _cachedViaje = null;
+                  _stopGps();
+                  return Column(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: RepaintBoundary(
+                          child: MapaTiempoReal(
+                            key: const ValueKey<String>('mapa-sin-viaje'),
+                            esTaxista: true,
+                            esCliente: false,
+                            onUserInteractWithMap: _colapsarTarjetaViajePorMapa,
+                            onUserMapGestureEnd: _expandirTarjetaViajeTrasMapa,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.taxi_alert,
+                                  color: Colors.greenAccent,
+                                  size: 60,
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  'No tienes viaje en curso',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Puedes buscar viajes disponibles\nen el botón verde',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.white70),
+                                ),
+                                const SizedBox(height: 20),
+                                ElevatedButton.icon(
+                                  onPressed: () {
+                                    Navigator.of(context, rootNavigator: true)
+                                        .push(
+                                      MaterialPageRoute(
+                                          builder: (_) => const TaxistaShell()),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.search),
+                                  label: const Text('Buscar viajes'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.greenAccent,
+                                    foregroundColor: Colors.black,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }
+
+                // Actualizar cache
+                if (_cachedViaje?.id != v.id) {
+                  _cachedViaje = v;
+                  _escucharCancelacionRemota(v.id);
+
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _asegurarGps(v.id).then((_) {
+                      if (mounted) {
+                        _scheduleDrawRoute();
+                      }
+                    });
+                  });
+                } else {
+                  final String prevSig = _cachedViaje != null
+                      ? _firmaRutaMapaTaxista(_cachedViaje!)
+                      : '';
+                  _cachedViaje = v;
+                  final String newSig = _firmaRutaMapaTaxista(v);
+                  if (prevSig != newSig && mounted) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _scheduleDrawRoute();
+                    });
+                  }
+                }
+
+                final fecha = formato.format(v.fechaHora);
+                final total = FormatosMoneda.rd(v.precio);
+
+                final estadoBase = EstadosViaje.normalizar(
+                  v.estado.isNotEmpty
+                      ? v.estado
+                      : (v.completado
+                          ? EstadosViaje.completado
+                          : (v.aceptado
+                              ? EstadosViaje.aceptado
+                              : EstadosViaje.pendiente)),
+                );
+
+                if (estadoBase == EstadosViaje.cancelado) {
+                  final cancelNavigator =
+                      Navigator.of(context, rootNavigator: true);
+
+                  WidgetsBinding.instance.addPostFrameCallback((_) async {
+                    _stopGps();
+                    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+                    if (uid.isNotEmpty) {
+                      try {
+                        await FirebaseFirestore.instance
+                            .collection('usuarios')
+                            .doc(uid)
+                            .set({
+                          'viajeActivoId': '',
+                          'updatedAt': FieldValue.serverTimestamp(),
+                          'actualizadoEn': FieldValue.serverTimestamp(),
+                        }, SetOptions(merge: true));
+                      } catch (e, st) {
+                        await ErrorReporting.reportError(
+                          e,
+                          stack: st,
+                          context:
+                              'viaje_en_curso_taxista: set viajeActivoId (cancelado)',
+                        );
+                      }
+                    }
+                    if (mounted) {
+                      cancelNavigator.pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const TaxistaShell()),
+                        (route) => false,
+                      );
+                    }
+                  });
+                  return const SizedBox.shrink();
+                }
+
+                final mostrarOrigen = EstadosViaje.esAceptado(estadoBase) ||
+                    EstadosViaje.esEnCaminoPickup(estadoBase) ||
+                    EstadosViaje.esAbordo(estadoBase);
+
+                final mostrarDestino = EstadosViaje.esEnCurso(estadoBase) ||
+                    (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
+
+                final LatLng? puntoOrigen =
+                    _coordsValid(v.latCliente, v.lonCliente)
+                        ? LatLng(v.latCliente, v.lonCliente)
+                        : null;
+
+                final LatLng? puntoDestino =
+                    _coordsValid(v.latDestino, v.lonDestino)
+                        ? LatLng(v.latDestino, v.lonDestino)
+                        : null;
+
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Positioned.fill(
+                      child: RepaintBoundary(
+                        child: MapaTiempoReal(
+                          key: ValueKey<String>('mapa-${v.id}'),
+                          origen: puntoOrigen,
+                          origenNombre: v.origen,
+                          destino: puntoDestino,
+                          destinoNombre: v.destino,
+                          mostrarOrigen: mostrarOrigen,
+                          mostrarDestino: mostrarDestino,
+                          esTaxista: true,
+                          esCliente: false,
+                          mostrarTaxista: false,
+                          ubicacionTaxista:
+                              _coordsValid(v.latTaxista, v.lonTaxista)
+                                  ? LatLng(v.latTaxista, v.lonTaxista)
+                                  : null,
+                          overlayPolylines: _polylines,
+                          onUserInteractWithMap: _colapsarTarjetaViajePorMapa,
+                          onUserMapGestureEnd: _expandirTarjetaViajeTrasMapa,
+                        ),
                       ),
                     ),
-                  ),
-                ],
-          );
-        },
+                    Transform.translate(
+                      offset: _viajeSheetOcultoPorModalNav
+                          ? Offset(
+                              0,
+                              MediaQuery.sizeOf(context).height + 80,
+                            )
+                          : Offset.zero,
+                      child: DraggableScrollableSheet(
+                        controller: _viajeNavSheetCtrl,
+                        initialChildSize: _kViajeNavSheetInitialMitad,
+                        minChildSize: _kViajeNavSheetMin,
+                        maxChildSize: 0.92,
+                        snap: true,
+                        snapSizes: const <double>[
+                          0.14,
+                          0.40,
+                          _kViajeNavSheetInitialMitad,
+                          0.62,
+                          0.92,
+                        ],
+                        builder: (context, scrollController) {
+                        return Container(
+                          decoration: const BoxDecoration(
+                            color: Colors.black,
+                            borderRadius:
+                                BorderRadius.vertical(top: Radius.circular(20)),
+                            border: Border(
+                                top: BorderSide(color: Color(0x22FFFFFF))),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Color(0x66000000),
+                                blurRadius: 16,
+                                offset: Offset(0, -4),
+                              ),
+                            ],
+                          ),
+                          child: ListView(
+                            controller: scrollController,
+                            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                            children: [
+                              Center(
+                                child: Container(
+                                  width: 40,
+                                  height: 5,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white24,
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              if (FirebaseAuth.instance.currentUser?.uid !=
+                                  null)
+                                ColaSiguienteViajeBannerTaxista(
+                                  uidTaxista:
+                                      FirebaseAuth.instance.currentUser!.uid,
+                                ),
+                              if (FirebaseAuth.instance.currentUser?.uid !=
+                                  null)
+                                const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[900],
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '🧭 ${v.origen} → ${v.destino}',
+                                            style: const TextStyle(
+                                              fontSize: 18,
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                        _servicioBadge(v),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '🕓 Fecha: $fecha',
+                                      style: const TextStyle(
+                                          fontSize: 16, color: Colors.white70),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '💰 Total: $total',
+                                      style: const TextStyle(
+                                          fontSize: 18,
+                                          color: Colors.greenAccent),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '📍 Estado: ${_labelEstado(estadoBase)}',
+                                      style: const TextStyle(
+                                          fontSize: 16, color: Colors.white70),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    _progresoOperativoViaje(estadoBase),
+                                    _buildDuracionEnRuta(v, estadoBase),
+                                    _buildWaypoints(v,
+                                        enRuta:
+                                            EstadosViaje.esEnCurso(estadoBase)),
+                                    _buildExtras(v),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _tarjetaVehiculoVisibleAlCliente(v),
+                              const SizedBox(height: 16),
+                              _actionBar(v, estadoBase),
+                              const SizedBox(height: 8),
+                              _botonRescate(v.id),
+                            ],
+                          ),
+                        );
+                      },
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
           ViajesCercanosTaxistaLayer(
@@ -2448,11 +2632,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
   List<Widget> _getActionButtons(Viaje v, String estadoBase) {
     final uidCli = _uidClienteDe(v);
-    
-    if (EstadosViaje.esAceptado(estadoBase) || EstadosViaje.esEnCaminoPickup(estadoBase)) {
+
+    if (EstadosViaje.esAceptado(estadoBase) ||
+        EstadosViaje.esEnCaminoPickup(estadoBase)) {
       final bool puedeMarcarAbordo = _navegacionIniciada || _clienteCerca;
-      
+
       return [
+        const SizedBox(height: 12),
+        const Text(
+          'Paso 1: ve al cliente · Paso 2: confirma abordo · Paso 3: código que te dicta · Paso 4: navegas al destino',
+          style: TextStyle(color: Colors.white60, fontSize: 12, height: 1.35),
+        ),
         const SizedBox(height: 12),
         Container(
           padding: const EdgeInsets.all(12),
@@ -2464,7 +2654,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                '📍 Punto de recogida',
+                '📍 Punto de recogida del cliente',
                 style: TextStyle(
                   color: Colors.greenAccent,
                   fontSize: 14,
@@ -2480,10 +2670,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                   fontWeight: FontWeight.w500,
                 ),
               ),
+              if (uidCli.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: ClientePerfilConductorChip(
+                    uidCliente: uidCli,
+                  ),
+                ),
+              ],
               if (_clienteCerca) ...[
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: Colors.green.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(8),
@@ -2495,7 +2695,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                       Expanded(
                         child: Text(
                           '✅ ¡Estás muy cerca del cliente! Ya puedes marcarlo como a bordo.',
-                          style: TextStyle(color: Colors.green, fontWeight: FontWeight.w500),
+                          style: TextStyle(
+                              color: Colors.green, fontWeight: FontWeight.w500),
                         ),
                       ),
                     ],
@@ -2506,25 +2707,30 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           ),
         ),
         const SizedBox(height: 16),
-        
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
-            onPressed: _navegacionIniciada ? null : () => _iniciarNavegacionPickup(v),
-            icon: Icon(_navegacionIniciada ? Icons.check_circle : Icons.navigation, size: 24),
+            onPressed:
+                _navegacionIniciada ? null : () => _iniciarNavegacionPickup(v),
+            icon: Icon(
+                _navegacionIniciada ? Icons.check_circle : Icons.navigation,
+                size: 24),
             label: Text(
-              _navegacionIniciada ? 'NAVEGACIÓN ACTIVADA' : 'INICIAR NAVEGACIÓN',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              _navegacionIniciada
+                  ? 'YA ABRIÓ NAVEGACIÓN — VE HACIA EL CLIENTE'
+                  : 'NAVEGAR HACIA EL CLIENTE',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: _navegacionIniciada ? Colors.green : Colors.blue,
               foregroundColor: Colors.white,
               minimumSize: const Size(double.infinity, 56),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
             ),
           ),
         ),
-        
         if (_navegacionIniciada) ...[
           const SizedBox(height: 12),
           Container(
@@ -2540,7 +2746,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'La navegación está activa. Cuando llegues al punto de recogida, presiona el botón de abajo.',
+                    'Abriste Maps/Waze hacia el cliente. Al llegar y subir al pasajero, usa «Cliente a bordo» y luego el código.',
                     style: TextStyle(color: Colors.white70, fontSize: 13),
                   ),
                 ),
@@ -2548,7 +2754,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             ),
           ),
         ],
-        
         if (!_navegacionIniciada && !_clienteCerca) ...[
           const SizedBox(height: 12),
           Container(
@@ -2563,7 +2768,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'Presiona "Iniciar navegación" o acércate al punto de recogida para activar "Cliente a bordo".',
+                    'Toca «Navegar hacia el cliente» para abrir Waze/Maps al punto de recogida, o acércate (~100 m) para habilitar abordo.',
                     style: TextStyle(color: Colors.white70, fontSize: 13),
                   ),
                 ),
@@ -2571,7 +2776,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             ),
           ),
         ],
-        
         if (!_navegacionIniciada && _clienteCerca) ...[
           const SizedBox(height: 12),
           Container(
@@ -2588,14 +2792,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                 Expanded(
                   child: Text(
                     '✅ ¡Excelente! Estás en el punto de recogida. Ya puedes marcar "Cliente a bordo".',
-                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500),
                   ),
                 ),
               ],
             ),
           ),
         ],
-        
         if (puedeMarcarAbordo) ...[
           const SizedBox(height: 16),
           SizedBox(
@@ -2604,57 +2810,61 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               onPressed: () => _marcarClienteAbordo(v),
               icon: const Icon(Icons.person_add, size: 24),
               label: const Text(
-                'CLIENTE A BORDO',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                'CLIENTE A BORDO (paso 2)',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
                 minimumSize: const Size(double.infinity, 56),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
               ),
             ),
           ),
         ],
-        
         const SizedBox(height: 16),
         const Divider(color: Colors.white24),
         const SizedBox(height: 12),
-        
         Row(
           children: [
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () => _verInfoCliente(uidCliente: uidCli),
                 icon: const Icon(Icons.person, size: 18),
                 label: const Text('Ver cliente'),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
                 ),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () =>
+                        _contactarCliente(uidCliente: uidCli, viajeId: v.id),
                 icon: const Icon(Icons.chat, size: 18),
                 label: const Text('Contactar'),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
                 ),
               ),
             ),
           ],
         ),
-        
         const SizedBox(height: 12),
-        
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
@@ -2665,7 +2875,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5)),
               foregroundColor: Colors.redAccent,
               padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
             ),
           ),
         ),
@@ -2696,13 +2907,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               _btnSecundario(
                 icon: const Icon(Icons.person, size: 20),
                 label: const Text('Ver cliente'),
-                onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () => _verInfoCliente(uidCliente: uidCli),
               ),
               const SizedBox(width: 12),
               _btnSecundario(
                 icon: const Icon(Icons.chat, size: 20),
                 label: const Text('Contactar'),
-                onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () =>
+                        _contactarCliente(uidCliente: uidCli, viajeId: v.id),
               ),
             ],
           ),
@@ -2721,17 +2937,19 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           const SizedBox(height: 12),
           const Text(
             'Código verificado',
-            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
           const Text(
-            'Continúa para dejar el viaje en ruta y abrir navegación al destino.',
-            style: TextStyle(color: Colors.white70, fontSize: 14),
+            'El código ya quedó verificado. Continúa para pasar a «en ruta» y abrir navegación al destino.',
+            style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.35),
           ),
           const SizedBox(height: 16),
           _btnPrimario(
             icon: const Icon(Icons.play_arrow, size: 24),
-            label: const Text('CONTINUAR VIAJE', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            label: const Text('INICIAR RUTA AL DESTINO',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
             onPressed: () async {
               if (_actionBusy || _selectorNavegacionAbierto) return;
               _actionBusy = true;
@@ -2742,7 +2960,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               }
               try {
                 try {
-                  await ViajesRepo.iniciarViaje(viajeId: v.id, uidTaxista: uidTax);
+                  await ViajesRepo.iniciarViaje(
+                      viajeId: v.id, uidTaxista: uidTax);
                 } catch (e, st) {
                   await ErrorReporting.reportError(
                     e,
@@ -2765,13 +2984,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               _btnSecundario(
                 icon: const Icon(Icons.person, size: 20),
                 label: const Text('Ver cliente'),
-                onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () => _verInfoCliente(uidCliente: uidCli),
               ),
               const SizedBox(width: 12),
               _btnSecundario(
                 icon: const Icon(Icons.chat, size: 20),
                 label: const Text('Contactar'),
-                onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () =>
+                        _contactarCliente(uidCliente: uidCli, viajeId: v.id),
               ),
             ],
           ),
@@ -2788,13 +3012,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
       return [
         const SizedBox(height: 12),
         const Text(
-          'Código de verificación',
-          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          'Paso 3 — Código con el cliente',
+          style: TextStyle(
+              color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 4),
         const Text(
-          'Pídele el código de 6 dígitos al cliente',
-          style: TextStyle(color: Colors.white70, fontSize: 14),
+          'El mismo PIN de 6 dígitos que el cliente ve en su pantalla. '
+          'Al verificarlo, el viaje pasa a ruta y se puede abrir navegación al destino.',
+          style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.35),
         ),
         const SizedBox(height: 16),
         Container(
@@ -2816,10 +3042,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
                 ),
                 textAlign: TextAlign.center,
                 keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 maxLength: 6,
+                onSubmitted: (_) =>
+                    _verificarCodigo(v.id, v.codigoVerificacion ?? ''),
                 decoration: InputDecoration(
                   hintText: '000000',
-                  hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 32, letterSpacing: 8),
+                  hintStyle: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      fontSize: 32,
+                      letterSpacing: 8),
                   filled: true,
                   fillColor: Colors.grey[900],
                   border: const OutlineInputBorder(
@@ -2833,8 +3065,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
               const SizedBox(height: 16),
               _btnPrimario(
                 icon: const Icon(Icons.verified, size: 24),
-                label: const Text('VERIFICAR CÓDIGO', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                onPressed: () => _verificarCodigo(v.id, v.codigoVerificacion ?? ''),
+                label: const Text('VERIFICAR E INICIAR RUTA',
+                    style:
+                        TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                onPressed: _actionBusy
+                    ? null
+                    : () => _verificarCodigo(v.id, v.codigoVerificacion ?? ''),
                 backgroundColor: Colors.orange,
               ),
             ],
@@ -2846,13 +3082,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             _btnSecundario(
               icon: const Icon(Icons.person, size: 20),
               label: const Text('Ver cliente'),
-              onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+              onPressed: uidCli.isEmpty
+                  ? null
+                  : () => _verInfoCliente(uidCliente: uidCli),
             ),
             const SizedBox(width: 12),
             _btnSecundario(
               icon: const Icon(Icons.chat, size: 20),
               label: const Text('Contactar'),
-              onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+              onPressed: uidCli.isEmpty
+                  ? null
+                  : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
             ),
           ],
         ),
@@ -2861,7 +3101,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         const SizedBox(height: 12),
         _btnPeligro(
           icon: const Icon(Icons.cancel_outlined, size: 20),
-          label: const Text('Salir a disponibilidad', style: TextStyle(fontSize: 15)),
+          label: const Text('Salir a disponibilidad',
+              style: TextStyle(fontSize: 15)),
           onPressed: () => _cancelarPorTaxista(v),
         ),
       ];
@@ -2872,7 +3113,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         const SizedBox(height: 12),
         const Text(
           'En camino al destino',
-          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          style: TextStyle(
+              color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 4),
         Text(
@@ -2884,7 +3126,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         const SizedBox(height: 16),
         _btnPrimario(
           icon: const Icon(Icons.navigation, size: 24),
-          label: const Text('NAVEGAR AL DESTINO', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          label: const Text('NAVEGAR AL DESTINO',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           onPressed: () async {
             final okGps = await _asegurarGps(v.id);
             if (!okGps) return;
@@ -2897,13 +3140,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
             _btnSecundario(
               icon: const Icon(Icons.person, size: 20),
               label: const Text('Ver cliente'),
-              onPressed: uidCli.isEmpty ? null : () => _verInfoCliente(uidCliente: uidCli),
+              onPressed: uidCli.isEmpty
+                  ? null
+                  : () => _verInfoCliente(uidCliente: uidCli),
             ),
             const SizedBox(width: 12),
             _btnSecundario(
               icon: const Icon(Icons.chat, size: 20),
               label: const Text('Contactar'),
-              onPressed: uidCli.isEmpty ? null : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+              onPressed: uidCli.isEmpty
+                  ? null
+                  : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
             ),
           ],
         ),
@@ -2912,7 +3159,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         const SizedBox(height: 12),
         _btnPrimario(
           icon: const Icon(Icons.check_circle, size: 24),
-          label: const Text('FINALIZAR VIAJE', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          label: const Text('FINALIZAR VIAJE',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           onPressed: () => _finalizarViaje(v),
           backgroundColor: Colors.blueAccent,
         ),
@@ -2931,15 +3179,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
 
   // ==================== ESTILOS DE BOTONES ====================
 
-  ButtonStyle _styleBase() => ElevatedButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
-        minimumSize: const Size(1, 52),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        elevation: 0,
-      );
-
   Widget _btnPrimario({
     required Widget icon,
     required Widget label,
@@ -2957,7 +3196,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           foregroundColor: Colors.black,
           minimumSize: const Size(double.infinity, 56),
           textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           elevation: 0,
         ),
       ),
@@ -2979,7 +3219,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           foregroundColor: Colors.white,
           minimumSize: const Size(1, 48),
           textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
       ),
     );
@@ -3001,7 +3242,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
           foregroundColor: Colors.redAccent,
           minimumSize: const Size(double.infinity, 48),
           textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
       ),
     );
@@ -3014,28 +3256,32 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista> with Automati
         _stopGps();
         if (uid.isNotEmpty) {
           try {
-            await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+            await FirebaseFirestore.instance
+                .collection('usuarios')
+                .doc(uid)
+                .set({
               'viajeActivoId': '',
               'updatedAt': FieldValue.serverTimestamp(),
               'actualizadoEn': FieldValue.serverTimestamp(),
             }, SetOptions(merge: true));
-            } catch (e, st) {
-              await ErrorReporting.reportError(
-                e,
-                stack: st,
-                context: 'viaje_en_curso_taxista: set viajeActivoId (rescate)',
-              );
-            }
+          } catch (e, st) {
+            await ErrorReporting.reportError(
+              e,
+              stack: st,
+              context: 'viaje_en_curso_taxista: set viajeActivoId (rescate)',
+            );
+          }
         }
         if (mounted) {
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const TaxistaShell()),
             (route) => false,
           );
         }
       },
       icon: const Icon(Icons.exit_to_app, color: Colors.white70),
-      label: const Text('Salir a disponibles (rescate)', style: TextStyle(color: Colors.white70)),
+      label: const Text('Salir a disponibles (rescate)',
+          style: TextStyle(color: Colors.white70)),
     );
   }
 }

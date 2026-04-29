@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class ErrorProfessionalWidget extends StatelessWidget {
   final String mensaje;
   final VoidCallback onRetry;
-  
+
   const ErrorProfessionalWidget({
     Key? key,
     required this.mensaje,
@@ -53,7 +53,7 @@ class ErrorProfessionalWidget extends StatelessWidget {
               },
             ),
             const SizedBox(height: 30),
-            
+
             // Título principal
             const Text(
               "No pudimos conectar",
@@ -65,7 +65,7 @@ class ErrorProfessionalWidget extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            
+
             // Mensaje de error
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -84,14 +84,15 @@ class ErrorProfessionalWidget extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 30),
-            
+
             // Botón de reintentar
             ElevatedButton(
               onPressed: onRetry,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green.shade600,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 14),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 40, vertical: 14),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(40),
                 ),
@@ -114,7 +115,7 @@ class ErrorProfessionalWidget extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            
+
             // Texto de ayuda
             Text(
               "Verifica tu conexión a internet",

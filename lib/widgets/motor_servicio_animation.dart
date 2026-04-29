@@ -61,7 +61,10 @@ class _MotorServicioAnimationState extends State<MotorServicioAnimation>
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
                     shadows: const [
-                      Shadow(color: Colors.black45, blurRadius: 3, offset: Offset(0, 1)),
+                      Shadow(
+                          color: Colors.black45,
+                          blurRadius: 3,
+                          offset: Offset(0, 1)),
                     ],
                   ),
                 ),
@@ -103,7 +106,8 @@ class _MotorRiderPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
     final double scroll = (1 - t) * 40;
     for (double x = -20; x < w + 40; x += 14) {
-      canvas.drawLine(Offset(x + scroll, h * 0.35), Offset(x + scroll - 10, h * 0.5), streak);
+      canvas.drawLine(Offset(x + scroll, h * 0.35),
+          Offset(x + scroll - 10, h * 0.5), streak);
     }
 
     // Asfalto
@@ -163,14 +167,18 @@ class _MotorRiderPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
 
-    canvas.drawLine(const Offset(-22, groundY), const Offset(-4, groundY - 8), frame);
-    canvas.drawLine(const Offset(-4, groundY - 8), const Offset(16, groundY - 4), frame);
-    canvas.drawLine(const Offset(16, groundY - 4), const Offset(20, groundY), frame);
+    canvas.drawLine(
+        const Offset(-22, groundY), const Offset(-4, groundY - 8), frame);
+    canvas.drawLine(
+        const Offset(-4, groundY - 8), const Offset(16, groundY - 4), frame);
+    canvas.drawLine(
+        const Offset(16, groundY - 4), const Offset(20, groundY), frame);
 
     // Asiento / depósito
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromCenter(center: const Offset(2, groundY - 14), width: 22, height: 8),
+        Rect.fromCenter(
+            center: const Offset(2, groundY - 14), width: 22, height: 8),
         const Radius.circular(3),
       ),
       Paint()..color = Colors.orange.shade100,
@@ -198,7 +206,8 @@ class _MotorRiderPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round,
     );
     // Cabeza
-    canvas.drawCircle(Offset(seat.dx - 2, seat.dy - 20), 6, Paint()..color = const Color(0xFFFFE0B2));
+    canvas.drawCircle(Offset(seat.dx - 2, seat.dy - 20), 6,
+        Paint()..color = const Color(0xFFFFE0B2));
     canvas.drawCircle(
       Offset(seat.dx - 2, seat.dy - 20),
       6,
@@ -238,5 +247,6 @@ class _MotorRiderPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _MotorRiderPainter oldDelegate) => oldDelegate.t != t;
+  bool shouldRepaint(covariant _MotorRiderPainter oldDelegate) =>
+      oldDelegate.t != t;
 }

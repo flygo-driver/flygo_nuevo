@@ -17,12 +17,12 @@ class CompletarPerfilTaxista extends StatefulWidget {
 class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
   // 🔥 ELIMINADO: _formKey no se usaba
   final user = FirebaseAuth.instance.currentUser;
-  
+
   // Documentos
   File? _licenciaImage;
   File? _matriculaImage;
   File? _seguroImage;
-  
+
   bool _loading = false;
   int _currentStep = 0;
 
@@ -32,7 +32,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
       return const Scaffold(
         backgroundColor: Colors.black,
         body: Center(
-          child: Text('No hay sesión activa', style: TextStyle(color: Colors.white)),
+          child: Text('No hay sesión activa',
+              style: TextStyle(color: Colors.white)),
         ),
       );
     }
@@ -49,20 +50,25 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
         elevation: 0,
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: Colors.greenAccent))
+          ? const Center(
+              child: CircularProgressIndicator(color: Colors.greenAccent))
           : Stepper(
               type: StepperType.vertical,
               currentStep: _currentStep,
-              onStepContinue: _currentStep < 2 ? () {
-                if (_currentStep == 0) {
-                  setState(() => _currentStep++);
-                } else if (_currentStep == 1) {
-                  setState(() => _currentStep++);
-                }
-              } : null,
-              onStepCancel: _currentStep > 0 ? () {
-                setState(() => _currentStep--);
-              } : null,
+              onStepContinue: _currentStep < 2
+                  ? () {
+                      if (_currentStep == 0) {
+                        setState(() => _currentStep++);
+                      } else if (_currentStep == 1) {
+                        setState(() => _currentStep++);
+                      }
+                    }
+                  : null,
+              onStepCancel: _currentStep > 0
+                  ? () {
+                      setState(() => _currentStep--);
+                    }
+                  : null,
               onStepTapped: (step) {
                 setState(() => _currentStep = step);
               },
@@ -80,7 +86,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
                               foregroundColor: Colors.black,
                               padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
-                            child: Text(_currentStep == 2 ? 'FINALIZAR' : 'CONTINUAR'),
+                            child: Text(
+                                _currentStep == 2 ? 'FINALIZAR' : 'CONTINUAR'),
                           ),
                         ),
                       if (details.onStepCancel != null) ...[
@@ -88,7 +95,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
                         Expanded(
                           child: TextButton(
                             onPressed: details.onStepCancel,
-                            child: const Text('ATRÁS', style: TextStyle(color: Colors.white70)),
+                            child: const Text('ATRÁS',
+                                style: TextStyle(color: Colors.white70)),
                           ),
                         ),
                       ],
@@ -99,29 +107,41 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
               steps: [
                 // PASO 1: Información personal adicional
                 Step(
-                  title: const Text('Información personal', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: const Text('Completa tus datos', style: TextStyle(color: Colors.white70)),
+                  title: const Text('Información personal',
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                  subtitle: const Text('Completa tus datos',
+                      style: TextStyle(color: Colors.white70)),
                   content: _buildPersonalInfoStep(),
                   isActive: _currentStep >= 0,
-                  state: _currentStep > 0 ? StepState.complete : StepState.indexed,
+                  state:
+                      _currentStep > 0 ? StepState.complete : StepState.indexed,
                 ),
-                
+
                 // PASO 2: Subir documentos
                 Step(
-                  title: const Text('Documentos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: const Text('Licencia, matrícula, seguro', style: TextStyle(color: Colors.white70)),
+                  title: const Text('Documentos',
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                  subtitle: const Text('Licencia, matrícula, seguro',
+                      style: TextStyle(color: Colors.white70)),
                   content: _buildDocumentsStep(),
                   isActive: _currentStep >= 1,
-                  state: _currentStep > 1 ? StepState.complete : StepState.indexed,
+                  state:
+                      _currentStep > 1 ? StepState.complete : StepState.indexed,
                 ),
-                
+
                 // PASO 3: Confirmar y finalizar
                 Step(
-                  title: const Text('Finalizar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: const Text('Revisa y confirma', style: TextStyle(color: Colors.white70)),
+                  title: const Text('Finalizar',
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                  subtitle: const Text('Revisa y confirma',
+                      style: TextStyle(color: Colors.white70)),
                   content: _buildConfirmStep(),
                   isActive: _currentStep >= 2,
-                  state: _currentStep > 2 ? StepState.complete : StepState.indexed,
+                  state:
+                      _currentStep > 2 ? StepState.complete : StepState.indexed,
                 ),
               ],
             ),
@@ -131,14 +151,17 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
   // PASO 1: Información personal adicional
   Widget _buildPersonalInfoStep() {
     return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        
+
         final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-        
+
         return Column(
           children: [
             _buildInfoRow('Nombre:', data['nombre'] ?? 'Cargando...'),
@@ -147,7 +170,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
             const Divider(color: Colors.white24),
             _buildInfoRow('Teléfono:', data['telefono'] ?? 'Cargando...'),
             const Divider(color: Colors.white24),
-            _buildInfoRow('Vehículo:', '${data['marca'] ?? ''} ${data['modelo'] ?? ''}'),
+            _buildInfoRow(
+                'Vehículo:', '${data['marca'] ?? ''} ${data['modelo'] ?? ''}'),
             const Divider(color: Colors.white24),
             _buildInfoRow('Placa:', data['placa'] ?? 'Cargando...'),
           ],
@@ -163,7 +187,9 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: const TextStyle(color: Colors.white70)),
-          Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          Text(value,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -203,7 +229,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
     );
   }
 
-  Widget _buildDocumentButton(String label, IconData icon, File? image, VoidCallback onTap) {
+  Widget _buildDocumentButton(
+      String label, IconData icon, File? image, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
@@ -211,7 +238,9 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
         width: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: image != null ? Colors.green.withValues(alpha: 0.1) : const Color(0xFF1E1E1E),
+          color: image != null
+              ? Colors.green.withValues(alpha: 0.1)
+              : const Color(0xFF1E1E1E),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: image != null ? Colors.green : Colors.white24,
@@ -237,7 +266,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
                     ),
                   ),
                   if (image != null)
-                    const Text('Documento seleccionado', style: TextStyle(color: Colors.green, fontSize: 12)),
+                    const Text('Documento seleccionado',
+                        style: TextStyle(color: Colors.green, fontSize: 12)),
                 ],
               ),
             ),
@@ -254,14 +284,18 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
   // PASO 3: Confirmar y finalizar
   Widget _buildConfirmStep() {
     // 🔥 CAMBIADO: final para variable local
-    final bool allDocumentsSelected = _licenciaImage != null && _matriculaImage != null && _seguroImage != null;
-    
+    final bool allDocumentsSelected = _licenciaImage != null &&
+        _matriculaImage != null &&
+        _seguroImage != null;
+
     return Column(
       children: [
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: allDocumentsSelected ? Colors.green.withValues(alpha: 0.1) : Colors.orange.withValues(alpha: 0.1),
+            color: allDocumentsSelected
+                ? Colors.green.withValues(alpha: 0.1)
+                : Colors.orange.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: allDocumentsSelected ? Colors.green : Colors.orange,
@@ -276,8 +310,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
               ),
               const SizedBox(height: 12),
               Text(
-                allDocumentsSelected 
-                    ? '¡Todo listo para continuar!' 
+                allDocumentsSelected
+                    ? '¡Todo listo para continuar!'
                     : 'Faltan documentos por subir',
                 style: TextStyle(
                   color: allDocumentsSelected ? Colors.green : Colors.orange,
@@ -307,7 +341,8 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
                 foregroundColor: Colors.black,
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
-              child: const Text('FINALIZAR Y COMENZAR', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text('FINALIZAR Y COMENZAR',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ),
       ],
@@ -317,7 +352,7 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
   Future<void> _pickImage(String tipo) async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-    
+
     if (pickedFile != null) {
       setState(() {
         if (tipo == 'licencia') {
@@ -337,8 +372,11 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
     try {
       // Aquí iría la lógica para subir las imágenes a Storage
       // Por ahora, solo actualizamos el estado
-      
-      await FirebaseFirestore.instance.collection('usuarios').doc(user!.uid).update({
+
+      await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .update({
         'documentosCompletos': true,
         'docsEstado': 'pendiente',
         'perfilCompletado': true,

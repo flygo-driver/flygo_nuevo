@@ -1,7 +1,5 @@
 import 'package:flutter/foundation.dart' show kDebugMode;
 
-
-
 class FirebaseEmulators {
   static Future<void> connectIfNeeded() async {
     // ✅ en release NO hace nada

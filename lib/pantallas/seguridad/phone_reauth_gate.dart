@@ -7,11 +7,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 // Destinos finales por rol
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
 import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
-import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
 
 class PhoneReauthGate extends StatefulWidget {
   final String rol; // 'cliente' | 'taxista' | 'admin'
-  final int dias;   // vigencia de reauth en días (ej: 7 o 30)
+  final int dias; // vigencia de reauth en días (ej: 7 o 30)
   const PhoneReauthGate({super.key, required this.rol, this.dias = 30});
 
   @override
@@ -87,7 +87,8 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
             // Reautentica y también asegura que el teléfono quede como principal.
             await user.reauthenticateWithCredential(credential);
             try {
-              await user.updatePhoneNumber(credential); // 🔒 asegura phoneNumber en Auth
+              await user.updatePhoneNumber(
+                  credential); // 🔒 asegura phoneNumber en Auth
             } catch (_) {}
             await _onVerifiedSuccess(phone);
           } catch (e) {
@@ -174,7 +175,8 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
     if (user == null) return;
 
     // Actualiza perfil del usuario (tu app ya usa este doc)
-    final usuariosRef = FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
+    final usuariosRef =
+        FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
     await usuariosRef.set({
       'telefono': phone,
       'phoneVerified': true,
@@ -183,7 +185,8 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
     }, SetOptions(merge: true));
 
     // 🔐 Además guarda sello de reauth y vigencia en /seguridad/{uid}
-    final segRef = FirebaseFirestore.instance.collection('seguridad').doc(user.uid);
+    final segRef =
+        FirebaseFirestore.instance.collection('seguridad').doc(user.uid);
     await segRef.set({
       'telefono': phone,
       'ultimoReauth': FieldValue.serverTimestamp(),
@@ -203,7 +206,7 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
         break;
       default:
         // 👉 AQUÍ: usamos la clase que SÍ existe
-        destino = const ClienteHome();
+        destino = const ClienteShell();
     }
 
     Navigator.of(context).pushAndRemoveUntil(
@@ -218,7 +221,8 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text('Verificación por SMS', style: TextStyle(color: Colors.white)),
+        title: const Text('Verificación por SMS',
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
       ),
       body: ListView(
@@ -244,7 +248,8 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
                 borderRadius: BorderRadius.circular(12),
               ),
               focusedBorder: OutlineInputBorder(
-                borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+                borderSide:
+                    const BorderSide(color: Colors.greenAccent, width: 2),
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
@@ -255,16 +260,23 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: (_sending || _secondsLeft > 0) ? null : () => _sendCode(),
+              onPressed:
+                  (_sending || _secondsLeft > 0) ? null : () => _sendCode(),
               icon: _sending
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.sms_outlined),
-              label: Text(_secondsLeft > 0 ? 'Reenviar en ${_secondsLeft}s' : 'Enviar código por SMS'),
+              label: Text(_secondsLeft > 0
+                  ? 'Reenviar en ${_secondsLeft}s'
+                  : 'Enviar código por SMS'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.white,
                 side: const BorderSide(color: Colors.white24),
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ),
@@ -287,7 +299,8 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
                 borderRadius: BorderRadius.circular(12),
               ),
               focusedBorder: OutlineInputBorder(
-                borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+                borderSide:
+                    const BorderSide(color: Colors.greenAccent, width: 2),
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
@@ -300,14 +313,19 @@ class _PhoneReauthGateState extends State<PhoneReauthGate> {
             child: ElevatedButton.icon(
               onPressed: _verifying ? null : _verifyCode,
               icon: _verifying
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.lock_open),
-              label: Text(_verifying ? 'Verificando...' : 'Verificar y continuar'),
+              label:
+                  Text(_verifying ? 'Verificando...' : 'Verificar y continuar'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.green,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ),

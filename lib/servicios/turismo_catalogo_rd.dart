@@ -3,13 +3,13 @@
 // ✅ Actualizado con descripcion, imagen y popularidad para el buscador
 
 class TurismoLugar {
-  final String id;         // único (para UI)
-  final String nombre;     // lo que ve el cliente
-  final String ciudad;     // Santo Domingo / Punta Cana / etc.
-  final String subtipo;    // AEROPUERTO, PLAYA, ZONA_COLONIAL, MUELLE, TOUR, etc.
+  final String id; // único (para UI)
+  final String nombre; // lo que ve el cliente
+  final String ciudad; // Santo Domingo / Punta Cana / etc.
+  final String subtipo; // AEROPUERTO, PLAYA, ZONA_COLONIAL, MUELLE, TOUR, etc.
   final double lat;
   final double lon;
-  
+
   // ✅ NUEVOS CAMPOS (opcionales pero necesarios para el selector)
   final String? descripcion;
   final String? imagen;
@@ -22,9 +22,9 @@ class TurismoLugar {
     required this.subtipo,
     required this.lat,
     required this.lon,
-    this.descripcion,      // ✅ Agregado
-    this.imagen,           // ✅ Agregado
-    this.popularidad = 0,  // ✅ Agregado con valor por defecto
+    this.descripcion, // ✅ Agregado
+    this.imagen, // ✅ Agregado
+    this.popularidad = 0, // ✅ Agregado con valor por defecto
   });
 
   String get label => '$nombre • $ciudad';
@@ -191,7 +191,8 @@ class TurismoCatalogoRD {
       subtipo: zonaColonial,
       lat: 18.471900,
       lon: -69.885600,
-      descripcion: 'Centro histórico de Santo Domingo, Patrimonio de la Humanidad',
+      descripcion:
+          'Centro histórico de Santo Domingo, Patrimonio de la Humanidad',
       popularidad: 100,
     ),
     TurismoLugar(
@@ -1084,11 +1085,11 @@ class TurismoCatalogoRD {
   static List<TurismoLugar> buscar(String query) {
     final q = query.toLowerCase().trim();
     if (q.isEmpty) return [];
-    
+
     return lugares.where((lugar) {
       return lugar.nombre.toLowerCase().contains(q) ||
-             lugar.ciudad.toLowerCase().contains(q) ||
-             (lugar.descripcion?.toLowerCase().contains(q) ?? false);
+          lugar.ciudad.toLowerCase().contains(q) ||
+          (lugar.descripcion?.toLowerCase().contains(q) ?? false);
     }).toList();
   }
 }

@@ -96,14 +96,18 @@ class PoolRepo {
       if (tipoPersonalizado != null && tipoPersonalizado.trim().isNotEmpty)
         'tipoPersonalizado': tipoPersonalizado.trim(),
       if (incluye != null && incluye.isNotEmpty)
-        'incluye': incluye.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toList(),
+        'incluye': incluye
+            .where((e) => e.trim().isNotEmpty)
+            .map((e) => e.trim())
+            .toList(),
       if (descripcionViaje != null && descripcionViaje.trim().isNotEmpty)
         'descripcionViaje': descripcionViaje.trim(),
       'asientosReservados': 0,
       'asientosPagados': 0,
       'montoReservado': 0.0,
       'montoPagado': 0.0,
-      'estado': 'abierto', // abierto | preconfirmado | confirmado | lleno | cancelado | finalizado
+      'estado':
+          'abierto', // abierto | preconfirmado | confirmado | lleno | cancelado | finalizado
       'ownerTaxistaId': u.uid,
       'taxistaNombre': u.displayName ?? '',
       'createdAt': FieldValue.serverTimestamp(),
@@ -154,13 +158,11 @@ class PoolRepo {
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamPoolsTaxista({
     required String ownerTaxistaId,
   }) {
-    return pools
-        .where('ownerTaxistaId', isEqualTo: ownerTaxistaId)
-        .snapshots();
+    return pools.where('ownerTaxistaId', isEqualTo: ownerTaxistaId).snapshots();
   }
 
   /// Refuerzo de consistencia:
-  /// Si el taxista tiene `usuarios.{uid}.tienePagoPendiente == true`,
+  /// Si el taxista tiene `usuarios.{uid}.tienePagoPendiente == true` (comisión efectivo ≥ tope),
   /// cerramos sus pools (estado => 'cancelado') para que el cliente no pueda reservar.
   ///
   /// Si luego paga y `tienePagoPendiente` pasa a false, se reabre usando
@@ -171,9 +173,8 @@ class PoolRepo {
   }) async {
     if (ownerTaxistaId.trim().isEmpty) return;
 
-    final snap = await pools
-        .where('ownerTaxistaId', isEqualTo: ownerTaxistaId)
-        .get();
+    final snap =
+        await pools.where('ownerTaxistaId', isEqualTo: ownerTaxistaId).get();
     if (snap.docs.isEmpty) return;
 
     // Batch por chunks para no exceder límite de Firestore.
@@ -233,7 +234,8 @@ class PoolRepo {
       'poolId': poolId,
       'seats': seats,
       'metodoPago': metodoPago,
-      'idempotencyKey': '${poolId}_${u.uid}_${DateTime.now().millisecondsSinceEpoch}',
+      'idempotencyKey':
+          '${poolId}_${u.uid}_${DateTime.now().millisecondsSinceEpoch}',
     });
   }
 
@@ -261,7 +263,8 @@ class PoolRepo {
       tx.update(poolRef, {
         'asientosPagados': pag + seats,
         'montoPagado': ((p['montoPagado'] ?? 0.0) as num).toDouble() + total,
-        if ((pag + seats) >= minConf && (p['estado'] != 'confirmado')) 'estado': 'confirmado',
+        if ((pag + seats) >= minConf && (p['estado'] != 'confirmado'))
+          'estado': 'confirmado',
       });
       tx.update(resRef, {'estado': 'pagado'});
     });
@@ -331,6 +334,26 @@ class PoolRepo {
     });
   }
 
+  /// Solo admin (Cloud Function valida rol): anula una gira ya **finalizada** y limpia comisión pendiente en panel.
+  static Future<void> anularGiraFinalizadaAdmin({
+    required String poolId,
+    String motivo = '',
+    String? idempotencyKey,
+  }) async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) throw 'Debes iniciar sesión';
+    final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+        ? idempotencyKey.trim()
+        : 'voidfin_${poolId}_${DateTime.now().millisecondsSinceEpoch}';
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    final callable = fx.httpsCallable('adminVoidFinalizedPool');
+    await callable.call(<String, dynamic>{
+      'poolId': poolId,
+      'motivo': motivo,
+      'idempotencyKey': key,
+    });
+  }
+
   static Future<int> limpiarReservasVencidas(String poolId) async {
     final poolRef = pools.doc(poolId);
     final now = Timestamp.fromDate(DateTime.now());
@@ -360,7 +383,8 @@ class PoolRepo {
         final metodo = (r['metodoPago'] ?? '').toString().toLowerCase().trim();
         final poolPatch = <String, dynamic>{
           'asientosReservados': newOcc,
-          'montoReservado': ((p['montoReservado'] ?? 0.0) as num).toDouble() - total,
+          'montoReservado':
+              ((p['montoReservado'] ?? 0.0) as num).toDouble() - total,
           if (p['estado'] == 'lleno') 'estado': 'abierto',
         };
         // En cliente no hay query en transacción; si ya existe el contador, ajustamos efectivo.

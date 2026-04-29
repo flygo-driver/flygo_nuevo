@@ -4,11 +4,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 
-import 'documentos_taxista.dart';
 import 'contrato_taxista_firma.dart';
-import 'viaje_disponible.dart';
-import '../cliente/cliente_home.dart';
-import '../../widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/shell/taxista_shell.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import '../../servicios/pool_repo.dart';
 
 class TaxistaEntry extends StatefulWidget {
@@ -35,7 +33,7 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
   Future<void> _decidirRuta() async {
     final u = FirebaseAuth.instance.currentUser;
     if (!mounted || u == null) {
-      _go(const ClienteHome());
+      _go(const ClienteShell());
       return;
     }
 
@@ -52,12 +50,11 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
         debugPrint(
           '[TAXISTA_ENTRY] uid=${u.uid} rol=$rol -> redirigiendo a ClienteHome',
         );
-        _go(const ClienteHome());
+        _go(const ClienteShell());
         return;
       }
 
-      // Cierre de pools por deuda semanal (consistencia con pagos/ADM).
-      // Si el taxista no ha pagado, sus pools deben quedar "no disponibles".
+      // Cierre/reapertura de pools según bandera vigente en usuario.
       try {
         final tienePagoPendiente = data['tienePagoPendiente'] == true;
         await PoolRepo.syncPoolsPorPagoSemanal(
@@ -75,27 +72,43 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
         '[TAXISTA_ENTRY] uid=${u.uid} rol=taxista docsEstado=$estado poolOk=$poolOk contratoOk=$contratoOk',
       );
 
-      final Widget destino = !poolOk
-          ? const DocumentosTaxista()
-          : (contratoOk ? const ViajeDisponible() : const ContratoTaxistaFirma());
+      // 1) Sin docs aprobados → subir fotos. 2) Docs OK pero sin contrato → firma una sola vez (versión).
+      // 3) Ya firmó → siempre al pool (incl. tras pagar comisión/deuda: no vuelve al contrato).
+      final Widget destino;
+      if (!poolOk) {
+        destino = const TaxistaShell(openDocumentosOnLaunch: true);
+      } else if (contratoOk) {
+        destino = const TaxistaShell();
+      } else {
+        destino = const ContratoTaxistaFirma();
+      }
 
       _go(destino);
     } catch (e) {
       debugPrint('[TAXISTA_ENTRY] error=$e');
-      _go(const ClienteHome());
+      _go(const ClienteShell());
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    // Mismo lenguaje visual que el splash de [main] (entrada limpia al pool).
+    return Scaffold(
       backgroundColor: Colors.black,
-      appBar: RaiAppBar(
-        title: 'Conductor',
-      ),
       body: Center(
-        child: CircularProgressIndicator(
-          color: Colors.greenAccent,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Image.asset(
+              'assets/icon/logo_rai_vertical.png',
+              width: 150,
+              height: 150,
+            ),
+            const SizedBox(height: 30),
+            const CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+            ),
+          ],
         ),
       ),
     );

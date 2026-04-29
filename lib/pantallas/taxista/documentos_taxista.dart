@@ -1,13 +1,14 @@
-import 'dart:typed_data';
+import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'package:flygo_nuevo/widgets/taxista_drawer.dart';
+import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 
 /// Firestore:
@@ -38,6 +39,11 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
 
   bool _cargando = true;
   bool _subiendo = false;
+  bool _escuchaAprobacionIniciada = false;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subUsuario;
+
+  /// Último estado de docs conocido (evita saltar al pool si ya estaba aprobado y abrió esta pantalla desde el menú).
+  String? _ultimoEstadoDocs;
 
   String docsEstado = 'pendiente';
   String? comentarioAdmin;
@@ -48,10 +54,80 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
   String? fotoVehiculoUrl;
   String? placaUrl;
 
+  /// Aprobado en Firestore pero fuera del plazo de renovación (~6 meses).
+  bool _renovacionObligatoria = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _restaurarBarrasSistema());
     _cargar();
+  }
+
+  @override
+  void dispose() {
+    _subUsuario?.cancel();
+    _restaurarBarrasSistema();
+    super.dispose();
+  }
+
+  /// La cámara / galería a veces deja el modo inmersivo y ocultan barra de navegación y gestos.
+  void _restaurarBarrasSistema() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: Colors.black87,
+        systemNavigationBarIconBrightness: Brightness.light,
+        systemNavigationBarContrastEnforced: false,
+      ),
+    );
+  }
+
+  /// Cuando el admin aprueba documentos en vivo: contrato (una vez) o pool. No confundir con bloqueo por comisión RD\$500.
+  void _iniciarEscuchaAprobacionAdmin() {
+    if (_escuchaAprobacionIniciada) return;
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) return;
+    _escuchaAprobacionIniciada = true;
+    _subUsuario = FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(u.uid)
+        .snapshots()
+        .listen((DocumentSnapshot<Map<String, dynamic>> snap) {
+      final data = snap.data() ?? <String, dynamic>{};
+      final e = taxistaDocsEstadoDesdeUsuario(data);
+      if (!taxistaAprobadoParaOperarPool(data)) {
+        _ultimoEstadoDocs = e;
+        if (mounted) {
+          setState(() {
+            docsEstado = e;
+            _renovacionObligatoria = taxistaRequiereRenovacionDocumentos(data);
+          });
+        }
+        return;
+      }
+      final prev = (_ultimoEstadoDocs ?? docsEstado).toLowerCase().trim();
+      _ultimoEstadoDocs = e;
+      if (mounted) {
+        setState(() {
+          docsEstado = e;
+          _renovacionObligatoria = false;
+        });
+      }
+      final pasoAAprobado = prev != 'aprobado' && e == 'aprobado';
+      if (!pasoAAprobado || !mounted) return;
+      // Una sola decisión: [TaxistaEntry] → contrato (once) o pool. No mezclar aquí con bloqueo RD\$500.
+      _continuarTrasAprobacionAdmin();
+    });
+  }
+
+  void _continuarTrasAprobacionAdmin() {
+    if (!mounted) return;
+    Navigator.of(context)
+        .pushNamedAndRemoveUntil('/taxista_entry', (route) => false);
   }
 
   Future<void> _cargar() async {
@@ -65,19 +141,23 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       // Forzar refresco del token
       await u.getIdToken(true);
 
-      final snap =
-          await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).get();
+      final snap = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(u.uid)
+          .get();
       final data = (snap.data() ?? <String, dynamic>{});
       final docs = (data['docs'] as Map?) ?? {};
-      final rawEstado = (data['docsEstado'] ?? data['estadoDocumentos'] ?? 'pendiente')
-          .toString()
-          .trim();
-      final estado =
-          rawEstado.isEmpty ? 'pendiente' : rawEstado.toLowerCase();
+      final rawEstado =
+          (data['docsEstado'] ?? data['estadoDocumentos'] ?? 'pendiente')
+              .toString()
+              .trim();
+      final estado = rawEstado.isEmpty ? 'pendiente' : rawEstado.toLowerCase();
 
       if (!mounted) return;
       setState(() {
         docsEstado = estado;
+        _ultimoEstadoDocs = estado;
+        _renovacionObligatoria = taxistaRequiereRenovacionDocumentos(data);
         comentarioAdmin = (data['docsComentarioAdmin'] as String?);
         licenciaUrl = (docs['licenciaUrl'] as String?);
         matriculaUrl = (docs['matriculaUrl'] as String?);
@@ -86,6 +166,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         placaUrl = (docs['placaUrl'] as String?);
         _cargando = false;
       });
+      _iniciarEscuchaAprobacionAdmin();
     } catch (e) {
       if (!mounted) return;
       setState(() => _cargando = false);
@@ -142,7 +223,10 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         updateData['estadoDocumentos'] = 'pendiente';
       }
 
-      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).update(updateData);
+      await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(u.uid)
+          .update(updateData);
 
       await _cargar();
 
@@ -163,7 +247,10 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         SnackBar(content: Text('❌ Error subiendo $tipo: $e')),
       );
     } finally {
-      if (mounted) setState(() => _subiendo = false);
+      if (mounted) {
+        setState(() => _subiendo = false);
+        _restaurarBarrasSistema();
+      }
     }
   }
 
@@ -192,17 +279,20 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
               const SizedBox(height: 12),
               const Text(
                 'Selecciona fuente',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                style:
+                    TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
               ListTile(
                 leading: const Icon(Icons.photo_camera, color: Colors.white),
-                title: const Text('Cámara', style: TextStyle(color: Colors.white)),
+                title:
+                    const Text('Cámara', style: TextStyle(color: Colors.white)),
                 onTap: () => Navigator.pop(ctx, ImageSource.camera),
               ),
               ListTile(
                 leading: const Icon(Icons.photo_library, color: Colors.white),
-                title: const Text('Galería', style: TextStyle(color: Colors.white)),
+                title: const Text('Galería',
+                    style: TextStyle(color: Colors.white)),
                 onTap: () => Navigator.pop(ctx, ImageSource.gallery),
               ),
               const SizedBox(height: 8),
@@ -223,12 +313,14 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1C1C1C),
-        title:
-            const Text('Eliminar documento', style: TextStyle(color: Colors.white)),
+        title: const Text('Eliminar documento',
+            style: TextStyle(color: Colors.white)),
         content: const Text('¿Seguro que deseas eliminar este documento?',
             style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar')),
           FilledButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
             icon: const Icon(Icons.delete_outline),
@@ -253,7 +345,10 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         updateData['estadoDocumentos'] = 'pendiente';
       }
 
-      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).update(updateData);
+      await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(u.uid)
+          .update(updateData);
 
       await _cargar();
 
@@ -297,7 +392,10 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
     await u.getIdToken(true);
 
     try {
-      await FirebaseFirestore.instance.collection('usuarios').doc(u.uid).update({
+      await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(u.uid)
+          .update({
         'docsEstado': 'en_revision',
         'estadoDocumentos': 'en_revision',
         'docsEnviadosEn': FieldValue.serverTimestamp(),
@@ -314,7 +412,8 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       if (!mounted) return;
       String msg = '❌ Error al enviar: ${e.message}';
       if (e.code == 'permission-denied') {
-        msg = 'No tienes permisos para modificar el estado. Verifica las reglas de Firestore.';
+        msg =
+            'No tienes permisos para modificar el estado. Verifica las reglas de Firestore.';
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg)),
@@ -346,36 +445,54 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      drawer: const TaxistaDrawer(),
       appBar: AppBar(
         backgroundColor: Colors.black,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-            tooltip: 'Menú',
-          ),
-        ),
         title: const Text('Documentos', style: TextStyle(color: Colors.white)),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: const [SaldoGananciasChip()],
       ),
       body: _cargando
-          ? const Center(child: CircularProgressIndicator(color: Colors.greenAccent))
+          ? const Center(
+              child: CircularProgressIndicator(color: Colors.greenAccent))
           : Stack(
               children: [
                 ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 110),
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    12,
+                    16,
+                    110 + MediaQuery.paddingOf(context).bottom,
+                  ),
                   children: [
+                    if (_renovacionObligatoria) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1a2a1a),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: Colors.greenAccent.withValues(alpha: 0.6)),
+                        ),
+                        child: const Text(
+                          'Renovación de documentos: han pasado unos 6 meses desde la última '
+                          'aprobación. Sube de nuevo las fotos y envía a revisión para seguir operando.',
+                          style: TextStyle(color: Colors.white70, height: 1.35),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     // Chip de estado
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
                           color: colorEstado.withValues(alpha: 0.12),
-                          border: Border.all(color: colorEstado.withValues(alpha: 0.65)),
+                          border: Border.all(
+                              color: colorEstado.withValues(alpha: 0.65)),
                           borderRadius: BorderRadius.circular(24),
                         ),
                         child: Row(
@@ -385,7 +502,9 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                             const SizedBox(width: 8),
                             Text(
                               'Estado: ${docsEstado.toUpperCase()}',
-                              style: TextStyle(color: colorEstado, fontWeight: FontWeight.w700),
+                              style: TextStyle(
+                                  color: colorEstado,
+                                  fontWeight: FontWeight.w700),
                             ),
                             if (_subiendo) ...[
                               const SizedBox(width: 10),
@@ -416,7 +535,8 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                         ),
                         child: Text(
                           'Observación del revisor: $comentarioAdmin',
-                          style: const TextStyle(color: Colors.white70, height: 1.3),
+                          style: const TextStyle(
+                              color: Colors.white70, height: 1.3),
                         ),
                       ),
                     ],
@@ -451,7 +571,8 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                       nombre: 'Foto del vehículo',
                       url: fotoVehiculoUrl,
                       onSubir: () => _elegirFuenteYSubir('fotoVehiculo'),
-                      onEliminar: () => _eliminar('fotoVehiculo', fotoVehiculoUrl),
+                      onEliminar: () =>
+                          _eliminar('fotoVehiculo', fotoVehiculoUrl),
                     ),
                     const SizedBox(height: 12),
 
@@ -470,22 +591,28 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                   ],
                 ),
 
-                // Botón fijo inferior
+                // Botón fijo inferior (SafeArea: no tapa ni queda bajo la barra/gestos del sistema)
                 Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: 16,
-                  child: SizedBox(
-                    height: 52,
-                    child: ElevatedButton.icon(
-                      onPressed: _subiendo ? null : _enviarRevision,
-                      icon: const Icon(Icons.send),
-                      label: const Text('Enviar a revisión'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.green,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SafeArea(
+                    top: false,
+                    minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: SizedBox(
+                      height: 52,
+                      child: ElevatedButton.icon(
+                        onPressed: _subiendo ? null : _enviarRevision,
+                        icon: const Icon(Icons.send),
+                        label: const Text('Enviar a revisión'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.green,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                          textStyle: const TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 16),
+                        ),
                       ),
                     ),
                   ),
@@ -527,7 +654,8 @@ class _DocItem extends StatelessWidget {
             GestureDetector(
               onTap: tieneArchivo
                   ? () async {
-                      await launchUrl(Uri.parse(url!), mode: LaunchMode.externalApplication);
+                      await launchUrl(Uri.parse(url!),
+                          mode: LaunchMode.externalApplication);
                     }
                   : null,
               child: ClipRRect(
@@ -538,7 +666,8 @@ class _DocItem extends StatelessWidget {
                   color: const Color(0xFF262626),
                   child: tieneArchivo
                       ? Image.network(url!, fit: BoxFit.cover)
-                      : const Icon(Icons.insert_drive_file, color: Colors.white38),
+                      : const Icon(Icons.insert_drive_file,
+                          color: Colors.white38),
                 ),
               ),
             ),
@@ -553,13 +682,22 @@ class _DocItem extends StatelessWidget {
                     nombre,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16),
                   ),
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Icon(tieneArchivo ? Icons.check_circle : Icons.info_outline,
-                          size: 16, color: tieneArchivo ? Colors.greenAccent : Colors.white60),
+                      Icon(
+                          tieneArchivo
+                              ? Icons.check_circle
+                              : Icons.info_outline,
+                          size: 16,
+                          color: tieneArchivo
+                              ? Colors.greenAccent
+                              : Colors.white60),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
@@ -567,7 +705,9 @@ class _DocItem extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: tieneArchivo ? Colors.greenAccent : Colors.white70,
+                            color: tieneArchivo
+                                ? Colors.greenAccent
+                                : Colors.white70,
                             fontSize: 12,
                           ),
                         ),
@@ -588,8 +728,10 @@ class _DocItem extends StatelessWidget {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.green,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
                 textStyle: const TextStyle(fontWeight: FontWeight.w700),
               ),
             ),

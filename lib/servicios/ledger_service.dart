@@ -54,13 +54,15 @@ class LedgerService {
   }
 
   /// Devuelve todos los movimientos (últimos primero) para auditoría UI.
-  static Stream<List<LedgerEntry>> streamMovimientos(String uidTaxista, {int limit = 500}) {
+  static Stream<List<LedgerEntry>> streamMovimientos(String uidTaxista,
+      {int limit = 500}) {
     if (uidTaxista.trim().isEmpty) return Stream.value(const <LedgerEntry>[]);
     return _movRef(uidTaxista)
         .orderBy('created_at', descending: true)
         .limit(limit)
         .snapshots()
-        .map((qs) => qs.docs.map((d) => LedgerEntry.fromMap(d.id, d.data())).toList());
+        .map((qs) =>
+            qs.docs.map((d) => LedgerEntry.fromMap(d.id, d.data())).toList());
   }
 
   // ------------------------
@@ -104,15 +106,16 @@ class LedgerService {
   /// DocId determinístico: "wdreq_{liquidacionId}" si lo tienes; si no, genera con add().
   static Future<String> requestWithdrawal({
     required String uidTaxista,
-    required int amountCents,        // POSITIVO en argumento; internamente se guarda NEGATIVO
-    String? liquidacionId,           // si ya creaste el doc en /liquidaciones
+    required int
+        amountCents, // POSITIVO en argumento; internamente se guarda NEGATIVO
+    String? liquidacionId, // si ya creaste el doc en /liquidaciones
     String? createdByUid,
     String? createdByName,
     String? note,
   }) async {
     final ref = (liquidacionId == null || liquidacionId.isEmpty)
-        ? _movRef(uidTaxista).doc()                           // auto-id
-        : _movRef(uidTaxista).doc('wdreq_$liquidacionId');     // idempotente
+        ? _movRef(uidTaxista).doc() // auto-id
+        : _movRef(uidTaxista).doc('wdreq_$liquidacionId'); // idempotente
 
     await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
@@ -121,8 +124,8 @@ class LedgerService {
       tx.set(ref, {
         'id': ref.id,
         'type': 'withdrawal',
-        'status': 'pending',                 // reserva activa
-        'amount_cents': -amountCents,        // NEGATIVO (reserva)
+        'status': 'pending', // reserva activa
+        'amount_cents': -amountCents, // NEGATIVO (reserva)
         'currency': 'DOP',
         'ref_type': 'liquidacion',
         'ref_id': liquidacionId ?? '',
@@ -162,7 +165,8 @@ class LedgerService {
     await _db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
       if (reqSnap.exists) {
-        tx.update(reqRef, {'status': 'rejected', if (note != null) 'note': note});
+        tx.update(
+            reqRef, {'status': 'rejected', if (note != null) 'note': note});
       }
       final relSnap = await tx.get(adjRef);
       if (!relSnap.exists) {
@@ -187,8 +191,8 @@ class LedgerService {
 /// Modelo simple para UI/Auditoría
 class LedgerEntry {
   final String id;
-  final String type;    // ride_income | withdrawal | adjustment
-  final String status;  // posted | pending | approved | rejected
+  final String type; // ride_income | withdrawal | adjustment
+  final String status; // posted | pending | approved | rejected
   final int amountCents;
   final String currency;
   final String refType;

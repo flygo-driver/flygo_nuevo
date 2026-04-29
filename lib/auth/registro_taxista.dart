@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
@@ -29,8 +28,8 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
   final _modelo = TextEditingController();
   final _color = TextEditingController();
 
-  // 🔥 TIPO DE SERVICIO
-  String _tipoServicio = 'normal'; // normal, motor, turismo
+  // 🔥 TIPO DE SERVICIO (incl. Bola Ahorro = tablero intermunicipal)
+  String _tipoServicio = 'bola_ahorro'; // bola_ahorro, normal, motor, turismo
 
   // Para servicio normal
   String _tipoVehiculo = 'Carro';
@@ -103,14 +102,25 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
         password: _pass.text.trim(),
       );
       final user = cred.user!;
+      final String uid = user.uid;
+      final String emailTrim = _email.text.trim();
+
+      // 1b) Marcar rol taxista en Firestore ANTES que cualquier otra tarea: evita que AuthGate
+      // cree usuarios/{uid} con rol cliente por carrera con el registro.
+      await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+        'uid': uid,
+        'email': emailTrim,
+        'rol': 'taxista',
+        'fechaRegistro': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
       await user.updateDisplayName(_nombre.text.trim());
 
       // Enviamos verificación (solo informativo)
       try {
         await user.sendEmailVerification();
       } catch (_) {}
-
-      final String uid = user.uid;
 
       // 2) Preparar datos del vehículo según tipo de servicio
       final String marca = _marca.text.trim();
@@ -128,7 +138,7 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
       };
 
       // Datos específicos según tipo
-      if (_tipoServicio == 'normal') {
+      if (_tipoServicio == 'normal' || _tipoServicio == 'bola_ahorro') {
         datosVehiculo.addAll({
           'tipoVehiculo': _tipoVehiculo,
           'vehiculoTipo': _tipoVehiculo,
@@ -155,7 +165,7 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
       // 3) Guardar perfil en Firestore
       await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
         'uid': uid,
-        'email': _email.text.trim(),
+        'email': emailTrim,
         'nombre': _nombre.text.trim(),
         'telefono': _telefono.text.trim(),
         'rol': 'taxista',
@@ -177,7 +187,7 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
         'vehiculoColor': color,
 
         'vehiculo': {
-          'tipo': _tipoServicio == 'normal'
+          'tipo': (_tipoServicio == 'normal' || _tipoServicio == 'bola_ahorro')
               ? _tipoVehiculo
               : (_tipoServicio == 'motor'
                   ? 'Motor'
@@ -210,15 +220,14 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Cuenta creada. Ahora sube tus documentos.')),
+            content:
+                Text('Cuenta creada. Continúa con documentos y contrato.')),
       );
 
-      // 4) Ir a pantalla de documentos (NO directo a taxista)
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const DocumentosTaxista()),
-        (_) => false,
-      );
+      // 4) Mismo flujo que login taxista: AuthGate → TaxistaEntry → documentos → contrato → pool
+      if (!mounted) return;
+      Navigator.of(context)
+          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -321,6 +330,11 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
                 child: Column(
                   children: [
                     _buildTipoServicioOption(
+                      value: 'bola_ahorro',
+                      icon: Icons.savings_outlined,
+                      label: '💚 Bola Ahorro (viajes compartidos)',
+                    ),
+                    _buildTipoServicioOption(
                       value: 'normal',
                       icon: Icons.directions_car,
                       label: '🚗 Servicio Normal',
@@ -354,7 +368,8 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
               const SizedBox(height: 12),
 
               // Selector específico según tipo de servicio
-              if (_tipoServicio == 'normal') ...[
+              if (_tipoServicio == 'normal' ||
+                  _tipoServicio == 'bola_ahorro') ...[
                 DropdownButtonFormField<String>(
                   value: _tipoVehiculo,
                   items: _tiposVehiculoNormal.map((tipo) {
@@ -388,6 +403,31 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
                       _dec('Tipo de vehículo turístico', Icons.beach_access),
                   dropdownColor: Colors.black,
                   style: const TextStyle(color: Colors.white),
+                ),
+                const SizedBox(height: 16),
+              ],
+
+              if (_tipoServicio == 'bola_ahorro') ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE65100).withAlpha(38),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFFF8F00)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.route_rounded, color: Color(0xFFFFB74D)),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Bola Ahorro: ofertas y rutas en el tablero RAI (intermunicipal). '
+                          'Puedes combinar con otros servicios cuando estés aprobado.',
+                          style: TextStyle(color: Colors.white, height: 1.35),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 16),
               ],
@@ -572,7 +612,7 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
         setState(() {
           _tipoServicio = val!;
           // Resetear valores según tipo
-          if (_tipoServicio == 'normal') {
+          if (_tipoServicio == 'normal' || _tipoServicio == 'bola_ahorro') {
             _tipoVehiculo = 'Carro';
           } else if (_tipoServicio == 'turismo') {
             _subtipoTurismo = 'carro';

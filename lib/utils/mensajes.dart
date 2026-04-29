@@ -32,7 +32,8 @@ class MensajeUtils {
     if (s.contains('unavailable')) {
       return 'Servicio no disponible momentáneamente. Revisa tu conexión e inténtalo de nuevo.';
     }
-    if (s.contains('deadline-exceeded') || s.contains('network-request-failed')) {
+    if (s.contains('deadline-exceeded') ||
+        s.contains('network-request-failed')) {
       return 'Conexión lenta o inestable. Vuelve a intentar la cancelación.';
     }
     return 'No se pudo cancelar por un error inesperado.';

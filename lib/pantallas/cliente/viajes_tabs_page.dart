@@ -79,8 +79,8 @@ class _ListaViajes extends StatelessWidget {
     );
   }
 
-  bool _esAhora(DateTime fecha) =>
-      !fecha.isAfter(DateTime.now().add(const Duration(minutes: kAhoraUmbralMin)));
+  bool _esAhora(DateTime fecha) => !fecha
+      .isAfter(DateTime.now().add(const Duration(minutes: kAhoraUmbralMin)));
 
   @override
   Widget build(BuildContext context) {
@@ -103,7 +103,9 @@ class _ListaViajes extends StatelessWidget {
         if (!snap.hasData || snap.data!.docs.isEmpty) {
           return Center(
             child: Text(
-              programados ? 'No hay viajes programados' : 'No hay viajes ahora mismo',
+              programados
+                  ? 'No hay viajes programados'
+                  : 'No hay viajes ahora mismo',
               style: const TextStyle(color: Colors.white70),
             ),
           );
@@ -123,7 +125,9 @@ class _ListaViajes extends StatelessWidget {
         if (docs.isEmpty) {
           return Center(
             child: Text(
-              programados ? 'No hay viajes programados' : 'No hay viajes ahora mismo',
+              programados
+                  ? 'No hay viajes programados'
+                  : 'No hay viajes ahora mismo',
               style: const TextStyle(color: Colors.white70),
             ),
           );
@@ -131,8 +135,10 @@ class _ListaViajes extends StatelessWidget {
 
         // Orden: AHORA (desc por fecha) / PROGRAMADOS (asc por fecha)
         docs.sort((a, b) {
-          final fa = _readDate(a.data()['fechaHora']) ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final fb = _readDate(b.data()['fechaHora']) ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final fa = _readDate(a.data()['fechaHora']) ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          final fb = _readDate(b.data()['fechaHora']) ??
+              DateTime.fromMillisecondsSinceEpoch(0);
           return programados ? fa.compareTo(fb) : fb.compareTo(fa);
         });
 
@@ -158,7 +164,8 @@ class _ListaViajes extends StatelessWidget {
                   l2o: d['lonDestino'],
                 );
 
-            final double gana = _readDouble(d['gananciaTaxista']) ?? (precio * 0.8);
+            final double gana =
+                _readDouble(d['gananciaTaxista']) ?? (precio * 0.8);
 
             return ViajeCard(
               origen: origen,
@@ -170,7 +177,7 @@ class _ListaViajes extends StatelessWidget {
               metodoPago: metodo,
               tipoVehiculo: veh,
               programado: programados,
-              onTap: () {},       // si tienes detalle del viaje, navega aquí
+              onTap: () {}, // si tienes detalle del viaje, navega aquí
               showAceptar: false, // vista de cliente → no mostrar botón Aceptar
               onAceptar: null,
             );
@@ -212,5 +219,5 @@ class _ListaViajes extends StatelessWidget {
     final d = _readDouble(l2o);
     if (a == null || b == null || c == null || d == null) return null;
     return DistanciaService.calcularDistancia(a, b, c, d);
-    }
+  }
 }

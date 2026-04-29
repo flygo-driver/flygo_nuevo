@@ -61,7 +61,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),
         iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Reportes y Estadísticas', style: TextStyle(color: AdminUi.onCard(context))),
+        title: Text('Reportes y Estadísticas',
+            style: TextStyle(color: AdminUi.onCard(context))),
         actions: [
           PopupMenuButton<int>(
             onSelected: (int v) {
@@ -74,7 +75,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               PopupMenuItem(value: 7, child: Text('Últimos 7 días')),
               PopupMenuItem(value: 30, child: Text('Últimos 30 días')),
             ],
-            icon: Icon(Icons.filter_alt_outlined, color: AdminUi.appBarFg(context)),
+            icon: Icon(Icons.filter_alt_outlined,
+                color: AdminUi.appBarFg(context)),
           ),
         ],
       ),
@@ -85,7 +87,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             .get(),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
-            return Center(child: CircularProgressIndicator(color: AdminUi.progressAccent(context)));
+            return Center(
+                child: CircularProgressIndicator(
+                    color: AdminUi.progressAccent(context)));
           }
           if (snap.hasError) {
             return Center(
@@ -97,7 +101,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           }
 
           final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
-              snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+              snap.data?.docs ??
+                  <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
           final int total = docs.length;
 
@@ -127,13 +132,11 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             children: [
               _chipPeriodo(context),
               const SizedBox(height: 14),
-
               _cardNumero(context, 'Total viajes', total.toString()),
               const SizedBox(height: 10),
               _cardNumero(context, 'Completados', completados.toString()),
               const SizedBox(height: 10),
               _cardNumero(context, 'Cancelados', cancelados.toString()),
-
               const SizedBox(height: 14),
               _cardMoney(context, 'Suma precios (aprox)', sumaPrecio),
               const SizedBox(height: 10),
@@ -146,7 +149,6 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               _filtroHistoricoPromoCard(context),
               const SizedBox(height: 12),
               _historicoAuditoriaPromoCard(context),
-
               const SizedBox(height: 16),
               _filtroReportesCard(context),
               const SizedBox(height: 12),
@@ -158,7 +160,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               const SizedBox(height: 16),
               Text(
                 'Nota: esto calcula leyendo viajes recientes. Para producción grande, lo ideal es guardar stats agregadas.',
-                style: TextStyle(color: AdminUi.muted(context).withValues(alpha: 0.85)),
+                style: TextStyle(
+                    color: AdminUi.muted(context).withValues(alpha: 0.85)),
               ),
             ],
           );
@@ -215,7 +218,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           Expanded(
             child: Text(
               'Estado de reportes',
-              style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
             ),
           ),
           DropdownButton<String>(
@@ -254,7 +258,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         style: TextStyle(color: AdminUi.onCard(context)),
         decoration: InputDecoration(
           hintText: 'Buscar por viajeId o uidTaxista',
-          hintStyle: TextStyle(color: AdminUi.secondary(context).withValues(alpha: 0.85)),
+          hintStyle: TextStyle(
+              color: AdminUi.secondary(context).withValues(alpha: 0.85)),
           prefixIcon: Icon(Icons.search, color: AdminUi.secondary(context)),
           filled: true,
           fillColor: AdminUi.inputFill(context),
@@ -299,7 +304,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           Expanded(
             child: Text(
               'Rango de reportes',
-              style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
             ),
           ),
           DropdownButton<int>(
@@ -343,7 +349,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           Expanded(
             child: Text(
               'Auditoría Promo MxK',
-              style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
             ),
           ),
           DropdownButton<String>(
@@ -391,7 +398,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           Expanded(
             child: Text(
               'Histórico auditoría promo',
-              style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
             ),
           ),
           DropdownButton<int>(
@@ -432,7 +440,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     return true;
   }
 
-  Widget _auditoriaPromoCard(BuildContext context, List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+  Widget _auditoriaPromoCard(BuildContext context,
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     final List<Map<String, dynamic>> viajesConPromo = docs
         .map((d) {
           final data = d.data();
@@ -444,10 +453,12 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             'promoSnapshot': ps,
           };
         })
-        .where((v) => _matchesFiltroPromo(v['promoSnapshot'] as Map<String, dynamic>?))
+        .where((v) =>
+            _matchesFiltroPromo(v['promoSnapshot'] as Map<String, dynamic>?))
         .toList();
 
-    final int conSnapshot = docs.where((d) => _promoSnapshotDeViaje(d.data()) != null).length;
+    final int conSnapshot =
+        docs.where((d) => _promoSnapshotDeViaje(d.data()) != null).length;
     final int conDescuento = docs.where((d) {
       final ps = _promoSnapshotDeViaje(d.data());
       return ps != null && ps['aplicaDescuento'] == true;
@@ -466,7 +477,10 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         children: [
           Text(
             'Auditoría Promo MxK (viajes)',
-            style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w800, fontSize: 16),
+            style: TextStyle(
+                color: AdminUi.onCard(context),
+                fontWeight: FontWeight.w800,
+                fontSize: 16),
           ),
           const SizedBox(height: 8),
           Text(
@@ -477,7 +491,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: viajesConPromo.isEmpty ? null : () => _exportarPromoCsv(viajesConPromo),
+              onPressed: viajesConPromo.isEmpty
+                  ? null
+                  : () => _exportarPromoCsv(viajesConPromo),
               icon: const Icon(Icons.download_outlined),
               label: const Text('Exportar CSV auditoría promo'),
             ),
@@ -499,7 +515,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           ),
           const SizedBox(height: 10),
           if (viajesConPromo.isEmpty)
-            Text('Sin viajes para el filtro seleccionado.', style: TextStyle(color: AdminUi.secondary(context))),
+            Text('Sin viajes para el filtro seleccionado.',
+                style: TextStyle(color: AdminUi.secondary(context))),
           for (final v in viajesConPromo.take(12)) ...[
             Builder(
               builder: (_) {
@@ -515,7 +532,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
                   padding: const EdgeInsets.only(bottom: 6),
                   child: Text(
                     '• ${v['id']} · ${v['estado']} · RD\$ ${(v['precio'] as double).toStringAsFixed(2)} · $etiqueta · modo $modo · pos ${pos ?? '-'} · contador ${contador ?? '-'}',
-                    style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+                    style: TextStyle(
+                        color: AdminUi.secondary(context), fontSize: 12),
                   ),
                 );
               },
@@ -554,7 +572,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         _csvCell(v['id']),
         _csvCell(v['estado']),
         _csvCell((v['precio'] as double).toStringAsFixed(2)),
-        _csvCell(ps == null ? '' : (ps['aplicaDescuento'] == true ? 'true' : 'false')),
+        _csvCell(ps == null
+            ? ''
+            : (ps['aplicaDescuento'] == true ? 'true' : 'false')),
         _csvCell(ps?['modo']),
         _csvCell(ps?['m']),
         _csvCell(ps?['k']),
@@ -566,7 +586,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
       ].join(','));
     }
 
-    final filename = 'auditoria_promo_mxk_${DateTime.now().millisecondsSinceEpoch}.csv';
+    final filename =
+        'auditoria_promo_mxk_${DateTime.now().millisecondsSinceEpoch}.csv';
     final bytes = Uint8List.fromList(utf8.encode(sb.toString()));
     await Share.shareXFiles(
       [XFile.fromData(bytes, mimeType: 'text/csv')],
@@ -608,7 +629,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
       ].join(','));
     }
 
-    final filename = 'historico_auditoria_promo_${DateTime.now().millisecondsSinceEpoch}.csv';
+    final filename =
+        'historico_auditoria_promo_${DateTime.now().millisecondsSinceEpoch}.csv';
     final bytes = Uint8List.fromList(utf8.encode(sb.toString()));
     await Share.shareXFiles(
       [XFile.fromData(bytes, mimeType: 'text/csv')],
@@ -619,7 +641,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
   }
 
   Widget _historicoAuditoriaPromoCard(BuildContext context) {
-    final DateTime limite = DateTime.now().subtract(Duration(days: _diasAuditoriaPromo));
+    final DateTime limite =
+        DateTime.now().subtract(Duration(days: _diasAuditoriaPromo));
     return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
       future: _db
           .collection('config')
@@ -628,13 +651,15 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           .get(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return _cardNumero(context, 'Histórico auditoría promo', 'Cargando...');
+          return _cardNumero(
+              context, 'Histórico auditoría promo', 'Cargando...');
         }
         if (snap.hasError) {
           return _cardNumero(context, 'Histórico auditoría promo', 'Error');
         }
 
-        final allDocs = snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+        final allDocs =
+            snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
         final docs = allDocs.where((d) {
           final createdAtRaw = d.data()['createdAt'];
           if (createdAtRaw is! Timestamp) return false;
@@ -643,8 +668,12 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           ..sort((a, b) {
             final ta = a.data()['createdAt'];
             final tb = b.data()['createdAt'];
-            final da = ta is Timestamp ? ta.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
-            final db = tb is Timestamp ? tb.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
+            final da = ta is Timestamp
+                ? ta.toDate()
+                : DateTime.fromMillisecondsSinceEpoch(0);
+            final db = tb is Timestamp
+                ? tb.toDate()
+                : DateTime.fromMillisecondsSinceEpoch(0);
             return db.compareTo(da);
           });
 
@@ -670,7 +699,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  onPressed: docs.isEmpty ? null : () => _exportarHistoricoAuditoriaPromoCsv(docs),
+                  onPressed: docs.isEmpty
+                      ? null
+                      : () => _exportarHistoricoAuditoriaPromoCsv(docs),
                   icon: const Icon(Icons.download_outlined),
                   label: const Text('Exportar CSV histórico'),
                 ),
@@ -694,7 +725,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
                       padding: const EdgeInsets.only(bottom: 6),
                       child: Text(
                         '• ${d.id} · $createdAt · filtro ${data['filtroPromo'] ?? '-'} · total ${data['totalBase'] ?? 0} · dto ${data['conDescuentoBase'] ?? 0} ($pct%)',
-                        style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+                        style: TextStyle(
+                            color: AdminUi.secondary(context), fontSize: 12),
                       ),
                     );
                   },
@@ -713,7 +745,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     required List<Map<String, dynamic>> docsFiltrados,
   }) async {
     final int totalBase = docsBase.length;
-    final int conSnapshotBase = docsBase.where((d) => _promoSnapshotDeViaje(d.data()) != null).length;
+    final int conSnapshotBase =
+        docsBase.where((d) => _promoSnapshotDeViaje(d.data()) != null).length;
     final int conDescuentoBase = docsBase.where((d) {
       final ps = _promoSnapshotDeViaje(d.data());
       return ps != null && ps['aplicaDescuento'] == true;
@@ -734,7 +767,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
       }
     }
 
-    final double pctDescuento = totalBase == 0 ? 0 : (conDescuentoBase * 100.0 / totalBase);
+    final double pctDescuento =
+        totalBase == 0 ? 0 : (conDescuentoBase * 100.0 / totalBase);
     final String fecha = DateTime.now().toIso8601String();
     final sb = StringBuffer()
       ..writeln('Resumen ejecutivo Promo MxK - RAI DRIVER')
@@ -782,7 +816,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
 
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Resumen promo copiado y guardado en auditoría.')),
+      const SnackBar(
+          content: Text('Resumen promo copiado y guardado en auditoría.')),
     );
   }
 
@@ -791,11 +826,13 @@ class _ReportesAdminState extends State<ReportesAdmin> {
   ) async {
     if (docs.isEmpty) return;
     final sb = StringBuffer();
-    sb.writeln('id,viajeId,uidCliente,uidTaxista,motivo,comentario,estado,creadoEn');
+    sb.writeln(
+        'id,viajeId,uidCliente,uidTaxista,motivo,comentario,estado,creadoEn');
     for (final d in docs) {
       final data = d.data();
       final creadoEn = data['creadoEn'];
-      final fecha = creadoEn is Timestamp ? creadoEn.toDate().toIso8601String() : '';
+      final fecha =
+          creadoEn is Timestamp ? creadoEn.toDate().toIso8601String() : '';
       sb.writeln([
         _csvCell(d.id),
         _csvCell(data['viajeId']),
@@ -827,7 +864,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     int enRevision = 0;
     int cerrados = 0;
     for (final d in docs) {
-      final e = (d.data()['estado'] ?? 'pendiente').toString().trim().toLowerCase();
+      final e =
+          (d.data()['estado'] ?? 'pendiente').toString().trim().toLowerCase();
       if (e == 'cerrado') {
         cerrados++;
       } else if (e == 'en_revision') {
@@ -861,7 +899,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     await Clipboard.setData(ClipboardData(text: sb.toString()));
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Resumen ejecutivo copiado al portapapeles.')),
+      const SnackBar(
+          content: Text('Resumen ejecutivo copiado al portapapeles.')),
     );
   }
 
@@ -931,7 +970,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
   }
 
   Widget _reportesQuejasCard(BuildContext context) {
-    final DateTime limite = DateTime.now().subtract(Duration(days: _diasReportes));
+    final DateTime limite =
+        DateTime.now().subtract(Duration(days: _diasReportes));
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _db.collection('reportes_viaje').snapshots(),
       builder: (context, snap) {
@@ -941,20 +981,25 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         if (snap.hasError) {
           return _cardNumero(context, 'Reportes de clientes', 'Error');
         }
-        final allDocs = snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+        final allDocs =
+            snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
         final docs = allDocs.where((d) {
           final creadoEn = d.data()['creadoEn'];
           if (creadoEn is Timestamp) {
             if (creadoEn.toDate().isBefore(limite)) return false;
           }
           if (_estadoReporte == 'todos') return true;
-          final e = (d.data()['estado'] ?? 'pendiente').toString().trim().toLowerCase();
+          final e = (d.data()['estado'] ?? 'pendiente')
+              .toString()
+              .trim()
+              .toLowerCase();
           return e == _estadoReporte;
         }).where((d) {
           if (_buscar.isEmpty) return true;
           final data = d.data();
           final viajeId = (data['viajeId'] ?? '').toString().toLowerCase();
-          final uidTaxista = (data['uidTaxista'] ?? '').toString().toLowerCase();
+          final uidTaxista =
+              (data['uidTaxista'] ?? '').toString().toLowerCase();
           return viajeId.contains(_buscar) || uidTaxista.contains(_buscar);
         }).toList()
           ..sort((a, b) {
@@ -972,11 +1017,13 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         final Map<String, int> abiertosPorTaxista = <String, int>{};
         for (final d in docsEnRango) {
           final data = d.data();
-          final estado = (data['estado'] ?? 'pendiente').toString().trim().toLowerCase();
+          final estado =
+              (data['estado'] ?? 'pendiente').toString().trim().toLowerCase();
           if (estado == 'cerrado') continue;
           final uidTaxista = (data['uidTaxista'] ?? '').toString().trim();
           if (uidTaxista.isEmpty) continue;
-          abiertosPorTaxista[uidTaxista] = (abiertosPorTaxista[uidTaxista] ?? 0) + 1;
+          abiertosPorTaxista[uidTaxista] =
+              (abiertosPorTaxista[uidTaxista] ?? 0) + 1;
         }
         final topTaxistas = abiertosPorTaxista.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
@@ -1003,7 +1050,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  onPressed: docs.isEmpty ? null : () => _exportarReportesCsv(docs),
+                  onPressed:
+                      docs.isEmpty ? null : () => _exportarReportesCsv(docs),
                   icon: const Icon(Icons.download_outlined),
                   label: const Text('Exportar CSV (filtros actuales)'),
                 ),
@@ -1027,7 +1075,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
                 const SizedBox(height: 10),
                 Text(
                   'Choferes con más reportes abiertos',
-                  style: TextStyle(color: AdminUi.secondary(context), fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                      color: AdminUi.secondary(context),
+                      fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 6),
                 for (final e in topTaxistas.take(3))
@@ -1057,12 +1107,18 @@ class _ReportesAdminState extends State<ReportesAdmin> {
                       ),
                     ),
                     PopupMenuButton<String>(
-                      icon: Icon(Icons.more_vert, color: AdminUi.muted(context), size: 18),
+                      icon: Icon(Icons.more_vert,
+                          color: AdminUi.muted(context), size: 18),
                       onSelected: (v) => _cambiarEstadoReporte(d.id, v),
                       itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'pendiente', child: Text('Marcar pendiente')),
-                        PopupMenuItem(value: 'en_revision', child: Text('Marcar en revisión')),
-                        PopupMenuItem(value: 'cerrado', child: Text('Marcar cerrado')),
+                        PopupMenuItem(
+                            value: 'pendiente',
+                            child: Text('Marcar pendiente')),
+                        PopupMenuItem(
+                            value: 'en_revision',
+                            child: Text('Marcar en revisión')),
+                        PopupMenuItem(
+                            value: 'cerrado', child: Text('Marcar cerrado')),
                       ],
                     ),
                   ],

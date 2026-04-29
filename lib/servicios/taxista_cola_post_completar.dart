@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/pantallas/taxista/viaje_disponible.dart';
+import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -14,7 +14,8 @@ class TaxistaColaPostCompletar {
     required String uidTaxista,
   }) async {
     final String? siguienteId =
-        await ViajesRepo.promoverColaTrasFinalizarTaxista(uidTaxista: uidTaxista);
+        await ViajesRepo.promoverColaTrasFinalizarTaxista(
+            uidTaxista: uidTaxista);
 
     if (siguienteId != null && siguienteId.isNotEmpty) {
       await UbicacionTaxista.marcarNoDisponible();
@@ -27,7 +28,7 @@ class TaxistaColaPostCompletar {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
       final messenger = ScaffoldMessenger.maybeOf(context);
-      final nav = Navigator.of(context);
+      final nav = Navigator.of(context, rootNavigator: true);
 
       if (siguienteId != null && siguienteId.isNotEmpty) {
         messenger?.showSnackBar(
@@ -48,7 +49,7 @@ class TaxistaColaPostCompletar {
           const SnackBar(content: Text('🏁 Viaje marcado como completado')),
         );
         nav.pushAndRemoveUntil(
-          MaterialPageRoute<void>(builder: (_) => const ViajeDisponible()),
+          MaterialPageRoute<void>(builder: (_) => const TaxistaShell()),
           (route) => false,
         );
       }

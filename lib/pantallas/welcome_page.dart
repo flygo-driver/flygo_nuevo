@@ -83,14 +83,16 @@ class WelcomePage extends StatelessWidget {
                             icon: Icons.person,
                             label: 'Soy Cliente',
                             iconColor: green,
-                            onTap: () => Navigator.pushNamed(context, '/login_cliente'),
+                            onTap: () =>
+                                Navigator.pushNamed(context, '/login_cliente'),
                           ),
                           const SizedBox(height: 10),
                           _WhitePrimaryButton(
                             icon: Icons.local_taxi,
                             label: 'Soy Taxista',
                             iconColor: green,
-                            onTap: () => Navigator.pushNamed(context, '/login_taxista'),
+                            onTap: () =>
+                                Navigator.pushNamed(context, '/login_taxista'),
                           ),
                           const SizedBox(height: 10),
                           Text.rich(
@@ -101,7 +103,8 @@ class WelcomePage extends StatelessWidget {
                                 height: 1.25,
                               ),
                               children: [
-                                const TextSpan(text: 'Al continuar aceptas nuestras '),
+                                const TextSpan(
+                                    text: 'Al continuar aceptas nuestras '),
                                 TextSpan(
                                   text: 'Condiciones',
                                   style: const TextStyle(
@@ -110,7 +113,8 @@ class WelcomePage extends StatelessWidget {
                                     fontWeight: FontWeight.w600,
                                   ),
                                   recognizer: TapGestureRecognizer()
-                                    ..onTap = () => Navigator.pushNamed(context, '/terminos'),
+                                    ..onTap = () => Navigator.pushNamed(
+                                        context, '/terminos'),
                                 ),
                                 const TextSpan(text: ' y '),
                                 TextSpan(
@@ -121,7 +125,8 @@ class WelcomePage extends StatelessWidget {
                                     fontWeight: FontWeight.w600,
                                   ),
                                   recognizer: TapGestureRecognizer()
-                                    ..onTap = () => Navigator.pushNamed(context, '/privacidad'),
+                                    ..onTap = () => Navigator.pushNamed(
+                                        context, '/privacidad'),
                                 ),
                                 const TextSpan(text: '.'),
                               ],

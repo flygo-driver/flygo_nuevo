@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
-import 'package:flygo_nuevo/widgets/taxista_drawer.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 
 class GananciaTaxista extends StatefulWidget {
@@ -69,20 +68,12 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
 
     return Scaffold(
       backgroundColor: cs.surface,
-      drawer: const TaxistaDrawer(),
       appBar: AppBar(
         backgroundColor: cs.surface,
         foregroundColor: cs.onSurface,
         surfaceTintColor: cs.surfaceTint,
         elevation: 0,
         scrolledUnderElevation: 1,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: Icon(Icons.menu, color: cs.onSurface),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-            tooltip: 'Menú',
-          ),
-        ),
         title: Text(
           'Ganancias del Taxista',
           style: TextStyle(
@@ -153,7 +144,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
           // ===== Acumuladores exactos en centavos =====
           int totalComisionCents = 0;
           int totalGananciaCents = 0;
-          
+
           // 🔥 NUEVO: Acumuladores por tipo de servicio
           int viajesNormales = 0;
           int viajesMotor = 0;
@@ -164,10 +155,10 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
 
           for (final d in docs) {
             final m = d.data();
-            
+
             // Determinar tipo de servicio
             final String tipoServicio = m['tipoServicio'] ?? 'normal';
-            
+
             // Precio
             final int precioC = _asInt(m['precio_cents']) == 0
                 ? _toCents(_asDouble(m['precioFinal'] ?? m['precio']))
@@ -175,7 +166,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
 
             // Comisión (si existe en el documento)
             int comisionC = _asInt(m['comision_cents']);
-            
+
             // Si no hay comisión guardada, calcular según tipo
             if (comisionC == 0) {
               if (tipoServicio == 'turismo') {
@@ -192,7 +183,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
             // Acumular totales
             totalComisionCents += comisionC;
             totalGananciaCents += gananciaC;
-            
+
             // 🔥 NUEVO: Acumular por tipo
             switch (tipoServicio) {
               case 'motor':
@@ -283,7 +274,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                   ),
                 ),
                 const SizedBox(height: 14),
-                
+
                 // 🔥 NUEVO: Tarjeta de resumen por tipo de servicio
                 if (viajesNormales > 0 || viajesMotor > 0 || viajesTurismo > 0)
                   _SummaryCard(
@@ -299,7 +290,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        
+
                         // Normales
                         if (viajesNormales > 0) ...[
                           _buildTipoRow(
@@ -312,7 +303,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                           ),
                           const SizedBox(height: 8),
                         ],
-                        
+
                         // Motor
                         if (viajesMotor > 0) ...[
                           _buildTipoRow(
@@ -325,7 +316,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                           ),
                           const SizedBox(height: 8),
                         ],
-                        
+
                         // Turismo
                         if (viajesTurismo > 0) ...[
                           _buildTipoRow(
@@ -342,9 +333,9 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                       ],
                     ),
                   ),
-                
+
                 const SizedBox(height: 14),
-                
+
                 _SummaryCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -436,7 +427,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                     fontSize: 12,
                   ),
                 ),
-                
+
                 // 🔥 NUEVO: Nota sobre comisiones
                 const SizedBox(height: 8),
                 Text(

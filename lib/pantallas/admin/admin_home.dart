@@ -11,6 +11,15 @@ import '../../widgets/comision_global_chip.dart';
 import '../../widgets/admin_drawer.dart'; // ⬅️ NUEVO
 import 'panel_finanzas.dart';
 
+String _liquidacionesErrorMsg(Object? err) {
+  if (err is FirebaseException) {
+    final m = err.message?.trim();
+    if (m != null && m.isNotEmpty) return m;
+    return err.code;
+  }
+  return err.toString();
+}
+
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
 
@@ -18,7 +27,8 @@ class AdminHome extends StatefulWidget {
   State<AdminHome> createState() => _AdminHomeState();
 }
 
-class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMixin {
+class _AdminHomeState extends State<AdminHome>
+    with SingleTickerProviderStateMixin {
   late final TabController _tab;
   final _buscador = TextEditingController();
 
@@ -71,7 +81,8 @@ class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMix
                 MaterialPageRoute(builder: (_) => const PanelFinanzasAdmin()),
               );
             },
-            icon: Icon(Icons.pie_chart_outline, color: AdminUi.iconStandard(context)),
+            icon: Icon(Icons.pie_chart_outline,
+                color: AdminUi.iconStandard(context)),
           ),
           IconButton(
             onPressed: () => setState(() {}),
@@ -90,8 +101,10 @@ class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMix
               style: TextStyle(color: AdminUi.onCard(context)),
               decoration: InputDecoration(
                 hintText: 'Buscar por UID de taxista o nota...',
-                hintStyle: TextStyle(color: AdminUi.secondary(context).withValues(alpha: 0.85)),
-                prefixIcon: Icon(Icons.search, color: AdminUi.secondary(context)),
+                hintStyle: TextStyle(
+                    color: AdminUi.secondary(context).withValues(alpha: 0.85)),
+                prefixIcon:
+                    Icon(Icons.search, color: AdminUi.secondary(context)),
                 filled: true,
                 fillColor: AdminUi.inputFill(context),
                 border: OutlineInputBorder(
@@ -104,7 +117,8 @@ class _AdminHomeState extends State<AdminHome> with SingleTickerProviderStateMix
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.4),
+                  borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary, width: 1.4),
                 ),
               ),
               onChanged: (_) => setState(() {}),
@@ -139,14 +153,37 @@ class _LiquidacionesList extends StatelessWidget {
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return Center(
-            child: CircularProgressIndicator(color: AdminUi.progressAccent(context)),
+            child: CircularProgressIndicator(
+                color: AdminUi.progressAccent(context)),
           );
         }
         if (snap.hasError) {
-          return Center(
-            child: Text(
-              'Error: ${snap.error}',
-              style: TextStyle(color: AdminUi.secondary(context)),
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.cloud_off_outlined,
+                      size: 48, color: AdminUi.secondary(context)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'No se pudieron cargar las liquidaciones.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: AdminUi.onCard(context),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _liquidacionesErrorMsg(snap.error),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: AdminUi.secondary(context), fontSize: 13),
+                  ),
+                ],
+              ),
             ),
           );
         }
@@ -214,7 +251,7 @@ class _LiquidacionTile extends StatelessWidget {
             builder: (context, snap) {
               final data = snap.data?.data();
               final nombre = (data?['nombre'] ?? '').toString().trim();
-              final email  = (data?['email']  ?? '').toString().trim();
+              final email = (data?['email'] ?? '').toString().trim();
               final titulo = (nombre.isNotEmpty) ? nombre : l.uidTaxista;
 
               return Row(
@@ -237,13 +274,15 @@ class _LiquidacionTile extends StatelessWidget {
                           email.isNotEmpty ? email : 'UID: ${l.uidTaxista}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
+                          style: TextStyle(
+                              color: AdminUi.muted(context), fontSize: 12),
                         ),
                       ],
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: color.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(20),
@@ -251,7 +290,8 @@ class _LiquidacionTile extends StatelessWidget {
                     ),
                     child: Text(
                       l.estado.toUpperCase(),
-                      style: TextStyle(color: color, fontWeight: FontWeight.w700),
+                      style:
+                          TextStyle(color: color, fontWeight: FontWeight.w700),
                     ),
                   ),
                 ],
@@ -297,74 +337,112 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
 
   Future<void> _resolver(String nuevoEstado) async {
     final notaCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AdminUi.dialogSurface(ctx),
-        title: Text(
-          (nuevoEstado == 'aprobado') ? 'Aprobar liquidación' : 'Rechazar liquidación',
-          style: TextStyle(color: AdminUi.onCard(ctx)),
-        ),
-        content: TextField(
-          controller: notaCtrl,
-          maxLines: 3,
-          style: TextStyle(color: AdminUi.onCard(ctx)),
-          decoration: InputDecoration(
-            labelText: 'Nota (opcional)',
-            hintText: 'Ej: Transferencia verificada, Ref #12345',
-            labelStyle: TextStyle(color: AdminUi.secondary(ctx)),
-            hintStyle: TextStyle(color: AdminUi.muted(ctx)),
-            filled: true,
-            fillColor: AdminUi.inputFill(ctx),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: AdminUi.borderSubtle(ctx)),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: AdminUi.borderSubtle(ctx)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: Theme.of(ctx).colorScheme.primary, width: 1.4),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancelar', style: TextStyle(color: AdminUi.secondary(ctx))),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(ctx).colorScheme.primary,
-              foregroundColor: Theme.of(ctx).colorScheme.onPrimary,
-            ),
-            child: Text((nuevoEstado == 'aprobado') ? 'Aprobar' : 'Rechazar'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true) return;
-
     try {
-      setState(() => _busy = true);
-      await AdminService.resolverLiquidacion(
-        id: widget.l.id,
-        nuevoEstado: nuevoEstado,
-        notaAdmin: notaCtrl.text,
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text(
+            (nuevoEstado == 'aprobado')
+                ? 'Aprobar liquidación'
+                : 'Rechazar liquidación',
+            style: TextStyle(color: AdminUi.onCard(ctx)),
+          ),
+          content: TextField(
+            controller: notaCtrl,
+            maxLines: 3,
+            style: TextStyle(color: AdminUi.onCard(ctx)),
+            decoration: InputDecoration(
+              labelText: nuevoEstado == 'rechazado'
+                  ? 'Motivo (obligatorio)'
+                  : 'Nota (opcional)',
+              hintText: nuevoEstado == 'rechazado'
+                  ? 'Ej: Datos bancarios incorrectos'
+                  : 'Ej: Transferencia verificada, Ref #12345',
+              labelStyle: TextStyle(color: AdminUi.secondary(ctx)),
+              hintStyle: TextStyle(color: AdminUi.muted(ctx)),
+              filled: true,
+              fillColor: AdminUi.inputFill(ctx),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: AdminUi.borderSubtle(ctx)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: AdminUi.borderSubtle(ctx)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(
+                    color: Theme.of(ctx).colorScheme.primary, width: 1.4),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Cancelar',
+                  style: TextStyle(color: AdminUi.secondary(ctx))),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.primary,
+                foregroundColor: Theme.of(ctx).colorScheme.onPrimary,
+              ),
+              child: Text((nuevoEstado == 'aprobado') ? 'Aprobar' : 'Rechazar'),
+            ),
+          ],
+        ),
       );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text((nuevoEstado == 'aprobado') ? '✅ Aprobada' : '❌ Rechazada')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+
+      if (ok != true) return;
+
+      final nota = notaCtrl.text.trim();
+      if (nuevoEstado == 'rechazado' && nota.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Indica el motivo del rechazo antes de confirmar.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      try {
+        setState(() => _busy = true);
+        await AdminService.resolverLiquidacion(
+          id: widget.l.id,
+          nuevoEstado: nuevoEstado,
+          notaAdmin: nota.isEmpty ? null : nota,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text((nuevoEstado == 'aprobado')
+                ? 'Liquidación aprobada'
+                : 'Liquidación rechazada'),
+            backgroundColor:
+                nuevoEstado == 'aprobado' ? Colors.green : Colors.orange,
+          ),
+        );
+      } on FirebaseException catch (e) {
+        if (!mounted) return;
+        final msg = _liquidacionesErrorMsg(e);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg), backgroundColor: Colors.red),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      notaCtrl.dispose();
     }
   }
 
@@ -384,7 +462,8 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancelar', style: TextStyle(color: AdminUi.secondary(ctx))),
+            child: Text('Cancelar',
+                style: TextStyle(color: AdminUi.secondary(ctx))),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -404,11 +483,23 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
       await AdminService.marcarPendiente(widget.l.id);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('↩️ Marcada como pendiente')),
+        const SnackBar(
+          content: Text('Marcada como pendiente'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text(_liquidacionesErrorMsg(e)),
+            backgroundColor: Colors.red),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -431,7 +522,8 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
                   ? SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: cs.onPrimary),
                     )
                   : Icon(Icons.check_circle, color: cs.onPrimary),
               label: const Text('Aprobar'),
@@ -450,7 +542,8 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
                   ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
                     )
                   : const Icon(Icons.cancel, color: Colors.white),
               label: const Text('Rechazar'),
@@ -465,8 +558,10 @@ class _AccionesAdminState extends State<_AccionesAdmin> {
             child: OutlinedButton.icon(
               onPressed: _busy ? null : _revertir,
               icon: Icon(Icons.undo, color: AdminUi.secondary(context)),
-              label: Text('Revertir a pendiente', style: TextStyle(color: AdminUi.onCard(context))),
-              style: OutlinedButton.styleFrom(side: BorderSide(color: AdminUi.borderSubtle(context))),
+              label: Text('Revertir a pendiente',
+                  style: TextStyle(color: AdminUi.onCard(context))),
+              style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: AdminUi.borderSubtle(context))),
             ),
           ),
       ],

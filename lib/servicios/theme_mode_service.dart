@@ -22,7 +22,8 @@ class ThemeModeService {
   }
 
   static Future<void> toggleLightDark() async {
-    final next = mode.value == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+    final next =
+        mode.value == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
     await setMode(next);
   }
 

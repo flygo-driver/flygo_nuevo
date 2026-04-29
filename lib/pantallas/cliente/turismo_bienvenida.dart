@@ -1,4 +1,4 @@
- import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/turismo_selector_screen.dart';
 import 'package:flygo_nuevo/pantallas/cliente/turismo_selector.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
@@ -31,6 +31,7 @@ class TurismoBienvenida extends StatelessWidget {
       backgroundColor: Colors.black,
       appBar: const RaiAppBar(
         title: '🏝️ Turismo RAI',
+        backWhenCanPop: true,
       ),
       body: SafeArea(
         child: SingleChildScrollView(

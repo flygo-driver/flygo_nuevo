@@ -88,7 +88,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final soyYo = emisor == miUid;
 
     final textoRaw = m['texto'];
-    final texto = (textoRaw is String) ? textoRaw : (textoRaw?.toString() ?? '');
+    final texto =
+        (textoRaw is String) ? textoRaw : (textoRaw?.toString() ?? '');
 
     final ts = m['ts'] ?? m['createdAt'] ?? m['enviadoEn'];
     DateTime? when;
@@ -101,7 +102,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final cs = Theme.of(context).colorScheme;
     final bubbleBg = soyYo ? cs.primary : cs.surfaceContainerHighest;
     final fg = soyYo ? cs.onPrimary : cs.onSurface;
-    final sub = soyYo ? cs.onPrimary.withValues(alpha: 0.75) : cs.onSurfaceVariant;
+    final sub =
+        soyYo ? cs.onPrimary.withValues(alpha: 0.75) : cs.onSurfaceVariant;
 
     return Align(
       alignment: soyYo ? Alignment.centerRight : Alignment.centerLeft,
@@ -113,7 +115,8 @@ class _ChatScreenState extends State<ChatScreen> {
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(
-          crossAxisAlignment: soyYo ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment:
+              soyYo ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             if (texto.isEmpty)
               Text('—', style: TextStyle(color: sub))
@@ -151,7 +154,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     stream: ChatRepo.streamMensajes(chatId),
                     builder: (context, snap) {
                       if (snap.connectionState == ConnectionState.waiting) {
-                        return Center(child: CircularProgressIndicator(color: cs.primary));
+                        return Center(
+                            child:
+                                CircularProgressIndicator(color: cs.primary));
                       }
                       if (snap.hasError) {
                         final msg = snap.error.toString();
@@ -204,7 +209,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         hintStyle: TextStyle(color: cs.onSurfaceVariant),
                         filled: true,
                         fillColor: cs.surfaceContainerHighest,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                        contentPadding: const EdgeInsets.symmetric(
+                            vertical: 12, horizontal: 14),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
                           borderSide: BorderSide(color: cs.outlineVariant),

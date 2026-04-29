@@ -8,13 +8,18 @@ import '../../utils/calculos/estados.dart';
 import '../../servicios/asignacion_turismo_repo.dart';
 import 'asignar_viaje_turismo.dart';
 
-class ViajesTurismoAdmin extends StatelessWidget {
+class ViajesTurismoAdmin extends StatefulWidget {
   const ViajesTurismoAdmin({super.key});
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> _streamViajes() {
-    final db = FirebaseFirestore.instance;
+  @override
+  State<ViajesTurismoAdmin> createState() => _ViajesTurismoAdminState();
+}
 
-    return db
+class _ViajesTurismoAdminState extends State<ViajesTurismoAdmin> {
+  final Set<String> _liberandoViajeIds = <String>{};
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _streamViajes() {
+    return FirebaseFirestore.instance
         .collection('viajes')
         .where('tipoServicio', isEqualTo: 'turismo')
         .where('canalAsignacion', isEqualTo: 'admin')
@@ -25,6 +30,162 @@ class ViajesTurismoAdmin extends StatelessWidget {
         ])
         .orderBy('fechaHora')
         .snapshots();
+  }
+
+  String _mensajeFirebase(FirebaseException e) {
+    final m = e.message?.trim();
+    if (m != null && m.isNotEmpty) return m;
+    return e.code;
+  }
+
+  static double _toDouble(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0;
+  }
+
+  Future<void> _liberarAlPoolTuristico(
+    BuildContext context,
+    String id,
+  ) async {
+    if (_liberandoViajeIds.contains(id)) return;
+
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) {
+        return AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text(
+            'Liberar al pool turístico',
+            style: TextStyle(color: AdminUi.onCard(ctx)),
+          ),
+          content: Text(
+            'El viaje saldrá de esta cola de administración y solo lo verán choferes de turismo aprobados en «Pool turístico».',
+            style: TextStyle(color: AdminUi.secondary(ctx)),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Cancelar',
+                  style: TextStyle(color: AdminUi.onCard(ctx))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Liberar',
+                  style: TextStyle(color: Theme.of(ctx).colorScheme.primary)),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true || !context.mounted) return;
+
+    setState(() => _liberandoViajeIds.add(id));
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> vSnap =
+          await FirebaseFirestore.instance.collection('viajes').doc(id).get();
+      final Map<String, dynamic>? vd = vSnap.data();
+
+      if (!vSnap.exists || vd == null) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('El viaje ya no existe o fue modificado.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      if ((vd['tipoServicio'] ?? '').toString() != 'turismo') {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Este documento no es un viaje de turismo.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      final String canalRaw =
+          (vd['canalAsignacion'] ?? 'admin').toString().trim();
+      final String canal = canalRaw.isEmpty ? 'admin' : canalRaw;
+      if (canal != 'admin') {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'El viaje ya no está en cola de administración (canal distinto).'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      final String estadoRaw = (vd['estado'] ?? '').toString();
+      final String estadoNorm = EstadosViaje.normalizar(estadoRaw);
+      final bool estadoOk = estadoRaw == 'pendiente_admin' ||
+          estadoNorm == EstadosViaje.pendiente ||
+          estadoNorm == EstadosViaje.pendientePago;
+      if (!estadoOk) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Estado actual no permite liberar: $estadoRaw'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      final String uidTx =
+          (vd['uidTaxista'] ?? vd['taxistaId'] ?? '').toString().trim();
+      if (uidTx.isNotEmpty) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Este viaje ya tiene chofer asignado; no se puede liberar al pool.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      await FirebaseFirestore.instance.collection('viajes').doc(id).update(
+        <String, dynamic>{
+          'canalAsignacion': AsignacionTurismoRepo.canalTurismoPool,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Viaje liberado al pool turístico'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } on FirebaseException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_mensajeFirebase(e)),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo liberar: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _liberandoViajeIds.remove(id));
+    }
   }
 
   @override
@@ -56,30 +217,63 @@ class ViajesTurismoAdmin extends StatelessWidget {
               child: Text(
                 'Canal turismo (admin): no aparecen en el pool normal de taxistas. '
                 'Puedes asignar un chofer aprobado o «Liberar al pool turístico» para que solo choferes de turismo aprobados los vean y acepten.',
-                style: TextStyle(color: AdminUi.secondary(context), fontSize: 12, height: 1.35),
+                style: TextStyle(
+                    color: AdminUi.secondary(context),
+                    fontSize: 12,
+                    height: 1.35),
               ),
             ),
           ),
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: _streamViajes(),
-              builder: (BuildContext context, AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snap) {
+              builder: (BuildContext context,
+                  AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return Center(
-                    child: CircularProgressIndicator(color: AdminUi.progressAccent(context)),
+                    child: CircularProgressIndicator(
+                        color: AdminUi.progressAccent(context)),
                   );
                 }
 
                 if (snap.hasError) {
-                  return Center(
-                    child: Text(
-                      'Error: ${snap.error}',
-                      style: TextStyle(color: AdminUi.secondary(context)),
+                  final err = snap.error;
+                  final String msg = err is FirebaseException
+                      ? _mensajeFirebase(err)
+                      : err.toString();
+                  return Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.cloud_off_outlined,
+                              size: 48, color: AdminUi.secondary(context)),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No se pudieron cargar los viajes.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AdminUi.onCard(context),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            msg,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: AdminUi.secondary(context),
+                                fontSize: 13),
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 }
 
-                final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs = snap.data?.docs ?? [];
+                final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+                    snap.data?.docs ?? [];
                 if (docs.isEmpty) {
                   return Center(
                     child: Text(
@@ -92,19 +286,23 @@ class ViajesTurismoAdmin extends StatelessWidget {
                 return ListView.separated(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                   itemCount: docs.length,
-                  separatorBuilder: (BuildContext context, int index) => const SizedBox(height: 10),
+                  separatorBuilder: (BuildContext context, int index) =>
+                      const SizedBox(height: 10),
                   itemBuilder: (BuildContext context, int index) {
-                    final QueryDocumentSnapshot<Map<String, dynamic>> doc = docs[index];
+                    final QueryDocumentSnapshot<Map<String, dynamic>> doc =
+                        docs[index];
                     final Map<String, dynamic> data = doc.data();
 
                     final String origen = (data['origen'] ?? '').toString();
                     final String destino = (data['destino'] ?? '').toString();
-                    final String tipoVehiculo = (data['tipoVehiculo'] ?? '').toString();
+                    final String tipoVehiculo =
+                        (data['tipoVehiculo'] ?? '').toString();
                     final String subtipoTurismo =
                         (data['subtipoTurismo'] ?? '').toString();
-                    final double precio = (data['precio'] ?? 0).toDouble();
-                    final double km = (data['distanciaKm'] ?? 0).toDouble();
-                    final String uidCliente = (data['uidCliente'] ?? '').toString();
+                    final double precio = _toDouble(data['precio']);
+                    final double km = _toDouble(data['distanciaKm']);
+                    final String uidCliente =
+                        (data['uidCliente'] ?? '').toString();
 
                     double latCliente = 0;
                     double lonCliente = 0;
@@ -119,8 +317,10 @@ class ViajesTurismoAdmin extends StatelessWidget {
 
                     final String fechaStr = fechaHora != null
                         ? '${fechaHora.day.toString().padLeft(2, '0')}/${fechaHora.month.toString().padLeft(2, '0')} '
-                          '${fechaHora.hour.toString().padLeft(2, '0')}:${fechaHora.minute.toString().padLeft(2, '0')}'
+                            '${fechaHora.hour.toString().padLeft(2, '0')}:${fechaHora.minute.toString().padLeft(2, '0')}'
                         : '—';
+
+                    final bool liberando = _liberandoViajeIds.contains(doc.id);
 
                     return _ViajeTurismoTile(
                       id: doc.id,
@@ -134,6 +334,9 @@ class ViajesTurismoAdmin extends StatelessWidget {
                       uidCliente: uidCliente,
                       latCliente: latCliente,
                       lonCliente: lonCliente,
+                      liberandoPool: liberando,
+                      onLiberarPool: () =>
+                          _liberarAlPoolTuristico(context, doc.id),
                     );
                   },
                 );
@@ -158,6 +361,8 @@ class _ViajeTurismoTile extends StatelessWidget {
   final String uidCliente;
   final double latCliente;
   final double lonCliente;
+  final bool liberandoPool;
+  final VoidCallback onLiberarPool;
 
   const _ViajeTurismoTile({
     required this.id,
@@ -171,13 +376,16 @@ class _ViajeTurismoTile extends StatelessWidget {
     required this.uidCliente,
     required this.latCliente,
     required this.lonCliente,
+    required this.liberandoPool,
+    required this.onLiberarPool,
   });
 
   String _rd(double v) {
     final String s = v.toStringAsFixed(2);
     final List<String> parts = s.split('.');
     final RegExp re = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
-    final String intPart = parts.first.replaceAllMapped(re, (Match m) => '${m[1]},');
+    final String intPart =
+        parts.first.replaceAllMapped(re, (Match m) => '${m[1]},');
     return 'RD\$ $intPart.${parts.last}';
   }
 
@@ -185,8 +393,7 @@ class _ViajeTurismoTile extends StatelessWidget {
 
   Future<void> _asignarChofer(BuildContext context) async {
     if (!context.mounted) return;
-    
-    // 🔥 Navegar a la pantalla de asignación pasando el tipo de vehículo
+
     final bool? asignado = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -203,77 +410,8 @@ class _ViajeTurismoTile extends StatelessWidget {
     if (asignado == true && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Chofer asignado correctamente'),
+          content: Text('Chofer asignado correctamente'),
           backgroundColor: Colors.green,
-        ),
-      );
-    }
-  }
-
-  Future<void> _liberarAlPoolTuristico(BuildContext context) async {
-    final bool? ok = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext ctx) {
-        return AlertDialog(
-          backgroundColor: AdminUi.dialogSurface(ctx),
-          title: Text(
-            'Liberar al pool turístico',
-            style: TextStyle(color: AdminUi.onCard(ctx)),
-          ),
-          content: Text(
-            'El viaje saldrá de esta cola de administración y solo lo verán choferes de turismo aprobados en «Pool turístico».',
-            style: TextStyle(color: AdminUi.secondary(ctx)),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text('Cancelar', style: TextStyle(color: AdminUi.onCard(ctx))),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Liberar', style: TextStyle(color: Theme.of(ctx).colorScheme.primary)),
-            ),
-          ],
-        );
-      },
-    );
-    if (ok != true || !context.mounted) return;
-    try {
-      final DocumentSnapshot<Map<String, dynamic>> vSnap =
-          await FirebaseFirestore.instance.collection('viajes').doc(id).get();
-      final Map<String, dynamic>? vd = vSnap.data();
-      final String uidTx = (vd?['uidTaxista'] ?? vd?['taxistaId'] ?? '').toString().trim();
-      if (uidTx.isNotEmpty) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Este viaje ya tiene chofer asignado; no se puede liberar al pool.'),
-            backgroundColor: Colors.orangeAccent,
-          ),
-        );
-        return;
-      }
-
-      await FirebaseFirestore.instance.collection('viajes').doc(id).update(
-        <String, dynamic>{
-          'canalAsignacion': AsignacionTurismoRepo.canalTurismoPool,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        },
-      );
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Viaje liberado al pool turístico'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo liberar: $e'),
-          backgroundColor: Colors.redAccent,
         ),
       );
     }
@@ -344,7 +482,10 @@ class _ViajeTurismoTile extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Chip(
-                backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                backgroundColor: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.5),
                 label: Text(
                   _km(distanciaKm),
                   style: TextStyle(color: AdminUi.secondary(context)),
@@ -356,11 +497,13 @@ class _ViajeTurismoTile extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: () => _asignarChofer(context),
-              icon: Icon(Icons.person_search, color: Theme.of(context).colorScheme.onPrimary),
+              onPressed: liberandoPool ? null : () => _asignarChofer(context),
+              icon: Icon(Icons.person_search,
+                  color: Theme.of(context).colorScheme.onPrimary),
               label: Text(
                 'Asignar chofer',
-                style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
+                style:
+                    TextStyle(color: Theme.of(context).colorScheme.onPrimary),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Theme.of(context).colorScheme.primary,
@@ -375,10 +518,19 @@ class _ViajeTurismoTile extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () => _liberarAlPoolTuristico(context),
-              icon: Icon(Icons.groups_2, color: purple),
+              onPressed: liberandoPool ? null : onLiberarPool,
+              icon: liberandoPool
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: purple,
+                      ),
+                    )
+                  : Icon(Icons.groups_2, color: purple),
               label: Text(
-                'Liberar al pool turístico',
+                liberandoPool ? 'Liberando…' : 'Liberar al pool turístico',
                 style: TextStyle(color: purple),
               ),
               style: OutlinedButton.styleFrom(

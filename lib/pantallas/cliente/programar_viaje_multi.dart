@@ -14,12 +14,18 @@ import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/places_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/pay_config.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 import 'package:flygo_nuevo/keys.dart' as app_keys;
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
+import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
 
 class _LugarSel {
@@ -42,6 +48,9 @@ class _EstiloRutaCampo {
     required this.icono,
   });
 }
+
+/// Variante visual de los campos de ruta (mockup: origen con glow, paradas finas, destino morado sólido).
+enum _RutaCampoVisual { origen, parada, destino }
 
 class ProgramarViajeMulti extends StatefulWidget {
   const ProgramarViajeMulti({super.key});
@@ -127,12 +136,13 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }
 
   Future<int> _obtenerContadorViajes(String uidCliente) async {
-    if (_contadorViajesCache != null && 
+    if (_contadorViajesCache != null &&
         _contadorTimestamp != null &&
-        DateTime.now().difference(_contadorTimestamp!) < const Duration(minutes: 5)) {
+        DateTime.now().difference(_contadorTimestamp!) <
+            const Duration(minutes: 5)) {
       return _contadorViajesCache!;
     }
-    
+
     try {
       final snapshot = await fs.FirebaseFirestore.instance
           .collection('viajes')
@@ -140,12 +150,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           .where('completado', isEqualTo: true)
           .count()
           .get();
-      
+
       // El MxK se evalúa para el próximo viaje a crear.
       final int contador = (snapshot.count ?? 0) + 1;
       _contadorViajesCache = contador;
       _contadorTimestamp = DateTime.now();
-      
+
       return contador;
     } catch (e) {
       return 1;
@@ -166,15 +176,18 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             String vehiculoValido = seleccion.tipoVehiculo;
             const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
             if (!vehiculosValidos.contains(vehiculoValido)) {
-              debugPrint('⚠️ Valor inválido en multi: "$vehiculoValido", usando "carro"');
+              debugPrint(
+                  '⚠️ Valor inválido en multi: "$vehiculoValido", usando "carro"');
               vehiculoValido = 'carro';
             }
-            
-            Navigator.pop(bc, _LugarSel(
-              label: seleccion.lugar.nombre,
-              lat: seleccion.lugar.lat,
-              lon: seleccion.lugar.lon,
-            ));
+
+            Navigator.pop(
+                bc,
+                _LugarSel(
+                  label: seleccion.lugar.nombre,
+                  lat: seleccion.lugar.lat,
+                  lon: seleccion.lugar.lon,
+                ));
             if (mounted) {
               setState(() {
                 _tipoVehiculoTurismo = vehiculoValido;
@@ -185,7 +198,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         ),
       );
     }
-    
+
     return showModalBottomSheet<_LugarSel?>(
       context: context,
       backgroundColor: const Color(0xFF0E0E0E),
@@ -268,13 +281,15 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         return <String, double>{'km': kmFb, 'peaje': peajeTramo};
       }
       if (mounted) {
-        _snack('No se pudo calcular la ruta. Revisa conexión o la API de mapas.');
+        _snack(
+            'No se pudo calcular la ruta. Revisa conexión o la API de mapas.');
       }
       return <String, double>{'km': 0, 'peaje': 0};
     }
   }
 
-  double _estimarPeaje(double km, double lat1, double lon1, double lat2, double lon2) {
+  double _estimarPeaje(
+      double km, double lat1, double lon1, double lat2, double lon2) {
     const Map<String, Map<String, double>> peajesRD = {
       'las americas': {'lat': 18.45, 'lon': -69.75, 'costo': 150},
       'duarte': {'lat': 19.0, 'lon': -70.5, 'costo': 200},
@@ -302,7 +317,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     if (_origen == null || _destino == null) {
       return;
     }
-    
+
     _calculoDebounce?.cancel();
     _calculoSeq++;
     final int runId = _calculoSeq;
@@ -334,7 +349,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     });
 
     try {
-      final List<_LugarSel> waypoints = _paradas.whereType<_LugarSel>().toList();
+      final List<_LugarSel> waypoints =
+          _paradas.whereType<_LugarSel>().toList();
       final List<_LugarSel> ordenParadas = <_LugarSel>[
         _origen!,
         ...waypoints,
@@ -509,7 +525,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       }
 
       final TarifaServiceUnificado servicio = TarifaServiceUnificado();
-      
+
       final user = FirebaseAuth.instance.currentUser;
       int contadorViajes = 1;
       if (user != null) {
@@ -520,7 +536,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       final promoSnapshot =
           await servicio.construirPromoSnapshot(contadorViajes);
       if (!mounted || runId != _calculoSeq) return;
-      
+
       double precio;
       if (_tipoServicio == 'normal') {
         precio = await servicio.calcularPrecio(
@@ -545,7 +561,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         if (!vehiculosValidos.contains(vehiculoValido)) {
           vehiculoValido = 'carro';
         }
-        
+
         precio = await servicio.calcularPrecio(
           tipoServicio: _tipoServicio,
           tipoVehiculo: vehiculoValido,
@@ -567,7 +583,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _promoSnapshotCotizacion = promoSnapshot;
         _cargando = false;
         _mensajeCarga = '';
-        _vistaResumenCotizada = _tipoServicio != 'turismo';
+        // En automático (catálogo/buscador), mantenemos el formulario estable.
+        _vistaResumenCotizada = !automatico && _tipoServicio != 'turismo';
       });
     } catch (e) {
       if (!automatico && runId == _calculoSeq) {
@@ -594,6 +611,19 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       return;
     }
 
+    if (!_esAhora) {
+      final now = DateTime.now();
+      final maxD = now.add(const Duration(days: 90));
+      if (_fechaHora.isAfter(maxD)) {
+        _snack('Solo puedes programar hasta 90 días adelante.');
+        return;
+      }
+      if (_fechaHora.isBefore(now.subtract(const Duration(seconds: 90)))) {
+        _snack('La hora de recogida no puede quedar en el pasado.');
+        return;
+      }
+    }
+
     setState(() => _cargando = true);
 
     try {
@@ -618,9 +648,16 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           ? nowUtc.add(const Duration(minutes: 10))
           : _fechaHora.toUtc();
 
+      final bool viajeInmediato =
+          TripPublishWindows.esProgramadoRecogidaCasiInmediata(
+              fechaHoraViaje, nowUtc);
+
       DateTime? publishAtArg;
       DateTime? acceptAfterArg;
-      if (!_esAhora) {
+      if (viajeInmediato) {
+        publishAtArg = nowUtc;
+        acceptAfterArg = nowUtc;
+      } else {
         publishAtArg =
             ViajesRepo.poolOpensAtForScheduledPickup(fechaHoraViaje, nowUtc);
         acceptAfterArg = publishAtArg;
@@ -651,7 +688,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           'paradas_count': waypoints.length,
           'segmentos': _segmentos,
           'peaje_total': _peaje,
-          'esAhora': _esAhora,
+          'esAhora': viajeInmediato,
           if (_promoSnapshotCotizacion != null)
             'promoSnapshot': _promoSnapshotCotizacion,
         },
@@ -665,7 +702,15 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
       _snack('✅ Viaje creado — #${id.substring(0, 6)}');
 
-      if (Navigator.canPop(context)) {
+      if (tipoSrv != 'turismo') {
+        if (viajeInmediato) {
+          await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+        } else {
+          await NavigationService.clearAndGo(
+            ViajeProgramadoPendiente(viajeId: id),
+          );
+        }
+      } else if (Navigator.canPop(context)) {
         Navigator.pop(context, id);
       }
     } catch (e) {
@@ -742,12 +787,16 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   )
                 : null,
             trailing: label == _metodoPago && enabled
-                ? Icon(Icons.check, color: cs.brightness == Brightness.dark ? Colors.greenAccent : const Color(0xFF0F9D58))
+                ? Icon(Icons.check,
+                    color: cs.brightness == Brightness.dark
+                        ? Colors.greenAccent
+                        : const Color(0xFF0F9D58))
                 : null,
             enabled: enabled,
             onTap: enabled ? () => Navigator.pop(ctx, label) : null,
           );
         }
+
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -767,9 +816,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 style: TextStyle(color: muted, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 4),
-              item('Efectivo'),
-              item('Tarjeta', enabled: false, subtitle: 'No disponible'),
-              item('Transferencia'),
+              ...PayConfig.metodosReservaVisibles.map(
+                (String label) => item(label),
+              ),
               const SizedBox(height: 8),
             ],
           ),
@@ -796,15 +845,16 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         },
       ),
     );
-    
+
     if (seleccion != null && mounted) {
       String vehiculoValido = seleccion.tipoVehiculo;
       const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
       if (!vehiculosValidos.contains(vehiculoValido)) {
-        debugPrint('⚠️ Valor inválido en catálogo multi: "$vehiculoValido", usando "carro"');
+        debugPrint(
+            '⚠️ Valor inválido en catálogo multi: "$vehiculoValido", usando "carro"');
         vehiculoValido = 'carro';
       }
-      
+
       setState(() {
         _destino = _LugarSel(
           label: seleccion.lugar.nombre,
@@ -817,7 +867,11 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
   }
 
-  Widget _buildDestinoSection({_EstiloRutaCampo? estiloDestino}) {
+  Widget _buildDestinoSection({
+    _EstiloRutaCampo? estiloDestino,
+    bool legacyRutaCampos = false,
+  }) {
+    final bool mockupLayout = !legacyRutaCampos;
     if (_tipoServicio == 'turismo') {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -826,6 +880,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             label: 'Destino Turístico',
             value: _destino?.label,
             estilo: estiloDestino,
+            visual: _RutaCampoVisual.destino,
+            legacyRutaCampos: legacyRutaCampos,
+            mockupLayoutCampo: mockupLayout,
             onTap: () async {
               final _LugarSel? sel = await _buscarLugar('Destino Turístico');
               if (!mounted || sel == null) return;
@@ -836,7 +893,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           const SizedBox(height: 8),
           TextButton.icon(
             onPressed: _abrirCatalogoTurismo,
-            icon: Icon(Icons.explore, size: 18, color: estiloDestino?.acento ?? Colors.purple),
+            icon: Icon(Icons.explore,
+                size: 18, color: estiloDestino?.acento ?? Colors.purple),
             label: Text(
               'Ver catálogo completo de destinos turísticos',
               style: TextStyle(
@@ -856,6 +914,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       label: 'Destino',
       value: _destino?.label,
       estilo: estiloDestino,
+      visual: _RutaCampoVisual.destino,
+      legacyRutaCampos: legacyRutaCampos,
+      mockupLayoutCampo: mockupLayout,
       onTap: () async {
         final _LugarSel? sel = await _buscarLugar('Elige el destino');
         if (!mounted || sel == null) return;
@@ -895,8 +956,14 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: [
-                c.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.22 : 0.12),
-                c.withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.08 : 0.04),
+                c.withValues(
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? 0.22
+                        : 0.12),
+                c.withValues(
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? 0.08
+                        : 0.04),
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -936,7 +1003,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               const SizedBox(height: 4),
               Text(
                 _origen?.label ?? '',
-                style: TextStyle(color: textPrimary, fontWeight: FontWeight.w600),
+                style:
+                    TextStyle(color: textPrimary, fontWeight: FontWeight.w600),
               ),
               ..._paradas.whereType<_LugarSel>().map(
                     (p) => Padding(
@@ -949,7 +1017,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                           Expanded(
                             child: Text(
                               p.label,
-                              style: TextStyle(color: textPrimary, fontWeight: FontWeight.w500),
+                              style: TextStyle(
+                                  color: textPrimary,
+                                  fontWeight: FontWeight.w500),
                             ),
                           ),
                         ],
@@ -966,7 +1036,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     Expanded(
                       child: Text(
                         _destino?.label ?? '',
-                        style: TextStyle(color: textPrimary, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                            color: textPrimary, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ],
@@ -983,7 +1054,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               Text(
                 FormatosMoneda.km(_distKm),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: textSecondary, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                    color: textSecondary, fontWeight: FontWeight.w600),
               ),
               if (_peaje > 0) ...<Widget>[
                 const SizedBox(height: 6),
@@ -1028,12 +1100,15 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: <Widget>[
-                    Icon(Icons.payments_outlined, size: 18, color: textSecondary),
+                    Icon(Icons.payments_outlined,
+                        size: 18, color: textSecondary),
                     const SizedBox(width: 8),
-                    Text('Pago:', style: TextStyle(color: textMuted, fontSize: 13)),
+                    Text('Pago:',
+                        style: TextStyle(color: textMuted, fontSize: 13)),
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
                         color: metodoPagoChipBg,
                         borderRadius: BorderRadius.circular(10),
@@ -1041,7 +1116,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                       ),
                       child: Text(
                         _metodoPago,
-                        style: TextStyle(color: textPrimary, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                            color: textPrimary, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ],
@@ -1104,7 +1180,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                         const SizedBox(height: 2),
                         Text(
                           'Vuelve al formulario completo: origen, paradas, tipo y pago',
-                          style: TextStyle(color: textMuted, fontSize: 12, height: 1.3),
+                          style: TextStyle(
+                              color: textMuted, fontSize: 12, height: 1.3),
                         ),
                       ],
                     ),
@@ -1122,44 +1199,240 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color accent = isDark ? const Color(0xFF49F18B) : const Color(0xFF0F9D58);
-    final List<Color> badgeGradient = isDark
-        ? const [Color(0xFF15231A), Color(0xFF102016)]
-        : const [Color(0xFFE8F7EE), Color(0xFFDDF3E7)];
-    final Color badgeText = isDark ? accent : const Color(0xFF0B6B3A);
+    final bool esTurismo = _tipoServicio == 'turismo';
+    final bool rutaMockup = !esTurismo;
     final DateFormat f = DateFormat('EEE d MMM • HH:mm', 'es');
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textSecondary = isDark ? Colors.white70 : const Color(0xFF475467);
+    final Color textSecondary =
+        isDark ? Colors.white70 : const Color(0xFF475467);
     final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
-    final Color payLinkColor = isDark ? Colors.green.shade300 : const Color(0xFF0F9D58);
-    final Color metodoPagoChipBg = isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5);
-    final Color metodoPagoChipBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
+    final Color payLinkColor =
+        isDark ? Colors.green.shade300 : const Color(0xFF0F9D58);
+    final Color metodoPagoChipBg =
+        isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5);
+    final Color metodoPagoChipBorder =
+        isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color dividerSoft = isDark ? Colors.white24 : const Color(0xFFE4E7EC);
     final Color ddBg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
 
     final _EstiloRutaCampo estiloOrigen = _EstiloRutaCampo(
-      acento: isDark ? const Color(0xFF5EEAD4) : const Color(0xFF0F766E),
-      fondo: isDark ? const Color(0xFF0F2D2A) : const Color(0xFFECFDF5),
-      borde: isDark ? const Color(0xFF2DD4BF) : const Color(0xFF14B8A6),
+      acento: isDark
+          ? (esTurismo ? const Color(0xFFFCD34D) : const Color(0xFFFFE082))
+          : const Color(0xFFD97706),
+      fondo: isDark
+          ? (esTurismo ? const Color(0xFF422006) : const Color(0xFF1A1208))
+          : const Color(0xFFFFFBEB),
+      borde: isDark
+          ? (esTurismo ? const Color(0xFFF59E0B) : const Color(0xFFFF9800))
+          : const Color(0xFFF59E0B),
       icono: Icons.trip_origin_rounded,
     );
     final _EstiloRutaCampo estiloParada = _EstiloRutaCampo(
-      acento: isDark ? const Color(0xFFFBBF24) : const Color(0xFFC2410C),
-      fondo: isDark ? const Color(0xFF3A280A) : const Color(0xFFFFF7ED),
-      borde: isDark ? const Color(0xFFF59E0B) : const Color(0xFFFB923C),
+      acento: isDark
+          ? (esTurismo ? const Color(0xFFFBBF24) : const Color(0xFFFFE082))
+          : const Color(0xFFC2410C),
+      fondo: isDark
+          ? (esTurismo ? const Color(0xFF3A280A) : const Color(0xFF18120A))
+          : const Color(0xFFFFF7ED),
+      borde: isDark
+          ? (esTurismo ? const Color(0xFFF59E0B) : const Color(0xFFF59E0B))
+          : const Color(0xFFFB923C),
       icono: Icons.add_location_alt_rounded,
     );
     final _EstiloRutaCampo estiloDestino = _EstiloRutaCampo(
-      acento: isDark ? const Color(0xFFC4B5FD) : const Color(0xFF6B21A8),
-      fondo: isDark ? const Color(0xFF2E1065) : const Color(0xFFFAF5FF),
-      borde: isDark ? const Color(0xFFA78BFA) : const Color(0xFFA855F7),
+      acento: isDark
+          ? (esTurismo ? const Color(0xFFE9D5FF) : Colors.white)
+          : const Color(0xFF7C3AED),
+      fondo: isDark
+          ? (esTurismo ? const Color(0xFF3B0764) : const Color(0xFF3D0F5C))
+          : const Color(0xFFFAF5FF),
+      borde: isDark ? const Color(0xFFC084FC) : const Color(0xFFA855F7),
       icono: Icons.flag_rounded,
+    );
+    final Color lineaRecorrido = isDark
+        ? (esTurismo ? const Color(0xFFFFD54A) : const Color(0xFFFFB74D))
+        : const Color(0xFFF59E0B);
+
+    final Widget interiorRecorrido = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _tituloSeccionRuta(
+          estilo: estiloOrigen,
+          titulo: 'ORIGEN',
+          ayuda: 'Desde dónde sale el viaje',
+          textoAyuda: textMuted,
+        ),
+        ParpadeoRutaProgramar(
+          pulseColor: estiloOrigen.acento,
+          child: _btnLugar(
+            label: 'Punto de partida',
+            value: _origen?.label,
+            estilo: estiloOrigen,
+            visual:
+                rutaMockup ? _RutaCampoVisual.origen : _RutaCampoVisual.parada,
+            legacyRutaCampos: esTurismo,
+            mockupLayoutCampo: rutaMockup,
+            onTap: () async {
+              final _LugarSel? sel = await _buscarLugar('Elige el origen');
+              if (!mounted || sel == null) return;
+              setState(() => _origen = sel);
+              _programarCalculoAutomatico();
+            },
+          ),
+        ),
+        if (rutaMockup)
+          const SizedBox(height: 6)
+        else
+          _conectorRuta(estiloOrigen),
+        _tituloSeccionRuta(
+          estilo: estiloParada,
+          titulo: 'PARADAS INTERMEDIAS',
+          ayuda: 'Paradas en el camino (hasta 3). Puedes dejar vacías.',
+          textoAyuda: textMuted,
+        ),
+        ..._paradas.asMap().entries.map((MapEntry<int, _LugarSel?> e) {
+          final int i = e.key;
+          final _LugarSel? val = e.value;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Expanded(
+                  child: _btnLugar(
+                    label: 'Parada ${i + 1}',
+                    value: val?.label,
+                    estilo: estiloParada,
+                    visual: _RutaCampoVisual.parada,
+                    legacyRutaCampos: esTurismo,
+                    mockupLayoutCampo: rutaMockup,
+                    onTap: () async {
+                      final _LugarSel? sel =
+                          await _buscarLugar('Elige la parada ${i + 1}');
+                      if (!mounted) return;
+                      setState(() => _paradas[i] = sel);
+                      _programarCalculoAutomatico();
+                    },
+                  ),
+                ),
+                SizedBox(width: rutaMockup ? 6 : 4),
+                if (rutaMockup)
+                  Tooltip(
+                    message: 'Quitar parada',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () {
+                          setState(() {
+                            if (_paradas.length > 1) {
+                              _paradas.removeAt(i);
+                            } else {
+                              _paradas[i] = null;
+                            }
+                          });
+                          _programarCalculoAutomatico();
+                        },
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: estiloParada.acento,
+                              width: 1.5,
+                            ),
+                            color: estiloParada.acento
+                                .withValues(alpha: isDark ? 0.12 : 0.14),
+                          ),
+                          child: Icon(Icons.remove_rounded,
+                              color: estiloParada.acento, size: 22),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  IconButton(
+                    tooltip: 'Quitar parada',
+                    onPressed: () {
+                      setState(() {
+                        if (_paradas.length > 1) {
+                          _paradas.removeAt(i);
+                        } else {
+                          _paradas[i] = null;
+                        }
+                      });
+                      _programarCalculoAutomatico();
+                    },
+                    icon: Icon(Icons.remove_circle_outline_rounded,
+                        color: estiloParada.acento),
+                  ),
+              ],
+            ),
+          );
+        }),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _paradas.length < 3
+                ? () {
+                    setState(() => _paradas.add(null));
+                    _programarCalculoAutomatico();
+                  }
+                : null,
+            icon: Icon(Icons.add_circle_outline_rounded,
+                color: estiloParada.acento),
+            label: Text(
+              'Agregar parada',
+              style: TextStyle(
+                color: estiloParada.acento,
+                fontWeight: rutaMockup ? FontWeight.w800 : FontWeight.w700,
+                fontSize: rutaMockup ? 14 : null,
+              ),
+            ),
+            style: TextButton.styleFrom(foregroundColor: estiloParada.acento),
+          ),
+        ),
+        if (rutaMockup)
+          const SizedBox(height: 8)
+        else
+          _conectorRuta(estiloParada),
+        _tituloSeccionRuta(
+          estilo: estiloDestino,
+          titulo: 'DESTINO FINAL',
+          ayuda: 'Última parada del viaje',
+          textoAyuda: textMuted,
+          colorTitulo: rutaMockup
+              ? (isDark ? Colors.white : estiloDestino.acento)
+              : null,
+          colorIconoEnCaja: rutaMockup
+              ? (isDark ? Colors.white : estiloDestino.acento)
+              : null,
+          bordeCajaIcono: rutaMockup
+              ? (isDark ? const Color(0xFFC084FC) : estiloDestino.borde)
+              : null,
+          fondoCajaIcono: rutaMockup && isDark
+              ? const Color(0xFF2D0A45).withValues(alpha: 0.9)
+              : null,
+        ),
+        ParpadeoRutaProgramar(
+          pulseColor: rutaMockup
+              ? (isDark ? const Color(0xFFC084FC) : estiloDestino.borde)
+              : estiloDestino.acento,
+          child: _buildDestinoSection(
+            estiloDestino: estiloDestino,
+            legacyRutaCampos: esTurismo,
+          ),
+        ),
+      ],
     );
 
     return Scaffold(
       backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
       appBar: const RaiAppBar(
         title: 'Múltiples paradas',
+        backWhenCanPop: true,
       ),
       body: Stack(
         children: <Widget>[
@@ -1172,9 +1445,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   child: CotizacionPrecioLoadingStrip(
                     accentColor: _colorServicio,
                     isDark: isDark,
-                    message: _precio > 0
-                        ? 'Procesando…'
-                        : 'Calculando precio…',
+                    message: _precio > 0 ? 'Procesando…' : 'Calculando precio…',
                   ),
                 ),
               if (_mostrarResumenMulti)
@@ -1187,381 +1458,360 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   metodoPagoChipBorder: metodoPagoChipBorder,
                 ),
               if (!_mostrarResumenMulti) ...<Widget>[
-              _card(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      'Tu recorrido',
-                      style: TextStyle(
-                        color: textPrimary,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 18,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                    Text(
-                      'Origen → paradas (opcional) → destino final',
-                      style: TextStyle(color: textMuted, fontSize: 12.5, height: 1.35),
-                    ),
-                    const SizedBox(height: 14),
-                    _tituloSeccionRuta(
-                      estilo: estiloOrigen,
-                      titulo: 'ORIGEN',
-                      ayuda: 'Desde dónde sale el viaje',
-                      textoAyuda: textMuted,
-                    ),
-                    _btnLugar(
-                      label: 'Punto de partida',
-                      value: _origen?.label,
-                      estilo: estiloOrigen,
-                      onTap: () async {
-                        final _LugarSel? sel = await _buscarLugar('Elige el origen');
-                        if (!mounted || sel == null) return;
-                        setState(() => _origen = sel);
-                        _programarCalculoAutomatico();
-                      },
-                    ),
-                    _conectorRuta(estiloOrigen),
-                    _tituloSeccionRuta(
-                      estilo: estiloParada,
-                      titulo: 'PARADAS INTERMEDIAS',
-                      ayuda: 'Paradas en el camino (hasta 3). Puedes dejar vacías.',
-                      textoAyuda: textMuted,
-                    ),
-                    ..._paradas.asMap().entries.map((MapEntry<int, _LugarSel?> e) {
-                      final int i = e.key;
-                      final _LugarSel? val = e.value;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Expanded(
-                              child: _btnLugar(
-                                label: 'Parada ${i + 1}',
-                                value: val?.label,
-                                estilo: estiloParada,
-                                onTap: () async {
-                                  final _LugarSel? sel = await _buscarLugar('Elige la parada ${i + 1}');
-                                  if (!mounted) return;
-                                  setState(() => _paradas[i] = sel);
-                                  _programarCalculoAutomatico();
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            IconButton(
-                              tooltip: 'Quitar parada',
-                              onPressed: () {
-                                setState(() {
-                                  if (_paradas.length > 1) {
-                                    _paradas.removeAt(i);
-                                  } else {
-                                    _paradas[i] = null;
-                                  }
-                                });
-                                _programarCalculoAutomatico();
-                              },
-                              icon: Icon(Icons.remove_circle_outline_rounded, color: estiloParada.acento),
-                            ),
-                          ],
+                _card(
+                  mockupSurface: rutaMockup,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'Tu recorrido',
+                        style: TextStyle(
+                          color: textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                          letterSpacing: -0.2,
                         ),
-                      );
-                    }),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: _paradas.length < 3
-                            ? () {
-                                setState(() => _paradas.add(null));
-                                _programarCalculoAutomatico();
-                              }
-                            : null,
-                        icon: Icon(Icons.add_circle_outline_rounded, color: estiloParada.acento),
-                        label: Text(
-                          'Agregar parada',
-                          style: TextStyle(
-                            color: estiloParada.acento,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        style: TextButton.styleFrom(foregroundColor: estiloParada.acento),
                       ),
-                    ),
-                    _conectorRuta(estiloParada),
-                    _tituloSeccionRuta(
-                      estilo: estiloDestino,
-                      titulo: 'DESTINO FINAL',
-                      ayuda: 'Última parada del viaje',
-                      textoAyuda: textMuted,
-                    ),
-                    _buildDestinoSection(estiloDestino: estiloDestino),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _card(
-                child: Column(
-                  children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      Text(
+                        'Origen → paradas (opcional) → destino final',
+                        style: TextStyle(
+                            color: textMuted, fontSize: 12.5, height: 1.35),
+                      ),
+                      const SizedBox(height: 14),
+                      if (rutaMockup)
+                        DecoratedBox(
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: badgeGradient,
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
+                            border: Border(
+                              left: BorderSide(color: lineaRecorrido, width: 2),
                             ),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: accent, width: 1.6),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.bolt_rounded, color: badgeText, size: 18),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Pide ahora',
-                                style: TextStyle(
-                                  color: badgeText,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 14,
-                                  letterSpacing: 0.2,
-                                ),
-                              ),
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 16),
+                            child: interiorRecorrido,
+                          ),
+                        )
+                      else
+                        interiorRecorrido,
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _card(
+                  mockupSurface: rutaMockup,
+                  child: Column(
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Text(
+                            'Tipo:',
+                            style: TextStyle(
+                              color: rutaMockup ? textPrimary : textSecondary,
+                              fontWeight: rutaMockup
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          SizedBox(width: rutaMockup ? 6 : 10),
+                          const Spacer(),
+                          DropdownButton<String>(
+                            value: _tipoServicio,
+                            dropdownColor: ddBg,
+                            underline: rutaMockup
+                                ? Container(
+                                    height: 1,
+                                    margin: const EdgeInsets.only(top: 2),
+                                    color: isDark
+                                        ? Colors.white54
+                                        : const Color(0xFF98A2B3),
+                                  )
+                                : const SizedBox(),
+                            style: TextStyle(color: textPrimary, fontSize: 16),
+                            items: <DropdownMenuItem<String>>[
+                              DropdownMenuItem<String>(
+                                  value: 'normal',
+                                  child: Text('Normal',
+                                      style: TextStyle(color: textPrimary))),
+                              DropdownMenuItem<String>(
+                                  value: 'motor',
+                                  child: Text('Motor',
+                                      style: TextStyle(color: textPrimary))),
+                              DropdownMenuItem<String>(
+                                  value: 'turismo',
+                                  child: Text('Turismo',
+                                      style: TextStyle(color: textPrimary))),
                             ],
-                          ),
-                        ),
-                        const Spacer(),
-                        Text('Tipo:', style: TextStyle(color: textSecondary)),
-                        const SizedBox(width: 10),
-                        DropdownButton<String>(
-                          value: _tipoServicio,
-                          dropdownColor: ddBg,
-                          style: TextStyle(color: textPrimary, fontSize: 16),
-                          items: <DropdownMenuItem<String>>[
-                            DropdownMenuItem<String>(value: 'normal', child: Text('Normal', style: TextStyle(color: textPrimary))),
-                            DropdownMenuItem<String>(value: 'motor', child: Text('Motor', style: TextStyle(color: textPrimary))),
-                            DropdownMenuItem<String>(value: 'turismo', child: Text('Turismo', style: TextStyle(color: textPrimary))),
-                          ],
-                          onChanged: (String? v) {
-                            setState(() {
-                              _tipoServicio = v ?? 'normal';
-                              _esAhora = true; // Múltiples paradas solo en modo ahora.
-                              if (_tipoServicio == 'normal') {
-                                _tipoVehiculo = 'Carro';
-                              } else if (_tipoServicio == 'turismo') {
-                                _tipoVehiculoTurismo = 'carro';
-                              }
-                            });
-                            _programarCalculoAutomatico();
-                          },
-                        ),
-                      ],
-                    ),
-                    if (_tipoServicio != 'motor') ...[
-                      const SizedBox(height: 8),
-                      if (_tipoServicio == 'normal')
-                        Row(
-                          children: [
-                            Icon(Icons.directions_car, color: textSecondary, size: 20),
-                            const SizedBox(width: 10),
-                            Text('Vehículo:', style: TextStyle(color: textSecondary)),
-                            const Spacer(),
-                            DropdownButton<String>(
-                              value: _tipoVehiculo,
-                              dropdownColor: ddBg,
-                              underline: const SizedBox(),
-                              style: TextStyle(color: textPrimary, fontSize: 16),
-                              items: ['Carro', 'Jeepeta', 'Minibús', 'Minivan', 'AutobusGuagua']
-                                  .map((e) => DropdownMenuItem(
-                                        value: e,
-                                        child: Text(e, style: TextStyle(color: textPrimary)),
-                                      ))
-                                  .toList(),
-                              onChanged: (v) {
-                                setState(() => _tipoVehiculo = v ?? 'Carro');
-                                _programarCalculoAutomatico();
-                              },
-                            ),
-                          ],
-                        ),
-                      if (_tipoServicio == 'turismo')
-                        Row(
-                          children: [
-                            Icon(Icons.beach_access, color: textSecondary, size: 20),
-                            const SizedBox(width: 10),
-                            Text('Vehículo turismo:', style: TextStyle(color: textSecondary)),
-                            const Spacer(),
-                            DropdownButton<String>(
-                              value: _tipoVehiculoTurismo,
-                              dropdownColor: ddBg,
-                              underline: const SizedBox(),
-                              style: TextStyle(color: textPrimary, fontSize: 16),
-                              items: [
-                                DropdownMenuItem(value: 'carro', child: Text('Carro', style: TextStyle(color: textPrimary))),
-                                DropdownMenuItem(value: 'jeepeta', child: Text('Jeepeta', style: TextStyle(color: textPrimary))),
-                                DropdownMenuItem(value: 'minivan', child: Text('Minivan', style: TextStyle(color: textPrimary))),
-                                DropdownMenuItem(value: 'bus', child: Text('Bus', style: TextStyle(color: textPrimary))),
-                              ],
-                              onChanged: (v) {
-                                setState(() => _tipoVehiculoTurismo = v);
-                                _programarCalculoAutomatico();
-                              },
-                            ),
-                          ],
-                        ),
-                    ],
-                    if (!_esAhora) ...<Widget>[
-                      const SizedBox(height: 12),
-                      TextButton.icon(
-                        onPressed: _seleccionarFechaHora,
-                        icon: Icon(Icons.calendar_today, color: payLinkColor),
-                        label: Text(f.format(_fechaHora), style: TextStyle(color: payLinkColor, fontWeight: FontWeight.w600)),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    _card(
-                      child: Row(
-                        children: [
-                          Icon(Icons.credit_card_outlined, color: textSecondary),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: TextButton.icon(
-                              onPressed: _elegirMetodoPago,
-                              icon: Icon(Icons.account_balance_wallet_outlined, color: payLinkColor),
-                              label: Text(
-                                'Elegir método de pago',
-                                style: TextStyle(color: payLinkColor, fontWeight: FontWeight.w700),
-                              ),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: metodoPagoChipBg,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: metodoPagoChipBorder),
-                            ),
-                            child: Text(
-                              _metodoPago,
-                              style: TextStyle(color: textSecondary, fontWeight: FontWeight.w700),
-                            ),
+                            onChanged: (String? v) {
+                              setState(() {
+                                _tipoServicio = v ?? 'normal';
+                                _esAhora =
+                                    true; // Múltiples paradas solo en modo ahora.
+                                if (_tipoServicio == 'normal') {
+                                  _tipoVehiculo = 'Carro';
+                                } else if (_tipoServicio == 'turismo') {
+                                  _tipoVehiculoTurismo = 'carro';
+                                }
+                              });
+                              _programarCalculoAutomatico();
+                            },
                           ),
                         ],
                       ),
-                    ),
-                  ],
-                ),
-              ),
-
-              if (_precio > 0 && !_cargando) ...<Widget>[
-                const SizedBox(height: 16),
-                Container(
-                  margin: const EdgeInsets.symmetric(vertical: 8),
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: _colorServicio.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: _colorServicio, width: 2),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        'DISTANCIA TOTAL',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: _colorServicio,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 1,
+                      if (_tipoServicio != 'motor') ...[
+                        const SizedBox(height: 8),
+                        if (_tipoServicio == 'normal')
+                          Row(
+                            children: [
+                              Icon(Icons.directions_car,
+                                  color: textSecondary, size: 20),
+                              const SizedBox(width: 10),
+                              Text('Vehículo:',
+                                  style: TextStyle(color: textSecondary)),
+                              const Spacer(),
+                              DropdownButton<String>(
+                                value: _tipoVehiculo,
+                                dropdownColor: ddBg,
+                                underline: rutaMockup
+                                    ? Container(
+                                        height: 1,
+                                        margin: const EdgeInsets.only(top: 2),
+                                        color: isDark
+                                            ? Colors.white54
+                                            : const Color(0xFF98A2B3),
+                                      )
+                                    : const SizedBox(),
+                                style:
+                                    TextStyle(color: textPrimary, fontSize: 16),
+                                items: [
+                                  'Carro',
+                                  'Jeepeta',
+                                  'Minibús',
+                                  'Minivan',
+                                  'AutobusGuagua'
+                                ]
+                                    .map((e) => DropdownMenuItem(
+                                          value: e,
+                                          child: Text(e,
+                                              style: TextStyle(
+                                                  color: textPrimary)),
+                                        ))
+                                    .toList(),
+                                onChanged: (v) {
+                                  setState(() => _tipoVehiculo = v ?? 'Carro');
+                                  _programarCalculoAutomatico();
+                                },
+                              ),
+                            ],
+                          ),
+                        if (_tipoServicio == 'turismo')
+                          Row(
+                            children: [
+                              Icon(Icons.beach_access,
+                                  color: textSecondary, size: 20),
+                              const SizedBox(width: 10),
+                              Text('Vehículo turismo:',
+                                  style: TextStyle(color: textSecondary)),
+                              const Spacer(),
+                              DropdownButton<String>(
+                                value: _tipoVehiculoTurismo,
+                                dropdownColor: ddBg,
+                                underline: rutaMockup
+                                    ? Container(
+                                        height: 1,
+                                        margin: const EdgeInsets.only(top: 2),
+                                        color: isDark
+                                            ? Colors.white54
+                                            : const Color(0xFF98A2B3),
+                                      )
+                                    : const SizedBox(),
+                                style:
+                                    TextStyle(color: textPrimary, fontSize: 16),
+                                items: [
+                                  DropdownMenuItem(
+                                      value: 'carro',
+                                      child: Text('Carro',
+                                          style:
+                                              TextStyle(color: textPrimary))),
+                                  DropdownMenuItem(
+                                      value: 'jeepeta',
+                                      child: Text('Jeepeta',
+                                          style:
+                                              TextStyle(color: textPrimary))),
+                                  DropdownMenuItem(
+                                      value: 'minivan',
+                                      child: Text('Minivan',
+                                          style:
+                                              TextStyle(color: textPrimary))),
+                                  DropdownMenuItem(
+                                      value: 'bus',
+                                      child: Text('Bus',
+                                          style:
+                                              TextStyle(color: textPrimary))),
+                                ],
+                                onChanged: (v) {
+                                  setState(() => _tipoVehiculoTurismo = v);
+                                  _programarCalculoAutomatico();
+                                },
+                              ),
+                            ],
+                          ),
+                      ],
+                      if (!_esAhora) ...<Widget>[
+                        const SizedBox(height: 12),
+                        TextButton.icon(
+                          onPressed: _seleccionarFechaHora,
+                          icon: Icon(Icons.calendar_today, color: payLinkColor),
+                          label: Text(f.format(_fechaHora),
+                              style: TextStyle(
+                                  color: payLinkColor,
+                                  fontWeight: FontWeight.w600)),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        FormatosMoneda.km(_distKm),
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: textSecondary,
-                          fontSize: 16,
-                        ),
-                      ),
+                      ],
                       const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: Divider(color: dividerSoft),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'TOTAL',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: textSecondary,
-                          fontSize: 14,
-                        ),
-                      ),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.center,
-                          child: Text(
-                            FormatosMoneda.rd(_precio),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: _colorServicio,
-                              fontSize: 42,
-                              fontWeight: FontWeight.w900,
+                      _card(
+                        mockupSurface: rutaMockup,
+                        child: Row(
+                          children: [
+                            Icon(Icons.credit_card_outlined,
+                                color: textSecondary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: TextButton.icon(
+                                onPressed: _elegirMetodoPago,
+                                icon: Icon(
+                                    Icons.account_balance_wallet_outlined,
+                                    color: payLinkColor),
+                                label: Text(
+                                  'Elegir método de pago',
+                                  style: TextStyle(
+                                      color: payLinkColor,
+                                      fontWeight: FontWeight.w700),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      ),
-                      if (_peaje > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            'Incluye peaje: ${FormatosMoneda.rd(_peaje)}',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: textMuted, fontSize: 12),
-                          ),
-                        ),
-                      const SizedBox(height: 20),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: _confirmar,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _colorServicio,
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: metodoPagoChipBg,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: metodoPagoChipBorder),
+                              ),
+                              child: Text(
+                                _metodoPago,
+                                style: TextStyle(
+                                    color: textSecondary,
+                                    fontWeight: FontWeight.w700),
+                              ),
                             ),
-                          ),
-                          child: const Text(
-                            '✅ CONFIRMAR VIAJE',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-              ],
-              if (_cargando)
-                CotizacionPrecioLoadingPlaceholder(
-                  accentColor: _colorServicio,
-                  isDark: isDark,
-                  message: _precio > 0
-                      ? 'Procesando…'
-                      : 'Calculando precio…',
-                ),
+                if (_precio > 0 && !_cargando) ...<Widget>[
+                  const SizedBox(height: 16),
+                  Container(
+                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: _colorServicio.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _colorServicio, width: 2),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Text(
+                          'DISTANCIA TOTAL',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: _colorServicio,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          FormatosMoneda.km(_distKm),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: textSecondary,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: Divider(color: dividerSoft),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'TOTAL',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: textSecondary,
+                            fontSize: 14,
+                          ),
+                        ),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.center,
+                            child: Text(
+                              FormatosMoneda.rd(_precio),
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: _colorServicio,
+                                fontSize: 42,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (_peaje > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              'Incluye peaje: ${FormatosMoneda.rd(_peaje)}',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: textMuted, fontSize: 12),
+                            ),
+                          ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _confirmar,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _colorServicio,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text(
+                              '✅ CONFIRMAR VIAJE',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (_cargando)
+                  CotizacionPrecioLoadingPlaceholder(
+                    accentColor: _colorServicio,
+                    isDark: isDark,
+                    message: _precio > 0 ? 'Procesando…' : 'Calculando precio…',
+                  ),
               ],
             ],
           ),
@@ -1583,7 +1833,17 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     required String titulo,
     required String ayuda,
     required Color textoAyuda,
+    Color? colorTitulo,
+    Color? colorIconoEnCaja,
+    Color? fondoCajaIcono,
+    Color? bordeCajaIcono,
   }) {
+    final Color tituloCol = colorTitulo ?? estilo.acento;
+    final Color iconCol = colorIconoEnCaja ?? estilo.acento;
+    final Color fondoCaja =
+        fondoCajaIcono ?? estilo.acento.withValues(alpha: 0.18);
+    final Color bordeCaja =
+        bordeCajaIcono ?? estilo.borde.withValues(alpha: 0.55);
     return Padding(
       padding: const EdgeInsets.only(top: 4, bottom: 10),
       child: Row(
@@ -1592,11 +1852,11 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: estilo.acento.withValues(alpha: 0.18),
+              color: fondoCaja,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: estilo.borde.withValues(alpha: 0.55), width: 1.2),
+              border: Border.all(color: bordeCaja, width: 1.2),
             ),
-            child: Icon(estilo.icono, size: 22, color: estilo.acento),
+            child: Icon(estilo.icono, size: 22, color: iconCol),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1606,7 +1866,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 Text(
                   titulo,
                   style: TextStyle(
-                    color: estilo.acento,
+                    color: tituloCol,
                     fontWeight: FontWeight.w800,
                     fontSize: 15,
                     letterSpacing: 0.2,
@@ -1615,7 +1875,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 const SizedBox(height: 2),
                 Text(
                   ayuda,
-                  style: TextStyle(color: textoAyuda, fontSize: 12, height: 1.35),
+                  style:
+                      TextStyle(color: textoAyuda, fontSize: 12, height: 1.35),
                 ),
               ],
             ),
@@ -1642,14 +1903,28 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     );
   }
 
-  Widget _card({required Widget child}) {
+  Widget _card({required Widget child, bool mockupSurface = true}) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    if (mockupSurface) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFD0D5DD),
+          ),
+        ),
+        child: child,
+      );
+    }
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF121212) : Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD0D5DD)),
+        border: Border.all(
+            color: isDark ? Colors.white24 : const Color(0xFFD0D5DD)),
       ),
       child: child,
     );
@@ -1660,46 +1935,181 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     String? value,
     required VoidCallback onTap,
     _EstiloRutaCampo? estilo,
+    _RutaCampoVisual visual = _RutaCampoVisual.parada,
+    bool legacyRutaCampos = false,
+    bool mockupLayoutCampo = false,
   }) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color secondary = isDark ? Colors.white70 : const Color(0xFF475467);
     final Color muted = isDark ? Colors.white54 : const Color(0xFF667085);
     final Color primary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color fillDefault = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC);
-    final Color borderDefault = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
+    final Color fillDefault =
+        isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC);
+    final Color borderDefault =
+        isDark ? Colors.white24 : const Color(0xFFD0D5DD);
 
-    final Color fill = estilo?.fondo ?? fillDefault;
-    final Color border = estilo?.borde ?? borderDefault;
-    final Color labelColor = estilo?.acento ?? secondary;
+    Color fill = estilo?.fondo ?? fillDefault;
+    Color border = estilo?.borde ?? borderDefault;
+    Color labelColor = estilo?.acento ?? secondary;
+    Color iconColor = estilo?.acento ?? secondary;
+    Color chevronColor = muted;
+    double borderW = estilo != null ? 1.6 : 1;
+    List<BoxShadow>? shadows;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-          decoration: BoxDecoration(
-            color: fill,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: border, width: estilo != null ? 1.6 : 1),
-            boxShadow: estilo != null
-                ? <BoxShadow>[
-                    BoxShadow(
-                      color: estilo.acento.withValues(alpha: isDark ? 0.12 : 0.08),
-                      blurRadius: 10,
-                      offset: const Offset(0, 3),
+    if (estilo != null && legacyRutaCampos) {
+      fill = estilo.fondo;
+      border = estilo.borde;
+      labelColor = estilo.acento;
+      iconColor = estilo.acento;
+      chevronColor = muted;
+      borderW = 1.6;
+      shadows = <BoxShadow>[
+        BoxShadow(
+          color: estilo.acento.withValues(alpha: isDark ? 0.12 : 0.08),
+          blurRadius: 10,
+          offset: const Offset(0, 3),
+        ),
+      ];
+    } else if (estilo != null) {
+      switch (visual) {
+        case _RutaCampoVisual.origen:
+          borderW = isDark ? 2 : 1.8;
+          shadows = <BoxShadow>[
+            BoxShadow(
+              color: const Color(0xFFFF9800)
+                  .withValues(alpha: isDark ? 0.38 : 0.22),
+              blurRadius: 18,
+              spreadRadius: 0,
+              offset: const Offset(0, 5),
+            ),
+            BoxShadow(
+              color: const Color(0xFFFFD54A)
+                  .withValues(alpha: isDark ? 0.12 : 0.08),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ];
+          break;
+        case _RutaCampoVisual.parada:
+          borderW = isDark ? 1.15 : 1.2;
+          shadows = null;
+          break;
+        case _RutaCampoVisual.destino:
+          if (isDark) {
+            fill = const Color(0xFF4C1D95);
+            border = const Color(0xFFD8B4FE);
+            labelColor = Colors.white;
+            iconColor = Colors.white;
+            chevronColor = Colors.white.withValues(alpha: 0.85);
+            borderW = 2;
+            shadows = <BoxShadow>[
+              BoxShadow(
+                color: const Color(0xFFA78BFA).withValues(alpha: 0.5),
+                blurRadius: 20,
+                spreadRadius: 0,
+                offset: const Offset(0, 5),
+              ),
+            ];
+          } else {
+            borderW = 2;
+            shadows = <BoxShadow>[
+              BoxShadow(
+                color: estilo.borde.withValues(alpha: 0.22),
+                blurRadius: 12,
+                offset: const Offset(0, 3),
+              ),
+            ];
+          }
+          break;
+      }
+    }
+
+    LinearGradient? gradienteMockupDestino;
+    if (estilo != null &&
+        !legacyRutaCampos &&
+        visual == _RutaCampoVisual.destino &&
+        isDark) {
+      gradienteMockupDestino = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: <Color>[
+          Color(0xFF7C3AED),
+          Color(0xFF5B21B6),
+          Color(0xFF1E0B36),
+        ],
+        stops: <double>[0.0, 0.42, 1.0],
+      );
+    }
+
+    final bool empty = value?.isEmpty ?? true;
+    final Color line2Color =
+        !legacyRutaCampos && visual == _RutaCampoVisual.destino && isDark
+            ? (empty ? Colors.white70 : Colors.white)
+            : (empty ? muted : primary);
+    final FontWeight line2Weight = empty ? FontWeight.w500 : FontWeight.w600;
+
+    final bool layoutTimeline =
+        mockupLayoutCampo && estilo != null && !legacyRutaCampos;
+    final double radioCampo = layoutTimeline ? 16 : 14;
+
+    final TextStyle estiloTituloCampo = TextStyle(
+      color: labelColor,
+      fontWeight: FontWeight.w800,
+      fontSize: layoutTimeline ? 14 : 13,
+      letterSpacing: layoutTimeline ? 0.15 : 0.3,
+    );
+    final TextStyle estiloSubCampo = TextStyle(
+      color: line2Color,
+      fontSize: layoutTimeline ? 14.5 : 15,
+      fontWeight: line2Weight,
+      height: 1.25,
+    );
+
+    final Widget contenidoFila = layoutTimeline
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Icon(estilo.icono, size: 22, color: iconColor),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: estiloTituloCampo,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Icon(Icons.chevron_right_rounded,
+                            color: chevronColor, size: 22),
+                      ],
                     ),
-                  ]
-                : null,
-          ),
-          child: Row(
+                    const SizedBox(height: 5),
+                    Text(
+                      empty ? 'Toca para buscar en el mapa…' : value!,
+                      style: estiloSubCampo,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          )
+        : Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               if (estilo != null) ...<Widget>[
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
-                  child: Icon(estilo.icono, size: 22, color: estilo.acento),
+                  child: Icon(estilo.icono, size: 22, color: iconColor),
                 ),
                 const SizedBox(width: 12),
               ],
@@ -1707,31 +2117,34 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: labelColor,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
+                    Text(label, style: estiloTituloCampo),
                     const SizedBox(height: 6),
                     Text(
-                      value?.isEmpty ?? true ? 'Toca para buscar en el mapa…' : value!,
-                      style: TextStyle(
-                        color: value?.isEmpty ?? true ? muted : primary,
-                        fontSize: 15,
-                        fontWeight: value?.isEmpty ?? true ? FontWeight.w500 : FontWeight.w600,
-                        height: 1.25,
-                      ),
+                      empty ? 'Toca para buscar en el mapa…' : value!,
+                      style: estiloSubCampo,
                     ),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right_rounded, color: muted, size: 22),
+              Icon(Icons.chevron_right_rounded, color: chevronColor, size: 22),
             ],
+          );
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(radioCampo),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+          decoration: BoxDecoration(
+            color: gradienteMockupDestino == null ? fill : null,
+            gradient: gradienteMockupDestino,
+            borderRadius: BorderRadius.circular(radioCampo),
+            border: Border.all(color: border, width: borderW),
+            boxShadow: shadows,
           ),
+          child: contenidoFila,
         ),
       ),
     );
@@ -1742,7 +2155,7 @@ class DestinoSeleccionado {
   final TurismoLugar lugar;
   final String tipoVehiculo;
   final int pasajeros;
-  
+
   DestinoSeleccionado({
     required this.lugar,
     required this.tipoVehiculo,
@@ -1823,12 +2236,14 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
       'Acuario Nacional, Santo Domingo',
       'Teleférico de Puerto Plata',
     ];
-    
-    _sugerenciasDestacadas = sugerencias.map((s) => {
-      'id': 'sug_${s.hashCode}',
-      'text': s,
-    }).toList();
-    
+
+    _sugerenciasDestacadas = sugerencias
+        .map((s) => {
+              'id': 'sug_${s.hashCode}',
+              'text': s,
+            })
+        .toList();
+
     setState(() {});
   }
 
@@ -1837,21 +2252,21 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
       final fullDesc = (p as dynamic).fullDescription;
       if (fullDesc != null && fullDesc.isNotEmpty) return fullDesc;
     } catch (_) {}
-    
+
     try {
       final desc = (p as dynamic).description;
       if (desc != null && desc.isNotEmpty) return desc;
     } catch (_) {}
-    
+
     try {
       final mainText = (p as dynamic).mainText;
       if (mainText != null && mainText.isNotEmpty) return mainText;
     } catch (_) {}
-    
+
     try {
       return p.toString();
     } catch (_) {}
-    
+
     return 'Lugar seleccionado';
   }
 
@@ -1880,7 +2295,8 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
     }
   }
 
-  List<PlacePrediction> _rankPredictions(List<PlacePrediction> preds, String q) {
+  List<PlacePrediction> _rankPredictions(
+      List<PlacePrediction> preds, String q) {
     final nq = _stripAccents(q);
     if (nq.isEmpty) return preds;
 
@@ -2003,10 +2419,12 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
     final sh = mq.size.height;
     final pad = mq.padding;
     // Altura del panel: se reduce cuando el teclado está abierto para que la lista siga siendo scrollable arriba del teclado.
-    final panelH = math.min(
-      sh * 0.62,
-      sh - kb - pad.top - pad.bottom - 12,
-    ).clamp(260.0, sh);
+    final panelH = math
+        .min(
+          sh * 0.62,
+          sh - kb - pad.top - pad.bottom - 12,
+        )
+        .clamp(260.0, sh);
 
     return AnimatedPadding(
       padding: EdgeInsets.only(bottom: kb),
@@ -2024,7 +2442,8 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Text(
                   widget.titulo,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w800),
                 ),
               ),
               Padding(
@@ -2032,7 +2451,8 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                 child: TextField(
                   controller: _ctrl,
                   style: const TextStyle(color: Colors.white),
-                  scrollPadding: EdgeInsets.only(bottom: math.max(200.0, sh * 0.28)),
+                  scrollPadding:
+                      EdgeInsets.only(bottom: math.max(200.0, sh * 0.28)),
                   keyboardType: TextInputType.streetAddress,
                   textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
@@ -2044,7 +2464,8 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                     prefixIcon: const Icon(Icons.search, color: Colors.white54),
                     suffixIcon: _ctrl.text.isNotEmpty
                         ? IconButton(
-                            icon: const Icon(Icons.clear, color: Colors.white54),
+                            icon:
+                                const Icon(Icons.clear, color: Colors.white54),
                             onPressed: () {
                               _ctrl.clear();
                               _onChanged('');
@@ -2079,15 +2500,17 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                   child: ListView.separated(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-                    itemCount:
-                        _ctrl.text.isEmpty ? _sugerenciasDestacadas.length : _preds.length,
+                    itemCount: _ctrl.text.isEmpty
+                        ? _sugerenciasDestacadas.length
+                        : _preds.length,
                     separatorBuilder: (_, __) =>
                         const Divider(color: Colors.white12, height: 1),
                     itemBuilder: (_, int i) {
                       if (_ctrl.text.isEmpty) {
                         final sugerencia = _sugerenciasDestacadas[i];
                         return ListTile(
-                          leading: const Icon(Icons.star, color: Colors.amber, size: 20),
+                          leading: const Icon(Icons.star,
+                              color: Colors.amber, size: 20),
                           title: Text(
                             sugerencia['text']!,
                             style: const TextStyle(color: Colors.white),
@@ -2100,7 +2523,8 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                         final PlacePrediction p = _preds[i];
                         final String displayText = _getPlaceDescription(p);
                         return ListTile(
-                          leading: const Icon(Icons.location_on, color: Colors.greenAccent, size: 20),
+                          leading: const Icon(Icons.location_on,
+                              color: Colors.greenAccent, size: 20),
                           title: Text(
                             displayText,
                             style: const TextStyle(color: Colors.white),

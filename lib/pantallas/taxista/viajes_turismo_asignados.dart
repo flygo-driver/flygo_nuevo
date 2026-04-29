@@ -26,7 +26,8 @@ class ViajesTurismoAsignadosTaxista extends StatelessWidget {
         .where('uidTaxista', isEqualTo: uid)
         .where('tipoServicio', isEqualTo: 'turismo')
         // Mismo whereIn histórico (índices existentes). En ruta: usar «Viaje en curso» del menú.
-        .where('estado', whereIn: <String>['pendiente_admin', EstadosViaje.aceptado])
+        .where('estado',
+            whereIn: <String>['pendiente_admin', EstadosViaje.aceptado])
         .orderBy('fechaHora')
         .snapshots();
   }
@@ -53,16 +54,21 @@ class ViajesTurismoAsignadosTaxista extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
             child: Text(
               'Solo viajes que te asignó administración. No aparecen en «Viajes disponibles».',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.3),
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  fontSize: 12,
+                  height: 1.3),
             ),
           ),
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: _streamMisViajes(),
-              builder: (BuildContext context, AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snap) {
+              builder: (BuildContext context,
+                  AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(
-                    child: CircularProgressIndicator(color: EstilosFlyGo.textoVerde),
+                    child: CircularProgressIndicator(
+                        color: EstilosFlyGo.textoVerde),
                   );
                 }
 
@@ -75,7 +81,8 @@ class ViajesTurismoAsignadosTaxista extends StatelessWidget {
                   );
                 }
 
-                final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs = snap.data?.docs ?? [];
+                final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+                    snap.data?.docs ?? [];
                 if (docs.isEmpty) {
                   return const Center(
                     child: Text(
@@ -90,12 +97,14 @@ class ViajesTurismoAsignadosTaxista extends StatelessWidget {
                   itemCount: docs.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (BuildContext context, int i) {
-                    final QueryDocumentSnapshot<Map<String, dynamic>> doc = docs[i];
+                    final QueryDocumentSnapshot<Map<String, dynamic>> doc =
+                        docs[i];
                     final Map<String, dynamic> data = doc.data();
 
                     final String origen = (data['origen'] ?? '').toString();
                     final String destino = (data['destino'] ?? '').toString();
-                    final String tipoVehiculo = (data['tipoVehiculo'] ?? '').toString();
+                    final String tipoVehiculo =
+                        (data['tipoVehiculo'] ?? '').toString();
                     final double precio = (data['precio'] ?? 0).toDouble();
                     final double km = (data['distanciaKm'] ?? 0).toDouble();
                     final String estado = (data['estado'] ?? '').toString();
@@ -158,7 +167,8 @@ class _ViajeTurismoChoferTile extends StatelessWidget {
     final String s = v.toStringAsFixed(2);
     final List<String> parts = s.split('.');
     final RegExp re = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
-    final String intPart = parts.first.replaceAllMapped(re, (Match m) => '${m[1]},');
+    final String intPart =
+        parts.first.replaceAllMapped(re, (Match m) => '${m[1]},');
     return 'RD\$ $intPart.${parts.last}';
   }
 

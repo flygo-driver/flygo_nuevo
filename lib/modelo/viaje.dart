@@ -1,5 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart' show GeoPoint, Timestamp, FieldValue;
+import 'package:cloud_firestore/cloud_firestore.dart'
+    show GeoPoint, Timestamp, FieldValue;
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
 /// Modelo de Viaje usado en la app (cliente y taxista).
 class Viaje {
@@ -59,17 +61,19 @@ class Viaje {
   // Programados
   final bool esAhora;
   final bool programado;
-  final DateTime? acceptAfter;      // 🔥 Cuándo se puede aceptar (30 min antes)
-  final DateTime? publishAt;        // 🔥 Cuándo se publica/visible (2 horas antes)
+  final DateTime?
+      acceptAfter; // Claim permitido desde aquí (alineado con publishAt en programados)
+  final DateTime?
+      publishAt; // Visibilidad en pool; ver TripPublishWindows.poolLeadMinutesProgramado
   final DateTime? startWindowAt;
 
   // ============================================
   // ✅ CAMPOS NUEVOS PARA VERSIÓN 2.0
   // ============================================
-  final String tipoServicio;        // 'normal' | 'motor' | 'turismo'
-  final String subtipoTurismo;      // 'carro' | 'jeepeta' | 'minivan' | 'bus'
-  final String canalAsignacion;     // 'pool' | 'admin'
-  final String? catalogoTurismoId;  // ID del destino en catálogo turístico
+  final String tipoServicio; // 'normal' | 'motor' | 'turismo'
+  final String subtipoTurismo; // 'carro' | 'jeepeta' | 'minivan' | 'bus'
+  final String canalAsignacion; // 'pool' | 'admin'
+  final String? catalogoTurismoId; // ID del destino en catálogo turístico
 
   // ✅ NUEVO: GeoPoint para consultas geoespaciales
   final GeoPoint? origenGeoPoint;
@@ -128,7 +132,7 @@ class Viaje {
     this.esAhora = false,
     this.programado = false,
     this.acceptAfter,
-    this.publishAt,                   // 🔥 NUEVO
+    this.publishAt, // 🔥 NUEVO
     this.startWindowAt,
     this.tipoServicio = 'normal',
     this.subtipoTurismo = '',
@@ -206,7 +210,9 @@ class Viaje {
     final raw = telefono.trim();
     final digits = raw.replaceAll(RegExp(r'\D+'), '');
     if (digits.isEmpty) return '—';
-    final norma = digits.startsWith('1') ? digits : (digits.length == 10 ? '1$digits' : digits);
+    final norma = digits.startsWith('1')
+        ? digits
+        : (digits.length == 10 ? '1$digits' : digits);
     return '+$norma';
   }
 
@@ -275,6 +281,19 @@ class Viaje {
     return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
   }
 
+  /// Compat: camelCase, snake_case o campo usado en acuerdos bola si el doc lo trae.
+  static String? _primerCodigoVerificacion(Map<String, dynamic> data) {
+    for (final key in [
+      'codigoVerificacion',
+      'codigo_verificacion',
+      'codigoVerificacionBola'
+    ]) {
+      final s = _asString(data[key]).trim();
+      if (s.isNotEmpty) return s;
+    }
+    return null;
+  }
+
   // ---- Factory/serialización ----
   factory Viaje.fromMap(String id, Map<String, dynamic> data) {
     // Fallbacks de pickup por compat (latOrigen/lonOrigen)
@@ -290,7 +309,9 @@ class Viaje {
 
     final String estadoNorm = EstadosViaje.normalizar(
       rawEstado.isEmpty
-          ? (comp ? EstadosViaje.completado : (acept ? EstadosViaje.aceptado : EstadosViaje.pendiente))
+          ? (comp
+              ? EstadosViaje.completado
+              : (acept ? EstadosViaje.aceptado : EstadosViaje.pendiente))
           : rawEstado,
     );
 
@@ -313,12 +334,14 @@ class Viaje {
     // ✅ PARSEO DE CAMPOS NUEVOS (con valores por defecto)
     // ============================================
     final String tipoServicioRaw = _asString(data['tipoServicio']);
-    final String tipoServicioFinal = tipoServicioRaw.isEmpty ? 'normal' : tipoServicioRaw;
+    final String tipoServicioFinal =
+        tipoServicioRaw.isEmpty ? 'normal' : tipoServicioRaw;
 
     final String subtipoTurismoRaw = _asString(data['subtipoTurismo']);
 
     final String canalAsignacionRaw = _asString(data['canalAsignacion']);
-    final String canalAsignacionFinal = canalAsignacionRaw.isEmpty ? 'pool' : canalAsignacionRaw;
+    final String canalAsignacionFinal =
+        canalAsignacionRaw.isEmpty ? 'pool' : canalAsignacionRaw;
 
     final String? catalogoId = data['catalogoTurismoId']?.toString();
 
@@ -327,15 +350,18 @@ class Viaje {
     final origenGeoPoint = geo is GeoPoint ? geo : null;
 
     // 🔥 NUEVO: código de verificación
-    final String? codigoVerif = data['codigoVerificacion']?.toString();
+    final String? codigoVerif = _primerCodigoVerificacion(data);
     final bool codigoVerifOk = _asBool(data['codigoVerificado']);
 
     // ✅ NUEVO: waypoints
-    final List<Map<String, dynamic>>? waypoints = 
-        data['waypoints'] is List ? List<Map<String, dynamic>>.from(data['waypoints']) : null;
+    final List<Map<String, dynamic>>? waypoints = data['waypoints'] is List
+        ? List<Map<String, dynamic>>.from(data['waypoints'])
+        : null;
 
     // 👇 NUEVO: extras
-    final Map<String, dynamic>? extras = data['extras'] is Map ? Map<String, dynamic>.from(data['extras']) : null;
+    final Map<String, dynamic>? extras = data['extras'] is Map
+        ? Map<String, dynamic>.from(data['extras'])
+        : null;
 
     return Viaje(
       id: id,
@@ -356,8 +382,12 @@ class Viaje {
       precioFinal: _asDouble(data['precioFinal']),
       comision: _asDouble(data['comision']),
       gananciaTaxista: _asDouble(data['gananciaTaxista']),
-      metodoPago: _asString(data['metodoPago']).isEmpty ? 'Efectivo' : _asString(data['metodoPago']),
-      tipoVehiculo: _asString(data['tipoVehiculo']).isEmpty ? 'Carro' : _asString(data['tipoVehiculo']),
+      metodoPago: _asString(data['metodoPago']).isEmpty
+          ? 'Efectivo'
+          : _asString(data['metodoPago']),
+      tipoVehiculo: _asString(data['tipoVehiculo']).isEmpty
+          ? 'Carro'
+          : _asString(data['tipoVehiculo']),
       marca: _asString(data['marca']),
       modelo: _asString(data['modelo']),
       color: _asString(data['color']),
@@ -375,7 +405,7 @@ class Viaje {
       esAhora: _asBool(data['esAhora']),
       programado: _asBool(data['programado']),
       acceptAfter: _asDateOrNull(data['acceptAfter']),
-      publishAt: _asDateOrNull(data['publishAt']),           // 🔥 NUEVO
+      publishAt: _asDateOrNull(data['publishAt']), // 🔥 NUEVO
       startWindowAt: _asDateOrNull(data['startWindowAt']),
 
       // Nuevos
@@ -384,11 +414,11 @@ class Viaje {
       canalAsignacion: canalAsignacionFinal,
       catalogoTurismoId: catalogoId,
       origenGeoPoint: origenGeoPoint,
-      
+
       // 🔥 NUEVOS
       codigoVerificacion: codigoVerif,
       codigoVerificado: codigoVerifOk,
-      
+
       // ✅ NUEVO: waypoints
       waypoints: waypoints,
 
@@ -452,13 +482,15 @@ class Viaje {
       'esAhora': esAhora,
       'programado': programado,
       if (acceptAfter != null) 'acceptAfter': Timestamp.fromDate(acceptAfter!),
-      if (publishAt != null) 'publishAt': Timestamp.fromDate(publishAt!),     // 🔥 NUEVO
-      if (startWindowAt != null) 'startWindowAt': Timestamp.fromDate(startWindowAt!),
-      
+      if (publishAt != null)
+        'publishAt': Timestamp.fromDate(publishAt!), // 🔥 NUEVO
+      if (startWindowAt != null)
+        'startWindowAt': Timestamp.fromDate(startWindowAt!),
+
       // 🔥 NUEVOS
       if (codigoVerificacion != null) 'codigoVerificacion': codigoVerificacion,
       'codigoVerificado': codigoVerificado,
-      
+
       // ✅ NUEVO: waypoints
       if (waypoints != null) 'waypoints': waypoints,
 
@@ -490,20 +522,18 @@ class Viaje {
   Map<String, dynamic> toCreateMap() {
     final now = DateTime.now();
 
-    // Ventanas de negocio
-    const int kAcceptHoursBefore = 2;
-    const int kReadyMinutesBefore = 45;
+    final bool esAhoraCalc =
+        TripPublishWindows.esAhoraPorFechaPickup(fechaHora, now);
 
-    // AHORA si la hora es dentro de 15 minutos
-    final bool esAhoraCalc = fechaHora.isBefore(now.add(const Duration(minutes: 15)));
-
-    final DateTime acceptAfterDT =
-        esAhoraCalc ? now : fechaHora.subtract(const Duration(hours: kAcceptHoursBefore));
-    final DateTime startWindowDT =
-        esAhoraCalc ? now : fechaHora.subtract(const Duration(minutes: kReadyMinutesBefore));
-
-    // 🔥 NUEVO: publishAt es cuando se hace visible (2 horas antes para programados)
-    final DateTime publishAtDT = esAhoraCalc ? now : fechaHora.subtract(const Duration(hours: 2));
+    final DateTime publishAtDT = esAhoraCalc
+        ? now
+        : TripPublishWindows.poolOpensAtForScheduledPickup(fechaHora, now);
+    final DateTime acceptAfterDT = esAhoraCalc
+        ? now
+        : TripPublishWindows.acceptAfterForScheduledPickup(fechaHora, now);
+    final DateTime startWindowDT = esAhoraCalc
+        ? now
+        : TripPublishWindows.startWindowAtForScheduledPickup(fechaHora, now);
 
     // Estado inicial según método de pago
     final String estadoInicial = (metodoPago.toLowerCase().trim() == 'tarjeta')
@@ -511,12 +541,14 @@ class Viaje {
         : EstadosViaje.pendiente;
 
     // Determinar canal de asignación automáticamente
-    final String tipoServicioFinal = tipoServicio.isEmpty ? 'normal' : tipoServicio;
+    final String tipoServicioFinal =
+        tipoServicio.isEmpty ? 'normal' : tipoServicio;
     final bool esTurismo = tipoServicioFinal == 'turismo';
     final String canalAsignacionFinal = esTurismo ? 'admin' : 'pool';
 
     // 🔥 Generar código de verificación de 6 dígitos
-    final String codigoVerif = (100000 + (now.millisecondsSinceEpoch % 900000)).toString();
+    final String codigoVerif =
+        (100000 + (now.millisecondsSinceEpoch % 900000)).toString();
 
     return {
       'uidCliente': uidCliente.isNotEmpty ? uidCliente : clienteId,
@@ -531,7 +563,7 @@ class Viaje {
       'esAhora': esAhoraCalc,
       'programado': !esAhoraCalc,
       'acceptAfter': Timestamp.fromDate(acceptAfterDT),
-      'publishAt': Timestamp.fromDate(publishAtDT),           // 🔥 NUEVO
+      'publishAt': Timestamp.fromDate(publishAtDT), // 🔥 NUEVO
       'startWindowAt': Timestamp.fromDate(startWindowDT),
 
       // Trayecto
@@ -642,7 +674,7 @@ class Viaje {
     bool? esAhora,
     bool? programado,
     DateTime? acceptAfter,
-    DateTime? publishAt,          // 🔥 NUEVO
+    DateTime? publishAt, // 🔥 NUEVO
     DateTime? startWindowAt,
     String? tipoServicio,
     String? subtipoTurismo,
@@ -697,7 +729,7 @@ class Viaje {
       esAhora: esAhora ?? this.esAhora,
       programado: programado ?? this.programado,
       acceptAfter: acceptAfter ?? this.acceptAfter,
-      publishAt: publishAt ?? this.publishAt,                 // 🔥 NUEVO
+      publishAt: publishAt ?? this.publishAt, // 🔥 NUEVO
       startWindowAt: startWindowAt ?? this.startWindowAt,
       tipoServicio: tipoServicio ?? this.tipoServicio,
       subtipoTurismo: subtipoTurismo ?? this.subtipoTurismo,

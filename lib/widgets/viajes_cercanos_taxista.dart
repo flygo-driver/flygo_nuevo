@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 
 /// Estado compartido entre el botón del AppBar y el overlay (solo este árbol escucha [notifyListeners]).
@@ -53,7 +54,7 @@ class ViajesCercanosTaxistaController extends ChangeNotifier {
   }
 }
 
-/// [escuchaActiva]: true solo en estados donde aplica buscar pendientes (p. ej. a bordo / en curso).
+/// [escuchaActiva]: true mientras el taxista tiene un viaje activo (aceptado…en curso) y puede reservar el siguiente.
 /// El padre actualiza el [ValueNotifier] sin setState.
 class ViajesCercanosTaxistaLayer extends StatefulWidget {
   const ViajesCercanosTaxistaLayer({
@@ -70,13 +71,16 @@ class ViajesCercanosTaxistaLayer extends StatefulWidget {
   final ValueNotifier<(double, double)?>? taxistaUbicacion;
 
   @override
-  State<ViajesCercanosTaxistaLayer> createState() => _ViajesCercanosTaxistaLayerState();
+  State<ViajesCercanosTaxistaLayer> createState() =>
+      _ViajesCercanosTaxistaLayerState();
 }
 
-class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer> {
+class _ViajesCercanosTaxistaLayerState
+    extends State<ViajesCercanosTaxistaLayer> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _docs = [];
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _rawDocs = [];
+
   /// Total de pendientes en el último snapshot (tras ordenar), puede ser mayor que [_docs].
   int _pendientesTotales = 0;
   final Set<String> _prevCercanosIds = <String>{};
@@ -84,6 +88,18 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
 
   static const int _kQueryLimit = 40;
   static const int _kMostrarMax = 12;
+
+  /// Mismos estados que [ViajesRepo.reservarComoSiguiente] admite (sin taxista asignado en documento).
+  static const List<String> _kEstadosReservablesSiguiente = <String>[
+    EstadosViaje.pendiente,
+    EstadosViaje.pendientePago,
+    'pendiente_admin',
+  ];
+
+  static bool _docSinTaxistaAsignado(Map<String, dynamic> m) {
+    final String uid = (m['uidTaxista'] ?? '').toString().trim();
+    return uid.isEmpty;
+  }
 
   @override
   void initState() {
@@ -137,8 +153,10 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
     (double, double) taxista,
   ) {
     final Map<String, dynamic> m = doc.data();
-    final double? la = (m['latCliente'] is num) ? (m['latCliente'] as num).toDouble() : null;
-    final double? lo = (m['lonCliente'] is num) ? (m['lonCliente'] as num).toDouble() : null;
+    final double? la =
+        (m['latCliente'] is num) ? (m['latCliente'] as num).toDouble() : null;
+    final double? lo =
+        (m['lonCliente'] is num) ? (m['lonCliente'] as num).toDouble() : null;
     if (la == null || lo == null) return double.infinity;
     if (!la.isFinite || !lo.isFinite) return double.infinity;
     return Geolocator.distanceBetween(taxista.$1, taxista.$2, la, lo);
@@ -148,11 +166,15 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
     (double, double)? taxista,
   ) {
-    if (taxista == null) return List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(docs);
+    if (taxista == null) {
+      return List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(docs);
+    }
     final List<QueryDocumentSnapshot<Map<String, dynamic>>> copy =
         List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(docs);
-    copy.sort((QueryDocumentSnapshot<Map<String, dynamic>> a, QueryDocumentSnapshot<Map<String, dynamic>> b) {
-      return _distanciaMetrosPickup(a, taxista).compareTo(_distanciaMetrosPickup(b, taxista));
+    copy.sort((QueryDocumentSnapshot<Map<String, dynamic>> a,
+        QueryDocumentSnapshot<Map<String, dynamic>> b) {
+      return _distanciaMetrosPickup(a, taxista)
+          .compareTo(_distanciaMetrosPickup(b, taxista));
     });
     return copy;
   }
@@ -160,7 +182,8 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
   void _applySortAndSetState() {
     if (!mounted) return;
     final (double, double)? t = widget.taxistaUbicacion?.value;
-    final List<QueryDocumentSnapshot<Map<String, dynamic>>> sorted = _ordenarPorCercania(_rawDocs, t);
+    final List<QueryDocumentSnapshot<Map<String, dynamic>>> sorted =
+        _ordenarPorCercania(_rawDocs, t);
     final List<QueryDocumentSnapshot<Map<String, dynamic>>> top =
         sorted.take(_kMostrarMax).toList(growable: false);
     setState(() {
@@ -177,14 +200,21 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
     _rawDocs = [];
     _sub = FirebaseFirestore.instance
         .collection('viajes')
-        .where('estado', isEqualTo: 'pendiente')
+        .where('estado', whereIn: _kEstadosReservablesSiguiente)
         .where('completado', isEqualTo: false)
         .limit(_kQueryLimit)
         .snapshots()
         .listen((QuerySnapshot<Map<String, dynamic>> snapshot) {
       if (!mounted) return;
-      final Set<String> nowIds = snapshot.docs.map((QueryDocumentSnapshot<Map<String, dynamic>> d) => d.id).toSet();
-      _rawDocs = snapshot.docs.toList();
+      final List<QueryDocumentSnapshot<Map<String, dynamic>>> filtrados =
+          snapshot.docs
+              .where((QueryDocumentSnapshot<Map<String, dynamic>> d) =>
+                  _docSinTaxistaAsignado(d.data()))
+              .toList(growable: false);
+      final Set<String> nowIds = filtrados
+          .map((QueryDocumentSnapshot<Map<String, dynamic>> d) => d.id)
+          .toSet();
+      _rawDocs = filtrados;
 
       if (_cercanosPrimeraEmision) {
         _cercanosPrimeraEmision = false;
@@ -197,12 +227,14 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
 
       for (final String id in nowIds.difference(_prevCercanosIds)) {
         final QueryDocumentSnapshot<Map<String, dynamic>> doc =
-            snapshot.docs.firstWhere((QueryDocumentSnapshot<Map<String, dynamic>> d) => d.id == id);
+            filtrados.firstWhere(
+                (QueryDocumentSnapshot<Map<String, dynamic>> d) => d.id == id);
         final Map<String, dynamic> data = doc.data();
         unawaited(NotificationService.I.notifyNuevoViaje(
           viajeId: id,
           titulo: 'Nuevo viaje pendiente',
-          cuerpo: '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+          cuerpo:
+              '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
         ));
       }
 
@@ -274,7 +306,9 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo reservar: $e'), backgroundColor: Colors.red),
+        SnackBar(
+            content: Text('No se pudo reservar: $e'),
+            backgroundColor: Colors.red),
       );
     }
   }
@@ -297,7 +331,8 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
           constraints: const BoxConstraints(maxHeight: 400),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.3)),
+            border:
+                Border.all(color: Colors.greenAccent.withValues(alpha: 0.3)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -306,11 +341,13 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: Colors.greenAccent.withValues(alpha: 0.1),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(20)),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.taxi_alert, color: Colors.greenAccent, size: 20),
+                    const Icon(Icons.taxi_alert,
+                        color: Colors.greenAccent, size: 20),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Column(
@@ -318,13 +355,17 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                         children: [
                           const Text(
                             'Reservar siguiente',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold),
                           ),
                           Text(
                             widget.taxistaUbicacion?.value != null
                                 ? 'Ordenados por cercanía al pickup · se activan al terminar el actual'
                                 : 'Activa GPS para ordenar por distancia',
-                            style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11),
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.55),
+                                fontSize: 11),
                           ),
                         ],
                       ),
@@ -335,11 +376,13 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                         message:
                             'Hay más pendientes en la consulta; aquí ves los $_kMostrarMax más cercanos (hasta $_kQueryLimit en la búsqueda).',
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: Colors.orange.withValues(alpha: 0.28),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.orange.withValues(alpha: 0.45)),
+                            border: Border.all(
+                                color: Colors.orange.withValues(alpha: 0.45)),
                           ),
                           child: Text(
                             '+${_pendientesTotales - _kMostrarMax}',
@@ -360,7 +403,8 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                   shrinkWrap: true,
                   itemCount: _docs.length,
                   itemBuilder: (BuildContext context, int index) {
-                    final QueryDocumentSnapshot<Map<String, dynamic>> doc = _docs[index];
+                    final QueryDocumentSnapshot<Map<String, dynamic>> doc =
+                        _docs[index];
                     final Map<String, dynamic> data = doc.data();
                     final Object? origen = data['origen'] ?? 'Origen';
                     final Object? destino = data['destino'] ?? 'Destino';
@@ -374,15 +418,19 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                     if (t != null) {
                       final double m = _distanciaMetrosPickup(doc, t);
                       if (m.isFinite) {
-                        distTxt = m < 1000 ? '${m.round()} m' : '${(m / 1000).toStringAsFixed(1)} km';
+                        distTxt = m < 1000
+                            ? '${m.round()} m'
+                            : '${(m / 1000).toStringAsFixed(1)} km';
                       }
                     }
 
                     return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
                         border: Border(
-                          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                          bottom: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.1)),
                         ),
                       ),
                       child: Row(
@@ -393,13 +441,15 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                               children: [
                                 Text(
                                   '$origen',
-                                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 13),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 Text(
                                   '→ $destino',
-                                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 12),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -415,7 +465,8 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                                   Text(
                                     'A recogida: $distTxt',
                                     style: TextStyle(
-                                      color: Colors.white.withValues(alpha: 0.45),
+                                      color:
+                                          Colors.white.withValues(alpha: 0.45),
                                       fontSize: 11,
                                     ),
                                   ),
@@ -426,17 +477,23 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                           ListenableBuilder(
                             listenable: widget.controller,
                             builder: (BuildContext context, Widget? _) {
-                              final bool encolado = widget.controller.encoladoId == doc.id;
+                              final bool encolado =
+                                  widget.controller.encoladoId == doc.id;
                               return ElevatedButton(
                                 onPressed: () => _encolar(doc.id),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.greenAccent,
                                   foregroundColor: Colors.black,
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
                                   minimumSize: const Size(70, 32),
-                                  textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                  textStyle: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold),
                                 ),
-                                child: encolado ? const Text('✓ LISTO') : const Text('SIGUIENTE'),
+                                child: encolado
+                                    ? const Text('✓ LISTO')
+                                    : const Text('SIGUIENTE'),
                               );
                             },
                           ),
@@ -452,12 +509,15 @@ class _ViajesCercanosTaxistaLayerState extends State<ViajesCercanosTaxistaLayer>
                   child: Text(
                     '+${_pendientesTotales - _docs.length} más no listados · consulta hasta $_kQueryLimit',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 10),
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.45),
+                        fontSize: 10),
                   ),
                 ),
               TextButton(
                 onPressed: () => widget.controller.hidePanel(),
-                child: const Text('Ocultar', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                child: const Text('Ocultar',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
               ),
             ],
           ),
@@ -502,10 +562,12 @@ class ViajesCercanosTaxistaAppBarAction extends StatelessWidget {
                           color: Colors.red,
                           shape: BoxShape.circle,
                         ),
-                        constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+                        constraints:
+                            const BoxConstraints(minWidth: 14, minHeight: 14),
                         child: Text(
                           '${controller.pendingCount}',
-                          style: const TextStyle(color: Colors.white, fontSize: 8),
+                          style:
+                              const TextStyle(color: Colors.white, fontSize: 8),
                           textAlign: TextAlign.center,
                         ),
                       ),
@@ -516,7 +578,8 @@ class ViajesCercanosTaxistaAppBarAction extends StatelessWidget {
                 if (controller.pendingCount == 0 && !controller.panelOpen) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('No hay viajes pendientes cercanos en este momento.'),
+                      content: Text(
+                          'No hay viajes pendientes cercanos en este momento.'),
                       duration: Duration(seconds: 2),
                     ),
                   );

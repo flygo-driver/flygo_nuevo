@@ -30,16 +30,14 @@ class QuickTripCard extends StatelessWidget {
         final estado = v.estado.isNotEmpty
             ? v.estado
             : (v.completado
-                  ? EstadosViaje.completado
-                  : (v.aceptado
-                        ? EstadosViaje.enCurso
-                        : EstadosViaje.pendiente));
+                ? EstadosViaje.completado
+                : (v.aceptado ? EstadosViaje.enCurso : EstadosViaje.pendiente));
 
         final estadoTexto = (estado == EstadosViaje.completado)
             ? '✅ Viaje completado'
             : (estado == EstadosViaje.enCurso)
-            ? '🚕 Tu viaje está en curso'
-            : '⌛ Pendiente de asignación';
+                ? '🚕 Tu viaje está en curso'
+                : '⌛ Pendiente de asignación';
 
         return Card(
           color: Colors.grey[900],

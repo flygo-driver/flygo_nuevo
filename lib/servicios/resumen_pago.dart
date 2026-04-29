@@ -71,7 +71,8 @@ class _ResumenPagoState extends State<ResumenPago> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text("Resumen de Pago", style: TextStyle(color: Colors.white)),
+        title: const Text("Resumen de Pago",
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
       ),
       backgroundColor: Colors.black,
@@ -81,10 +82,14 @@ class _ResumenPagoState extends State<ResumenPago> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("Monto total: RD\$${widget.montoTotal.toStringAsFixed(2)}",
-                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Text("Ganancia taxista: RD\$${ganancia.toStringAsFixed(2)}",
-                style: const TextStyle(color: Colors.greenAccent, fontSize: 18)),
+                style:
+                    const TextStyle(color: Colors.greenAccent, fontSize: 18)),
             Text("Comisión FlyGo: RD\$${comision.toStringAsFixed(2)}",
                 style: const TextStyle(color: Colors.redAccent, fontSize: 18)),
             const SizedBox(height: 20),
@@ -113,7 +118,8 @@ class _ResumenPagoState extends State<ResumenPago> {
                           : Colors.white,
                       foregroundColor: Colors.black,
                     ),
-                    onPressed: () => setState(() => metodoPago = "transferencia"),
+                    onPressed: () =>
+                        setState(() => metodoPago = "transferencia"),
                     child: const Text("Transferencia"),
                   ),
                 ),
@@ -132,7 +138,8 @@ class _ResumenPagoState extends State<ResumenPago> {
                 child: cargando
                     ? const CircularProgressIndicator(color: Colors.black)
                     : const Text("Confirmar pago",
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold)),
               ),
             ),
           ],

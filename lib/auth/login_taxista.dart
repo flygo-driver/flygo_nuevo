@@ -33,12 +33,13 @@ class _LoginTaxistaState extends State<LoginTaxista> {
   bool _loadingGoogle = false;
   StreamSubscription<User?>? _authSub;
   bool _autoRedirectDone = false;
+  bool _suppressAuthRedirect = false;
 
   @override
   void initState() {
     super.initState();
     _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
-      if (!mounted || _autoRedirectDone) return;
+      if (!mounted || _autoRedirectDone || _suppressAuthRedirect) return;
       if (user != null) {
         _autoRedirectDone = true;
         Navigator.of(context)
@@ -90,27 +91,34 @@ class _LoginTaxistaState extends State<LoginTaxista> {
   }
 
   Future<void> _loginAnonTaxista() async {
-    final cred = await FirebaseAuth.instance.signInAnonymously();
-    final uid = cred.user!.uid;
-    await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
-      'uid': uid,
-      'rol': 'taxista',
-      'email': _email.text.trim(),
-      'nombre': '',
-      'telefono': '',
-      'disponible': false,
-      'docsEstado': 'pendiente',
-      'estadoDocumentos': 'pendiente',
-      'documentosCompletos': false,
-      'puedeRecibirViajes': false,
-      'fechaRegistro': FieldValue.serverTimestamp(),
-      'actualizadoEn': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    _suppressAuthRedirect = true;
+    try {
+      final cred = await FirebaseAuth.instance.signInAnonymously();
+      final uid = cred.user!.uid;
+      await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+        'uid': uid,
+        'rol': 'taxista',
+        'email': _email.text.trim(),
+        'nombre': '',
+        'telefono': '',
+        'disponible': false,
+        'docsEstado': 'pendiente',
+        'estadoDocumentos': 'pendiente',
+        'documentosCompletos': false,
+        'puedeRecibirViajes': false,
+        'fechaRegistro': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-    if (!mounted) return;
-    await ViajesRepo.reconciliarActivosTaxista(uid);
-    if (!mounted) return;
-    Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
+      if (!mounted) return;
+      await ViajesRepo.reconciliarActivosTaxista(uid);
+      if (!mounted) return;
+      _autoRedirectDone = true;
+      Navigator.of(context)
+          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+    } finally {
+      _suppressAuthRedirect = false;
+    }
   }
 
   Future<void> _loginEmail() async {
@@ -119,7 +127,10 @@ class _LoginTaxistaState extends State<LoginTaxista> {
     final email = _email.text.trim();
     final pass = _pass.text;
 
-    setState(() => _loadingEmail = true);
+    setState(() {
+      _loadingEmail = true;
+      _suppressAuthRedirect = true;
+    });
     try {
       await AuthService().loginUser(email, pass);
 
@@ -173,6 +184,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
         await ViajesRepo.reconciliarActivosTaxista(uid);
       }
       if (!mounted) return;
+      _autoRedirectDone = true;
       Navigator.of(context)
           .pushNamedAndRemoveUntil('/auth_check', (r) => false);
     } on FirebaseAuthException catch (e) {
@@ -240,59 +252,67 @@ class _LoginTaxistaState extends State<LoginTaxista> {
           await _loginAnonTaxista();
           return;
         }
-        _snack('No se pudo iniciar sesión en este momento. Inténtalo de nuevo.');
+        _snack(
+            'No se pudo iniciar sesión en este momento. Inténtalo de nuevo.');
       }
     } finally {
+      _suppressAuthRedirect = false;
       if (mounted) setState(() => _loadingEmail = false);
     }
   }
 
   Future<void> _loginGoogle() async {
-    setState(() => _loadingGoogle = true);
+    if (_loadingGoogle || _loadingEmail) return;
+    setState(() {
+      _loadingGoogle = true;
+      _suppressAuthRedirect = true;
+    });
     try {
       await GoogleAuthService.signInWithGoogleStrict(entradaRol: 'taxista');
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
-      // Navegación inmediata tras auth exitosa (tipo Uber).
+      if (uid != null) {
+        final nowTs = FieldValue.serverTimestamp();
+        await FirebaseFirestore.instance.collection('usuarios').doc(uid).set(
+          {
+            'lastLogin': nowTs,
+            'updatedAt': nowTs,
+            'actualizadoEn': nowTs,
+          },
+          SetOptions(merge: true),
+        );
+        await ViajesRepo.reconciliarActivosTaxista(uid);
+      }
+      if (!mounted) return;
+      _autoRedirectDone = true;
       Navigator.of(context)
           .pushNamedAndRemoveUntil('/auth_check', (r) => false);
-
-      // Persistencia / reconciliación en segundo plano.
-      if (uid != null) {
-        Future<void>(() async {
-          final nowTs = FieldValue.serverTimestamp();
-          await FirebaseFirestore.instance.collection('usuarios').doc(uid).set(
-            {
-              'lastLogin': nowTs,
-              'updatedAt': nowTs,
-              'actualizadoEn': nowTs,
-            },
-            SetOptions(merge: true),
-          );
-          await ViajesRepo.reconciliarActivosTaxista(uid);
-        });
-      }
     } on FirebaseAuthException catch (e) {
-      if (kQaFlexibleAccess && kQaAllowAnonOnCollision && e.code != 'role-mismatch') {
-        await _loginAnonTaxista();
-      } else {
-        _snack(GoogleAuthService.friendlyAuthError(e, rol: 'taxista'));
+      if (kDebugMode) {
+        debugPrint('[LOGIN_GOOGLE][taxista] code=${e.code} msg=${e.message}');
       }
+      if (e.code == 'aborted-by-user') return;
+      if (e.code == 'google-token-null') {
+        _snack(
+            'No se pudo completar el inicio con Google. Inténtalo nuevamente.');
+        return;
+      }
+      _snack(GoogleAuthService.friendlyAuthError(e, rol: 'taxista'));
     } catch (err) {
-      if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
-        await _loginAnonTaxista();
-      } else {
-        _snack(GoogleAuthService.friendlyAuthError(err, rol: 'taxista'));
+      if (kDebugMode) {
+        debugPrint('[LOGIN_GOOGLE][taxista] error=$err');
       }
+      _snack(GoogleAuthService.friendlyAuthError(err, rol: 'taxista'));
     } finally {
+      _suppressAuthRedirect = false;
       if (mounted) setState(() => _loadingGoogle = false);
     }
   }
 
   InputDecoration _inputDec(BuildContext context, String label, IconData icon) {
     final cs = Theme.of(context).colorScheme;
-    final divider = cs.outline.withOpacity(0.6);
-    final labelColor = cs.onSurface.withOpacity(0.7);
+    final divider = cs.outline.withValues(alpha: 0.6);
+    final labelColor = cs.onSurface.withValues(alpha: 0.7);
 
     return InputDecoration(
       labelText: label,
@@ -312,9 +332,9 @@ class _LoginTaxistaState extends State<LoginTaxista> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final divider = cs.outline.withOpacity(0.55);
-    final muted38 = cs.onSurface.withOpacity(0.38);
-    final muted54 = cs.onSurface.withOpacity(0.54);
+    final divider = cs.outline.withValues(alpha: 0.55);
+    final muted38 = cs.onSurface.withValues(alpha: 0.38);
+    final muted54 = cs.onSurface.withValues(alpha: 0.54);
     final primaryContainer = cs.primaryContainer;
     final onPrimaryContainer = cs.onPrimaryContainer;
 
@@ -347,9 +367,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
                       _loadingGoogle ? 'Conectando...' : 'Continuar con Google',
                       style: const TextStyle(fontSize: 14),
                     ),
-                    onPressed: (_loadingGoogle)
-                        ? null
-                        : _loginGoogle,
+                    onPressed: (_loadingGoogle) ? null : _loginGoogle,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: cs.onSurface,
                       side: BorderSide(color: divider),
@@ -363,7 +381,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
                 ),
               ),
               Padding(
-                padding: EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   'Entra rápido con Google o correo. La habilitación operativa de viajes se valida dentro del flujo de taxista.',
                   textAlign: TextAlign.center,
@@ -376,7 +394,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
                 children: <Widget>[
                   Expanded(child: Divider(color: divider)),
                   Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: Text('o usa tu correo',
                         style: TextStyle(color: muted54)),
                   ),
@@ -389,7 +407,8 @@ class _LoginTaxistaState extends State<LoginTaxista> {
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
                 style: TextStyle(color: cs.onSurface),
-                decoration: _inputDec(context, 'Correo electrónico', Icons.email),
+                decoration:
+                    _inputDec(context, 'Correo electrónico', Icons.email),
                 validator: (v) =>
                     (v == null || !v.contains('@')) ? 'Correo inválido' : null,
                 autofillHints: const [AutofillHints.email],

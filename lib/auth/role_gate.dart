@@ -98,7 +98,8 @@ class _RoleGateState extends State<RoleGate> {
   Widget _errorPage(String texto) {
     return _SplashScaffold(
       child: _SplashContent(
-        icon: const Icon(Icons.error_outline, color: Colors.redAccent, size: 28),
+        icon:
+            const Icon(Icons.error_outline, color: Colors.redAccent, size: 28),
         text: texto,
       ),
     );

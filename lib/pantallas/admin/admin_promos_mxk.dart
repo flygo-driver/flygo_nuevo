@@ -85,7 +85,7 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
       _k = k;
       _mCtrl.text = '$m';
       _kCtrl.text = '$k';
-      
+
       // ✅ CORREGIDO: Agregar llaves en todas las condiciones if
       if (m == 1 && k == 1) {
         _porcentaje = 50;
@@ -102,7 +102,7 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
       } else if (m == 10 && k == 1) {
         _porcentaje = 91;
       }
-      
+
       // ✅ CORREGIDO: Quitar llaves innecesarias en interpolación
       _pCtrl.text = '$_porcentaje';
     });
@@ -114,7 +114,7 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
     final int m = int.tryParse(_mCtrl.text.trim()) ?? _m;
     final int k = int.tryParse(_kCtrl.text.trim()) ?? _k;
     final int p = int.tryParse(_pCtrl.text.trim()) ?? _porcentaje;
-    
+
     return m >= 1 && k >= 1 && p >= 0 && p <= 95;
   }
 
@@ -179,7 +179,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),
         iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Promociones M×K', style: TextStyle(color: AdminUi.onCard(context))),
+        title: Text('Promociones M×K',
+            style: TextStyle(color: AdminUi.onCard(context))),
         actions: [
           IconButton(
             icon: Icon(Icons.refresh, color: AdminUi.appBarFg(context)),
@@ -189,7 +190,9 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
         ],
       ),
       body: _cargando
-          ? Center(child: CircularProgressIndicator(color: AdminUi.progressAccent(context)))
+          ? Center(
+              child: CircularProgressIndicator(
+                  color: AdminUi.progressAccent(context)))
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
               children: [
@@ -203,7 +206,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.info_outline, color: AdminUi.muted(context), size: 16),
+                      Icon(Icons.info_outline,
+                          color: AdminUi.muted(context), size: 16),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -245,7 +249,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                             const SizedBox(height: 4),
                             Text(
                               'Si está OFF, el sistema cobra precio normal.',
-                              style: TextStyle(color: AdminUi.secondary(context)),
+                              style:
+                                  TextStyle(color: AdminUi.secondary(context)),
                             ),
                           ],
                         ),
@@ -340,12 +345,16 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                       end: Alignment.bottomRight,
                       colors: [
                         AdminUi.card(context),
-                        _activa ? Colors.green.withValues(alpha: 0.1) : AdminUi.inputFill(context),
+                        _activa
+                            ? Colors.green.withValues(alpha: 0.1)
+                            : AdminUi.inputFill(context),
                       ],
                     ),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: _activa ? Colors.green.withValues(alpha: 0.3) : AdminUi.borderSubtle(context),
+                      color: _activa
+                          ? Colors.green.withValues(alpha: 0.3)
+                          : AdminUi.borderSubtle(context),
                       width: _activa ? 2 : 1,
                     ),
                   ),
@@ -395,7 +404,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.lightbulb_outline, color: Colors.amber, size: 20),
+                          const Icon(Icons.lightbulb_outline,
+                              color: Colors.amber, size: 20),
                           const SizedBox(width: 8),
                           Text(
                             '¿Cómo funciona M×K?',
@@ -417,14 +427,16 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                         padding: const EdgeInsets.only(left: 16),
                         child: Text(
                           '• Los primeros M viajes tienen descuento',
-                          style: TextStyle(color: Colors.green.withValues(alpha: 0.9)),
+                          style: TextStyle(
+                              color: Colors.green.withValues(alpha: 0.9)),
                         ),
                       ),
                       Padding(
                         padding: const EdgeInsets.only(left: 16),
                         child: Text(
                           '• Los siguientes K viajes pagan tarifa completa',
-                          style: TextStyle(color: Colors.blue.withValues(alpha: 0.9)),
+                          style: TextStyle(
+                              color: Colors.blue.withValues(alpha: 0.9)),
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -508,7 +520,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
           style: TextStyle(color: AdminUi.onCard(context), fontSize: 16),
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle: TextStyle(color: AdminUi.secondary(context).withValues(alpha: 0.75)),
+            hintStyle: TextStyle(
+                color: AdminUi.secondary(context).withValues(alpha: 0.75)),
             suffixText: suffix,
             suffixStyle: TextStyle(color: AdminUi.secondary(context)),
             filled: true,
@@ -523,7 +536,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.4),
+              borderSide: BorderSide(
+                  color: Theme.of(context).colorScheme.primary, width: 1.4),
             ),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 16,
@@ -564,7 +578,9 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: _activa ? Colors.green.withValues(alpha: 0.2) : Colors.grey.withValues(alpha: 0.2),
+                color: _activa
+                    ? Colors.green.withValues(alpha: 0.2)
+                    : Colors.grey.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
@@ -583,11 +599,17 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
         // Métricas
         Row(
           children: [
-            _buildMetricCard('Ciclo', '$ciclo viajes', Icons.repeat, Colors.blue),
+            _buildMetricCard(
+                'Ciclo', '$ciclo viajes', Icons.repeat, Colors.blue),
             const SizedBox(width: 8),
-            _buildMetricCard('Dto. x viaje', '$p2%', Icons.percent, Colors.amber),
+            _buildMetricCard(
+                'Dto. x viaje', '$p2%', Icons.percent, Colors.amber),
             const SizedBox(width: 8),
-            _buildMetricCard('Ahorro prom.', '${descuentoEfectivo.toStringAsFixed(1)}%', Icons.trending_down, Colors.green),
+            _buildMetricCard(
+                'Ahorro prom.',
+                '${descuentoEfectivo.toStringAsFixed(1)}%',
+                Icons.trending_down,
+                Colors.green),
           ],
         ),
 
@@ -615,9 +637,12 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                   final int pos = i + 1;
                   final bool esDesc = pos <= m2;
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color: esDesc ? Colors.green.withValues(alpha: 0.2) : Colors.blue.withValues(alpha: 0.2),
+                      color: esDesc
+                          ? Colors.green.withValues(alpha: 0.2)
+                          : Colors.blue.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
                         color: esDesc ? Colors.green : Colors.blue,
@@ -655,7 +680,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                 Expanded(
                   child: Text(
                     'Los clientes verán el descuento aplicado según su contador de viajes',
-                    style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+                    style: TextStyle(
+                        color: AdminUi.secondary(context), fontSize: 12),
                   ),
                 ),
               ],
@@ -666,7 +692,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
     );
   }
 
-  Widget _buildMetricCard(String label, String value, IconData icon, Color color) {
+  Widget _buildMetricCard(
+      String label, String value, IconData icon, Color color) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(8),

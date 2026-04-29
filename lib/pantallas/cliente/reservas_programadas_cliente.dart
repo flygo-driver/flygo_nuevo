@@ -6,7 +6,6 @@ import 'package:intl/intl.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_confirmacion.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
-import 'package:flygo_nuevo/widgets/cliente_drawer.dart';
 
 /// Lista de viajes programados aún no terminados (acceso desde el menú).
 class ReservasProgramadasCliente extends StatelessWidget {
@@ -15,7 +14,9 @@ class ReservasProgramadasCliente extends StatelessWidget {
   static DateTime _asDate(dynamic v) {
     if (v is Timestamp) return v.toDate();
     if (v is DateTime) return v;
-    if (v is String) return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    if (v is String) {
+      return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
@@ -28,7 +29,9 @@ class ReservasProgramadasCliente extends StatelessWidget {
 
   static bool _esTerminal(Map<String, dynamic> d) {
     final e = EstadosViaje.normalizar((d['estado'] ?? '').toString());
-    if (EstadosViaje.esCancelado(e) || EstadosViaje.esCompletado(e)) return true;
+    if (EstadosViaje.esCancelado(e) || EstadosViaje.esCompletado(e)) {
+      return true;
+    }
     if (d['completado'] == true) return true;
     return false;
   }
@@ -40,16 +43,17 @@ class ReservasProgramadasCliente extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      drawer: const ClienteDrawer(),
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text('Mis reservas programadas', style: TextStyle(color: Colors.white)),
+        title: const Text('Mis reservas programadas',
+            style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
         centerTitle: true,
       ),
       body: user == null
           ? const Center(
-              child: Text('Inicia sesión', style: TextStyle(color: Colors.white70)),
+              child: Text('Inicia sesión',
+                  style: TextStyle(color: Colors.white70)),
             )
           : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
@@ -71,7 +75,9 @@ class ReservasProgramadasCliente extends StatelessWidget {
                   );
                 }
                 if (!snap.hasData) {
-                  return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
+                  return const Center(
+                      child:
+                          CircularProgressIndicator(color: Colors.greenAccent));
                 }
                 final docs = snap.data!.docs.where((d) {
                   final m = d.data();
@@ -110,7 +116,8 @@ class ReservasProgramadasCliente extends StatelessWidget {
                     final fecha = _asDate(m['fechaHora']);
                     final origen = (m['origen'] ?? '').toString();
                     final destino = (m['destino'] ?? '').toString();
-                    final precio = _asDouble(m['precioFinal'] ?? m['precio'] ?? m['total']);
+                    final precio = _asDouble(
+                        m['precioFinal'] ?? m['precio'] ?? m['total']);
                     final ref = d.id.length >= 6 ? d.id.substring(0, 6) : d.id;
                     return Material(
                       color: const Color(0xFF1A1A1A),
@@ -122,7 +129,8 @@ class ReservasProgramadasCliente extends StatelessWidget {
                           children: [
                             Row(
                               children: [
-                                const Icon(Icons.event_note, color: Colors.greenAccent, size: 20),
+                                const Icon(Icons.event_note,
+                                    color: Colors.greenAccent, size: 20),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
@@ -146,7 +154,8 @@ class ReservasProgramadasCliente extends StatelessWidget {
                             const SizedBox(height: 8),
                             Text(
                               '$origen → $destino',
-                              style: const TextStyle(color: Colors.white70, height: 1.3),
+                              style: const TextStyle(
+                                  color: Colors.white70, height: 1.3),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -166,17 +175,21 @@ class ReservasProgramadasCliente extends StatelessWidget {
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute<void>(
-                                    builder: (_) => ViajeProgramadoConfirmacion(viajeId: d.id),
+                                    builder: (_) => ViajeProgramadoConfirmacion(
+                                        viajeId: d.id),
                                   ),
                                 );
                               },
                               style: FilledButton.styleFrom(
-                                backgroundColor: Colors.greenAccent.withValues(alpha: 0.2),
+                                backgroundColor:
+                                    Colors.greenAccent.withValues(alpha: 0.2),
                                 foregroundColor: Colors.greenAccent,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(10),
-                                  side: const BorderSide(color: Colors.greenAccent, width: 1),
+                                  side: const BorderSide(
+                                      color: Colors.greenAccent, width: 1),
                                 ),
                               ),
                               child: const Text('Ver detalles'),

@@ -352,6 +352,69 @@ export const cancelPoolTrip = onCall(async (request) => {
 });
 
 /**
+ * Solo administración: anula una gira/excursión ya finalizada (corrección operativa,
+ * disputa, error de cierre). Quita la comisión pendiente de validación en panel admin.
+ */
+export const adminVoidFinalizedPool = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const poolId = typeof request.data?.poolId === "string" ? request.data.poolId.trim() : "";
+  const motivo = typeof request.data?.motivo === "string" ? request.data.motivo.trim() : "";
+  const idemKey = typeof request.data?.idempotencyKey === "string" ? request.data.idempotencyKey.trim() : "";
+  if (!poolId) throw new HttpsError("invalid-argument", "Falta poolId");
+  if (!idemKey) throw new HttpsError("invalid-argument", "Falta idempotencyKey");
+
+  const roleRaw = await getRole(uidActor);
+  const roleNorm = String(roleRaw ?? "").trim().toLowerCase();
+  if (roleNorm !== "admin" && roleNorm !== "administrador") {
+    throw new HttpsError("permission-denied", "Solo administradores pueden anular giras finalizadas");
+  }
+
+  const idem = await ensureIdempotencyStart(idemKey, "admin_void_finalized_pool", uidActor);
+  if (idem.done) return idem.result;
+
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const result = await db().runTransaction(async (tx) => {
+    const snap = await tx.get(poolRef);
+    if (!snap.exists) throw new HttpsError("not-found", "Pool no existe");
+    const pool = (snap.data() ?? {}) as AnyMap;
+
+    const estado = String(pool.estado ?? "abierto");
+    const yaAnulada = pool.anuladaTrasFinalizar === true;
+    if (estado === "cancelado" && yaAnulada) {
+      return { ok: true, poolId, alreadyVoided: true };
+    }
+    if (estado === "cancelado" && !yaAnulada) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Esta gira está cancelada por flujo normal; no requiere anulación post-finalizado",
+      );
+    }
+    if (estado !== "finalizado") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Solo se puede usar tras finalizar la gira (estado actual: " + estado + ")",
+      );
+    }
+
+    tx.update(poolRef, {
+      estado: "cancelado",
+      anuladaTrasFinalizar: true,
+      anuladaTrasFinalizarAt: FieldValue.serverTimestamp(),
+      anuladaTrasFinalizarPor: uidActor,
+      motivoAnulacionAdmin: motivo || "Anulación administrativa tras cierre",
+      comisionPendientePagoAdmin: false,
+      comisionEstado: "anulada_admin",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { ok: true, poolId, alreadyVoided: false };
+  });
+
+  await markIdempotencyDone(idem.ref, result);
+  return result;
+});
+
+/**
  * Borra el documento del pool y sus reservas (solo si no hay compromisos activos).
  * Evita “basura” en Firestore cuando el operador cancela un anuncio sin cupos vendidos.
  */

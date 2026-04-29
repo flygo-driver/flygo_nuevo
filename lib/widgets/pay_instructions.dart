@@ -4,8 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
 
 class PayInstructions extends StatelessWidget {
-  final String referencia;       // referencia sugerida (opcional pero útil)
-  final bool showEfectivoNote;   // nota “pagar al abordar” si aplica
+  final String referencia; // referencia sugerida (opcional pero útil)
+  final bool showEfectivoNote; // nota “pagar al abordar” si aplica
 
   const PayInstructions({
     super.key,
@@ -34,7 +34,8 @@ class PayInstructions extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text('Cuenta FlyGo (Transferencia)',
-              style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w800)),
+              style: TextStyle(
+                  color: Colors.greenAccent, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),
           _row(context, 'Banco', PayConfig.bankName),
           _row(context, 'Tipo', PayConfig.accountType),
@@ -52,7 +53,8 @@ class PayInstructions extends StatelessWidget {
             const SizedBox(height: 8),
             const Text(
               'Si eliges EFECTIVO: pagarás al abordar con el conductor asignado.',
-              style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+              style:
+                  TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
             ),
           ],
         ],

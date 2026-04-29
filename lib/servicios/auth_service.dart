@@ -49,7 +49,9 @@ class AuthService {
   User? getCurrentUser() => _auth.currentUser;
 
   Future<void> logout() async {
-    try { await GoogleSignIn().signOut(); } catch (_) {}
+    try {
+      await GoogleSignIn().signOut();
+    } catch (_) {}
     await _auth.signOut();
   }
 
@@ -71,7 +73,8 @@ class AuthService {
   Future<User> signInWithGoogle({required String rol}) async {
     final gUser = await GoogleSignIn(scopes: ['email']).signIn();
     if (gUser == null) {
-      throw FirebaseAuthException(code: 'sign_in_canceled', message: 'Inicio cancelado.');
+      throw FirebaseAuthException(
+          code: 'sign_in_canceled', message: 'Inicio cancelado.');
     }
     final gAuth = await gUser.authentication;
     final credential = GoogleAuthProvider.credential(
@@ -117,7 +120,9 @@ class AuthService {
       );
       final user = cred.user!;
       await user.updateDisplayName(nombre);
-      try { await user.sendEmailVerification(); } catch (_) {}
+      try {
+        await user.sendEmailVerification();
+      } catch (_) {}
 
       await _ensureUserDoc(
         user: user,
@@ -176,7 +181,9 @@ class AuthService {
       );
       final user = cred.user!;
       await user.updateDisplayName(nombre);
-      try { await user.sendEmailVerification(); } catch (_) {}
+      try {
+        await user.sendEmailVerification();
+      } catch (_) {}
       await _ensureUserDoc(
         user: user,
         rolSiFalta: 'cliente',

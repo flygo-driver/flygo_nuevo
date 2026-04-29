@@ -115,13 +115,13 @@ class EstadosViaje {
   // ====== Helpers booleanos ======
   static bool esPendiente(String e) => normalizar(e) == pendiente;
   static bool esPendientePago(String e) => normalizar(e) == pendientePago;
-  
+
   // 🔥 CORREGIDO: esAceptado incluye tanto aceptado como en_camino_pickup
   static bool esAceptado(String e) {
     final n = normalizar(e);
     return n == aceptado || n == enCaminoPickup;
   }
-  
+
   static bool esEnCaminoPickup(String e) => normalizar(e) == enCaminoPickup;
   static bool esAbordo(String e) => normalizar(e) == aBordo;
   static bool esEnCurso(String e) => normalizar(e) == enCurso;
@@ -131,6 +131,23 @@ class EstadosViaje {
 
   static bool esActivo(String e) => activos.contains(normalizar(e));
   static bool esTerminal(String e) => terminales.contains(normalizar(e));
+
+  /// Cliente/taxista vía app: no cancelar tras abordar o en ruta (anti‑fraude).
+  static bool esEstadoSinCancelacionApp(String e) {
+    final String n = normalizar(e);
+    return n == aBordo || n == enCurso;
+  }
+
+  /// Si el botón “Cancelar viaje” debe mostrarse al cliente.
+  static bool clientePuedeCancelarViajeDesdeApp(String estadoRaw) {
+    final String n = normalizar(estadoRaw);
+    if (n == completado || n == cancelado || n == rechazado) return false;
+    return !esEstadoSinCancelacionApp(n);
+  }
+
+  static const String mensajeNoCancelarViajeTrasAbordarApp =
+      'Una vez el cliente está a bordo o el viaje está en curso, no se puede cancelar desde la app. '
+      'Si hay una emergencia o un incidente grave, contacta a soporte de la plataforma.';
 
   // ====== Transiciones válidas ======
   static const Map<String, List<String>> _transiciones = {

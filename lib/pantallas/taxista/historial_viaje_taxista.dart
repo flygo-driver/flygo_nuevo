@@ -2,11 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import 'package:flygo_nuevo/data/viaje_data.dart';     // ✅ ViajeData en /data
+import 'package:flygo_nuevo/data/viaje_data.dart'; // ✅ ViajeData en /data
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/estilos.dart';
 
-import '../../widgets/taxista_drawer.dart';
 import '../../widgets/saldo_ganancias_chip.dart';
 
 class HistorialViajesTaxista extends StatefulWidget {
@@ -62,16 +61,8 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: EstilosFlyGo.fondoOscuro,
-      drawer: const TaxistaDrawer(),
       appBar: AppBar(
         backgroundColor: EstilosFlyGo.fondoOscuro,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: EstilosFlyGo.textoBlanco),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-            tooltip: 'Menú',
-          ),
-        ),
         foregroundColor: EstilosFlyGo.textoBlanco,
         title: const Text(
           "Historial de Viajes",

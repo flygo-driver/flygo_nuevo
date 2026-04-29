@@ -47,7 +47,8 @@ class ChoferesTurismoRepo {
                 lon,
                 c.ultimaUbicacion!.latitude,
                 c.ultimaUbicacion!.longitude,
-              ) / 1000;
+              ) /
+              1000;
           return distancia <= radioKm;
         }).toList();
 
@@ -91,14 +92,16 @@ class ChoferesTurismoRepo {
   // ==============================================================
   //                           UPDATE
   // ==============================================================
-  static Future<void> actualizarDisponibilidad(String uid, bool disponible) async {
+  static Future<void> actualizarDisponibilidad(
+      String uid, bool disponible) async {
     await _col.doc(uid).update({
       'disponible': disponible,
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
-  static Future<void> actualizarUbicacion(String uid, double lat, double lon) async {
+  static Future<void> actualizarUbicacion(
+      String uid, double lat, double lon) async {
     await _col.doc(uid).update({
       'ultimaUbicacion': GeoPoint(lat, lon),
       'ultimaUbicacionActualizada': FieldValue.serverTimestamp(),
@@ -111,19 +114,23 @@ class ChoferesTurismoRepo {
     });
   }
 
-  static Future<void> actualizarCalificacion(String uid, double nuevaCalificacion) async {
+  static Future<void> actualizarCalificacion(
+      String uid, double nuevaCalificacion) async {
     final chofer = await obtenerChofer(uid);
     if (chofer == null) return;
 
     final totalViajes = chofer.viajesCompletados + 1;
-    final nuevaPromedio = ((chofer.calificacion * chofer.viajesCompletados) + nuevaCalificacion) / totalViajes;
+    final nuevaPromedio =
+        ((chofer.calificacion * chofer.viajesCompletados) + nuevaCalificacion) /
+            totalViajes;
 
     await _col.doc(uid).update({
       'calificacion': nuevaPromedio,
     });
   }
 
-  static Future<void> actualizarEstado(String uid, String estado, {String? verificadoPor}) async {
+  static Future<void> actualizarEstado(String uid, String estado,
+      {String? verificadoPor}) async {
     final Map<String, dynamic> update = {
       'estado': estado,
       'updatedAt': FieldValue.serverTimestamp(),

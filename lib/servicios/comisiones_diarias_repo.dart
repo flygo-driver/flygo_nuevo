@@ -4,8 +4,7 @@ class ComisionesDiariasRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   static DateTime? _pickFechaViaje(Map<String, dynamic> data) {
-    final dynamic ts =
-        data['finalizadoEn'] ??
+    final dynamic ts = data['finalizadoEn'] ??
         data['completadoEn'] ??
         data['updatedAt'] ??
         data['createdAt'] ??
@@ -21,7 +20,8 @@ class ComisionesDiariasRepo {
     return !dt.isBefore(inicio) && dt.isBefore(finExclusive);
   }
 
-  static Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _viajesCompletadosRango({
+  static Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      _viajesCompletadosRango({
     required DateTime inicio,
     required DateTime finExclusive,
     int limit = 2000,
@@ -30,7 +30,8 @@ class ComisionesDiariasRepo {
       final q = await _db
           .collection('viajes')
           .where('completado', isEqualTo: true)
-          .where('finalizadoEn', isGreaterThanOrEqualTo: Timestamp.fromDate(inicio))
+          .where('finalizadoEn',
+              isGreaterThanOrEqualTo: Timestamp.fromDate(inicio))
           .where('finalizadoEn', isLessThan: Timestamp.fromDate(finExclusive))
           .get();
       return q.docs;
@@ -61,7 +62,7 @@ class ComisionesDiariasRepo {
     if (data.containsKey('comision') && data['comision'] != null) {
       return (data['comision'] as num?)?.toDouble() ?? 0.0;
     }
-    
+
     // PRIORIDAD 2: Si el taxista tiene una comisión especial (por promoción)
     final uidTaxista = data['uidTaxista'] as String?;
     if (uidTaxista != null) {
@@ -70,7 +71,7 @@ class ComisionesDiariasRepo {
       // double? comisionEspecial = _getComisionEspecial(uidTaxista);
       // if (comisionEspecial != null) return comisionEspecial;
     }
-    
+
     // PRIORIDAD 3: Comisión base 20% para TODOS
     final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
     return precio * _COMISION_BASE;
@@ -89,11 +90,11 @@ class ComisionesDiariasRepo {
       finExclusive: finDia,
     );
 
-    var totalRecaudado = 0.0;    // Lo que pagaron los clientes (100%)
-    var totalComisiones = 0.0;   // 20% para admin
-    var totalGanancias = 0.0;    // 80% para taxistas
+    var totalRecaudado = 0.0; // Lo que pagaron los clientes (100%)
+    var totalComisiones = 0.0; // 20% para admin
+    var totalGanancias = 0.0; // 80% para taxistas
     var totalViajes = 0;
-    
+
     // Estadísticas por tipo (aunque todos paguen 20%, sirve para análisis)
     var viajesNormales = 0;
     var viajesMotor = 0;
@@ -108,12 +109,12 @@ class ComisionesDiariasRepo {
       final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
       final comision = _calcularComision(data);
       final ganancia = precio - comision;
-      
+
       totalRecaudado += precio;
       totalComisiones += comision;
       totalGanancias += ganancia;
       totalViajes++;
-      
+
       // Acumular por tipo (solo para reportes)
       switch (tipoServicio) {
         case 'motor':
@@ -136,7 +137,7 @@ class ComisionesDiariasRepo {
       'totalComisiones': totalComisiones,
       'totalGanancias': totalGanancias,
       'totalViajes': totalViajes,
-      'porcentajeComision': totalRecaudado > 0 
+      'porcentajeComision': totalRecaudado > 0
           ? (totalComisiones / totalRecaudado * 100).toStringAsFixed(1)
           : '20.0', // Por defecto 20%
       // Desglose por tipo (para análisis)
@@ -164,7 +165,8 @@ class ComisionesDiariasRepo {
     final hoy = DateTime.now();
     // Lunes de esta semana
     final inicioSemana = hoy.subtract(Duration(days: hoy.weekday - 1));
-    final inicioDia = DateTime(inicioSemana.year, inicioSemana.month, inicioSemana.day);
+    final inicioDia =
+        DateTime(inicioSemana.year, inicioSemana.month, inicioSemana.day);
     final finDia = inicioDia.add(const Duration(days: 7));
 
     final viajesSemana = await _viajesCompletadosRango(
@@ -176,7 +178,7 @@ class ComisionesDiariasRepo {
     var totalComisiones = 0.0;
     var totalGanancias = 0.0;
     var totalViajes = 0;
-    
+
     var viajesTurismo = 0;
     var comisionesTurismo = 0.0;
 
@@ -186,12 +188,12 @@ class ComisionesDiariasRepo {
       final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
       final comision = _calcularComision(data);
       final ganancia = precio - comision;
-      
+
       totalRecaudado += precio;
       totalComisiones += comision;
       totalGanancias += ganancia;
       totalViajes++;
-      
+
       if (tipoServicio == 'turismo') {
         viajesTurismo++;
         comisionesTurismo += comision;
@@ -236,7 +238,7 @@ class ComisionesDiariasRepo {
       final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
       final comision = _calcularComision(data);
       final ganancia = precio - comision;
-      
+
       totalRecaudado += precio;
       totalComisiones += comision;
       totalGanancias += ganancia;
@@ -276,7 +278,7 @@ class ComisionesDiariasRepo {
       final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
       final comision = _calcularComision(data);
       final ganancia = precio - comision;
-      
+
       totalRecaudado += precio;
       totalComisiones += comision;
       totalGanancias += ganancia;
@@ -296,7 +298,8 @@ class ComisionesDiariasRepo {
   // ==============================================================
   // TOP TAXISTAS DEL DÍA (los que más comisiones generaron)
   // ==============================================================
-  static Future<List<Map<String, dynamic>>> getTopTaxistasHoy({int limite = 5}) async {
+  static Future<List<Map<String, dynamic>>> getTopTaxistasHoy(
+      {int limite = 5}) async {
     final hoy = DateTime.now();
     final inicioDia = DateTime(hoy.year, hoy.month, hoy.day);
     final finDia = inicioDia.add(const Duration(days: 1));
@@ -306,7 +309,8 @@ class ComisionesDiariasRepo {
       finExclusive: finDia,
     );
 
-    final Map<String, Map<String, dynamic>> taxistasMap = <String, Map<String, dynamic>>{};
+    final Map<String, Map<String, dynamic>> taxistasMap =
+        <String, Map<String, dynamic>>{};
 
     for (final viaje in viajesHoy) {
       final data = viaje.data();
@@ -314,7 +318,8 @@ class ComisionesDiariasRepo {
       final nombreTaxista = data['nombreTaxista'] as String? ?? 'Desconocido';
       final comision = _calcularComision(data);
       final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
-      final ganancia = (data['gananciaTaxista'] as num?)?.toDouble() ?? (precio - comision);
+      final ganancia =
+          (data['gananciaTaxista'] as num?)?.toDouble() ?? (precio - comision);
       final tipoServicio = data['tipoServicio'] as String? ?? 'normal';
 
       if (uidTaxista == null || uidTaxista.isEmpty) continue;
@@ -332,31 +337,37 @@ class ComisionesDiariasRepo {
       }
 
       final taxista = taxistasMap[uidTaxista]!;
-      taxista['totalComisiones'] = (taxista['totalComisiones'] as double) + comision;
-      taxista['totalGanancias'] = (taxista['totalGanancias'] as double) + ganancia;
+      taxista['totalComisiones'] =
+          (taxista['totalComisiones'] as double) + comision;
+      taxista['totalGanancias'] =
+          (taxista['totalGanancias'] as double) + ganancia;
       taxista['totalViajes'] = (taxista['totalViajes'] as int) + 1;
-      
+
       if (tipoServicio == 'turismo') {
         taxista['viajesTurismo'] = (taxista['viajesTurismo'] as int) + 1;
-        taxista['comisionesTurismo'] = (taxista['comisionesTurismo'] as double) + comision;
+        taxista['comisionesTurismo'] =
+            (taxista['comisionesTurismo'] as double) + comision;
       }
     }
 
     // Ordenar por comisiones (mayor a menor) y tomar límite
     final List<Map<String, dynamic>> lista = taxistasMap.values.toList();
-    lista.sort((Map<String, dynamic> a, Map<String, dynamic> b) => 
-        (b['totalComisiones'] as double).compareTo(a['totalComisiones'] as double));
-    
+    lista.sort((Map<String, dynamic> a, Map<String, dynamic> b) =>
+        (b['totalComisiones'] as double)
+            .compareTo(a['totalComisiones'] as double));
+
     return lista.take(limite).toList();
   }
 
   // ==============================================================
   // TOP TAXISTAS DE LA SEMANA
   // ==============================================================
-  static Future<List<Map<String, dynamic>>> getTopTaxistasSemana({int limite = 5}) async {
+  static Future<List<Map<String, dynamic>>> getTopTaxistasSemana(
+      {int limite = 5}) async {
     final hoy = DateTime.now();
     final inicioSemana = hoy.subtract(Duration(days: hoy.weekday - 1));
-    final inicioDia = DateTime(inicioSemana.year, inicioSemana.month, inicioSemana.day);
+    final inicioDia =
+        DateTime(inicioSemana.year, inicioSemana.month, inicioSemana.day);
     final finDia = inicioDia.add(const Duration(days: 7));
 
     final viajesSemana = await _viajesCompletadosRango(
@@ -364,7 +375,8 @@ class ComisionesDiariasRepo {
       finExclusive: finDia,
     );
 
-    final Map<String, Map<String, dynamic>> taxistasMap = <String, Map<String, dynamic>>{};
+    final Map<String, Map<String, dynamic>> taxistasMap =
+        <String, Map<String, dynamic>>{};
 
     for (final viaje in viajesSemana) {
       final data = viaje.data();
@@ -384,14 +396,16 @@ class ComisionesDiariasRepo {
       }
 
       final taxista = taxistasMap[uidTaxista]!;
-      taxista['totalComisiones'] = (taxista['totalComisiones'] as double) + comision;
+      taxista['totalComisiones'] =
+          (taxista['totalComisiones'] as double) + comision;
       taxista['totalViajes'] = (taxista['totalViajes'] as int) + 1;
     }
 
     final List<Map<String, dynamic>> lista = taxistasMap.values.toList();
-    lista.sort((Map<String, dynamic> a, Map<String, dynamic> b) => 
-        (b['totalComisiones'] as double).compareTo(a['totalComisiones'] as double));
-    
+    lista.sort((Map<String, dynamic> a, Map<String, dynamic> b) =>
+        (b['totalComisiones'] as double)
+            .compareTo(a['totalComisiones'] as double));
+
     return lista.take(limite).toList();
   }
 
@@ -401,7 +415,7 @@ class ComisionesDiariasRepo {
   static Future<List<Map<String, dynamic>>> getEvolucionSemanal() async {
     final hoy = DateTime.now();
     final inicioSemana = hoy.subtract(Duration(days: hoy.weekday - 1));
-    
+
     final List<Map<String, dynamic>> resultados = <Map<String, dynamic>>[];
 
     for (int i = 0; i < 7; i++) {
@@ -417,12 +431,12 @@ class ComisionesDiariasRepo {
 
       var totalComisiones = 0.0;
       var comisionesTurismo = 0.0;
-      
+
       for (final viaje in viajesDia) {
         final data = viaje.data();
         final comision = _calcularComision(data);
         totalComisiones += comision;
-        
+
         if (data['tipoServicio'] == 'turismo') {
           comisionesTurismo += comision;
         }
@@ -442,7 +456,15 @@ class ComisionesDiariasRepo {
   }
 
   static String _getNombreDia(int index) {
-    const List<String> dias = <String>['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+    const List<String> dias = <String>[
+      'Lun',
+      'Mar',
+      'Mié',
+      'Jue',
+      'Vie',
+      'Sáb',
+      'Dom'
+    ];
     return dias[index];
   }
 
@@ -461,8 +483,10 @@ class ComisionesDiariasRepo {
     );
     final viajes = docs
       ..sort((a, b) {
-        final da = _pickFechaViaje(a.data()) ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final db = _pickFechaViaje(b.data()) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final da =
+            _pickFechaViaje(a.data()) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final db =
+            _pickFechaViaje(b.data()) ?? DateTime.fromMillisecondsSinceEpoch(0);
         return db.compareTo(da);
       });
 
@@ -474,18 +498,25 @@ class ComisionesDiariasRepo {
       final d = doc.data();
       auditados++;
       final String uidTaxista = (d['uidTaxista'] ?? '').toString();
-      final String nombreTaxista = (d['nombreTaxista'] ?? 'Sin nombre').toString();
-      final int precioCents = ((d['precio_cents'] as num?)?.toInt() ?? (((d['precio'] as num?)?.toDouble() ?? 0) * 100).round());
-      final int comisionCents = ((d['comision_cents'] as num?)?.toInt() ?? (((d['comision'] as num?)?.toDouble() ?? 0) * 100).round());
-      final int gananciaCents = ((d['ganancia_cents'] as num?)?.toInt() ?? (((d['gananciaTaxista'] as num?)?.toDouble() ?? 0) * 100).round());
+      final String nombreTaxista =
+          (d['nombreTaxista'] ?? 'Sin nombre').toString();
+      final int precioCents = ((d['precio_cents'] as num?)?.toInt() ??
+          (((d['precio'] as num?)?.toDouble() ?? 0) * 100).round());
+      final int comisionCents = ((d['comision_cents'] as num?)?.toInt() ??
+          (((d['comision'] as num?)?.toDouble() ?? 0) * 100).round());
+      final int gananciaCents = ((d['ganancia_cents'] as num?)?.toInt() ??
+          (((d['gananciaTaxista'] as num?)?.toDouble() ?? 0) * 100).round());
       final bool pagoRegistrado = d['pagoRegistrado'] == true;
       final bool comisionCalculada = d['comisionCalculada'] == true;
-      final bool cuadra = (precioCents > 0) && (precioCents == comisionCents + gananciaCents);
+      final bool cuadra =
+          (precioCents > 0) && (precioCents == comisionCents + gananciaCents);
       final bool ok = pagoRegistrado && comisionCalculada && cuadra;
       if (!ok) {
         final String motivo = !pagoRegistrado
             ? 'sin_pago_registrado'
-            : (!comisionCalculada ? 'sin_comision_calculada' : 'partidas_no_cuadran');
+            : (!comisionCalculada
+                ? 'sin_comision_calculada'
+                : 'partidas_no_cuadran');
         inconsistencias.add({
           'viajeId': doc.id,
           'uidTaxista': uidTaxista,
@@ -497,15 +528,21 @@ class ComisionesDiariasRepo {
           'estado': (d['estado'] ?? '').toString(),
         });
         if (uidTaxista.isNotEmpty) {
-          abiertasPorTaxista[uidTaxista] = (abiertasPorTaxista[uidTaxista] ?? 0) + 1;
+          abiertasPorTaxista[uidTaxista] =
+              (abiertasPorTaxista[uidTaxista] ?? 0) + 1;
         }
       }
     }
 
-    final List<Map<String, dynamic>> topTaxistasInconsistentes = abiertasPorTaxista.entries
-        .map((e) => <String, dynamic>{'uidTaxista': e.key, 'inconsistencias': e.value})
-        .toList()
-      ..sort((a, b) => (b['inconsistencias'] as int).compareTo(a['inconsistencias'] as int));
+    final List<Map<String, dynamic>> topTaxistasInconsistentes =
+        abiertasPorTaxista.entries
+            .map((e) => <String, dynamic>{
+                  'uidTaxista': e.key,
+                  'inconsistencias': e.value
+                })
+            .toList()
+          ..sort((a, b) => (b['inconsistencias'] as int)
+              .compareTo(a['inconsistencias'] as int));
 
     return <String, dynamic>{
       'auditados': auditados,
@@ -518,7 +555,7 @@ class ComisionesDiariasRepo {
   // ==============================================================
   // SISTEMA DE PROMOCIONES (para futura implementación)
   // ==============================================================
-  
+
   /// Guarda una promoción para un taxista específico
   static Future<void> guardarPromocionTaxista({
     required String uidTaxista,
@@ -541,7 +578,7 @@ class ComisionesDiariasRepo {
   /// Obtiene la comisión especial de un taxista (si tiene promoción activa)
   static Future<double?> getComisionEspecialTaxista(String uidTaxista) async {
     final ahora = DateTime.now();
-    
+
     final snapshot = await _db
         .collection('promociones_taxistas')
         .where('uidTaxista', isEqualTo: uidTaxista)
@@ -552,7 +589,7 @@ class ComisionesDiariasRepo {
         .get();
 
     if (snapshot.docs.isEmpty) return null;
-    
+
     return (snapshot.docs.first.data()['comisionEspecial'] as num?)?.toDouble();
   }
 }

@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/calculos/estados.dart';
+
 class CancelarViaje extends StatefulWidget {
   final String? viajeId;
   const CancelarViaje({super.key, this.viajeId});
@@ -23,7 +26,7 @@ class _CancelarViajeState extends State<CancelarViaje> {
 
   Future<void> _enviar() async {
     if (_enviando) return;
-    
+
     if (widget.viajeId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('ID de viaje no disponible')),
@@ -31,35 +34,54 @@ class _CancelarViajeState extends State<CancelarViaje> {
       return;
     }
 
-    setState(() => _enviando = true);
-    
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw Exception('No autenticado');
+    final String motivo = _motivoCtrl.text.trim();
+    if (motivo.length < 12) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Escribe el motivo con al menos 12 caracteres.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
 
-      // Actualizar Firestore con estado cancelado
-      await FirebaseFirestore.instance
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No autenticado')),
+      );
+      return;
+    }
+
+    setState(() => _enviando = true);
+
+    try {
+      final snap = await FirebaseFirestore.instance
           .collection('viajes')
           .doc(widget.viajeId)
-          .update({
-        'estado': 'cancelado',
-        'motivoCancelacion': _motivoCtrl.text.trim().isNotEmpty 
-            ? _motivoCtrl.text.trim() 
-            : 'Cancelado por el cliente',
-        'canceladoPor': user.uid,
-        'canceladoEn': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+          .get();
+      if (!snap.exists) throw Exception('El viaje no existe.');
+      final String estado =
+          EstadosViaje.normalizar((snap.data()?['estado'] ?? '').toString());
+      if (!EstadosViaje.clientePuedeCancelarViajeDesdeApp(estado)) {
+        throw Exception(EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp);
+      }
+
+      await ViajesRepo.cancelarPorCliente(
+        viajeId: widget.viajeId!,
+        uidCliente: user.uid,
+        motivo: motivo,
+      );
 
       if (!mounted) return;
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Viaje cancelado exitosamente'),
           backgroundColor: Colors.green,
         ),
       );
-      
+
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
@@ -89,7 +111,12 @@ class _CancelarViajeState extends State<CancelarViaje> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Motivo de cancelación (opcional)',
+              EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp,
+              style: TextStyle(color: Colors.white60, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Motivo de cancelación (obligatorio, mín. 12 caracteres)',
               style: TextStyle(color: Colors.white70, fontSize: 14),
             ),
             const SizedBox(height: 8),
@@ -98,7 +125,7 @@ class _CancelarViajeState extends State<CancelarViaje> {
               style: const TextStyle(color: Colors.white),
               maxLines: 3,
               decoration: InputDecoration(
-                hintText: 'Ej: Cambié de planes, viaje muy largo, etc.',
+                hintText: 'Ej: Cambié de planes, dirección incorrecta…',
                 hintStyle: const TextStyle(color: Colors.white38),
                 filled: true,
                 fillColor: Colors.grey[900],
@@ -122,7 +149,7 @@ class _CancelarViajeState extends State<CancelarViaje> {
                   SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Esta acción no se puede deshacer. El viaje será cancelado permanentemente.',
+                      'Las cancelaciones sin causa clara pueden revisarse. Esta acción no se deshace.',
                       style: TextStyle(color: Colors.white70),
                     ),
                   ),

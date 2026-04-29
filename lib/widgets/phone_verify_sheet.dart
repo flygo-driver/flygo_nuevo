@@ -5,9 +5,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../servicios/phone_auth_service.dart';
 
 class PhoneVerifySheet extends StatefulWidget {
-  final String rol;           // 'cliente' | 'taxista' (solo para guardar contexto)
-  final bool forceReauth;     // true = reauth; false = link si no tiene
-  const PhoneVerifySheet({super.key, required this.rol, this.forceReauth = false});
+  final String rol; // 'cliente' | 'taxista' (solo para guardar contexto)
+  final bool forceReauth; // true = reauth; false = link si no tiene
+  const PhoneVerifySheet(
+      {super.key, required this.rol, this.forceReauth = false});
 
   @override
   State<PhoneVerifySheet> createState() => _PhoneVerifySheetState();
@@ -18,7 +19,7 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
   final _auth = FirebaseAuth.instance;
 
   final _phoneCtrl = TextEditingController();
-  final _codeCtrl  = TextEditingController();
+  final _codeCtrl = TextEditingController();
 
   String? _verificationId;
   bool _sending = false;
@@ -38,7 +39,8 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
     final phone = _phoneCtrl.text.trim();
     if (phone.isEmpty || !phone.startsWith('+')) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('Número inválido. Use formato +1829XXXXXXX')),
+        const SnackBar(
+            content: Text('Número inválido. Use formato +1829XXXXXXX')),
       );
       return;
     }
@@ -88,11 +90,13 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
     try {
       if (widget.forceReauth) {
         await PhoneAuthService.reauthWithSms(
-          verificationId: _verificationId!, smsCode: code,
+          verificationId: _verificationId!,
+          smsCode: code,
         );
       } else {
         await PhoneAuthService.linkWithSms(
-          verificationId: _verificationId!, smsCode: code,
+          verificationId: _verificationId!,
+          smsCode: code,
         );
       }
 
@@ -128,14 +132,17 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
 
     return Padding(
       padding: EdgeInsets.only(
-        left: 16, right: 16, bottom: 16,
+        left: 16,
+        right: 16,
+        bottom: 16,
         top: 12 + MediaQuery.of(context).viewInsets.top,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 40, height: 4,
+            width: 40,
+            height: 4,
             decoration: BoxDecoration(
               color: Colors.white24,
               borderRadius: BorderRadius.circular(2),
@@ -145,10 +152,9 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
           Text(
             isStep2 ? 'Ingresa el código' : 'Verifica tu teléfono',
             style: const TextStyle(
-              color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
-
           if (!isStep2)
             TextField(
               controller: _phoneCtrl,
@@ -163,12 +169,12 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+                  borderSide:
+                      const BorderSide(color: Colors.greenAccent, width: 2),
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
             ),
-
           if (isStep2)
             TextField(
               controller: _codeCtrl,
@@ -183,14 +189,13 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+                  borderSide:
+                      const BorderSide(color: Colors.greenAccent, width: 2),
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
             ),
-
           const SizedBox(height: 16),
-
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
@@ -201,11 +206,13 @@ class _PhoneVerifySheetState extends State<PhoneVerifySheet> {
                 backgroundColor: Colors.greenAccent,
                 foregroundColor: Colors.black,
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
               child: (_sending || _verifying)
                   ? const SizedBox(
-                      height: 20, width: 20,
+                      height: 20,
+                      width: 20,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : Text(isStep2 ? 'Confirmar código' : 'Enviar código'),

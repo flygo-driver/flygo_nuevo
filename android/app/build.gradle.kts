@@ -28,14 +28,14 @@ android {
     defaultConfig {
         applicationId = "com.flygo.rd2"
 
-        // ⚠️ SUBIMOS EL MIN SDK A 24 (por url_launcher_android)
+        // minSdk 24 (url_launcher_android)
         minSdk = 24
 
-        // TARGET SDK LO TOMAMOS DE FLUTTER
         targetSdk = flutter.targetSdkVersion
 
-        versionCode = 3
-        versionName = "1.0.2"
+        // Una sola fuente: pubspec.yaml → version: "nombre+código" (p. ej. 1.0.4+5)
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
 
         vectorDrawables {
             useSupportLibrary = true
@@ -71,8 +71,7 @@ android {
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-android-optimize.txt",
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
         }
     }
@@ -105,10 +104,11 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.2")
+    // Alineado con image_picker / Photo Picker (recomendación Google Play).
+    implementation("androidx.activity:activity:1.9.3")
 }
 
-// Flutter CLI espera el APK en <raíz_proyecto>/build/app/outputs/flutter-apk/, pero AGP lo genera
-// en android/app/build/outputs/flutter-apk/. Sin esta copia, `flutter run` falla aunque Gradle sea OK.
+// Copia APK y AAB al árbol build/ que espera la CLI de Flutter.
 afterEvaluate {
     listOf("assembleDebug", "assembleRelease").forEach { taskName ->
         tasks.named(taskName).configure {
@@ -124,4 +124,19 @@ afterEvaluate {
             }
         }
     }
+    listOf("bundleDebug" to "debug", "bundleRelease" to "release").forEach { (taskName, variant) ->
+        tasks.named(taskName).configure {
+            doLast {
+                val flutterRoot = rootProject.projectDir.parentFile
+                val srcDir = layout.buildDirectory.get().asFile.resolve("outputs/bundle/$variant")
+                if (!srcDir.isDirectory) return@doLast
+                val destDir = File(flutterRoot, "build/app/outputs/bundle/$variant")
+                destDir.mkdirs()
+                srcDir.listFiles().orEmpty()
+                    .filter { it.isFile && it.name.endsWith(".aab") }
+                    .forEach { aab -> aab.copyTo(File(destDir, aab.name), overwrite = true) }
+            }
+        }
+    }
 }
+ 

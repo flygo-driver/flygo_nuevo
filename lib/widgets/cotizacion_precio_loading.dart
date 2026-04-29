@@ -21,7 +21,8 @@ class _RadarWavesPainter extends CustomPainter {
     final c = Offset(size.width / 2, size.height / 2);
     final maxR = math.min(size.width, size.height) * 0.46;
 
-    final core = Paint()..color = const Color(0xFF49F18B).withValues(alpha: 0.95);
+    final core = Paint()
+      ..color = const Color(0xFF49F18B).withValues(alpha: 0.95);
     canvas.drawCircle(c, math.max(2.5, maxR * 0.09), core);
 
     void drawWaves(double tShift, double alphaMul) {
@@ -29,13 +30,12 @@ class _RadarWavesPainter extends CustomPainter {
         final phase = (progress + tShift + wave * 0.17) % 1.0;
         final r = maxR * phase;
         if (r < 3) continue;
-        final alpha =
-            ((1.0 - phase) * 0.58 * alphaMul).clamp(0.0, 1.0);
+        final alpha = ((1.0 - phase) * 0.58 * alphaMul).clamp(0.0, 1.0);
         final paint = Paint()
-            ..color =
-                _waveColors[wave % _waveColors.length].withValues(alpha: alpha)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.2;
+          ..color =
+              _waveColors[wave % _waveColors.length].withValues(alpha: alpha)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2;
         canvas.drawCircle(c, r, paint);
       }
     }
@@ -164,7 +164,7 @@ class CotizacionPrecioLoadingStrip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
+          const SizedBox(
             height: 48,
             child: Center(
               child: _AnimatedRadar(dimension: 44),
@@ -180,7 +180,7 @@ class CotizacionPrecioLoadingStrip extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(
+        const SizedBox(
           height: 96,
           child: Center(
             child: _AnimatedRadar(dimension: 88),

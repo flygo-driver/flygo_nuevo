@@ -75,7 +75,8 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
     }
   }
 
-  InputDecoration _fieldDecoration(BuildContext context, String label, String hint) {
+  InputDecoration _fieldDecoration(
+      BuildContext context, String label, String hint) {
     final cs = Theme.of(context).colorScheme;
     final border = OutlineInputBorder(
       borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.65)),

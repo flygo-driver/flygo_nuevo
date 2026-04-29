@@ -8,6 +8,40 @@ import '../../servicios/wallet_service.dart';
 import '../../widgets/admin_drawer.dart'; // ⬅️ NUEVO (para cerrar sesión desde el drawer)
 import 'admin_ui_theme.dart';
 
+String _panelFinanzasErrorMsg(Object? err) {
+  if (err is FirebaseException) {
+    final m = err.message?.trim();
+    if (m != null && m.isNotEmpty) return m;
+    return err.code;
+  }
+  return err.toString();
+}
+
+Widget _panelFinanzasErrorCard(
+    BuildContext context, String titulo, Object? err) {
+  return Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AdminUi.card(context),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.red.withValues(alpha: 0.45)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(titulo,
+            style: TextStyle(
+                color: AdminUi.onCard(context), fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        Text(
+          _panelFinanzasErrorMsg(err),
+          style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+        ),
+      ],
+    ),
+  );
+}
+
 class PanelFinanzasAdmin extends StatefulWidget {
   const PanelFinanzasAdmin({super.key});
 
@@ -19,7 +53,6 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
   DateTime? _desde;
   DateTime? _hasta;
   String _filtro = ''; // ← filtro por nombre/email/UID
-  static const int _maxDocs = 1000;
 
   // ======== Helpers de formato / fechas ========
   String _rd(double v) {
@@ -35,7 +68,9 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
     if (v is Timestamp) return v.toDate();
     if (v is DateTime) return v;
     if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
-    if (v is String) return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    if (v is String) {
+      return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
@@ -79,7 +114,9 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
       lastDate: DateTime(now.year + 2),
       helpText: 'Hasta',
     );
-    if (d != null) setState(() => _hasta = DateTime(d.year, d.month, d.day, 23, 59, 59));
+    if (d != null) {
+      setState(() => _hasta = DateTime(d.year, d.month, d.day, 23, 59, 59));
+    }
   }
 
   void _clearRango() {
@@ -96,11 +133,11 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
       position: const RelativeRect.fromLTRB(1000, 80, 12, 0),
       items: const [
         PopupMenuItem(value: 'filtros', child: Text('Filtros')),
-        PopupMenuItem(value: 'export',  child: Text('Exportar CSV (rango)')),
+        PopupMenuItem(value: 'export', child: Text('Exportar CSV (rango)')),
       ],
     );
     if (sel == 'filtros') _abrirFiltros();
-    if (sel == 'export')  _exportarCsv();
+    if (sel == 'export') _exportarCsv();
   }
 
   void _abrirFiltros() {
@@ -114,7 +151,11 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Filtros', style: TextStyle(color: AdminUi.onCard(sheetCtx), fontSize: 16, fontWeight: FontWeight.w700)),
+            Text('Filtros',
+                style: TextStyle(
+                    color: AdminUi.onCard(sheetCtx),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700)),
             const SizedBox(height: 12),
             TextField(
               controller: ctrl,
@@ -122,7 +163,8 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
               decoration: InputDecoration(
                 labelText: 'Buscar por nombre, email o UID',
                 labelStyle: TextStyle(color: AdminUi.secondary(sheetCtx)),
-                prefixIcon: Icon(Icons.search, color: AdminUi.secondary(sheetCtx)),
+                prefixIcon:
+                    Icon(Icons.search, color: AdminUi.secondary(sheetCtx)),
                 filled: true,
                 fillColor: AdminUi.inputFill(sheetCtx),
                 border: OutlineInputBorder(
@@ -135,7 +177,9 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: Theme.of(sheetCtx).colorScheme.primary, width: 1.4),
+                  borderSide: BorderSide(
+                      color: Theme.of(sheetCtx).colorScheme.primary,
+                      width: 1.4),
                 ),
               ),
             ),
@@ -171,12 +215,10 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
 
   // ======== Exportar CSV (rango actual) ========
   Future<void> _exportarCsv() async {
-    final q = FirebaseFirestore.instance
+    final snap = await FirebaseFirestore.instance
         .collection('viajes')
         .where('estado', isEqualTo: 'completado')
-        .limit(_maxDocs);
-
-    final snap = await q.get();
+        .get();
     final Map<String, _AcumTaxista> byDriver = {};
 
     // 1) Agrupa por taxista en rango
@@ -206,7 +248,7 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
       if (info != null) {
         byDriver[uid]!
           ..nombre = info['nombre'] ?? byDriver[uid]!.nombre
-          ..email  = info['email']  ?? byDriver[uid]!.email;
+          ..email = info['email'] ?? byDriver[uid]!.email;
       }
     }
 
@@ -217,8 +259,9 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
       ..sort((a, b) => b.comisionCents.compareTo(a.comisionCents));
     for (final x in list) {
       final nombre = (x.nombre?.replaceAll(',', ' ') ?? '').trim();
-      final email  = (x.email ?.replaceAll(',', ' ') ?? '').trim();
-      buf.writeln('$nombre,$email,${x.uid},${x.cantidad},${_rd(x.comisionCents/100.0)},${_rd(x.gananciaCents/100.0)}');
+      final email = (x.email?.replaceAll(',', ' ') ?? '').trim();
+      buf.writeln(
+          '$nombre,$email,${x.uid},${x.cantidad},${_rd(x.comisionCents / 100.0)},${_rd(x.gananciaCents / 100.0)}');
     }
 
     final csv = buf.toString();
@@ -228,10 +271,12 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
       context: context,
       builder: (dCtx) => AlertDialog(
         backgroundColor: AdminUi.dialogSurface(dCtx),
-        title: Text('CSV del rango', style: TextStyle(color: AdminUi.onCard(dCtx))),
+        title: Text('CSV del rango',
+            style: TextStyle(color: AdminUi.onCard(dCtx))),
         content: SizedBox(
           width: 600,
-          child: SelectableText(csv, style: TextStyle(color: AdminUi.secondary(dCtx))),
+          child: SelectableText(csv,
+              style: TextStyle(color: AdminUi.secondary(dCtx))),
         ),
         actions: [
           TextButton(
@@ -241,7 +286,8 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
                 const SnackBar(content: Text('CSV copiado al portapapeles')),
               );
             },
-            child: Text('Copiar', style: TextStyle(color: Theme.of(dCtx).colorScheme.primary)),
+            child: Text('Copiar',
+                style: TextStyle(color: Theme.of(dCtx).colorScheme.primary)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
@@ -253,11 +299,13 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
   }
 
   // Batch fetch de /usuarios (nombre/email) en lotes de 10 (límite de whereIn)
-  Future<Map<String, Map<String, String>>> _fetchUsuariosMap(List<String> uids) async {
+  Future<Map<String, Map<String, String>>> _fetchUsuariosMap(
+      List<String> uids) async {
     final out = <String, Map<String, String>>{};
     const int chunk = 10;
     for (var i = 0; i < uids.length; i += chunk) {
-      final part = uids.sublist(i, (i + chunk > uids.length) ? uids.length : i + chunk);
+      final part =
+          uids.sublist(i, (i + chunk > uids.length) ? uids.length : i + chunk);
       final qs = await FirebaseFirestore.instance
           .collection('usuarios')
           .where(FieldPath.documentId, whereIn: part)
@@ -266,7 +314,7 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
         final data = d.data();
         out[d.id] = {
           'nombre': (data['nombre'] ?? '').toString(),
-          'email':  (data['email']  ?? '').toString(),
+          'email': (data['email'] ?? '').toString(),
         };
       }
     }
@@ -297,7 +345,8 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),
         iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Panel de Finanzas', style: TextStyle(color: AdminUi.onCard(context))),
+        title: Text('Panel de Finanzas',
+            style: TextStyle(color: AdminUi.onCard(context))),
         actions: [
           IconButton(
             icon: Icon(Icons.clear_all, color: AdminUi.secondary(context)),
@@ -328,15 +377,13 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
             inRange: _inRange,
             asDate: _firstRelevant,
             rd: _rd,
-            maxDocs: _maxDocs,
           ),
           const SizedBox(height: 12),
           _CardPorTaxista(
             inRange: _inRange,
             asDate: _firstRelevant,
             rd: _rd,
-            maxDocs: _maxDocs,
-            filtro: _filtro,                  // ← aplica filtro texto
+            filtro: _filtro, // ← aplica filtro texto
             fetchUsuariosMap: _fetchUsuariosMap, // ← join a /usuarios
           ),
         ],
@@ -418,16 +465,32 @@ class _CardResumenGlobal extends StatelessWidget {
   }
 
   Color _amber(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.light ? Colors.amber.shade900 : Colors.amberAccent;
+      Theme.of(context).brightness == Brightness.light
+          ? Colors.amber.shade900
+          : Colors.amberAccent;
   Color _cyan(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.light ? Colors.teal.shade800 : Colors.cyanAccent;
+      Theme.of(context).brightness == Brightness.light
+          ? Colors.teal.shade800
+          : Colors.cyanAccent;
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Map<String, int>>(
       stream: WalletService.streamResumenGlobal(),
       builder: (context, snap) {
-        final data = snap.data ?? const {'comision_cents': 0, 'ganancia_cents': 0, 'viajes_completados': 0};
+        if (snap.hasError) {
+          return _panelFinanzasErrorCard(
+            context,
+            'No se pudo cargar el resumen global',
+            snap.error,
+          );
+        }
+        final data = snap.data ??
+            const {
+              'comision_cents': 0,
+              'ganancia_cents': 0,
+              'viajes_completados': 0
+            };
         final com = (data['comision_cents'] ?? 0) / 100.0;
         final gan = (data['ganancia_cents'] ?? 0) / 100.0;
         final cnt = (data['viajes_completados'] ?? 0);
@@ -442,12 +505,19 @@ class _CardResumenGlobal extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Global (en vivo)', style: TextStyle(color: AdminUi.secondary(context), fontWeight: FontWeight.w600)),
+              Text('Global (en vivo)',
+                  style: TextStyle(
+                      color: AdminUi.secondary(context),
+                      fontWeight: FontWeight.w600)),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: _metric(context, 'RAI (comisión)', _rd(com), _amber(context))),
-                  Expanded(child: _metric(context, 'Conductores (ganancia)', _rd(gan), _cyan(context))),
+                  Expanded(
+                      child: _metric(context, 'RAI (comisión)', _rd(com),
+                          _amber(context))),
+                  Expanded(
+                      child: _metric(context, 'Conductores (ganancia)',
+                          _rd(gan), _cyan(context))),
                   _badgeCnt(context, cnt),
                 ],
               ),
@@ -458,13 +528,17 @@ class _CardResumenGlobal extends StatelessWidget {
     );
   }
 
-  Widget _metric(BuildContext context, String title, String value, Color color) {
+  Widget _metric(
+      BuildContext context, String title, String value, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
+        Text(title,
+            style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
         const SizedBox(height: 4),
-        Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 18)),
+        Text(value,
+            style: TextStyle(
+                color: color, fontWeight: FontWeight.w800, fontSize: 18)),
       ],
     );
   }
@@ -473,7 +547,10 @@ class _CardResumenGlobal extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.5),
         border: Border.all(color: AdminUi.borderSubtle(context)),
         borderRadius: BorderRadius.circular(10),
       ),
@@ -481,7 +558,11 @@ class _CardResumenGlobal extends StatelessWidget {
         children: [
           Icon(Icons.local_taxi, color: AdminUi.secondary(context), size: 18),
           const SizedBox(width: 6),
-          Text('$cnt', style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700, fontSize: 16)),
+          Text('$cnt',
+              style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16)),
         ],
       ),
     );
@@ -492,13 +573,11 @@ class _CardResumenRango extends StatelessWidget {
   final bool Function(Map<String, dynamic>) inRange;
   final DateTime Function(Map<String, dynamic>) asDate;
   final String Function(double) rd;
-  final int maxDocs;
 
   const _CardResumenRango({
     required this.inRange,
     required this.asDate,
     required this.rd,
-    required this.maxDocs,
   });
 
   int _gananciaCentsOf(Map<String, dynamic> d) {
@@ -519,12 +598,18 @@ class _CardResumenRango extends StatelessWidget {
   Widget build(BuildContext context) {
     final q = FirebaseFirestore.instance
         .collection('viajes')
-        .where('estado', isEqualTo: 'completado')
-        .limit(maxDocs);
+        .where('estado', isEqualTo: 'completado');
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: q.snapshots(),
       builder: (context, snap) {
+        if (snap.hasError) {
+          return _panelFinanzasErrorCard(
+            context,
+            'No se pudo cargar viajes para el rango',
+            snap.error,
+          );
+        }
         var com = 0, gan = 0, cnt = 0;
         if (snap.hasData) {
           for (final doc in snap.data!.docs) {
@@ -546,19 +631,28 @@ class _CardResumenRango extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Rango seleccionado (en vivo)', style: TextStyle(color: AdminUi.secondary(context), fontWeight: FontWeight.w600)),
+              Text('Rango seleccionado (en vivo)',
+                  style: TextStyle(
+                      color: AdminUi.secondary(context),
+                      fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: _metric(context, 'RAI (comisión)', rd(com / 100.0), _amberR(context))),
-                  Expanded(child: _metric(context, 'Conductores (ganancia)', rd(gan / 100.0), _cyanR(context))),
+                  Expanded(
+                      child: _metric(context, 'RAI (comisión)', rd(com / 100.0),
+                          _amberR(context))),
+                  Expanded(
+                      child: _metric(context, 'Conductores (ganancia)',
+                          rd(gan / 100.0), _cyanR(context))),
                   _badgeCnt(context, cnt),
                 ],
               ),
               const SizedBox(height: 6),
               Text(
-                'Nota: se listan hasta 1000 viajes completados (filtrado local). Si necesitas más, implementa paginación.',
-                style: TextStyle(color: AdminUi.muted(context).withValues(alpha: 0.85), fontSize: 11),
+                'Todos los viajes completados en tiempo real; el rango de fechas se aplica al filtrar en esta pantalla.',
+                style: TextStyle(
+                    color: AdminUi.muted(context).withValues(alpha: 0.85),
+                    fontSize: 11),
               ),
             ],
           ),
@@ -568,17 +662,25 @@ class _CardResumenRango extends StatelessWidget {
   }
 
   Color _amberR(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.light ? Colors.amber.shade900 : Colors.amberAccent;
+      Theme.of(context).brightness == Brightness.light
+          ? Colors.amber.shade900
+          : Colors.amberAccent;
   Color _cyanR(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.light ? Colors.teal.shade800 : Colors.cyanAccent;
+      Theme.of(context).brightness == Brightness.light
+          ? Colors.teal.shade800
+          : Colors.cyanAccent;
 
-  Widget _metric(BuildContext context, String title, String value, Color color) {
+  Widget _metric(
+      BuildContext context, String title, String value, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
+        Text(title,
+            style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
         const SizedBox(height: 4),
-        Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 18)),
+        Text(value,
+            style: TextStyle(
+                color: color, fontWeight: FontWeight.w800, fontSize: 18)),
       ],
     );
   }
@@ -587,7 +689,10 @@ class _CardResumenRango extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.5),
         border: Border.all(color: AdminUi.borderSubtle(context)),
         borderRadius: BorderRadius.circular(10),
       ),
@@ -595,7 +700,11 @@ class _CardResumenRango extends StatelessWidget {
         children: [
           Icon(Icons.receipt_long, color: AdminUi.secondary(context), size: 18),
           const SizedBox(width: 6),
-          Text('$cnt', style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700, fontSize: 16)),
+          Text('$cnt',
+              style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16)),
         ],
       ),
     );
@@ -606,15 +715,14 @@ class _CardPorTaxista extends StatelessWidget {
   final bool Function(Map<String, dynamic>) inRange;
   final DateTime Function(Map<String, dynamic>) asDate;
   final String Function(double) rd;
-  final int maxDocs;
   final String filtro; // ← texto de filtro
-  final Future<Map<String, Map<String, String>>> Function(List<String> uids) fetchUsuariosMap;
+  final Future<Map<String, Map<String, String>>> Function(List<String> uids)
+      fetchUsuariosMap;
 
   const _CardPorTaxista({
     required this.inRange,
     required this.asDate,
     required this.rd,
-    required this.maxDocs,
     required this.filtro,
     required this.fetchUsuariosMap,
   });
@@ -638,7 +746,8 @@ class _CardPorTaxista extends StatelessWidget {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 720), // ancho mínimo para que no “salte” en vertical
+        constraints: const BoxConstraints(
+            minWidth: 720), // ancho mínimo para que no “salte” en vertical
         child: child,
       ),
     );
@@ -648,12 +757,18 @@ class _CardPorTaxista extends StatelessWidget {
   Widget build(BuildContext context) {
     final q = FirebaseFirestore.instance
         .collection('viajes')
-        .where('estado', isEqualTo: 'completado')
-        .limit(maxDocs);
+        .where('estado', isEqualTo: 'completado');
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: q.snapshots(),
       builder: (context, snap) {
+        if (snap.hasError) {
+          return _panelFinanzasErrorCard(
+            context,
+            'No se pudo cargar el desglose por taxista',
+            snap.error,
+          );
+        }
         final Map<String, _AcumTaxista> byDriver = {};
 
         if (snap.hasData) {
@@ -691,8 +806,9 @@ class _CardPorTaxista extends StatelessWidget {
               final x = byDriver[uid]!;
               final info = usuarios[uid];
               if (info != null) {
-                x.nombre = (x.nombre?.isNotEmpty == true) ? x.nombre : info['nombre'];
-                x.email  = info['email'];
+                x.nombre =
+                    (x.nombre?.isNotEmpty == true) ? x.nombre : info['nombre'];
+                x.email = info['email'];
               }
             }
 
@@ -705,8 +821,10 @@ class _CardPorTaxista extends StatelessWidget {
             if (q.isNotEmpty) {
               list = list.where((x) {
                 final n = (x.nombre ?? '').toLowerCase();
-                final e = (x.email  ?? '').toLowerCase();
-                return x.uid.toLowerCase().contains(q) || n.contains(q) || e.contains(q);
+                final e = (x.email ?? '').toLowerCase();
+                return x.uid.toLowerCase().contains(q) ||
+                    n.contains(q) ||
+                    e.contains(q);
               }).toList();
             }
 
@@ -720,10 +838,14 @@ class _CardPorTaxista extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Resumen por taxista (rango)', style: TextStyle(color: AdminUi.secondary(context), fontWeight: FontWeight.w600)),
+                  Text('Resumen por taxista (rango)',
+                      style: TextStyle(
+                          color: AdminUi.secondary(context),
+                          fontWeight: FontWeight.w600)),
                   const SizedBox(height: 10),
                   if (list.isEmpty)
-                    Text('No hay viajes completados en el rango.', style: TextStyle(color: AdminUi.muted(context)))
+                    Text('No hay viajes completados en el rango.',
+                        style: TextStyle(color: AdminUi.muted(context)))
                   else
                     ListView.separated(
                       shrinkWrap: true,
@@ -732,45 +854,63 @@ class _CardPorTaxista extends StatelessWidget {
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, i) {
                         final x = list[i];
-                        final titulo = (x.nombre?.isNotEmpty == true) ? x.nombre! : x.uid;
-                        final mail   = (x.email  ?? '').isNotEmpty ? ' • ${x.email}' : '';
+                        final titulo =
+                            (x.nombre?.isNotEmpty == true) ? x.nombre! : x.uid;
+                        final mail =
+                            (x.email ?? '').isNotEmpty ? ' • ${x.email}' : '';
 
-                        return _hWrap( // ⬅️ ENVOLTURA HORIZONTAL SOLO AQUÍ
+                        return _hWrap(
+                          // ⬅️ ENVOLTURA HORIZONTAL SOLO AQUÍ
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
                               color: AdminUi.inputFill(context),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: AdminUi.borderSubtle(context)),
+                              border: Border.all(
+                                  color: AdminUi.borderSubtle(context)),
                             ),
                             child: Row(
                               children: [
                                 // título + uid/email
                                 SizedBox(
-                                  width: 280, // ancho razonable para que no rompa
+                                  width:
+                                      280, // ancho razonable para que no rompa
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         titulo,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700),
+                                        style: TextStyle(
+                                            color: AdminUi.onCard(context),
+                                            fontWeight: FontWeight.w700),
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
                                         'UID: ${x.uid}$mail',
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
+                                        style: TextStyle(
+                                            color: AdminUi.muted(context),
+                                            fontSize: 12),
                                       ),
                                     ],
                                   ),
                                 ),
                                 const SizedBox(width: 16),
-                                _kv(context, 'Comisión', rd(x.comisionCents / 100.0), _amberT(context)),
+                                _kv(
+                                    context,
+                                    'Comisión',
+                                    rd(x.comisionCents / 100.0),
+                                    _amberT(context)),
                                 const SizedBox(width: 12),
-                                _kv(context, 'Ganancia', rd(x.gananciaCents / 100.0), _cyanT(context)),
+                                _kv(
+                                    context,
+                                    'Ganancia',
+                                    rd(x.gananciaCents / 100.0),
+                                    _cyanT(context)),
                                 const SizedBox(width: 12),
                                 _cnt(context, x.cantidad),
                               ],
@@ -782,7 +922,9 @@ class _CardPorTaxista extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(
                     'Tip: usa este cuadro para saber cuánto nos debe cada taxista (comisión) y cuánto ganó.',
-                    style: TextStyle(color: AdminUi.muted(context).withValues(alpha: 0.85), fontSize: 11),
+                    style: TextStyle(
+                        color: AdminUi.muted(context).withValues(alpha: 0.85),
+                        fontSize: 11),
                   ),
                 ],
               ),
@@ -794,15 +936,20 @@ class _CardPorTaxista extends StatelessWidget {
   }
 
   Color _amberT(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.light ? Colors.amber.shade900 : Colors.amberAccent;
+      Theme.of(context).brightness == Brightness.light
+          ? Colors.amber.shade900
+          : Colors.amberAccent;
   Color _cyanT(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.light ? Colors.teal.shade800 : Colors.cyanAccent;
+      Theme.of(context).brightness == Brightness.light
+          ? Colors.teal.shade800
+          : Colors.cyanAccent;
 
   Widget _kv(BuildContext context, String k, String v, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        Text(k, style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
+        Text(k,
+            style: TextStyle(color: AdminUi.secondary(context), fontSize: 12)),
         const SizedBox(height: 3),
         Text(v, style: TextStyle(color: color, fontWeight: FontWeight.w800)),
       ],
@@ -813,15 +960,21 @@ class _CardPorTaxista extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.5),
         border: Border.all(color: AdminUi.borderSubtle(context)),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
-          Icon(Icons.directions_car_filled, color: AdminUi.secondary(context), size: 16),
+          Icon(Icons.directions_car_filled,
+              color: AdminUi.secondary(context), size: 16),
           const SizedBox(width: 6),
-          Text('$n', style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.w700)),
+          Text('$n',
+              style: TextStyle(
+                  color: AdminUi.onCard(context), fontWeight: FontWeight.w700)),
         ],
       ),
     );

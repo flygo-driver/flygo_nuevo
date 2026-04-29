@@ -126,7 +126,10 @@ class _BoardingPinSheetState extends State<BoardingPinSheet> {
             const SizedBox(height: 4),
             const Text(
               'Abordaje por PIN',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold),
             ),
 
             // PIN vigente
@@ -141,7 +144,8 @@ class _BoardingPinSheetState extends State<BoardingPinSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('PIN vigente', style: TextStyle(color: Colors.white70)),
+                  const Text('PIN vigente',
+                      style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -164,13 +168,16 @@ class _BoardingPinSheetState extends State<BoardingPinSheet> {
                             ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.refresh),
                         label: Text(
                           _generando
                               ? 'Generando...'
-                              : (_pinActual == null ? 'Generar PIN' : 'Regenerar'),
+                              : (_pinActual == null
+                                  ? 'Generar PIN'
+                                  : 'Regenerar'),
                         ),
                       ),
                     ],
@@ -179,7 +186,8 @@ class _BoardingPinSheetState extends State<BoardingPinSheet> {
                   if (_pinExpira != null)
                     Text(
                       'Vence: ${fmt.format(_pinExpira!)}',
-                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                      style:
+                          const TextStyle(color: Colors.white38, fontSize: 12),
                     ),
                 ],
               ),

@@ -43,11 +43,14 @@ class _LoginClienteState extends State<LoginCliente> {
   StreamSubscription<User?>? _authSub;
   bool _autoRedirectDone = false;
 
+  /// Evita que [authStateChanges] navegue en medio de un login explícito (Google/email).
+  bool _suppressAuthRedirect = false;
+
   @override
   void initState() {
     super.initState();
     _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
-      if (!mounted || _autoRedirectDone) return;
+      if (!mounted || _autoRedirectDone || _suppressAuthRedirect) return;
       if (user != null) {
         _autoRedirectDone = true;
         _goAuthCheck();
@@ -108,6 +111,8 @@ class _LoginClienteState extends State<LoginCliente> {
         await ref.set({
           'uid': uid,
           'email': email.trim(),
+          'rol': 'cliente',
+          'registroClienteCompleto': false,
           'nombre': includeNombreTelefono ? '' : FieldValue.delete(),
           'telefono': includeNombreTelefono ? '' : FieldValue.delete(),
           'fechaRegistro': nowTs,
@@ -116,28 +121,42 @@ class _LoginClienteState extends State<LoginCliente> {
           'actualizadoEn': nowTs,
         }, SetOptions(merge: true));
       } else {
-        await ref.set({
+        final existing = snap.data();
+        final patch = <String, dynamic>{
           'email': email.trim(),
           'lastLogin': nowTs,
           'updatedAt': nowTs,
           'actualizadoEn': nowTs,
-        }, SetOptions(merge: true));
+        };
+        final r = (existing?['rol'] ?? '').toString().trim();
+        if (r.isEmpty) {
+          patch['rol'] = 'cliente';
+          patch['registroClienteCompleto'] = false;
+        }
+        await ref.set(patch, SetOptions(merge: true));
       }
     } catch (_) {}
   }
 
   Future<void> _loginAnonCliente() async {
     if (_loadingEmail || _loadingGoogle) return;
-    final cred = await FirebaseAuth.instance.signInAnonymously();
-    final uid = cred.user!.uid;
+    _suppressAuthRedirect = true;
+    try {
+      final cred = await FirebaseAuth.instance.signInAnonymously();
+      final uid = cred.user!.uid;
 
-    await _safeUpsertUsuario(
-      uid: uid,
-      email: _email.text.trim(),
-      includeNombreTelefono: true,
-    );
+      await _safeUpsertUsuario(
+        uid: uid,
+        email: _email.text.trim(),
+        includeNombreTelefono: true,
+      );
 
-    _goAuthCheck();
+      if (!mounted) return;
+      _autoRedirectDone = true;
+      _goAuthCheck();
+    } finally {
+      _suppressAuthRedirect = false;
+    }
   }
 
   Future<void> _vincularContrasenaConGoogle() async {
@@ -149,7 +168,10 @@ class _LoginClienteState extends State<LoginCliente> {
     final emailTyped = _email.text.trim();
     final passTyped = _pass.text;
 
-    setState(() => _loadingGoogle = true);
+    setState(() {
+      _loadingGoogle = true;
+      _suppressAuthRedirect = true;
+    });
     try {
       final cred =
           await GoogleAuthService.signInWithGoogleStrict(entradaRol: 'cliente');
@@ -172,8 +194,13 @@ class _LoginClienteState extends State<LoginCliente> {
 
       _snack(
           'Listo: contraseña vinculada. Ya puedes entrar con correo y contraseña.');
+      if (!mounted) return;
+      _autoRedirectDone = true;
       _goAuthCheck();
     } on FirebaseAuthException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[LOGIN_GOOGLE][cliente] code=${e.code} msg=${e.message}');
+      }
       if (e.code == 'aborted-by-user') return;
 
       if (e.code == 'google-token-null') {
@@ -205,6 +232,7 @@ class _LoginClienteState extends State<LoginCliente> {
     } catch (_) {
       _snack('No pudimos completar la operación. Inténtalo nuevamente.');
     } finally {
+      _suppressAuthRedirect = false;
       if (mounted) setState(() => _loadingGoogle = false);
     }
   }
@@ -221,7 +249,10 @@ class _LoginClienteState extends State<LoginCliente> {
     final email = _email.text.trim();
     final pass = _pass.text;
 
-    setState(() => _loadingEmail = true);
+    setState(() {
+      _loadingEmail = true;
+      _suppressAuthRedirect = true;
+    });
     try {
       await AuthService().loginUser(email, pass);
       await FirebaseAuth.instance.currentUser?.reload();
@@ -231,6 +262,8 @@ class _LoginClienteState extends State<LoginCliente> {
         await _safeUpsertUsuario(uid: uid, email: email);
       }
 
+      if (!mounted) return;
+      _autoRedirectDone = true;
       _goAuthCheck();
     } on FirebaseAuthException catch (e) {
       if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
@@ -298,6 +331,7 @@ class _LoginClienteState extends State<LoginCliente> {
       }
       _snack('Error inesperado: $err');
     } finally {
+      _suppressAuthRedirect = false;
       if (mounted) setState(() => _loadingEmail = false);
     }
   }
@@ -305,7 +339,10 @@ class _LoginClienteState extends State<LoginCliente> {
   Future<void> _loginGoogle() async {
     if (_loadingGoogle || _loadingEmail) return;
 
-    setState(() => _loadingGoogle = true);
+    setState(() {
+      _loadingGoogle = true;
+      _suppressAuthRedirect = true;
+    });
     try {
       await GoogleAuthService.signInWithGoogleStrict(entradaRol: 'cliente');
 
@@ -313,13 +350,11 @@ class _LoginClienteState extends State<LoginCliente> {
       final uid = user?.uid;
       final email = (user?.email ?? '').trim();
 
-      // Navegación inmediata tras auth exitosa (tipo Uber).
-      // Persistencia en segundo plano para no bloquear entrada.
       if (uid != null) {
-        Future<void>(() async {
-          await _safeUpsertUsuario(uid: uid, email: email);
-        });
+        await _safeUpsertUsuario(uid: uid, email: email);
       }
+      if (!mounted) return;
+      _autoRedirectDone = true;
       _goAuthCheck();
     } on FirebaseAuthException catch (e) {
       if (e.code == 'aborted-by-user') return;
@@ -331,18 +366,14 @@ class _LoginClienteState extends State<LoginCliente> {
         return;
       }
 
-      if (kQaFlexibleAccess && kQaAllowAnonOnCollision && e.code != 'role-mismatch') {
-        await _loginAnonCliente();
-      } else {
-        _snack(GoogleAuthService.friendlyAuthError(e, rol: 'cliente'));
-      }
+      _snack(GoogleAuthService.friendlyAuthError(e, rol: 'cliente'));
     } catch (err) {
-      if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
-        await _loginAnonCliente();
-      } else {
-        _snack(GoogleAuthService.friendlyAuthError(err, rol: 'cliente'));
+      if (kDebugMode) {
+        debugPrint('[LOGIN_GOOGLE][cliente] error=$err');
       }
+      _snack(GoogleAuthService.friendlyAuthError(err, rol: 'cliente'));
     } finally {
+      _suppressAuthRedirect = false;
       if (mounted) setState(() => _loadingGoogle = false);
     }
   }
@@ -389,9 +420,9 @@ class _LoginClienteState extends State<LoginCliente> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final divider = cs.outline.withOpacity(0.55);
-    final muted = cs.onSurface.withOpacity(0.54);
-    final muted70 = cs.onSurface.withOpacity(0.7);
+    final divider = cs.outline.withValues(alpha: 0.55);
+    final muted = cs.onSurface.withValues(alpha: 0.54);
+    final muted70 = cs.onSurface.withValues(alpha: 0.7);
     final onPrimaryContainer = cs.onPrimaryContainer;
     final primaryContainer = cs.primaryContainer;
 
@@ -418,10 +449,10 @@ class _LoginClienteState extends State<LoginCliente> {
                         ? SizedBox(
                             width: 20,
                             height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: cs.primary,
-                          ),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: cs.primary,
+                            ),
                           )
                         : const Icon(Icons.account_circle_outlined, size: 20),
                     label: Text(
@@ -444,7 +475,7 @@ class _LoginClienteState extends State<LoginCliente> {
               ),
               const SizedBox(height: 10),
               Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
                   'Entra al instante con Google y pide viajes de inmediato. '
                   'Podrás completar nombre, teléfono y foto en tu perfil cuando quieras.',
@@ -482,7 +513,7 @@ class _LoginClienteState extends State<LoginCliente> {
                 children: <Widget>[
                   Expanded(child: Divider(color: divider)),
                   Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: Text('o entra con correo',
                         style: TextStyle(color: muted)),
                   ),
@@ -498,7 +529,8 @@ class _LoginClienteState extends State<LoginCliente> {
                 decoration: InputDecoration(
                   labelText: 'Correo',
                   labelStyle: TextStyle(color: muted70),
-                  prefixIcon: Icon(Icons.email, color: Colors.greenAccent),
+                  prefixIcon:
+                      const Icon(Icons.email, color: Colors.greenAccent),
                 ),
                 validator: (v) =>
                     (v == null || v.trim().isEmpty || !v.contains('@'))
@@ -541,9 +573,8 @@ class _LoginClienteState extends State<LoginCliente> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: (_loadingGoogle)
-                      ? null
-                      : _vincularContrasenaConGoogle,
+                  onPressed:
+                      (_loadingGoogle) ? null : _vincularContrasenaConGoogle,
                   style: TextButton.styleFrom(foregroundColor: cs.primary),
                   child:
                       const Text('Vincular contraseña a mi cuenta de Google'),
@@ -561,8 +592,7 @@ class _LoginClienteState extends State<LoginCliente> {
                 child: SizedBox(
                   width: 280,
                   child: ElevatedButton.icon(
-                    onPressed:
-                        (_loadingEmail) ? null : _loginEmail,
+                    onPressed: (_loadingEmail) ? null : _loginEmail,
                     icon: _loadingEmail
                         ? SizedBox(
                             width: 18,
@@ -572,10 +602,11 @@ class _LoginClienteState extends State<LoginCliente> {
                               color: onPrimaryContainer,
                             ),
                           )
-                        : Icon(Icons.login, size: 18, color: onPrimaryContainer),
+                        : Icon(Icons.login,
+                            size: 18, color: onPrimaryContainer),
                     label: Text(
                       _loadingEmail ? 'Entrando...' : 'Continuar',
-                      style: TextStyle(fontSize: 14),
+                      style: const TextStyle(fontSize: 14),
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: primaryContainer,

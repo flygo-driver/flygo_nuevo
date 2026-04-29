@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart' as intl;
@@ -8,9 +9,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker_android/image_picker_android.dart';
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 
 import 'firebase_bootstrap.dart';
 import 'package:flygo_nuevo/keys.dart' show kAppDisplayName;
+import 'package:flygo_nuevo/utilidades/constante.dart'
+    show rutaBolaConductoresCliente, rutaBolaPueblo;
 
 // 🔔 Servicios
 import 'package:flygo_nuevo/servicios/notification_service.dart';
@@ -28,7 +33,7 @@ import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 
 // 🧭 Cliente
-import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
@@ -37,6 +42,7 @@ import 'package:flygo_nuevo/pantallas/cliente/metodos_pago.dart';
 import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/historial_pagos_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/pago_metodo.dart';
+import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
 
 // 🔴 NUEVO - REGISTRO CLIENTE (DESDE AUTH)
 import 'package:flygo_nuevo/auth/registro_cliente.dart';
@@ -44,10 +50,11 @@ import 'package:flygo_nuevo/auth/registro_cliente.dart';
 // 🧭 Comunes
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
+import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_a_pueblo.dart';
 
 // 🧭 Taxista
 import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_disponible.dart';
+import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/historial_viajes_taxista.dart';
 
@@ -81,29 +88,50 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 // ================== SPLASH EN FLUTTER (tras el nativo) ==================
-Widget _raiSplashScaffold({String subtitle = 'Cargando RAI...'}) {
+/// Splash unificado: barra lineal de borde a borde + logo. [subtitle] solo si hace falta copy explícito.
+Widget _raiSplashScaffold({String? subtitle}) {
   return Scaffold(
     backgroundColor: Colors.black,
-    body: Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Image.asset(
-            'assets/icon/logo_rai_vertical.png',
-            width: 150,
-            height: 150,
+    body: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          height: 3,
+          child: LinearProgressIndicator(
+            minHeight: 3,
+            backgroundColor: Colors.white.withValues(alpha: 0.10),
+            color: Colors.greenAccent,
           ),
-          const SizedBox(height: 30),
-          const CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+        ),
+        Expanded(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Image.asset(
+                  'assets/icon/logo_rai_vertical.png',
+                  width: 150,
+                  height: 150,
+                ),
+                if (subtitle != null && subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 24),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      subtitle,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 15),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
-          const SizedBox(height: 20),
-          Text(
-            subtitle,
-            style: const TextStyle(color: Colors.white, fontSize: 16),
-          ),
-        ],
-      ),
+        ),
+      ],
     ),
   );
 }
@@ -241,7 +269,7 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
       return MaterialApp(
         title: kAppDisplayName,
         debugShowCheckedModeBanner: false,
-        home: _raiSplashScaffold(subtitle: 'Iniciando...'),
+        home: _raiSplashScaffold(),
       );
     }
     return const RaiApp();
@@ -249,8 +277,23 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
 }
 
 // ================== MAIN ==================
+void _configureAndroidPhotoPicker() {
+  final ImagePickerPlatform platform = ImagePickerPlatform.instance;
+  if (platform is ImagePickerAndroid) {
+    platform.useAndroidPhotoPicker = true;
+  }
+}
+
+/// Barra de estado y **barra de navegación del sistema** (inicio / atrás / recientes)
+/// siempre visibles en toda la app (no modo inmersivo), estilo apps tipo Uber.
+void _configureGlobalSystemUi() {
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  _configureGlobalSystemUi();
+  _configureAndroidPhotoPicker();
   runZonedGuarded(
     () => runApp(const RaiBootstrap()),
     (error, stack) {
@@ -335,6 +378,36 @@ class _RaiAppState extends State<RaiApp> {
         title: kAppDisplayName,
         debugShowCheckedModeBanner: false,
         navigatorKey: NavigationService.navigatorKey,
+        builder: (ctx, child) {
+          final Brightness brightness;
+          switch (mode) {
+            case ThemeMode.dark:
+              brightness = Brightness.dark;
+              break;
+            case ThemeMode.light:
+              brightness = Brightness.light;
+              break;
+            case ThemeMode.system:
+              brightness = MediaQuery.platformBrightnessOf(ctx);
+              break;
+          }
+          final isDark = brightness == Brightness.dark;
+          final overlay = SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness:
+                isDark ? Brightness.light : Brightness.dark,
+            systemNavigationBarColor:
+                isDark ? const Color(0xFF0D0D0D) : const Color(0xFFF6F6F6),
+            systemNavigationBarIconBrightness:
+                isDark ? Brightness.light : Brightness.dark,
+            systemNavigationBarContrastEnforced: true,
+          );
+          return AnnotatedRegion<SystemUiOverlayStyle>(
+            value: overlay,
+            sized: false,
+            child: child ?? const SizedBox.shrink(),
+          );
+        },
         localizationsDelegates: const [
           GlobalMaterialLocalizations.delegate,
           GlobalWidgetsLocalizations.delegate,
@@ -349,51 +422,57 @@ class _RaiAppState extends State<RaiApp> {
         darkTheme: darkTheme,
         themeMode: mode,
         routes: {
-        '/login': (_) => const SeleccionUsuario(),
-        '/auth_check': (_) => const AuthGatePublic(),
+          '/login': (_) => const SeleccionUsuario(),
+          '/auth_check': (_) => const AuthGatePublic(),
 
-        // 🔴 NUEVO - REGISTRO (DESDE AUTH)
-        '/registro_cliente': (_) => const RegistroCliente(),
-        '/registro_taxista': (_) => const RegistroTaxista(),
+          // 🔴 NUEVO - REGISTRO (DESDE AUTH)
+          '/registro_cliente': (_) => const RegistroCliente(),
+          '/registro_taxista': (_) => const RegistroTaxista(),
 
-        // Cliente
-        '/solicitar_viaje_ahora': (_) => const ProgramarViaje(modoAhora: true),
-        '/programar_viaje': (_) => const ProgramarViaje(modoAhora: false),
-        '/programar_viaje_multi': (_) => const ProgramarViajeMulti(),
-        '/viaje_en_curso_cliente': (_) => const ViajeEnCursoCliente(),
-        '/historial_viajes_cliente': (_) => const HistorialViajesCliente(),
-        '/metodos_pago': (_) => const MetodosPago(),
-        '/espera_asignacion_turismo': (_) =>
-            const EsperaAsignacionTurismo(viajeId: ''),
-        '/historial_pagos': (_) => const HistorialPagosCliente(),
-        '/pago_metodo': (_) => const PagoMetodo(),
+          // Cliente
+          '/solicitar_viaje_ahora': (_) =>
+              const ProgramarViaje(modoAhora: true),
+          '/programar_viaje': (_) => const ProgramarViaje(modoAhora: false),
+          '/programar_viaje_multi': (_) => const ProgramarViajeMulti(),
+          '/viaje_en_curso_cliente': (_) => const ViajeEnCursoCliente(),
+          '/historial_viajes_cliente': (_) => const HistorialViajesCliente(),
+          '/metodos_pago': (_) => const MetodosPago(),
+          '/espera_asignacion_turismo': (_) =>
+              const EsperaAsignacionTurismo(viajeId: ''),
+          '/historial_pagos': (_) => const HistorialPagosCliente(),
+          '/pago_metodo': (_) => const PagoMetodo(),
 
-        // comunes
-        '/soporte': (_) => const Soporte(),
-        '/configuracion_perfil': (_) => const ConfiguracionPerfil(),
+          // comunes
+          '/soporte': (_) => const Soporte(),
+          '/configuracion_perfil': (_) => const ConfiguracionPerfil(),
+          rutaBolaPueblo: (_) => const BolaPuebloAPuebloPage(),
+          rutaBolaConductoresCliente: (_) =>
+              const BolaConductoresEnRutaClientePage(),
 
-        // taxista
-        '/taxista_entry': (_) => const TaxistaEntry(),
-        '/viaje_disponible': (_) => const ViajeDisponible(),
-        '/viaje_en_curso_taxista': (_) => const ViajeEnCursoTaxista(),
-        '/historial_viajes_taxista': (_) => const HistorialViajesTaxista(),
+          // taxista
+          '/taxista_entry': (_) => const TaxistaEntry(),
+          '/viaje_disponible': (_) => const TaxistaShell(),
+          '/viaje_en_curso_taxista': (_) => const ViajeEnCursoTaxista(),
+          '/historial_viajes_taxista': (_) => const HistorialViajesTaxista(),
 
-        // 🔴 NUEVAS RUTAS DE PAGOS
-        '/mis_pagos': (_) => const MisPagos(),
-        '/bloqueado_por_pagos': (_) => const BloqueadoPorPagos(),
-        '/verificar_pagos': (_) => const VerificarPagos(),
-        '/terminos_politica': (_) => const TermsPolicyScreen(),
+          // 🔴 NUEVAS RUTAS DE PAGOS
+          '/mis_pagos': (_) => const MisPagos(),
+          '/bloqueado_por_pagos': (_) => const BloqueadoPorPagos(),
+          '/verificar_pagos': (_) => const VerificarPagos(),
+          '/terminos_politica': (_) => const TermsPolicyScreen(),
+          '/admin': (_) => const AdminGate(),
         },
-        onGenerateRoute: (settings) {
-          return MaterialPageRoute(
-            builder: (_) => const SeleccionUsuario(),
+        onGenerateRoute: (settings) => null,
+        onUnknownRoute: (settings) {
+          return MaterialPageRoute<void>(
+            builder: (_) => const AuthGatePublic(),
+            settings: settings,
           );
         },
         home: const AuthGatePublic(),
       ),
     );
   }
-
 }
 
 // ================== AUTH GATE PUBLIC ==================
@@ -416,18 +495,32 @@ class _AuthGate extends StatelessWidget {
     final uRef = db.collection('usuarios').doc(user.uid);
     final rRef = db.collection('roles').doc(user.uid);
 
-    final uSnap = await uRef.get();
+    DocumentSnapshot<Map<String, dynamic>> uSnap = await uRef.get();
     if (uSnap.exists) {
       final data = uSnap.data() ?? <String, dynamic>{};
       final rol = (data['rol'] ?? '').toString().trim().toLowerCase();
       if (rol.isNotEmpty) return;
     }
 
+    // Evita carrera con registro taxista: el gate puede leer antes del primer .set() en Firestore.
+    for (var i = 0; i < 8; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+      uSnap = await uRef.get();
+      if (uSnap.exists) {
+        final data = uSnap.data() ?? <String, dynamic>{};
+        final rol = (data['rol'] ?? '').toString().trim().toLowerCase();
+        if (rol.isNotEmpty) return;
+      }
+    }
+
     String rol = 'cliente';
     try {
       final rSnap = await rRef.get();
-      final rolRoles = (rSnap.data()?['rol'] ?? '').toString().trim().toLowerCase();
-      if (rolRoles == 'taxista' || rolRoles == 'admin' || rolRoles == 'cliente') {
+      final rolRoles =
+          (rSnap.data()?['rol'] ?? '').toString().trim().toLowerCase();
+      if (rolRoles == 'taxista' ||
+          rolRoles == 'admin' ||
+          rolRoles == 'cliente') {
         rol = rolRoles;
       }
     } catch (_) {}
@@ -452,7 +545,8 @@ class _AuthGate extends StatelessWidget {
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, authSnap) {
         final user = authSnap.data ?? FirebaseAuth.instance.currentUser;
-        if (authSnap.connectionState == ConnectionState.waiting && user == null) {
+        if (authSnap.connectionState == ConnectionState.waiting &&
+            user == null) {
           return _raiSplashScaffold();
         }
         if (user == null) {
@@ -467,7 +561,8 @@ class _AuthGate extends StatelessWidget {
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: doc.snapshots(),
           builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+            if (snap.connectionState == ConnectionState.waiting &&
+                !snap.hasData) {
               return _raiSplashScaffold();
             }
 
@@ -500,7 +595,8 @@ class _AuthGate extends StatelessWidget {
                   if (fresh == null || !fresh.exists) {
                     return const SeleccionUsuario();
                   }
-                  return _buildGateForUsuarioData(context, user, fresh.data() ?? {});
+                  return _buildGateForUsuarioData(
+                      context, user, fresh.data() ?? {});
                 },
               );
             }
@@ -519,13 +615,17 @@ Widget _buildGateForUsuarioData(
   User user,
   Map<String, dynamic> data,
 ) {
-  final rol = (data['rol'] ?? '').toString().toLowerCase().trim();
+  // Sin rol en Firestore (carrera Google / upsert parcial) antes caía en splash infinito.
+  var rol = (data['rol'] ?? '').toString().toLowerCase().trim();
+  if (rol.isEmpty) {
+    rol = 'cliente';
+  }
 
   return FutureBuilder<bool>(
     future: LegalAcceptanceService.hasAccepted(user.uid),
     builder: (context, legalSnap) {
       if (legalSnap.connectionState == ConnectionState.waiting) {
-        return _raiSplashScaffold(subtitle: 'Cargando perfil...');
+        return _raiSplashScaffold();
       }
 
       final hasAccepted = legalSnap.data ?? false;
@@ -548,7 +648,7 @@ Widget _buildGateForUsuarioData(
           future: PagosTaxistaRepo.puedeTrabajar(user.uid),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return _raiSplashScaffold(subtitle: 'Verificando pagos...');
+              return _raiSplashScaffold();
             }
 
             final puedeTrabajar = snapshot.data ?? true;
@@ -566,11 +666,11 @@ Widget _buildGateForUsuarioData(
 
       if (rol == 'cliente' || rol == 'user') {
         return const VerifyEmailGate(
-          childWhenVerified: ClienteHome(),
+          childWhenVerified: ClienteShell(),
         );
       }
 
-      return _raiSplashScaffold(subtitle: 'Sincronizando cuenta...');
+      return _raiSplashScaffold();
     },
   );
 }

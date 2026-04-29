@@ -4,16 +4,16 @@ import { logger } from "firebase-functions";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 
+import {
+  AHORA_THRESHOLD_MINUTES,
+  poolOpensAtMsForScheduledPickup,
+  startWindowAtMsForScheduledPickup,
+} from "./trip_publish_windows";
+
 // initializeApp() ya se hace en src/index.ts
 const db = () => getFirestore();
 
 const COLL = "viajes";
-
-// Parámetros por defecto (deben alinear con tu app móvil)
-const POOL_HOURS_BEFORE = 5;     // publicar N horas antes (programados)
-const ACCEPT_HOURS_BEFORE = 2;   // ventana para aceptar N horas antes
-const READY_MIN_BEFORE = 45;     // ventana "ready" N minutos antes
-const AHORA_MIN_THRESHOLD = 15;  // si falta <= 15 min => esAhora
 
 // Utilidades pequeñas
 const tsNow = () => Timestamp.now();
@@ -39,21 +39,31 @@ function computeFieldsOnCreate(data: FirebaseFirestore.DocumentData, now: Date) 
   // fecha del viaje
   const fechaViaje = toDateSafe(data.fechaHora, now);
 
-  const esAhora = fechaViaje.getTime() <= (now.getTime() + AHORA_MIN_THRESHOLD * 60_000);
+  const esAhora =
+    fechaViaje.getTime() <= now.getTime() + AHORA_THRESHOLD_MINUTES * 60_000;
   const programado = !esAhora;
 
-  // Respetar si ya vienen set, si no, calcular
+  const pickupMs = fechaViaje.getTime();
+  const nowMs = now.getTime();
+
+  // Respetar si ya vienen set, si no, calcular (misma política que TripPublishWindows en la app)
   const publishAt: Date = (data.publishAt instanceof Timestamp)
     ? data.publishAt.toDate()
-    : (esAhora ? now : new Date(fechaViaje.getTime() - POOL_HOURS_BEFORE * 3_600_000));
+    : esAhora
+      ? now
+      : new Date(poolOpensAtMsForScheduledPickup(pickupMs, nowMs));
 
   const acceptAfter: Date = (data.acceptAfter instanceof Timestamp)
     ? data.acceptAfter.toDate()
-    : (esAhora ? now : new Date(fechaViaje.getTime() - ACCEPT_HOURS_BEFORE * 3_600_000));
+    : esAhora
+      ? now
+      : new Date(poolOpensAtMsForScheduledPickup(pickupMs, nowMs));
 
   const startWindowAt: Date = (data.startWindowAt instanceof Timestamp)
     ? data.startWindowAt.toDate()
-    : (esAhora ? now : new Date(fechaViaje.getTime() - READY_MIN_BEFORE * 60_000));
+    : esAhora
+      ? now
+      : new Date(startWindowAtMsForScheduledPickup(pickupMs, nowMs));
 
   // Publicado si ya estamos dentro de publishAt
   const publicado = (publishAt.getTime() <= now.getTime()) || !!data.publicado;
@@ -142,7 +152,8 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
 
         // esAhora si faltan <= 15 min
         const fecha = toDateSafe(d.fechaHora, now);
-        const esAhora = fecha.getTime() <= (now.getTime() + AHORA_MIN_THRESHOLD * 60_000);
+        const esAhora =
+          fecha.getTime() <= now.getTime() + AHORA_THRESHOLD_MINUTES * 60_000;
 
         batch.update(doc.ref, {
           publicado: true,
@@ -216,7 +227,8 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
       for (const doc of snaps.docs) {
         const d = doc.data();
         const fecha = toDateSafe(d.fechaHora, now);
-        const shouldBeAhora = fecha.getTime() <= (now.getTime() + AHORA_MIN_THRESHOLD * 60_000);
+        const shouldBeAhora =
+          fecha.getTime() <= now.getTime() + AHORA_THRESHOLD_MINUTES * 60_000;
 
         if (d.esAhora !== shouldBeAhora) {
           batch.update(doc.ref, {

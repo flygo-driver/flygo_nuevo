@@ -17,14 +17,11 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
 // ✅ Confirmación de viaje programado (no confundir con “en curso”)
-import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_confirmacion.dart';
 
 // ✅ IMPORT para la pantalla de espera de turismo
-import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 
 // Tus servicios/componentes
-import 'package:flygo_nuevo/widgets/cliente_drawer.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
@@ -34,21 +31,25 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/programar_viaje_futuro_animation.dart';
+import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/pay_config.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 
 // ✅ IMPORTS PARA TURISMO
-import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
+import 'package:flygo_nuevo/widgets/turismo_destinos_sheet_host.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
 
 // ✅ NUEVO SERVICIO UNIFICADO DE TARIFAS
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
 // ===== Flags / Reglas =====
 const bool kUsePlacesAutocomplete = true;
 const bool kUseDirectionsForDistance = true;
-const int kAhoraUmbralMin = 10;
 const int kMaxDiasProgramacion = 90;
 
 // ===== Snackbars =====
@@ -56,8 +57,8 @@ const String kMsgLogin = 'Debes iniciar sesión para continuar.';
 const String kMsgCalcFirst = 'Debes calcular el precio primero.';
 const String kMsgMaxFuture =
     'Solo puedes programar hasta 90 días en el futuro.';
-const String kMsgMinFuture =
-    'Selecciona una hora al menos ${kAhoraUmbralMin + 1} minutos en el futuro.';
+const String kMsgPickupPasado =
+    'La hora de recogida no puede quedar en el pasado. Elige la hora actual o una próxima.';
 
 class ProgramarViaje extends StatefulWidget {
   final bool modoAhora;
@@ -144,6 +145,63 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   final DraggableScrollableController _sheetCtrl =
       DraggableScrollableController();
 
+  static const double _sheetMinFracProgramar = 0.30;
+  int _mapProgrammaticCameraDepth = 0;
+  Timer? _programarMapGestureEndDebounce;
+
+  void _onProgramarMapCameraIdle() {
+    if (_mapProgrammaticCameraDepth > 0) {
+      _mapProgrammaticCameraDepth--;
+      return;
+    }
+    _programarMapGestureEndDebounce?.cancel();
+    if (mounted) _expandProgramarSheetTrasMapaInteract();
+  }
+
+  void _expandProgramarSheetTrasMapaInteract() {
+    if (!_sheetCtrl.isAttached) return;
+    final double target = (_vistaResumenCotizada && _mostrarResumenCotizacion)
+        ? 0.72
+        : (widget.modoAhora ? 0.86 : 0.88);
+    try {
+      _sheetCtrl.animateTo(
+        target.clamp(_sheetMinFracProgramar, 0.88),
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  void _onProgramarMapUserGesture() {
+    if (_mapProgrammaticCameraDepth > 0) return;
+    unawaited(_collapseProgramarSheetForMap());
+  }
+
+  Future<void> _collapseProgramarSheetForMap() async {
+    if (!_sheetCtrl.isAttached) return;
+    try {
+      final double s = _sheetCtrl.size;
+      if (s <= _sheetMinFracProgramar + 0.03) return;
+      await _sheetCtrl.animateTo(
+        _sheetMinFracProgramar,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _programarMapAnimate(
+      Future<void> Function(GoogleMapController c) op) async {
+    final GoogleMapController? c = _map;
+    if (c == null) return;
+    _mapProgrammaticCameraDepth++;
+    try {
+      await op(c);
+    } catch (_) {
+      if (_mapProgrammaticCameraDepth > 0) _mapProgrammaticCameraDepth--;
+    }
+  }
+
   // Flecha “nudge”
   late final AnimationController _nudgeCtrl = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 900));
@@ -188,6 +246,21 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
   }
 
+  Future<void> _salirDeTurismoAInicioCliente() async {
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+      return;
+    }
+
+    final rootNav = Navigator.of(context, rootNavigator: true);
+    final didPopRoot = await rootNav.maybePop();
+    if (didPopRoot) return;
+
+    if (!mounted) return;
+    rootNav.pushNamedAndRemoveUntil('/auth_check', (route) => false);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -196,6 +269,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       fechaHora = DateTime.now();
     } else {
       fechaHora = DateTime.now().add(const Duration(minutes: 20));
+      if (kUsePlacesAutocomplete) {
+        _origenBuscarDireccion = true;
+      }
     }
 
     // Si viene con subtipoTurismo, lo asignamos
@@ -328,6 +404,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     _nudgeCtrl.dispose();
     _peajeCtrl.dispose();
     _calculoDebounce?.cancel();
+    _programarMapGestureEndDebounce?.cancel();
     super.dispose();
   }
 
@@ -364,7 +441,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (!mounted) return;
       try {
         _sheetCtrl.animateTo(
-          0.54,
+          0.72,
           duration: const Duration(milliseconds: 360),
           curve: Curves.easeOutCubic,
         );
@@ -423,9 +500,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       setState(() => _cargandoUbicacion = false);
 
-      await _map?.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(target: here, zoom: 15),
+      await _programarMapAnimate(
+        (c) => c.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: here, zoom: 15),
+          ),
         ),
       );
       _didCenterOnce = true;
@@ -440,7 +519,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         _origenMap = ll;
         _updateOrigenMarker(ll);
         if (_map != null && _didCenterOnce) {
-          _map!.animateCamera(CameraUpdate.newLatLng(ll));
+          unawaited(_programarMapAnimate(
+            (c) => c.animateCamera(CameraUpdate.newLatLng(ll)),
+          ));
         }
         if (mounted) setState(() {});
         // Viaje ahora: si el destino se eligió antes que el GPS, recalcular al mover origen
@@ -484,6 +565,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       Marker(
         markerId: const MarkerId('origen'),
         position: pos,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
         infoWindow: const InfoWindow(title: 'Origen'),
         zIndexInt: 2,
       ),
@@ -493,10 +575,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   Future<void> _centrarEnMiUbicacion() async {
     if (_origenMap == null) return;
     _didCenterOnce = true;
-    await _map?.animateCamera(CameraUpdate.newLatLng(_origenMap!));
+    await _programarMapAnimate(
+      (c) => c.animateCamera(CameraUpdate.newLatLng(_origenMap!)),
+    );
   }
 
   void _onLongPressMap(LatLng p) async {
+    unawaited(_collapseProgramarSheetForMap());
     latDestino = p.latitude;
     lonDestino = p.longitude;
     _destinoDet = null;
@@ -509,7 +594,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       Marker(
         markerId: const MarkerId('destino'),
         position: p,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
         infoWindow: const InfoWindow(title: 'Destino'),
         zIndexInt: 1,
       ),
@@ -724,36 +809,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     _vistaResumenCotizada = false;
   }
 
-  Future<void> _volverOrigenMapaOGps() async {
-    _origenBuscarDireccion = false;
-    _origenDetManual = null;
-    origenManual = '';
-    origenTexto = '';
-    _invalidarCotizacion();
-    if (!mounted) return;
-    setState(() {});
-    try {
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-      );
-      if (!mounted) return;
-      final ll = LatLng(pos.latitude, pos.longitude);
-      setState(() {
-        _origenMap = ll;
-        _updateOrigenMarker(ll);
-      });
-      await _map?.animateCamera(CameraUpdate.newLatLng(ll));
-      _didCenterOnce = true;
-      _programarCalculoAutomatico();
-    } catch (_) {
-      if (mounted) {
-        _snack(
-          'No se pudo leer el GPS. Mové el pin de origen en el mapa o volvé a intentar.',
-        );
-      }
-    }
-  }
-
   void _setCargaFalseSiCorre(int runId) {
     if (!mounted || runId != _cotizacionSeq) return;
     setState(() => _cargando = false);
@@ -819,8 +874,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         } else {
           final or = await _geocodeConFallback(origenManual);
           if (or == null) {
-            if (!automatico)
+            if (!automatico) {
               _snack("❌ No se encontró esa dirección de origen.");
+            }
             _setCargaFalseSiCorre(runId);
             return;
           }
@@ -941,7 +997,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
               markerId: const MarkerId('destino'),
               position: LatLng(dLat, dLon),
               icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueGreen),
+                  BitmapDescriptor.hueViolet),
               infoWindow: const InfoWindow(title: 'Destino'),
               zIndexInt: 1,
             ),
@@ -971,6 +1027,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         }
 
         _cargando = false;
+        // Siempre mostramos resumen al terminar una cotización para priorizar precio + confirmar.
         _vistaResumenCotizada = true;
       });
 
@@ -978,14 +1035,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       if (_map != null && runId == _cotizacionSeq) {
         if (routeLatLng.length >= 2) {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
+          await _programarMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
+            ),
           );
         } else {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(
-              _boundsFrom(LatLng(origenLat, origenLon), LatLng(dLat, dLon)),
-              80,
+          await _programarMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(
+                _boundsFrom(LatLng(origenLat, origenLon), LatLng(dLat, dLon)),
+                80,
+              ),
             ),
           );
         }
@@ -1035,14 +1096,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       if (_map != null) {
         if (pts.length >= 2) {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
+          await _programarMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
+            ),
           );
         } else {
-          await _map!.animateCamera(
-            CameraUpdate.newLatLngBounds(
-              _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
-              80,
+          await _programarMapAnimate(
+            (c) => c.animateCamera(
+              CameraUpdate.newLatLngBounds(
+                _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
+                80,
+              ),
             ),
           );
         }
@@ -1199,9 +1264,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                 style: TextStyle(color: muted, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 4),
-              item('Efectivo'),
-              item('Tarjeta', enabled: false, subtitle: 'No disponible'),
-              item('Transferencia'),
+              ...PayConfig.metodosReservaVisibles.map(
+                (String label) => item(label),
+              ),
               const SizedBox(height: 8),
             ],
           ),
@@ -1234,9 +1299,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => SelectorDestinosTuristicos(
-        latOrigen: latCliente ?? _origenMap?.latitude,
-        lonOrigen: lonCliente ?? _origenMap?.longitude,
+      builder: (context) => TurismoDestinosSheetHost(
+        seedLat: latCliente ?? _origenMap?.latitude,
+        seedLon: lonCliente ?? _origenMap?.longitude,
         tipoVehiculoInicial: _tipoVehiculoTurismo,
         onDestinoSeleccionado: (seleccion) async {
           // 🔥 VALIDAR TIPO DE VEHÍCULO - ASEGURAR QUE SEA VÁLIDO
@@ -1275,7 +1340,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   markerId: const MarkerId('destino'),
                   position: LatLng(seleccion.lugar.lat, seleccion.lugar.lon),
                   icon: BitmapDescriptor.defaultMarkerWithHue(
-                      BitmapDescriptor.hueGreen),
+                      BitmapDescriptor.hueViolet),
                   infoWindow: InfoWindow(title: seleccion.lugar.nombre),
                 ),
               );
@@ -1317,14 +1382,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
     if (!widget.modoAhora) {
       final now = DateTime.now();
-      final minFuturo = now.add(const Duration(minutes: kAhoraUmbralMin + 1));
       final maxFuturo = now.add(const Duration(days: kMaxDiasProgramacion));
-      if (fechaHora.isBefore(minFuturo)) {
-        messenger.showSnackBar(const SnackBar(content: Text(kMsgMinFuture)));
-        return;
-      }
       if (fechaHora.isAfter(maxFuturo)) {
         messenger.showSnackBar(const SnackBar(content: Text(kMsgMaxFuture)));
+        return;
+      }
+      // Tolerancia por desfase reloj / redondeo del picker.
+      if (fechaHora.isBefore(now.subtract(const Duration(seconds: 90)))) {
+        messenger.showSnackBar(const SnackBar(content: Text(kMsgPickupPasado)));
         return;
       }
     }
@@ -1348,10 +1413,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       final DateTime fechaProgramadaUtc =
           widget.modoAhora ? nowUtc : fechaHora.toUtc();
 
+      /// Programar con recogida dentro de [poolLeadMinutesProgramado] min → como tab Ahora (mapa ya).
+      /// Recogida más lejana → pantalla de espera hasta que abra el pool (luego salta a en curso sola).
+      final bool viajeInmediato = TripPublishWindows.esProgramadoRecogidaCasiInmediata(
+          fechaProgramadaUtc, nowUtc);
+
       DateTime publishAt;
       DateTime acceptAfter;
 
-      if (widget.modoAhora) {
+      if (viajeInmediato) {
         publishAt = nowUtc;
         acceptAfter = nowUtc;
       } else {
@@ -1401,40 +1471,25 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         acceptAfter: acceptAfter,
       );
 
-      final accion = widget.modoAhora
+      final accion = viajeInmediato
           ? 'solicitado exitosamente'
           : 'programado exitosamente';
       messenger.showSnackBar(
         SnackBar(content: Text("✅ Viaje $accion — #${id.substring(0, 6)}")),
       );
 
-      if (mounted) {
-        if (tipoServicio == 'turismo') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => EsperaAsignacionTurismo(viajeId: id),
-            ),
-          );
-        } else if (!widget.modoAhora) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ViajeProgramadoConfirmacion(
-                viajeId: id,
-                fechaHoraPickup: fechaHora,
-                origen: origenLegible,
-                destino: destinoLegible,
-                precio: precioCalculado,
-              ),
-            ),
-          );
-        } else {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
-          );
-        }
+      if (viajeInmediato) {
+        // Inmediato (tab «Ahora» o programado con recogida en ventana corta): mismo mapa que motor/ahora.
+        await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+      } else {
+        // Programado lejano: pantalla de espera hasta ventana de pool / conductor.
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => ViajeProgramadoPendiente(viajeId: id),
+          ),
+        );
       }
     } on fs.FirebaseException catch (e) {
       messenger.showSnackBar(
@@ -1464,22 +1519,161 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
   }
 
-  /// Acentos legibles en claro y oscuro: origen (teal) vs destino (azul).
+  /// Acentos legibles en claro y oscuro: origen (amarillo) vs destino (púrpura).
+  /// Con [tipoSvc] distinto de turismo usa la misma paleta que “Múltiples paradas”.
   ({
     Color origenAccent,
     Color origenFill,
     Color destinoAccent,
-    Color destinoFill
-  }) _paletasOrigenDestino(bool isDark) {
+    Color destinoFill,
+    Color origenBorde,
+    Color destinoBorde,
+  }) _paletasOrigenDestino(bool isDark, String tipoSvc) {
+    if (tipoSvc == 'turismo') {
+      final Color oa =
+          isDark ? const Color(0xFFFCD34D) : const Color(0xFFD97706);
+      final Color da =
+          isDark ? const Color(0xFFE9D5FF) : const Color(0xFF7C3AED);
+      return (
+        origenAccent: oa,
+        origenFill: isDark
+            ? const Color(0xFF422006).withValues(alpha: 0.92)
+            : const Color(0xFFFFFBEB),
+        destinoAccent: da,
+        destinoFill: isDark
+            ? const Color(0xFF3B0764).withValues(alpha: 0.88)
+            : const Color(0xFFFAF5FF),
+        origenBorde: oa.withValues(alpha: 0.85),
+        destinoBorde: da.withValues(alpha: 0.55),
+      );
+    }
+    final Color oa = isDark ? const Color(0xFFFFE082) : const Color(0xFFD97706);
+    final Color da = isDark ? const Color(0xFFE9D5FF) : const Color(0xFF7C3AED);
     return (
-      origenAccent: isDark ? const Color(0xFF2DD4BF) : const Color(0xFF0D9488),
-      origenFill: isDark
-          ? const Color(0xFF134E4A).withValues(alpha: 0.42)
-          : const Color(0xFFF0FDFA),
-      destinoAccent: isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB),
-      destinoFill: isDark
-          ? const Color(0xFF1E3A8A).withValues(alpha: 0.38)
-          : const Color(0xFFEFF6FF),
+      origenAccent: oa,
+      origenFill: isDark ? const Color(0xFF1A1208) : const Color(0xFFFFFBEB),
+      destinoAccent: da,
+      destinoFill: isDark ? const Color(0xFF1E0B36) : const Color(0xFFFAF5FF),
+      origenBorde: isDark ? const Color(0xFFFF9800) : const Color(0xFFF59E0B),
+      destinoBorde: isDark ? const Color(0xFFD8B4FE) : const Color(0xFFA855F7),
+    );
+  }
+
+  Widget _prefixIconCajaRuta({
+    required Color accent,
+    required IconData icono,
+    Color? colorIcono,
+  }) {
+    final Color ic = colorIcono ?? accent;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 0, 2, 0),
+      child: Center(
+        child: Container(
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: accent.withValues(alpha: 0.72)),
+            color: accent.withValues(alpha: 0.14),
+          ),
+          child: Icon(icono, color: ic, size: 20),
+        ),
+      ),
+    );
+  }
+
+  /// Fila tipo “Punto de partida” / destino de la pantalla múltiples paradas.
+  Widget _tarjetaLineaPuntoMapa({
+    required bool isDark,
+    required Color accent,
+    required Color fill,
+    required Color borde,
+    required IconData iconoCaja,
+    required String titulo,
+    required String subtitulo,
+    required Color textMuted,
+    bool resplandorOrigen = false,
+    bool resplandorDestino = false,
+  }) {
+    final List<BoxShadow>? sombras = !isDark
+        ? null
+        : resplandorOrigen
+            ? <BoxShadow>[
+                BoxShadow(
+                  color: const Color(0xFFFF9800).withValues(alpha: 0.36),
+                  blurRadius: 18,
+                  offset: const Offset(0, 5),
+                ),
+                BoxShadow(
+                  color: const Color(0xFFFFD54A).withValues(alpha: 0.12),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : resplandorDestino
+                ? <BoxShadow>[
+                    BoxShadow(
+                      color: const Color(0xFFA78BFA).withValues(alpha: 0.48),
+                      blurRadius: 20,
+                      offset: const Offset(0, 5),
+                    ),
+                  ]
+                : null;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 14),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: borde,
+          width: resplandorOrigen || resplandorDestino ? 2 : 1.35,
+        ),
+        boxShadow: sombras,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _prefixIconCajaRuta(accent: accent, icono: iconoCaja),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        titulo,
+                        style: TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                          letterSpacing: 0.15,
+                        ),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right_rounded,
+                        color: textMuted, size: 22),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  subtitulo,
+                  style: TextStyle(
+                    color: textMuted,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w500,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1490,35 +1684,119 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     required Color fill,
     required Color tituloColor,
     required Widget child,
+    bool mockupRuta = false,
+    bool isDark = true,
+    String? ayudaHeader,
+    Color? ayudaColor,
+    Color? lineaTimeline,
   }) {
+    if (!mockupRuta) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: accent.withValues(alpha: 0.55), width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(icono, color: accent, size: 22),
+                const SizedBox(width: 8),
+                Text(
+                  titulo,
+                  style: TextStyle(
+                    color: tituloColor,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    letterSpacing: 0.65,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            child,
+          ],
+        ),
+      );
+    }
+
+    final Color ayudaCol =
+        ayudaColor ?? (isDark ? Colors.white60 : const Color(0xFF667085));
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: fill,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: accent.withValues(alpha: 0.55), width: 1.5),
+        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFD0D5DD),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icono, color: accent, size: 22),
-              const SizedBox(width: 8),
-              Text(
-                titulo,
-                style: TextStyle(
-                  color: tituloColor,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
-                  letterSpacing: 0.65,
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: accent.withValues(alpha: 0.58)),
+                ),
+                child: Icon(icono, color: accent, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      titulo,
+                      style: TextStyle(
+                        color: tituloColor,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    if (ayudaHeader != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        ayudaHeader,
+                        style: TextStyle(
+                          color: ayudaCol,
+                          fontSize: 12,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          child,
+          const SizedBox(height: 12),
+          if (lineaTimeline != null)
+            DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(color: lineaTimeline, width: 2),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: child,
+              ),
+            )
+          else
+            child,
         ],
       ),
     );
@@ -1548,7 +1826,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Paso 2 — Destino',
+                  'Falta la llegada',
                   style: TextStyle(
                     color: textPrimary,
                     fontWeight: FontWeight.w800,
@@ -1561,22 +1839,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           ),
           const SizedBox(height: 8),
           Text(
-            'Elegí el destino en el bloque que sigue a Origen. El precio se calcula cuando origen y destino estén listos.',
+            'Escribí o elegí el destino en el buscador de abajo. El precio aparece cuando salida y llegada están listas.',
             style: TextStyle(
               color: textSecondary,
               fontSize: 13,
               height: 1.35,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            widget.modoAhora
-                ? 'Más abajo podrás marcar ida y vuelta, tipo de vehículo y método de pago antes de confirmar.'
-                : 'Más abajo podrás marcar ida y vuelta, tipo de vehículo, fecha y hora, y método de pago antes de confirmar.',
-            style: TextStyle(
-              color: textSecondary,
-              fontSize: 12,
-              height: 1.3,
             ),
           ),
         ],
@@ -1640,7 +1907,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     final Color metodoPagoChipBorder =
         isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color c = _colorServicio;
-    final pRes = _paletasOrigenDestino(isDark);
+    final pRes = _paletasOrigenDestino(isDark, tipoServicio);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -1691,7 +1958,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                 ),
                 const SizedBox(height: 14),
                 _filaResumenViaje(
-                  icon: Icons.flag_rounded,
+                  icon: Icons.search_rounded,
                   etiqueta: 'DESTINO',
                   valor: _lineaDestinoResumen(),
                   textPrimary: textPrimary,
@@ -1794,7 +2061,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.event_rounded, size: 18, color: textSecondary),
+                        Icon(Icons.event_rounded,
+                            size: 18, color: textSecondary),
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
@@ -1917,75 +2185,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  // ===== UI =====
-  Widget _tabsModo() {
-    final bool esMotor = widget.tipoServicio == 'motor';
-    final bool esTurismo = widget.tipoServicio == 'turismo';
-
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color accent =
-        isDark ? const Color(0xFF49F18B) : const Color(0xFF0F9D58);
-    final List<Color> bgGradient = isDark
-        ? const [Color(0xFF15231A), Color(0xFF102016)]
-        : const [Color(0xFFE8F7EE), Color(0xFFDDF3E7)];
-    final Color textColor = isDark ? accent : const Color(0xFF0B6B3A);
-    final Color shadowColor =
-        isDark ? const Color(0x3324C86B) : const Color(0x220F9D58);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: bgGradient,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: accent,
-          width: 1.8,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: shadowColor,
-            blurRadius: 10,
-            spreadRadius: 1,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: esMotor
-            ? [
-                Semantics(
-                  label: 'Viaje en motor, inmediato',
-                  excludeSemantics: true,
-                  child: Icon(Icons.two_wheeler_rounded,
-                      color: textColor, size: 28),
-                ),
-              ]
-            : [
-                Icon(Icons.bolt_rounded, color: textColor, size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  // Motor y turismo solo operan en "ahora" para mantener consistencia de UX.
-                  esTurismo
-                      ? 'Pide ahora'
-                      : (widget.modoAhora ? 'Pide ahora' : 'Programar'),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: textColor,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 16,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ],
       ),
     );
   }
@@ -2150,13 +2349,27 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     final Color metodoPagoChipBorder =
         isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color dividerSoft = isDark ? Colors.white24 : const Color(0xFFE4E7EC);
-    final pRuta = _paletasOrigenDestino(isDark);
+    final pRuta = _paletasOrigenDestino(isDark, tipoServicio);
+    final bool uiRutaMockup = tipoServicio != 'turismo';
 
     return Scaffold(
       backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
-      drawer: const ClienteDrawer(),
-      appBar: const RaiAppBar(
+      appBar: RaiAppBar(
         title: 'Programar Viaje',
+        backWhenCanPop: true,
+        leading: SafeArea(
+          bottom: false,
+          child: IconButton(
+            icon: Icon(
+              Icons.arrow_back_rounded,
+              color: isDark ? Colors.white : const Color(0xFF101828),
+            ),
+            tooltip: 'Cancelar',
+            onPressed: tipoServicio == 'turismo'
+                ? _salirDeTurismoAInicioCliente
+                : () => Navigator.of(context).maybePop(),
+          ),
+        ),
       ),
       body: Stack(
         children: [
@@ -2175,6 +2388,19 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                 polylines: _polylines,
                 onMapCreated: (c) => _map = c,
                 onLongPress: _onLongPressMap,
+                onTap: (_) {
+                  if (_mapProgrammaticCameraDepth > 0) return;
+                  _onProgramarMapUserGesture();
+                  _programarMapGestureEndDebounce?.cancel();
+                  _programarMapGestureEndDebounce = Timer(
+                    const Duration(milliseconds: 420),
+                    () {
+                      if (mounted) _expandProgramarSheetTrasMapaInteract();
+                    },
+                  );
+                },
+                onCameraMoveStarted: _onProgramarMapUserGesture,
+                onCameraIdle: _onProgramarMapCameraIdle,
                 compassEnabled: true,
                 mapToolbarEnabled: false,
               ),
@@ -2211,12 +2437,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           ),
           DraggableScrollableSheet(
             controller: _sheetCtrl,
-            minChildSize: 0.26,
+            minChildSize: _sheetMinFracProgramar,
             maxChildSize: 0.88,
             initialChildSize: 0.36,
             snap: true,
-            snapSizes: const [0.34, 0.86, 0.88],
+            snapSizes: const [_sheetMinFracProgramar, 0.72, 0.88],
             builder: (context, controller) {
+              final double safeBottom = MediaQuery.of(context).padding.bottom;
               return Container(
                 decoration: BoxDecoration(
                   color: sheetBg,
@@ -2255,996 +2482,1357 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                           16,
                           _cargando ? 6 : 10,
                           16,
-                          24,
+                          24 + safeBottom,
                         ),
                         child: Form(
                           key: _formKey,
                           child: ListView(
                             controller: controller,
                             children: [
-                        GestureDetector(
-                          onTap: _expandToMax,
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 44,
-                                height: 5,
-                                decoration: BoxDecoration(
-                                  color: sheetHandle,
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              SlideTransition(
-                                position: _nudgeOffset,
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                              GestureDetector(
+                                onTap: _expandToMax,
+                                child: Column(
                                   children: [
-                                    Icon(Icons.keyboard_double_arrow_up,
-                                        size: 18, color: textMuted),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      _mostrarResumenCotizacion
-                                          ? 'Toca “Cambiar ruta” abajo para el buscador y opciones'
-                                          : 'Desliza o toca para ver todo',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                          color: textMuted,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600),
+                                    Container(
+                                      width: 44,
+                                      height: 5,
+                                      decoration: BoxDecoration(
+                                        color: sheetHandle,
+                                        borderRadius: BorderRadius.circular(3),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    SlideTransition(
+                                      position: _nudgeOffset,
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(Icons.keyboard_double_arrow_up,
+                                              size: 18, color: textMuted),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            _mostrarResumenCotizacion
+                                                ? 'Toca “Cambiar ruta” abajo para el buscador y opciones'
+                                                : 'Desliza o toca para ver todo',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                                color: textMuted,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ],
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        if (_mostrarResumenCotizacion)
-                          _tarjetaResumenCotizacion(),
-                        if (!_mostrarResumenCotizacion)
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _tabsModo(),
-                              if (!widget.modoAhora) ...[
-                                const SizedBox(height: 10),
-                                const ProgramarViajeFuturoAnimation(),
-                              ],
                               const SizedBox(height: 12),
-                              _selectorTipoServicio(),
-                              const SizedBox(height: 8),
-                              _seccionRutaCard(
-                                titulo: 'Paso 1 — Origen',
-                                icono: Icons.my_location,
-                                accent: pRuta.origenAccent,
-                                fill: pRuta.origenFill,
-                                tituloColor: textPrimary,
-                                child: widget.modoAhora
-                                    ? Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        children: [
-                                          Text(
-                                            'Salida desde tu ubicación',
-                                            style: TextStyle(
-                                              color: textPrimary,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'GPS en vivo. Ajustá el punto en el mapa o con el botón de ubicación.',
-                                            style: TextStyle(
-                                              color: textSecondary,
-                                              fontSize: 12.5,
-                                              height: 1.3,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 12),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 14,
-                                              vertical: 12,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: isDark
-                                                  ? pRuta.origenAccent
-                                                      .withValues(alpha: 0.14)
-                                                  : pRuta.origenFill,
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              border: Border.all(
-                                                color: pRuta.origenAccent
-                                                    .withValues(alpha: 0.85),
-                                                width: 1.5,
-                                              ),
-                                            ),
-                                            child: Row(
+                              if (_mostrarResumenCotizacion)
+                                _tarjetaResumenCotizacion(),
+                              if (!_mostrarResumenCotizacion)
+                                Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const SizedBox(height: 12),
+                                    _selectorTipoServicio(),
+                                    const SizedBox(height: 12),
+                                    const SizedBox(height: 14),
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                          top: 4, bottom: 2),
+                                      child: uiRutaMockup
+                                          ? Column(
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.start,
                                               children: [
-                                                Icon(
-                                                  Icons.my_location_rounded,
-                                                  color: pRuta.origenAccent,
-                                                  size: 22,
+                                                Text(
+                                                  'Tu recorrido',
+                                                  style: TextStyle(
+                                                    color: textPrimary,
+                                                    fontWeight: FontWeight.w900,
+                                                    fontSize: 18,
+                                                    letterSpacing: -0.2,
+                                                  ),
                                                 ),
-                                                const SizedBox(width: 10),
-                                                Expanded(
-                                                  child: Text(
-                                                    'El conductor te verá en el mapa al confirmar. Mové el pin si no coincide.',
-                                                    style: TextStyle(
-                                                      color: textSecondary,
-                                                      fontSize: 12.5,
-                                                      height: 1.35,
-                                                    ),
+                                                Text(
+                                                  widget.modoAhora
+                                                      ? 'Salida: tu ubicación (GPS) · llegada: escribila abajo'
+                                                      : 'Completá salida y llegada',
+                                                  style: TextStyle(
+                                                    color: textMuted,
+                                                    fontSize: 12.5,
+                                                    height: 1.35,
                                                   ),
                                                 ),
                                               ],
+                                            )
+                                          : Text(
+                                              'Origen y destino',
+                                              style: TextStyle(
+                                                color: textSecondary,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: 0.4,
+                                              ),
                                             ),
-                                          ),
-                                        ],
-                                      )
-                                    : _origenBuscarDireccion &&
-                                            kUsePlacesAutocomplete
-                                        ? Column(
+                                    ),
+                                    const SizedBox(height: 8),
+                                    if (widget.modoAhora && uiRutaMockup)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 10),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                border: Border.all(
+                                                  color: pRuta.origenBorde
+                                                      .withValues(alpha: 0.65),
+                                                ),
+                                                color: pRuta.origenAccent
+                                                    .withValues(alpha: 0.12),
+                                              ),
+                                              child: Icon(
+                                                Icons.gps_fixed_rounded,
+                                                color: pRuta.origenAccent,
+                                                size: 20,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    'Salida',
+                                                    style: TextStyle(
+                                                      color: pRuta.origenAccent,
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                      fontSize: 13,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    'Tu ubicación en el mapa. Mové el pin si hace falta.',
+                                                    style: TextStyle(
+                                                      color: textMuted,
+                                                      fontSize: 12,
+                                                      height: 1.3,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    if (!widget.modoAhora || !uiRutaMockup)
+                                      ParpadeoRutaProgramar(
+                                        pulseColor: pRuta.origenAccent,
+                                        child: _seccionRutaCard(
+                                          titulo: uiRutaMockup
+                                              ? 'ORIGEN'
+                                              : 'Origen',
+                                          icono: uiRutaMockup
+                                              ? Icons.search_rounded
+                                              : Icons.my_location,
+                                          accent: pRuta.origenAccent,
+                                          fill: pRuta.origenFill,
+                                          tituloColor: uiRutaMockup
+                                              ? pRuta.origenAccent
+                                              : textPrimary,
+                                          mockupRuta: uiRutaMockup,
+                                          isDark: isDark,
+                                          ayudaHeader:
+                                              uiRutaMockup ? 'Salida' : null,
+                                          ayudaColor: textMuted,
+                                          lineaTimeline: uiRutaMockup
+                                              ? const Color(0xFFFFB74D)
+                                              : null,
+                                          child: widget.modoAhora
+                                              ? Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment
+                                                          .stretch,
+                                                  children: [
+                                                    if (uiRutaMockup) ...[
+                                                      _tarjetaLineaPuntoMapa(
+                                                        isDark: isDark,
+                                                        accent:
+                                                            pRuta.origenAccent,
+                                                        fill: pRuta.origenFill,
+                                                        borde:
+                                                            pRuta.origenBorde,
+                                                        iconoCaja: Icons
+                                                            .gps_fixed_rounded,
+                                                        titulo:
+                                                            'Punto de partida',
+                                                        subtitulo:
+                                                            'Toca para buscar en el mapa…',
+                                                        textMuted: textMuted,
+                                                        resplandorOrigen: true,
+                                                      ),
+                                                      const SizedBox(
+                                                          height: 10),
+                                                      Text(
+                                                        'GPS en vivo. Mové el pin en el mapa o usá el botón de ubicación.',
+                                                        style: TextStyle(
+                                                          color: textSecondary,
+                                                          fontSize: 12,
+                                                          height: 1.3,
+                                                        ),
+                                                      ),
+                                                    ] else ...[
+                                                      Text(
+                                                        'Salida desde tu ubicación',
+                                                        style: TextStyle(
+                                                          color: textPrimary,
+                                                          fontSize: 14,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        'GPS en vivo. Ajustá el punto en el mapa o con el botón de ubicación.',
+                                                        style: TextStyle(
+                                                          color: textSecondary,
+                                                          fontSize: 12.5,
+                                                          height: 1.3,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(
+                                                          height: 12),
+                                                      Container(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                          horizontal: 14,
+                                                          vertical: 12,
+                                                        ),
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: isDark
+                                                              ? pRuta
+                                                                  .origenAccent
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          0.14)
+                                                              : pRuta
+                                                                  .origenFill,
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(12),
+                                                          border: Border.all(
+                                                            color: pRuta
+                                                                .origenAccent
+                                                                .withValues(
+                                                                    alpha:
+                                                                        0.85),
+                                                            width: 1.5,
+                                                          ),
+                                                        ),
+                                                        child: Row(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            Icon(
+                                                              Icons
+                                                                  .my_location_rounded,
+                                                              color: pRuta
+                                                                  .origenAccent,
+                                                              size: 22,
+                                                            ),
+                                                            const SizedBox(
+                                                                width: 10),
+                                                            Expanded(
+                                                              child: Text(
+                                                                'El conductor te verá en el mapa al confirmar. Mové el pin si no coincide.',
+                                                                style:
+                                                                    TextStyle(
+                                                                  color:
+                                                                      textSecondary,
+                                                                  fontSize:
+                                                                      12.5,
+                                                                  height: 1.35,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                )
+                                              : kUsePlacesAutocomplete
+                                                  ? Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        if (!uiRutaMockup) ...[
+                                                          Text(
+                                                            'Punto de salida en RD',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  textPrimary,
+                                                              fontSize: 14,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 4),
+                                                          Text(
+                                                            'Buscá aunque no estés ahí todavía. Podés elegir un reciente sin escribir.',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  textSecondary,
+                                                              fontSize: 12.5,
+                                                              height: 1.3,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 12),
+                                                        ],
+                                                        CampoLugarAutocomplete(
+                                                          label: uiRutaMockup
+                                                              ? 'Buscar origen'
+                                                              : 'Dirección de salida',
+                                                          hint: uiRutaMockup
+                                                              ? 'Dirección, barrio, hotel o lugar en RD…'
+                                                              : 'Ej. SDQ, hotel, sector…',
+                                                          showQuickSuggestions:
+                                                              false,
+                                                          showCategories: false,
+                                                          fieldAccent: pRuta
+                                                              .origenAccent,
+                                                          fieldFill: isDark
+                                                              ? (uiRutaMockup
+                                                                  ? const Color(
+                                                                      0xFF1A1208)
+                                                                  : const Color(
+                                                                      0xFF1C1508))
+                                                              : Colors.white,
+                                                          onPlaceSelected:
+                                                              (det) async {
+                                                            _origenDetManual =
+                                                                det;
+                                                            origenManual = det
+                                                                .displayLabel;
+                                                            origenTexto = det
+                                                                .displayLabel;
+                                                            _origenMap = LatLng(
+                                                                det.lat,
+                                                                det.lon);
+                                                            _updateOrigenMarker(
+                                                                _origenMap!);
+                                                            setState(() {});
+                                                            await _dibujarRutaSiHayDestino();
+                                                            _programarCalculoAutomatico();
+                                                          },
+                                                          onTextChanged: (t) {
+                                                            setState(() {
+                                                              origenManual = t;
+                                                              _origenDetManual =
+                                                                  null;
+                                                              origenTexto = '';
+                                                              _invalidarCotizacion();
+                                                            });
+                                                            _programarCalculoAutomatico();
+                                                          },
+                                                        ),
+                                                        const SizedBox(
+                                                            height: 6),
+                                                        Text(
+                                                          'Ajustá el pin de salida en el mapa si hace falta.',
+                                                          style: TextStyle(
+                                                            color: textMuted,
+                                                            fontSize: 11.5,
+                                                            height: 1.25,
+                                                          ),
+                                                        ),
+                                                        TextButton(
+                                                          onPressed: () {
+                                                            Navigator.of(
+                                                                    context)
+                                                                .push(
+                                                              MaterialPageRoute<
+                                                                  void>(
+                                                                builder: (_) =>
+                                                                    const ProgramarViajeMulti(),
+                                                              ),
+                                                            );
+                                                          },
+                                                          style: TextButton
+                                                              .styleFrom(
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .only(
+                                                                    top: 4),
+                                                            tapTargetSize:
+                                                                MaterialTapTargetSize
+                                                                    .shrinkWrap,
+                                                            alignment: Alignment
+                                                                .centerLeft,
+                                                          ),
+                                                          child: Text(
+                                                            'Múltiples paradas (lista)',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  payLinkColor,
+                                                              fontSize: 12,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                              decoration:
+                                                                  TextDecoration
+                                                                      .underline,
+                                                              decorationColor:
+                                                                  payLinkColor,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    )
+                                                  : Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        if (uiRutaMockup) ...[
+                                                          _tarjetaLineaPuntoMapa(
+                                                            isDark: isDark,
+                                                            accent: pRuta
+                                                                .origenAccent,
+                                                            fill: pRuta
+                                                                .origenFill,
+                                                            borde: pRuta
+                                                                .origenBorde,
+                                                            iconoCaja: Icons
+                                                                .gps_fixed_rounded,
+                                                            titulo:
+                                                                'Punto de partida',
+                                                            subtitulo:
+                                                                'Toca para buscar en el mapa…',
+                                                            textMuted:
+                                                                textMuted,
+                                                            resplandorOrigen:
+                                                                true,
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 12),
+                                                        ] else ...[
+                                                          Text(
+                                                            'Salida desde el mapa o GPS',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  textPrimary,
+                                                              fontSize: 14,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 4),
+                                                          Text(
+                                                            'Mové el pin si hace falta.',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  textSecondary,
+                                                              fontSize: 12.5,
+                                                              height: 1.3,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                              height: 12),
+                                                        ],
+                                                        SizedBox(
+                                                          width:
+                                                              double.infinity,
+                                                          child: OutlinedButton
+                                                              .icon(
+                                                            onPressed: () {
+                                                              _origenBuscarDireccion =
+                                                                  true;
+                                                              _origenDetManual =
+                                                                  null;
+                                                              origenManual = '';
+                                                              origenTexto = '';
+                                                              _invalidarCotizacion();
+                                                              if (mounted) {
+                                                                setState(() {});
+                                                              }
+                                                            },
+                                                            icon: Icon(
+                                                              Icons
+                                                                  .search_rounded,
+                                                              size: 22,
+                                                              color: uiRutaMockup
+                                                                  ? (isDark
+                                                                      ? const Color(
+                                                                          0xFF2ECC71)
+                                                                      : const Color(
+                                                                          0xFF0F9D58))
+                                                                  : pRuta
+                                                                      .origenAccent,
+                                                            ),
+                                                            label: Text(
+                                                              'Buscar dirección de salida',
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                fontSize: 15,
+                                                              ),
+                                                            ),
+                                                            style: uiRutaMockup
+                                                                ? OutlinedButton
+                                                                    .styleFrom(
+                                                                    foregroundColor: isDark
+                                                                        ? const Color(
+                                                                            0xFF2ECC71)
+                                                                        : const Color(
+                                                                            0xFF0F9D58),
+                                                                    backgroundColor:
+                                                                        Colors
+                                                                            .transparent,
+                                                                    side:
+                                                                        BorderSide(
+                                                                      color: isDark
+                                                                          ? const Color(
+                                                                              0xFF2ECC71)
+                                                                          : const Color(
+                                                                              0xFF0F9D58),
+                                                                      width:
+                                                                          1.5,
+                                                                    ),
+                                                                    padding:
+                                                                        const EdgeInsets
+                                                                            .symmetric(
+                                                                      vertical:
+                                                                          14,
+                                                                      horizontal:
+                                                                          14,
+                                                                    ),
+                                                                  )
+                                                                : OutlinedButton
+                                                                    .styleFrom(
+                                                                    foregroundColor:
+                                                                        pRuta
+                                                                            .origenAccent,
+                                                                    backgroundColor: isDark
+                                                                        ? pRuta.origenAccent.withValues(
+                                                                            alpha:
+                                                                                0.14)
+                                                                        : pRuta
+                                                                            .origenFill,
+                                                                    side:
+                                                                        BorderSide(
+                                                                      color: pRuta
+                                                                          .origenAccent
+                                                                          .withValues(
+                                                                              alpha: 0.85),
+                                                                      width:
+                                                                          1.5,
+                                                                    ),
+                                                                    padding:
+                                                                        const EdgeInsets
+                                                                            .symmetric(
+                                                                      vertical:
+                                                                          14,
+                                                                      horizontal:
+                                                                          14,
+                                                                    ),
+                                                                  ),
+                                                          ),
+                                                        ),
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                                  top: 8,
+                                                                  left: 2),
+                                                          child: Text(
+                                                            'Útil si programás desde fuera o con poca señal.',
+                                                            style: TextStyle(
+                                                              color: textMuted,
+                                                              fontSize: 11.5,
+                                                              height: 1.25,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        TextButton(
+                                                          onPressed: () {
+                                                            Navigator.of(
+                                                                    context)
+                                                                .push(
+                                                              MaterialPageRoute<
+                                                                  void>(
+                                                                builder: (_) =>
+                                                                    const ProgramarViajeMulti(),
+                                                              ),
+                                                            );
+                                                          },
+                                                          style: TextButton
+                                                              .styleFrom(
+                                                            padding:
+                                                                EdgeInsets.zero,
+                                                            tapTargetSize:
+                                                                MaterialTapTargetSize
+                                                                    .shrinkWrap,
+                                                            alignment: Alignment
+                                                                .centerLeft,
+                                                          ),
+                                                          child: Text(
+                                                            'Múltiples paradas (lista)',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  payLinkColor,
+                                                              fontSize: 12,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                              decoration:
+                                                                  TextDecoration
+                                                                      .underline,
+                                                              decorationColor:
+                                                                  payLinkColor,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                        ),
+                                      ),
+                                    if (!_tieneDestinoParaCalculo()) ...[
+                                      _bannerAntesDeElegirDestino(
+                                        destinoAccent: pRuta.destinoAccent,
+                                        destinoFill: pRuta.destinoFill,
+                                        textPrimary: textPrimary,
+                                        textSecondary: textSecondary,
+                                      ),
+                                      const SizedBox(height: 12),
+                                    ],
+                                    if (widget.tipoServicio != 'turismo' &&
+                                        kUsePlacesAutocomplete)
+                                      ParpadeoRutaProgramar(
+                                        pulseColor: uiRutaMockup && isDark
+                                            ? const Color(0xFFC084FC)
+                                            : pRuta.destinoAccent,
+                                        child: _seccionRutaCard(
+                                          titulo: uiRutaMockup
+                                              ? 'DESTINO'
+                                              : 'Destino',
+                                          icono: Icons.search_rounded,
+                                          accent: pRuta.destinoAccent,
+                                          fill: pRuta.destinoFill,
+                                          tituloColor: uiRutaMockup && isDark
+                                              ? Colors.white
+                                              : textPrimary,
+                                          mockupRuta: uiRutaMockup,
+                                          isDark: isDark,
+                                          ayudaHeader:
+                                              uiRutaMockup ? 'Llegada' : null,
+                                          ayudaColor: textMuted,
+                                          lineaTimeline: uiRutaMockup
+                                              ? const Color(0xFFC084FC)
+                                              : null,
+                                          child: Column(
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.start,
                                             children: [
-                                              Text(
-                                                'Punto de salida en RD',
-                                                style: TextStyle(
-                                                  color: textPrimary,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                'Buscá aunque no estés ahí todavía. Podés elegir un reciente sin escribir.',
-                                                style: TextStyle(
-                                                  color: textSecondary,
-                                                  fontSize: 12.5,
-                                                  height: 1.3,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 12),
-                                              CampoLugarAutocomplete(
-                                                label: 'Dirección de salida',
-                                                hint:
-                                                    'Ej. SDQ, hotel, sector…',
-                                                showQuickSuggestions: false,
-                                                showCategories: false,
-                                                fieldAccent: pRuta.origenAccent,
-                                                fieldFill: isDark
-                                                    ? const Color(0xFF0C1917)
-                                                    : Colors.white,
-                                                onPlaceSelected: (det) {
-                                                  _origenDetManual = det;
-                                                  origenManual =
-                                                      det.displayLabel;
-                                                  origenTexto =
-                                                      det.displayLabel;
-                                                  _origenMap =
-                                                      LatLng(det.lat, det.lon);
-                                                  _updateOrigenMarker(
-                                                      _origenMap!);
-                                                  setState(() {});
-                                                  _programarCalculoAutomatico();
-                                                },
-                                                onTextChanged: (t) {
-                                                  setState(() {
-                                                    origenManual = t;
-                                                    _origenDetManual = null;
-                                                    origenTexto = '';
-                                                    _invalidarCotizacion();
-                                                  });
-                                                  _programarCalculoAutomatico();
-                                                },
-                                              ),
-                                              const SizedBox(height: 10),
-                                              SizedBox(
-                                                width: double.infinity,
-                                                child: OutlinedButton.icon(
-                                                  onPressed:
-                                                      _volverOrigenMapaOGps,
-                                                  icon: Icon(
-                                                    Icons.map_outlined,
-                                                    size: 20,
-                                                    color: pRuta.origenAccent,
+                                              Stack(
+                                                children: [
+                                                  CampoLugarAutocomplete(
+                                                    label: 'Buscar destino',
+                                                    hint: uiRutaMockup
+                                                        ? 'Dirección, barrio, hotel o lugar en RD…'
+                                                        : '¿A dónde vas?',
+                                                    fieldAccent: uiRutaMockup &&
+                                                            isDark
+                                                        ? const Color(
+                                                            0xFFD8B4FE)
+                                                        : pRuta.destinoAccent,
+                                                    fieldFill: isDark
+                                                        ? (uiRutaMockup
+                                                            ? const Color(
+                                                                0xFF1E0B36)
+                                                            : const Color(
+                                                                0xFF1A0F2E))
+                                                        : Colors.white,
+                                                    onPlaceSelected:
+                                                        (det) async {
+                                                      _destinoDet = det;
+                                                      destino =
+                                                          det.displayLabel;
+                                                      destinoTexto =
+                                                          det.displayLabel;
+                                                      latDestino = det.lat;
+                                                      lonDestino = det.lon;
+
+                                                      final destLL = LatLng(
+                                                          det.lat, det.lon);
+                                                      _markers.removeWhere(
+                                                          (m) =>
+                                                              m.markerId
+                                                                  .value ==
+                                                              'destino');
+                                                      _markers.add(
+                                                        Marker(
+                                                          markerId:
+                                                              const MarkerId(
+                                                                  'destino'),
+                                                          position: destLL,
+                                                          icon: BitmapDescriptor
+                                                              .defaultMarkerWithHue(
+                                                                  BitmapDescriptor
+                                                                      .hueViolet),
+                                                          infoWindow:
+                                                              const InfoWindow(
+                                                                  title:
+                                                                      'Destino'),
+                                                          zIndexInt: 1,
+                                                        ),
+                                                      );
+                                                      setState(() {});
+
+                                                      if (_origenMap != null) {
+                                                        await _dibujarRutaReal(
+                                                          oLat: _origenMap!
+                                                              .latitude,
+                                                          oLon: _origenMap!
+                                                              .longitude,
+                                                          dLat: det.lat,
+                                                          dLon: det.lon,
+                                                          previewOnly: true,
+                                                        );
+                                                      }
+
+                                                      _programarCalculoAutomatico();
+                                                    },
+                                                    onTextChanged: (t) {
+                                                      _markers.removeWhere(
+                                                          (m) =>
+                                                              m.markerId
+                                                                  .value ==
+                                                              'destino');
+                                                      _polylines.clear();
+                                                      setState(() {
+                                                        destino = t;
+                                                        _destinoDet = null;
+                                                        latDestino = null;
+                                                        lonDestino = null;
+                                                        destinoTexto = '';
+                                                        _invalidarCotizacion();
+                                                      });
+                                                      _programarCalculoAutomatico();
+                                                    },
                                                   ),
-                                                  label: Text(
-                                                    'Volver a mapa / GPS',
+                                                ],
+                                              ),
+                                              if (destinoTexto.isNotEmpty)
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 6),
+                                                  child: Text(
+                                                    'Destino seleccionado: $destinoTexto',
                                                     style: TextStyle(
-                                                      color: textPrimary,
+                                                      color:
+                                                          pRuta.destinoAccent,
+                                                      fontSize: 12,
                                                       fontWeight:
                                                           FontWeight.w600,
                                                     ),
                                                   ),
-                                                  style: OutlinedButton
-                                                      .styleFrom(
-                                                    foregroundColor:
-                                                        textPrimary,
-                                                    side: BorderSide(
-                                                      color: isDark
-                                                          ? Colors.white30
-                                                          : const Color(
-                                                              0xFFD0D5DD),
-                                                    ),
-                                                    padding: const EdgeInsets
-                                                        .symmetric(
-                                                      vertical: 12,
-                                                    ),
-                                                  ),
                                                 ),
-                                              ),
-                                              TextButton(
-                                                onPressed: () {
-                                                  Navigator.of(context).push(
-                                                    MaterialPageRoute<void>(
-                                                      builder: (_) =>
-                                                          const ProgramarViajeMulti(),
-                                                    ),
-                                                  );
-                                                },
-                                                style: TextButton.styleFrom(
-                                                  padding: const EdgeInsets.only(
-                                                      top: 4),
-                                                  tapTargetSize:
-                                                      MaterialTapTargetSize
-                                                          .shrinkWrap,
-                                                  alignment:
-                                                      Alignment.centerLeft,
-                                                ),
-                                                child: Text(
-                                                  'Múltiples paradas (lista)',
-                                                  style: TextStyle(
-                                                    color: payLinkColor,
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.w600,
-                                                    decoration: TextDecoration
-                                                        .underline,
-                                                    decorationColor:
-                                                        payLinkColor,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          )
-                                        : Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                'Salida desde el mapa o GPS',
-                                                style: TextStyle(
-                                                  color: textPrimary,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                'Mové el pin si hace falta.',
-                                                style: TextStyle(
-                                                  color: textSecondary,
-                                                  fontSize: 12.5,
-                                                  height: 1.3,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 12),
-                                              SizedBox(
-                                                width: double.infinity,
-                                                child: OutlinedButton.icon(
-                                                  onPressed: () {
-                                                    _origenBuscarDireccion =
-                                                        true;
-                                                    _origenDetManual = null;
-                                                    origenManual = '';
-                                                    origenTexto = '';
-                                                    _invalidarCotizacion();
-                                                    if (mounted) {
-                                                      setState(() {});
-                                                    }
-                                                  },
-                                                  icon: Icon(
-                                                    Icons.search_rounded,
-                                                    size: 22,
-                                                    color: pRuta.origenAccent,
-                                                  ),
-                                                  label: Text(
-                                                    'Buscar dirección de salida',
-                                                    style: TextStyle(
-                                                      fontWeight: FontWeight.w700,
-                                                      fontSize: 15,
-                                                    ),
-                                                  ),
-                                                  style: OutlinedButton
-                                                      .styleFrom(
-                                                    foregroundColor:
-                                                        pRuta.origenAccent,
-                                                    backgroundColor: isDark
-                                                        ? pRuta.origenAccent
-                                                            .withValues(
-                                                                alpha: 0.14)
-                                                        : pRuta.origenFill,
-                                                    side: BorderSide(
-                                                      color: pRuta.origenAccent
-                                                          .withValues(
-                                                              alpha: 0.85),
-                                                      width: 1.5,
-                                                    ),
-                                                    padding: const EdgeInsets
-                                                        .symmetric(
-                                                      vertical: 14,
-                                                      horizontal: 14,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                              Padding(
-                                                padding: const EdgeInsets.only(
-                                                    top: 8, left: 2),
-                                                child: Text(
-                                                  'Útil si programás desde fuera o con poca señal.',
-                                                  style: TextStyle(
-                                                    color: textMuted,
-                                                    fontSize: 11.5,
-                                                    height: 1.25,
-                                                  ),
-                                                ),
-                                              ),
-                                              TextButton(
-                                                onPressed: () {
-                                                  Navigator.of(context).push(
-                                                    MaterialPageRoute<void>(
-                                                      builder: (_) =>
-                                                          const ProgramarViajeMulti(),
-                                                    ),
-                                                  );
-                                                },
-                                                style: TextButton.styleFrom(
-                                                  padding: EdgeInsets.zero,
-                                                  tapTargetSize:
-                                                      MaterialTapTargetSize
-                                                          .shrinkWrap,
-                                                  alignment:
-                                                      Alignment.centerLeft,
-                                                ),
-                                                child: Text(
-                                                  'Múltiples paradas (lista)',
-                                                  style: TextStyle(
-                                                    color: payLinkColor,
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.w600,
-                                                    decoration: TextDecoration
-                                                        .underline,
-                                                    decorationColor:
-                                                        payLinkColor,
-                                                  ),
-                                                ),
-                                              ),
                                             ],
                                           ),
-                              ),
-                              if (!_tieneDestinoParaCalculo()) ...[
-                                _bannerAntesDeElegirDestino(
-                                  destinoAccent: pRuta.destinoAccent,
-                                  destinoFill: pRuta.destinoFill,
-                                  textPrimary: textPrimary,
-                                  textSecondary: textSecondary,
-                                ),
-                                const SizedBox(height: 12),
-                              ],
-                              if (widget.tipoServicio != 'turismo' &&
-                                  kUsePlacesAutocomplete)
-                                _seccionRutaCard(
-                                  titulo: 'Paso 2 — Destino',
-                                  icono: Icons.flag_rounded,
-                                  accent: pRuta.destinoAccent,
-                                  fill: pRuta.destinoFill,
-                                  tituloColor: textPrimary,
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Stack(
-                                        children: [
-                                          CampoLugarAutocomplete(
-                                            label: 'Buscar destino',
-                                            hint: '¿A dónde vas?',
-                                            fieldAccent: pRuta.destinoAccent,
-                                            fieldFill: isDark
-                                                ? const Color(0xFF0F1729)
-                                                : Colors.white,
-                                            onPlaceSelected: (det) async {
-                                              _destinoDet = det;
-                                              destino = det.displayLabel;
-                                              destinoTexto = det.displayLabel;
-                                              latDestino = det.lat;
-                                              lonDestino = det.lon;
-
-                                              final destLL =
-                                                  LatLng(det.lat, det.lon);
-                                              _markers.removeWhere((m) =>
-                                                  m.markerId.value ==
-                                                  'destino');
-                                              _markers.add(
-                                                Marker(
-                                                  markerId:
-                                                      const MarkerId('destino'),
-                                                  position: destLL,
-                                                  icon: BitmapDescriptor
-                                                      .defaultMarkerWithHue(
-                                                          BitmapDescriptor
-                                                              .hueBlue),
-                                                  infoWindow: const InfoWindow(
-                                                      title: 'Destino'),
-                                                  zIndexInt: 1,
+                                        ),
+                                      ),
+                                    if (widget.tipoServicio == 'turismo') ...[
+                                      ParpadeoRutaProgramar(
+                                        pulseColor: pRuta.destinoAccent,
+                                        child: _seccionRutaCard(
+                                          titulo: 'Destino turístico',
+                                          icono: Icons.explore,
+                                          accent: pRuta.destinoAccent,
+                                          fill: pRuta.destinoFill,
+                                          tituloColor: textPrimary,
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
+                                            children: [
+                                              if (_destinoTurismoSeleccionado ==
+                                                  null)
+                                                ElevatedButton.icon(
+                                                  onPressed:
+                                                      _mostrarSelectorDestinosTuristicos,
+                                                  icon: const Icon(Icons.map),
+                                                  label: const Text(
+                                                      'Seleccionar destino turístico'),
+                                                  style:
+                                                      ElevatedButton.styleFrom(
+                                                    backgroundColor:
+                                                        pRuta.destinoAccent,
+                                                    foregroundColor:
+                                                        Colors.white,
+                                                    minimumSize: const Size(
+                                                        double.infinity, 48),
+                                                    shape:
+                                                        RoundedRectangleBorder(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              12),
+                                                    ),
+                                                  ),
+                                                )
+                                              else
+                                                Container(
+                                                  padding:
+                                                      const EdgeInsets.all(12),
+                                                  decoration: BoxDecoration(
+                                                    color: isDark
+                                                        ? const Color(
+                                                            0xFF0F172A)
+                                                        : Colors.white,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            12),
+                                                    border: Border.all(
+                                                      color: pRuta.destinoAccent
+                                                          .withValues(
+                                                              alpha: 0.55),
+                                                    ),
+                                                  ),
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Row(
+                                                        children: [
+                                                          Icon(
+                                                              Icons
+                                                                  .check_circle,
+                                                              color: pRuta
+                                                                  .destinoAccent,
+                                                              size: 20),
+                                                          const SizedBox(
+                                                              width: 8),
+                                                          Expanded(
+                                                            child: Text(
+                                                              _destinoTurismoSeleccionado!
+                                                                  .nombre,
+                                                              style: TextStyle(
+                                                                color:
+                                                                    textPrimary,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        _destinoTurismoSeleccionado!
+                                                            .ciudad,
+                                                        style: TextStyle(
+                                                            color:
+                                                                textSecondary),
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Text(
+                                                        'Distancia: ${FormatosMoneda.km(distanciaKm)}',
+                                                        style: TextStyle(
+                                                            color: textMuted),
+                                                      ),
+                                                      Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                vertical: 8),
+                                                        child: TextFormField(
+                                                          controller:
+                                                              _peajeCtrl,
+                                                          keyboardType:
+                                                              TextInputType
+                                                                  .number,
+                                                          style: TextStyle(
+                                                              color:
+                                                                  textPrimary),
+                                                          decoration:
+                                                              InputDecoration(
+                                                            labelText:
+                                                                'Peaje (RD\$)',
+                                                            hintText: 'Ej: 100',
+                                                            labelStyle: TextStyle(
+                                                                color:
+                                                                    textSecondary),
+                                                            hintStyle: TextStyle(
+                                                                color:
+                                                                    textMuted),
+                                                            prefixIcon: Icon(
+                                                                Icons.toll,
+                                                                color:
+                                                                    textMuted),
+                                                            filled: true,
+                                                            fillColor: isDark
+                                                                ? const Color(
+                                                                    0xFF1A1A1A)
+                                                                : const Color(
+                                                                    0xFFF8FAFC),
+                                                            border:
+                                                                OutlineInputBorder(
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          12),
+                                                              borderSide:
+                                                                  BorderSide(
+                                                                      color:
+                                                                          switchCardBorder),
+                                                            ),
+                                                            focusedBorder:
+                                                                OutlineInputBorder(
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          12),
+                                                              borderSide: BorderSide(
+                                                                  color: pRuta
+                                                                      .destinoAccent,
+                                                                  width: 2),
+                                                            ),
+                                                          ),
+                                                          onChanged: (value) {
+                                                            setState(() {
+                                                              _peaje = double
+                                                                      .tryParse(
+                                                                          value) ??
+                                                                  0.0;
+                                                            });
+                                                            _programarCalculoAutomatico();
+                                                          },
+                                                        ),
+                                                      ),
+                                                      TextButton.icon(
+                                                        onPressed: () {
+                                                          setState(() {
+                                                            _destinoTurismoSeleccionado =
+                                                                null;
+                                                            _invalidarCotizacion();
+                                                            latDestino = null;
+                                                            lonDestino = null;
+                                                            destinoTexto = '';
+                                                            destino = '';
+                                                            _peaje = 0.0;
+                                                            _peajeCtrl.clear();
+                                                          });
+                                                        },
+                                                        icon: const Icon(
+                                                            Icons.refresh,
+                                                            size: 16),
+                                                        label: const Text(
+                                                            'Cambiar destino'),
+                                                        style: TextButton
+                                                            .styleFrom(
+                                                          foregroundColor: pRuta
+                                                              .destinoAccent,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
                                                 ),
-                                              );
-                                              setState(() {});
-
-                                              if (_origenMap != null) {
-                                                await _dibujarRutaReal(
-                                                  oLat: _origenMap!.latitude,
-                                                  oLon: _origenMap!.longitude,
-                                                  dLat: det.lat,
-                                                  dLon: det.lon,
-                                                  previewOnly: true,
-                                                );
-                                              }
-
-                                              _programarCalculoAutomatico();
-                                            },
-                                            onTextChanged: (t) {
-                                              _markers.removeWhere((m) =>
-                                                  m.markerId.value ==
-                                                  'destino');
-                                              _polylines.clear();
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                    if (!widget.modoAhora) ...[
+                                      const SizedBox(height: 10),
+                                      const ProgramarViajeFuturoAnimation(),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Fecha y hora del viaje',
+                                        style: TextStyle(
+                                          color: textPrimary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      ElevatedButton.icon(
+                                        onPressed: _seleccionarFechaHora,
+                                        icon: const Icon(Icons.calendar_today),
+                                        label: const Text(
+                                            'Seleccionar Fecha y Hora'),
+                                        style: _botonEstilo(context),
+                                      ),
+                                      Text(
+                                        'Programado para: ${DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora)}',
+                                        style: TextStyle(
+                                          color: isDark
+                                              ? Colors.greenAccent
+                                              : const Color(0xFF0F9D58),
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                    const SizedBox(height: 14),
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                          top: 4, bottom: 2),
+                                      child: Text(
+                                        'Opciones del viaje',
+                                        style: TextStyle(
+                                          color: textSecondary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: 0.4,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _Caja(
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.swap_horiz,
+                                              color: textSecondary),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              '¿Ida y vuelta?',
+                                              style: TextStyle(
+                                                color: textPrimary,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                          Switch.adaptive(
+                                            value: idaYVuelta,
+                                            activeColor: Colors.white,
+                                            activeTrackColor: switchAccent,
+                                            inactiveThumbColor: isDark
+                                                ? Colors.white70
+                                                : const Color(0xFF98A2B3),
+                                            inactiveTrackColor: isDark
+                                                ? Colors.white24
+                                                : const Color(0xFFD0D5DD),
+                                            onChanged: (v) {
                                               setState(() {
-                                                destino = t;
-                                                _destinoDet = null;
-                                                latDestino = null;
-                                                lonDestino = null;
-                                                destinoTexto = '';
-                                                _invalidarCotizacion();
+                                                idaYVuelta = v;
                                               });
                                               _programarCalculoAutomatico();
                                             },
                                           ),
                                         ],
                                       ),
-                                      if (destinoTexto.isNotEmpty)
-                                        Padding(
-                                          padding:
-                                              const EdgeInsets.only(top: 6),
-                                          child: Text(
-                                            'Destino seleccionado: $destinoTexto',
-                                            style: TextStyle(
-                                              color: pRuta.destinoAccent,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600,
-                                            ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    if (tipoServicio != 'motor') ...[
+                                      if (tipoServicio == 'normal')
+                                        _Caja(
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                  Icons
+                                                      .directions_car_filled_outlined,
+                                                  color: textSecondary),
+                                              const SizedBox(width: 10),
+                                              Text('Tipo de Vehículo',
+                                                  style: TextStyle(
+                                                      color: textSecondary)),
+                                              const Spacer(),
+                                              DropdownButton<String>(
+                                                value: tipoVehiculo,
+                                                dropdownColor: isDark
+                                                    ? const Color(0xFF1A1A1A)
+                                                    : Colors.white,
+                                                underline: const SizedBox(),
+                                                style: TextStyle(
+                                                    color: textPrimary,
+                                                    fontSize: 16),
+                                                items: [
+                                                  'Carro',
+                                                  'Jeepeta',
+                                                  'Minibús',
+                                                  'Minivan',
+                                                  'AutobusGuagua'
+                                                ]
+                                                    .map(
+                                                        (e) => DropdownMenuItem(
+                                                              value: e,
+                                                              child: Text(e,
+                                                                  style: TextStyle(
+                                                                      color:
+                                                                          textPrimary)),
+                                                            ))
+                                                    .toList(),
+                                                onChanged: (v) {
+                                                  setState(() {
+                                                    tipoVehiculo = v ?? 'Carro';
+                                                  });
+                                                  _programarCalculoAutomatico();
+                                                },
+                                              ),
+                                            ],
                                           ),
                                         ),
+                                      if (tipoServicio == 'turismo')
+                                        _buildTurismoVehiculoSelector(),
+                                      const SizedBox(height: 10),
                                     ],
-                                  ),
-                                ),
-                              if (widget.tipoServicio == 'turismo') ...[
-                                _seccionRutaCard(
-                                  titulo: 'Paso 2 — Destino turístico',
-                                  icono: Icons.explore,
-                                  accent: pRuta.destinoAccent,
-                                  fill: pRuta.destinoFill,
-                                  tituloColor: textPrimary,
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      if (_destinoTurismoSeleccionado == null)
-                                        ElevatedButton.icon(
-                                          onPressed:
-                                              _mostrarSelectorDestinosTuristicos,
-                                          icon: const Icon(Icons.map),
-                                          label: const Text(
-                                              'Seleccionar destino turístico'),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor:
-                                                pRuta.destinoAccent,
-                                            foregroundColor: Colors.white,
-                                            minimumSize:
-                                                const Size(double.infinity, 48),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
+                                    _Caja(
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.credit_card_outlined,
+                                              color: textSecondary),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: TextButton.icon(
+                                              onPressed: _elegirMetodoPago,
+                                              icon: Icon(
+                                                  Icons
+                                                      .account_balance_wallet_outlined,
+                                                  color: payLinkColor),
+                                              label: Text(
+                                                'Elegir método de pago',
+                                                style: TextStyle(
+                                                    color: payLinkColor,
+                                                    fontWeight:
+                                                        FontWeight.w700),
+                                              ),
                                             ),
                                           ),
-                                        )
-                                      else
-                                        Container(
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 12, vertical: 10),
+                                            decoration: BoxDecoration(
+                                              color: metodoPagoChipBg,
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                  color: metodoPagoChipBorder),
+                                            ),
+                                            child: Text(metodoPago,
+                                                style: TextStyle(
+                                                    color: textSecondary,
+                                                    fontWeight:
+                                                        FontWeight.w700)),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (metodoPago
+                                        .toLowerCase()
+                                        .contains('transfer'))
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: Container(
+                                          width: double.infinity,
                                           padding: const EdgeInsets.all(12),
                                           decoration: BoxDecoration(
-                                            color: isDark
-                                                ? const Color(0xFF0F172A)
-                                                : Colors.white,
+                                            color: Colors.blue.withValues(
+                                                alpha: isDark ? 0.12 : 0.08),
                                             borderRadius:
-                                                BorderRadius.circular(12),
+                                                BorderRadius.circular(10),
                                             border: Border.all(
-                                              color: pRuta.destinoAccent
-                                                  .withValues(alpha: 0.55),
+                                              color: isDark
+                                                  ? Colors.blueAccent
+                                                  : const Color(0xFF1570EF),
                                             ),
                                           ),
                                           child: Column(
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.start,
                                             children: [
-                                              Row(
-                                                children: [
-                                                  Icon(Icons.check_circle,
-                                                      color:
-                                                          pRuta.destinoAccent,
-                                                      size: 20),
-                                                  const SizedBox(width: 8),
-                                                  Expanded(
-                                                    child: Text(
-                                                      _destinoTurismoSeleccionado!
-                                                          .nombre,
-                                                      style: TextStyle(
-                                                        color: textPrimary,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 4),
                                               Text(
-                                                _destinoTurismoSeleccionado!
-                                                    .ciudad,
+                                                'Transferencia al taxista',
                                                 style: TextStyle(
-                                                    color: textSecondary),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                'Distancia: ${FormatosMoneda.km(distanciaKm)}',
-                                                style:
-                                                    TextStyle(color: textMuted),
-                                              ),
-                                              Padding(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                        vertical: 8),
-                                                child: TextFormField(
-                                                  controller: _peajeCtrl,
-                                                  keyboardType:
-                                                      TextInputType.number,
-                                                  style: TextStyle(
-                                                      color: textPrimary),
-                                                  decoration: InputDecoration(
-                                                    labelText: 'Peaje (RD\$)',
-                                                    hintText: 'Ej: 100',
-                                                    labelStyle: TextStyle(
-                                                        color: textSecondary),
-                                                    hintStyle: TextStyle(
-                                                        color: textMuted),
-                                                    prefixIcon: Icon(Icons.toll,
-                                                        color: textMuted),
-                                                    filled: true,
-                                                    fillColor: isDark
-                                                        ? const Color(
-                                                            0xFF1A1A1A)
-                                                        : const Color(
-                                                            0xFFF8FAFC),
-                                                    border: OutlineInputBorder(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              12),
-                                                      borderSide: BorderSide(
-                                                          color:
-                                                              switchCardBorder),
-                                                    ),
-                                                    focusedBorder:
-                                                        OutlineInputBorder(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              12),
-                                                      borderSide: BorderSide(
-                                                          color: pRuta
-                                                              .destinoAccent,
-                                                          width: 2),
-                                                    ),
-                                                  ),
-                                                  onChanged: (value) {
-                                                    setState(() {
-                                                      _peaje = double.tryParse(
-                                                              value) ??
-                                                          0.0;
-                                                    });
-                                                    _programarCalculoAutomatico();
-                                                  },
+                                                  color: textPrimary,
+                                                  fontWeight: FontWeight.bold,
                                                 ),
                                               ),
-                                              TextButton.icon(
-                                                onPressed: () {
-                                                  setState(() {
-                                                    _destinoTurismoSeleccionado =
-                                                        null;
-                                                    _invalidarCotizacion();
-                                                    latDestino = null;
-                                                    lonDestino = null;
-                                                    destinoTexto = '';
-                                                    destino = '';
-                                                    _peaje = 0.0;
-                                                    _peajeCtrl.clear();
-                                                  });
-                                                },
-                                                icon: const Icon(Icons.refresh,
-                                                    size: 16),
-                                                label: const Text(
-                                                    'Cambiar destino'),
-                                                style: TextButton.styleFrom(
-                                                  foregroundColor:
-                                                      pRuta.destinoAccent,
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                'El pago por transferencia se realiza al taxista asignado.\n'
+                                                'Cuando tengas el viaje asignado podras ver su cuenta bancaria\n'
+                                                'y subir el comprobante para validacion de Administracion.',
+                                                style: TextStyle(
+                                                    color: textSecondary,
+                                                    height: 1.35),
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                'Efectivo y transferencia se pagan al taxista. La comision se liquida semanalmente.',
+                                                style: TextStyle(
+                                                  color: isDark
+                                                      ? Colors.amberAccent
+                                                      : const Color(0xFFB45309),
+                                                  fontSize: 12,
                                                 ),
                                               ),
                                             ],
                                           ),
                                         ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                              ],
-                              Padding(
-                                padding:
-                                    const EdgeInsets.only(top: 4, bottom: 2),
-                                child: Text(
-                                  'Opciones del viaje',
-                                  style: TextStyle(
-                                    color: textSecondary,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              _Caja(
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.swap_horiz,
-                                        color: textSecondary),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Text(
-                                        '¿Ida y vuelta?',
-                                        style: TextStyle(
-                                          color: textPrimary,
-                                          fontWeight: FontWeight.w600,
-                                        ),
                                       ),
-                                    ),
-                                    Switch.adaptive(
-                                      value: idaYVuelta,
-                                      activeColor: Colors.white,
-                                      activeTrackColor: switchAccent,
-                                      inactiveThumbColor: isDark
-                                          ? Colors.white70
-                                          : const Color(0xFF98A2B3),
-                                      inactiveTrackColor: isDark
-                                          ? Colors.white24
-                                          : const Color(0xFFD0D5DD),
-                                      onChanged: (v) {
-                                        setState(() {
-                                          idaYVuelta = v;
-                                        });
-                                        _programarCalculoAutomatico();
-                                      },
-                                    ),
+                                    if (precioCalculado > 0)
+                                      Container(
+                                        margin: const EdgeInsets.symmetric(
+                                            vertical: 16),
+                                        padding: const EdgeInsets.all(20),
+                                        decoration: BoxDecoration(
+                                          color: _colorServicio.withValues(
+                                              alpha: 0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                          border: Border.all(
+                                              color: _colorServicio, width: 2),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            Text(
+                                              'DISTANCIA',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                color: _colorServicio,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                letterSpacing: 1,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              FormatosMoneda.km(distanciaKm),
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                color: textSecondary,
+                                                fontSize: 16,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child:
+                                                  Divider(color: dividerSoft),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Text(
+                                              'TOTAL',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                color: textSecondary,
+                                                fontSize: 14,
+                                              ),
+                                            ),
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: FittedBox(
+                                                fit: BoxFit.scaleDown,
+                                                alignment: Alignment.center,
+                                                child: Text(
+                                                  FormatosMoneda.rd(
+                                                      precioCalculado),
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    color: _colorServicio,
+                                                    fontSize: 42,
+                                                    fontWeight: FontWeight.w900,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            if (_peaje > 0)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                    top: 8),
+                                                child: Text(
+                                                  'Incluye peaje: ${FormatosMoneda.rd(_peaje)}',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                      color: textMuted,
+                                                      fontSize: 12),
+                                                ),
+                                              ),
+                                            const SizedBox(height: 20),
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: ElevatedButton(
+                                                onPressed: (ubicacionObtenida &&
+                                                        precioCalculado > 0)
+                                                    ? () => _programarViaje(
+                                                        ScaffoldMessenger.of(
+                                                            context),
+                                                        Navigator.of(context))
+                                                    : null,
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor:
+                                                      _colorServicio,
+                                                  foregroundColor: Colors.black,
+                                                  padding: const EdgeInsets
+                                                      .symmetric(vertical: 16),
+                                                  shape: RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            12),
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  widget.modoAhora
+                                                      ? '✅ CONFIRMAR VIAJE'
+                                                      : '✅ CONFIRMAR PROGRAMACIÓN',
+                                                  style: const TextStyle(
+                                                    fontSize: 18,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    else if (_cargando)
+                                      CotizacionPrecioLoadingPlaceholder(
+                                        accentColor: _colorServicio,
+                                        isDark: isDark,
+                                        message: (ubicacionObtenida &&
+                                                precioCalculado > 0)
+                                            ? 'Guardando viaje…'
+                                            : 'Calculando precio…',
+                                      ),
                                   ],
                                 ),
-                              ),
-                              const SizedBox(height: 10),
-                              if (tipoServicio != 'motor') ...[
-                                if (tipoServicio == 'normal')
-                                  _Caja(
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                            Icons
-                                                .directions_car_filled_outlined,
-                                            color: textSecondary),
-                                        const SizedBox(width: 10),
-                                        Text('Tipo de Vehículo',
-                                            style: TextStyle(
-                                                color: textSecondary)),
-                                        const Spacer(),
-                                        DropdownButton<String>(
-                                          value: tipoVehiculo,
-                                          dropdownColor: isDark
-                                              ? const Color(0xFF1A1A1A)
-                                              : Colors.white,
-                                          underline: const SizedBox(),
-                                          style: TextStyle(
-                                              color: textPrimary, fontSize: 16),
-                                          items: [
-                                            'Carro',
-                                            'Jeepeta',
-                                            'Minibús',
-                                            'Minivan',
-                                            'AutobusGuagua'
-                                          ]
-                                              .map((e) => DropdownMenuItem(
-                                                    value: e,
-                                                    child: Text(e,
-                                                        style: TextStyle(
-                                                            color:
-                                                                textPrimary)),
-                                                  ))
-                                              .toList(),
-                                          onChanged: (v) {
-                                            setState(() {
-                                              tipoVehiculo = v ?? 'Carro';
-                                            });
-                                            _programarCalculoAutomatico();
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                if (tipoServicio == 'turismo')
-                                  _buildTurismoVehiculoSelector(),
-                                const SizedBox(height: 10),
-                              ],
-                              _Caja(
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.credit_card_outlined,
-                                        color: textSecondary),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: TextButton.icon(
-                                        onPressed: _elegirMetodoPago,
-                                        icon: Icon(
-                                            Icons
-                                                .account_balance_wallet_outlined,
-                                            color: payLinkColor),
-                                        label: Text(
-                                          'Elegir método de pago',
-                                          style: TextStyle(
-                                              color: payLinkColor,
-                                              fontWeight: FontWeight.w700),
-                                        ),
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 10),
-                                      decoration: BoxDecoration(
-                                        color: metodoPagoChipBg,
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                            color: metodoPagoChipBorder),
-                                      ),
-                                      child: Text(metodoPago,
-                                          style: TextStyle(
-                                              color: textSecondary,
-                                              fontWeight: FontWeight.w700)),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (metodoPago.toLowerCase().contains('transfer'))
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue.withValues(
-                                          alpha: isDark ? 0.12 : 0.08),
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(
-                                        color: isDark
-                                            ? Colors.blueAccent
-                                            : const Color(0xFF1570EF),
-                                      ),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Transferencia al taxista',
-                                          style: TextStyle(
-                                            color: textPrimary,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          'El pago por transferencia se realiza al taxista asignado.\n'
-                                          'Cuando tengas el viaje asignado podras ver su cuenta bancaria\n'
-                                          'y subir el comprobante para validacion de Administracion.',
-                                          style: TextStyle(
-                                              color: textSecondary,
-                                              height: 1.35),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          'Efectivo y transferencia se pagan al taxista. La comision se liquida semanalmente.',
-                                          style: TextStyle(
-                                            color: isDark
-                                                ? Colors.amberAccent
-                                                : const Color(0xFFB45309),
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              const SizedBox(height: 12),
-                              if (!widget.modoAhora) ...[
-                                Text("Fecha y hora del viaje",
-                                    style: TextStyle(
-                                        color: textPrimary,
-                                        fontWeight: FontWeight.w600)),
-                                ElevatedButton.icon(
-                                  onPressed: _seleccionarFechaHora,
-                                  icon: const Icon(Icons.calendar_today),
-                                  label: const Text("Seleccionar Fecha y Hora"),
-                                  style: _botonEstilo(context),
-                                ),
-                                Text(
-                                  "Programado para: ${DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora)}",
-                                  style: TextStyle(
-                                    color: isDark
-                                        ? Colors.greenAccent
-                                        : const Color(0xFF0F9D58),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
+                              if (latCliente != null &&
+                                  latDestino != null &&
+                                  !_mostrarResumenCotizacion)
                                 const SizedBox(height: 12),
-                              ],
-                              if (precioCalculado > 0)
-                                Container(
-                                  margin:
-                                      const EdgeInsets.symmetric(vertical: 16),
-                                  padding: const EdgeInsets.all(20),
-                                  decoration: BoxDecoration(
-                                    color:
-                                        _colorServicio.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                        color: _colorServicio, width: 2),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        'DISTANCIA',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: _colorServicio,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          letterSpacing: 1,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        FormatosMoneda.km(distanciaKm),
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: textSecondary,
-                                          fontSize: 16,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: Divider(color: dividerSoft),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        'TOTAL',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: textSecondary,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: FittedBox(
-                                          fit: BoxFit.scaleDown,
-                                          alignment: Alignment.center,
-                                          child: Text(
-                                            FormatosMoneda.rd(
-                                                precioCalculado),
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              color: _colorServicio,
-                                              fontSize: 42,
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      if (_peaje > 0)
-                                        Padding(
-                                          padding:
-                                              const EdgeInsets.only(top: 8),
-                                          child: Text(
-                                            'Incluye peaje: ${FormatosMoneda.rd(_peaje)}',
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                                color: textMuted, fontSize: 12),
-                                          ),
-                                        ),
-                                      const SizedBox(height: 20),
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: ElevatedButton(
-                                          onPressed: (ubicacionObtenida &&
-                                                  precioCalculado > 0)
-                                              ? () => _programarViaje(
-                                                  ScaffoldMessenger.of(context),
-                                                  Navigator.of(context))
-                                              : null,
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: _colorServicio,
-                                            foregroundColor: Colors.black,
-                                            padding: const EdgeInsets.symmetric(
-                                                vertical: 16),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                          ),
-                                          child: Text(
-                                            widget.modoAhora
-                                                ? '✅ CONFIRMAR VIAJE'
-                                                : '✅ CONFIRMAR PROGRAMACIÓN',
-                                            style: const TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              else if (_cargando)
-                                CotizacionPrecioLoadingPlaceholder(
-                                  accentColor: _colorServicio,
-                                  isDark: isDark,
-                                  message: (ubicacionObtenida &&
-                                          precioCalculado > 0)
-                                      ? 'Guardando viaje…'
-                                      : 'Calculando precio…',
-                                ),
                             ],
                           ),
-                        if (latCliente != null &&
-                            latDestino != null &&
-                            !_mostrarResumenCotizacion)
-                          const SizedBox(height: 12),
-                      ],
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-        );
+              );
             },
           ),
         ],

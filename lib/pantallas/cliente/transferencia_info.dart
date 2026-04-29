@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -25,7 +24,8 @@ class _TransferenciaInfoState extends State<TransferenciaInfo> {
   bool _subiendoComprobante = false;
   String? _comprobanteUrl;
 
-  String get _referencia => 'VIAJE-${widget.viajeId.substring(0, 6).toUpperCase()}';
+  String get _referencia =>
+      'VIAJE-${widget.viajeId.substring(0, 6).toUpperCase()}';
 
   Future<void> _seleccionarComprobante() async {
     if (_subiendoComprobante) return;
@@ -57,7 +57,8 @@ class _TransferenciaInfoState extends State<TransferenciaInfo> {
     } on FirebaseException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error Storage (${e.code}): ${e.message ?? ''}')),
+        SnackBar(
+            content: Text('Error Storage (${e.code}): ${e.message ?? ''}')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -89,7 +90,8 @@ class _TransferenciaInfoState extends State<TransferenciaInfo> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Transferencia reportada. Queda pendiente de confirmacion por Admin.'),
+          content: Text(
+              'Transferencia reportada. Queda pendiente de confirmacion por Admin.'),
           backgroundColor: Colors.green,
         ),
       );
@@ -97,7 +99,8 @@ class _TransferenciaInfoState extends State<TransferenciaInfo> {
     } on FirebaseException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error Firestore (${e.code}): ${e.message ?? ''}')),
+        SnackBar(
+            content: Text('Error Firestore (${e.code}): ${e.message ?? ''}')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -133,7 +136,8 @@ class _TransferenciaInfoState extends State<TransferenciaInfo> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: _subiendoComprobante ? null : _seleccionarComprobante,
+                onPressed:
+                    _subiendoComprobante ? null : _seleccionarComprobante,
                 icon: const Icon(Icons.upload_file),
                 label: Text(
                   _subiendoComprobante

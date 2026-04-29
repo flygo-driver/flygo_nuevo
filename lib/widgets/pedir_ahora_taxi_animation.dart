@@ -6,7 +6,8 @@ class PedirAhoraTaxiAnimation extends StatefulWidget {
   const PedirAhoraTaxiAnimation({super.key});
 
   @override
-  State<PedirAhoraTaxiAnimation> createState() => _PedirAhoraTaxiAnimationState();
+  State<PedirAhoraTaxiAnimation> createState() =>
+      _PedirAhoraTaxiAnimationState();
 }
 
 class _PedirAhoraTaxiAnimationState extends State<PedirAhoraTaxiAnimation>
@@ -168,7 +169,13 @@ class _TaxiMapPainter extends CustomPainter {
     final pinCenter = Offset(w * 0.1, h * 0.78);
     final pinPaint = Paint()..color = Colors.white.withValues(alpha: 0.9);
     canvas.drawCircle(pinCenter, 4, pinPaint);
-    canvas.drawCircle(pinCenter, 6, Paint()..color = Colors.redAccent.withValues(alpha: 0.9)..style = PaintingStyle.stroke..strokeWidth = 1.5);
+    canvas.drawCircle(
+        pinCenter,
+        6,
+        Paint()
+          ..color = Colors.redAccent.withValues(alpha: 0.9)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5);
   }
 
   Offset _quadraticPoint(Offset p0, Offset p1, Offset p2, double t) {
@@ -179,7 +186,8 @@ class _TaxiMapPainter extends CustomPainter {
     );
   }
 
-  void _drawDashedPath(Canvas canvas, Path path, Paint paint, {required double dashOffset}) {
+  void _drawDashedPath(Canvas canvas, Path path, Paint paint,
+      {required double dashOffset}) {
     for (final metric in path.computeMetrics()) {
       double d = dashOffset % 12;
       while (d < metric.length) {

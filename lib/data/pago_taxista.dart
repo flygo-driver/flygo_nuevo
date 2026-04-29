@@ -48,33 +48,34 @@ class _PagoTaxistaState extends State<PagoTaxista> {
               child: CircularProgressIndicator(color: Colors.greenAccent),
             )
           : pagos.isEmpty
-          ? const Center(
-              child: Text(
-                "Aún no has recibido pagos",
-                style: TextStyle(color: Colors.white),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: pagos.length,
-              itemBuilder: (context, index) {
-                final pago = pagos[index];
-                final fecha = DateTime.parse(pago['fecha']);
-                return Card(
-                  color: Colors.grey[850],
-                  child: ListTile(
-                    title: Text(
-                      "RD\$${pago['monto'].toStringAsFixed(2)}",
-                      style: const TextStyle(color: Colors.white, fontSize: 18),
-                    ),
-                    subtitle: Text(
-                      "Fecha: ${fecha.day}/${fecha.month}/${fecha.year} - Método: ${pago['metodo']}",
-                      style: const TextStyle(color: Colors.white70),
-                    ),
+              ? const Center(
+                  child: Text(
+                    "Aún no has recibido pagos",
+                    style: TextStyle(color: Colors.white),
                   ),
-                );
-              },
-            ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: pagos.length,
+                  itemBuilder: (context, index) {
+                    final pago = pagos[index];
+                    final fecha = DateTime.parse(pago['fecha']);
+                    return Card(
+                      color: Colors.grey[850],
+                      child: ListTile(
+                        title: Text(
+                          "RD\$${pago['monto'].toStringAsFixed(2)}",
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 18),
+                        ),
+                        subtitle: Text(
+                          "Fecha: ${fecha.day}/${fecha.month}/${fecha.year} - Método: ${pago['metodo']}",
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                    );
+                  },
+                ),
     );
   }
 }

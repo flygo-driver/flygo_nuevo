@@ -62,11 +62,13 @@ abstract final class AdminUi {
   static Color tabUnselected(BuildContext context) => secondary(context);
 
   /// Borde para contenedores informativos (p. ej. banners morados).
-  static Color infoBorder(BuildContext context) =>
-      light(context) ? Colors.deepPurple.shade200 : Colors.purpleAccent.withValues(alpha: 0.35);
+  static Color infoBorder(BuildContext context) => light(context)
+      ? Colors.deepPurple.shade200
+      : Colors.purpleAccent.withValues(alpha: 0.35);
 
-  static Color infoFill(BuildContext context) =>
-      light(context) ? Colors.deepPurple.shade50.withValues(alpha: 0.85) : Colors.purple.withValues(alpha: 0.12);
+  static Color infoFill(BuildContext context) => light(context)
+      ? Colors.deepPurple.shade50.withValues(alpha: 0.85)
+      : Colors.purple.withValues(alpha: 0.12);
 
   static TextStyle titleStyle(BuildContext context, {FontWeight? weight}) =>
       TextStyle(color: onCard(context), fontWeight: weight ?? FontWeight.w600);
@@ -83,7 +85,8 @@ abstract final class AdminUi {
       labelStyle: TextStyle(color: secondary(context)),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: o.withValues(alpha: light(context) ? 0.5 : 0.35)),
+        borderSide:
+            BorderSide(color: o.withValues(alpha: light(context) ? 0.5 : 0.35)),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),

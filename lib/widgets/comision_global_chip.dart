@@ -10,7 +10,10 @@ class ComisionGlobalChip extends StatelessWidget {
     final amber = Theme.of(context).brightness == Brightness.light
         ? Colors.amber.shade900
         : const Color(0xFFFFC107);
-    final fill = Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.65);
+    final fill = Theme.of(context)
+        .colorScheme
+        .surfaceContainerHighest
+        .withValues(alpha: 0.65);
 
     return StreamBuilder<int>(
       stream: WalletService.streamComisionCentsGlobal(),

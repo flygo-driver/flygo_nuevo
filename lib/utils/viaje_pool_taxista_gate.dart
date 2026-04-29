@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
 /// Reglas compartidas: lista «Viajes disponibles» y pantalla detalle (mismo criterio de claim).
 class ViajePoolTaxistaGate {
@@ -16,7 +17,8 @@ class ViajePoolTaxistaGate {
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
-  static DateTime acceptAfterDeViaje(Map<String, dynamic> data, DateTime fecha) {
+  static DateTime acceptAfterDeViaje(
+      Map<String, dynamic> data, DateTime fecha) {
     final raw = data['acceptAfter'];
     if (raw is Timestamp) return raw.toDate();
     if (raw is DateTime) return raw;
@@ -24,7 +26,9 @@ class ViajePoolTaxistaGate {
       final p = DateTime.tryParse(raw);
       if (p != null) return p;
     }
-    return fecha.subtract(const Duration(hours: 2));
+    return fecha.subtract(
+      const Duration(minutes: TripPublishWindows.poolLeadMinutesProgramado),
+    );
   }
 
   static bool estadoPermiteClaimPool(String estadoRaw, String estadoNorm) {
@@ -43,8 +47,8 @@ class ViajePoolTaxistaGate {
     DateTime? vence;
     if (rh is Timestamp) vence = rh.toDate();
     if (rh is DateTime) vence = rh;
-    final bool reservaVigente =
-        reservadoPor.isNotEmpty && (vence == null || vence.isAfter(DateTime.now()));
+    final bool reservaVigente = reservadoPor.isNotEmpty &&
+        (vence == null || vence.isAfter(DateTime.now()));
     return reservaVigente;
   }
 
@@ -65,8 +69,15 @@ class ViajePoolTaxistaGate {
 
   /// Misma lógica que el filtro de la lista del pool (taxista normal / motor).
   static bool viajeTomableEnPool(Map<String, dynamic> data, String myUid) {
+    final String bolaPid =
+        (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
+    if (bolaPid.isNotEmpty && data['bolaNegociacionAbierta'] == true) {
+      return false;
+    }
+
     final String tipoServicio = (data['tipoServicio'] ?? 'normal').toString();
-    final String canalAsignacion = (data['canalAsignacion'] ?? 'pool').toString();
+    final String canalAsignacion =
+        (data['canalAsignacion'] ?? 'pool').toString();
 
     if (tipoServicio == 'turismo' ||
         canalAsignacion == 'admin' ||
@@ -117,5 +128,15 @@ class ViajePoolTaxistaGate {
     if (!estadoPermiteClaimPool(estadoRaw, estadoNorm)) return false;
     if (reservaVigenteBloquea(data)) return false;
     return ventanaPublicacionYAceptacionOk(data);
+  }
+
+  /// Viaje espejo Bola Ahorro: negociación y ejecución van por [bolas_pueblo], no por ViajeEnCurso ni auto-router.
+  static bool esViajeEspejoBolaParaFlujo(Map<String, dynamic> data) {
+    if ((data['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro') {
+      return true;
+    }
+    final pid =
+        (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
+    return pid.isNotEmpty;
   }
 }

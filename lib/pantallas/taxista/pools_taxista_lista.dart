@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -10,8 +11,19 @@ import 'package:url_launcher/url_launcher.dart';
 import 'pools_taxista_reservas.dart';
 import 'pools_taxista_crear.dart';
 
-class PoolsTaxistaLista extends StatelessWidget {
+class PoolsTaxistaLista extends StatefulWidget {
   const PoolsTaxistaLista({super.key});
+
+  @override
+  State<PoolsTaxistaLista> createState() => _PoolsTaxistaListaState();
+}
+
+class _PoolsTaxistaListaState extends State<PoolsTaxistaLista> {
+  bool _accionEnCurso = false;
+  bool _esActivoVisible(Map<String, dynamic> d) {
+    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
+    return estado != 'cancelado' && estado != 'finalizado';
+  }
 
   String _cleanPhone(String raw) {
     final v = raw.replaceAll(RegExp(r'[^0-9]'), '');
@@ -58,7 +70,8 @@ class PoolsTaxistaLista extends StatelessWidget {
     final taxistaNombre = (d['taxistaNombre'] ?? '').toString().trim();
     final precio = ((d['precioPorAsiento'] ?? 0) as num).toDouble();
     final fechaTxt = DateFormat('EEE d MMM • HH:mm', 'es').format(fechaSalida);
-    final paradasTxt = paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ');
+    final paradasTxt =
+        paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ');
     final quien = agencia.isNotEmpty
         ? agencia
         : (taxistaNombre.isNotEmpty ? taxistaNombre : 'RAI Driver');
@@ -76,7 +89,8 @@ Paradas: $paradasTxt
 Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
 Contactanos por esta via para mas informacion y confirmacion.
 #RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
-'''.trim();
+'''
+        .trim();
     return '$base${PoolShareLink.shareFooter(poolId)}';
   }
 
@@ -102,7 +116,8 @@ Contactanos por esta via para mas informacion y confirmacion.
     }
   }
 
-  Future<void> _copiarTextoPromo(BuildContext context, {required String texto}) async {
+  Future<void> _copiarTextoPromo(BuildContext context,
+      {required String texto}) async {
     await Clipboard.setData(ClipboardData(text: texto));
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -124,8 +139,7 @@ Contactanos por esta via para mas informacion y confirmacion.
       final resQ = await PoolRepo.pools
           .doc(poolId)
           .collection('reservas')
-          .where('estado', whereIn: ['reservado', 'pagado'])
-          .get();
+          .where('estado', whereIn: ['reservado', 'pagado']).get();
       if (resQ.docs.isEmpty) {
         messenger.showSnackBar(
           const SnackBar(content: Text('Aun no hay pasajeros para contactar.')),
@@ -140,7 +154,8 @@ Contactanos por esta via para mas informacion y confirmacion.
           .toList();
       if (uids.isEmpty) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('No se encontraron telefonos de pasajeros.')),
+          const SnackBar(
+              content: Text('No se encontraron telefonos de pasajeros.')),
         );
         return;
       }
@@ -156,7 +171,8 @@ Contactanos por esta via para mas informacion y confirmacion.
           .toList();
       if (phones.isEmpty) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('No hay telefonos validos para WhatsApp.')),
+          const SnackBar(
+              content: Text('No hay telefonos validos para WhatsApp.')),
         );
         return;
       }
@@ -182,11 +198,42 @@ Contactanos por esta via para mas informacion y confirmacion.
     }
   }
 
+  bool _puedeIniciar(Map<String, dynamic> d) {
+    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
+    if (estado == 'en_ruta' ||
+        estado == 'cancelado' ||
+        estado == 'finalizado') {
+      return false;
+    }
+    final minC = ((d['minParaConfirmar'] ?? 0) as num).toInt();
+    final cached = d['asientosFirmesSalida'];
+    final firm = (cached != null
+            ? (cached as num).toInt()
+            : ((d['asientosPagados'] ?? 0) as num).toInt())
+        .clamp(0, 1 << 30);
+    if (firm <= 0) return false;
+    if (minC > 0 && firm < minC) return false;
+    final reservados = ((d['asientosReservados'] ?? 0) as num).toInt();
+    if (reservados <= 0) return false;
+    return true;
+  }
+
+  bool _puedeFinalizar(Map<String, dynamic> d) {
+    return (d['estado'] ?? '').toString().trim().toLowerCase() == 'en_ruta';
+  }
+
+  bool _puedeCancelar(Map<String, dynamic> d) {
+    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
+    return estado != 'finalizado' && estado != 'cancelado';
+  }
+
   Future<void> _operarPool(
     BuildContext context, {
     required String action,
     required String poolId,
   }) async {
+    if (_accionEnCurso || !mounted) return;
+    setState(() => _accionEnCurso = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
       if (action == 'iniciar') {
@@ -200,13 +247,29 @@ Contactanos por esta via para mas informacion y confirmacion.
           const SnackBar(content: Text('Viaje finalizado')),
         );
       } else if (action == 'cancelar') {
-        await PoolRepo.cancelarViajePoolSeguro(poolId: poolId, motivo: 'Cancelado por chofer');
+        await PoolRepo.cancelarViajePoolSeguro(
+            poolId: poolId, motivo: 'Cancelado por chofer');
         messenger.showSnackBar(
           const SnackBar(content: Text('Viaje cancelado')),
         );
       }
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(msg.isNotEmpty ? msg : e.code),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('❌ $e')));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _accionEnCurso = false);
     }
   }
 
@@ -245,7 +308,8 @@ Contactanos por esta via para mas informacion y confirmacion.
     final f = DateFormat('EEE d MMM • HH:mm', 'es');
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textSecondary = isDark ? Colors.white70 : const Color(0xFF475467);
+    final Color textSecondary =
+        isDark ? Colors.white70 : const Color(0xFF475467);
     final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
     final Color accent = isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
     final Color scaffoldBg = isDark ? Colors.black : const Color(0xFFE8EAED);
@@ -295,11 +359,14 @@ Contactanos por esta via para mas informacion y confirmacion.
               ),
             );
           }
-          final docs = (snap.data?.docs ?? []).toList()..sort(_sortTaxistaPools);
+          final docs = (snap.data?.docs ?? [])
+              .where((e) => _esActivoVisible(e.data()))
+              .toList()
+            ..sort(_sortTaxistaPools);
           if (docs.isEmpty) {
             return Center(
               child: Text(
-                'No tienes viajes creados.',
+                'No tienes viajes activos por cupos.',
                 style: TextStyle(color: textMuted),
               ),
             );
@@ -312,9 +379,9 @@ Contactanos por esta via para mas informacion y confirmacion.
               final d = docs[i].data();
               final id = docs[i].id;
 
-              final cap = (d['capacidad'] ?? 0) as int;
-              final occ = (d['asientosReservados'] ?? 0) as int;
-              final pag = (d['asientosPagados'] ?? 0) as int;
+              final cap = ((d['capacidad'] ?? 0) as num).toInt();
+              final occ = ((d['asientosReservados'] ?? 0) as num).toInt();
+              final pag = ((d['asientosPagados'] ?? 0) as num).toInt();
               final fee = ((d['feePct'] ?? 0.0) as num).toDouble();
               final precio = (d['precioPorAsiento'] as num).toDouble();
               final mult = (d['sentido'] == 'ida_y_vuelta') ? 2 : 1;
@@ -331,6 +398,11 @@ Contactanos por esta via para mas informacion y confirmacion.
               final confirmado = estado == 'confirmado';
               final fechaSalida = (d['fechaSalida'] as Timestamp).toDate();
               final paradas = _paradasOrdenadas(d);
+              final puedeIniciar = _puedeIniciar(d);
+              final puedeFinalizar = _puedeFinalizar(d);
+              final puedeCancelar = _puedeCancelar(d);
+              final tieneAccionesPool =
+                  puedeIniciar || puedeFinalizar || puedeCancelar;
 
               return Container(
                 padding: const EdgeInsets.all(12),
@@ -363,7 +435,8 @@ Contactanos por esta via para mas informacion y confirmacion.
                       runSpacing: 6,
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
                             color: _tipoColor(tipo).withValues(alpha: 0.18),
                             borderRadius: BorderRadius.circular(999),
@@ -450,7 +523,9 @@ Contactanos por esta via para mas informacion y confirmacion.
                             borderRadius: BorderRadius.circular(6),
                             child: LinearProgressIndicator(
                               value: cap == 0 ? 0 : (occ / cap).clamp(0, 1),
-                              backgroundColor: isDark ? Colors.white12 : const Color(0xFFE4E7EC),
+                              backgroundColor: isDark
+                                  ? Colors.white12
+                                  : const Color(0xFFE4E7EC),
                               color: accent,
                               minHeight: 8,
                             ),
@@ -486,49 +561,71 @@ Contactanos por esta via para mas informacion y confirmacion.
                       spacing: 8,
                       runSpacing: 4,
                       children: [
-                        PopupMenuButton<String>(
-                          tooltip: 'Operaciones',
-                          onSelected: (v) => _operarPool(ctx, action: v, poolId: id),
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: 'iniciar',
-                              child: Text('Iniciar viaje'),
-                            ),
-                            PopupMenuItem(
-                              value: 'finalizar',
-                              child: Text('Finalizar viaje'),
-                            ),
-                            PopupMenuItem(
-                              value: 'cancelar',
-                              child: Text('Cancelar viaje'),
-                            ),
-                          ],
-                          icon: const Icon(Icons.settings_suggest),
-                        ),
-                        TextButton.icon(
-                          onPressed: () async {
-                            final n = await PoolRepo.limpiarReservasVencidas(id);
-                            if (!ctx.mounted) return;
-                            ScaffoldMessenger.of(ctx).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Reservas vencidas limpiadas: $n',
+                        if (tieneAccionesPool)
+                          PopupMenuButton<String>(
+                            tooltip: 'Iniciar / finalizar / cancelar',
+                            enabled: !_accionEnCurso,
+                            onSelected: (v) =>
+                                _operarPool(ctx, action: v, poolId: id),
+                            itemBuilder: (_) => [
+                              if (puedeIniciar)
+                                const PopupMenuItem(
+                                  value: 'iniciar',
+                                  child: Text('Iniciar viaje'),
                                 ),
-                              ),
-                            );
-                          },
+                              if (puedeFinalizar)
+                                const PopupMenuItem(
+                                  value: 'finalizar',
+                                  child: Text('Finalizar viaje'),
+                                ),
+                              if (puedeCancelar)
+                                const PopupMenuItem(
+                                  value: 'cancelar',
+                                  child: Text('Cancelar viaje'),
+                                ),
+                            ],
+                            icon: _accionEnCurso
+                                ? SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: accent,
+                                    ),
+                                  )
+                                : const Icon(Icons.settings_suggest),
+                          ),
+                        TextButton.icon(
+                          onPressed: _accionEnCurso
+                              ? null
+                              : () async {
+                                  final n =
+                                      await PoolRepo.limpiarReservasVencidas(
+                                          id);
+                                  if (!ctx.mounted) return;
+                                  ScaffoldMessenger.of(ctx).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Reservas vencidas limpiadas: $n',
+                                      ),
+                                    ),
+                                  );
+                                },
                           icon: const Icon(Icons.cleaning_services),
                           label: const Text('Limpiar vencidas'),
                         ),
                         TextButton.icon(
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => PoolsTaxistaReservas(poolId: id),
-                              ),
-                            );
-                          },
+                          onPressed: _accionEnCurso
+                              ? null
+                              : () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          PoolsTaxistaReservas(poolId: id),
+                                    ),
+                                  );
+                                },
                           icon: const Icon(Icons.people_alt_outlined),
                           label: const Text('Reservas'),
                         ),

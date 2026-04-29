@@ -58,7 +58,8 @@ extension _PoolsTaxistaCrearPaletteX on BuildContext {
       chipListTint: const Color(0xFF5BC0BE).withValues(alpha: 0.25),
       tealBtnBg: const Color(0xFF5BC0BE),
       tealBtnFg: isDark ? const Color(0xFF0B1020) : const Color(0xFF042F2E),
-      placeholderBox: isDark ? const Color(0xFF1A1A1A) : const Color(0xFFE2E8F0),
+      placeholderBox:
+          isDark ? const Color(0xFF1A1A1A) : const Color(0xFFE2E8F0),
       faintIcon: isDark ? Colors.white38 : const Color(0xFF98A2B3),
     );
   }
@@ -219,13 +220,15 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       _snack('Selecciona un destino válido en el buscador.');
       return;
     }
-    if ((_tipoCanonico(_tipo) == 'tour' || _tipoCanonico(_tipo) == 'excursion') &&
+    if ((_tipoCanonico(_tipo) == 'tour' ||
+            _tipoCanonico(_tipo) == 'excursion') &&
         _paradas.isEmpty &&
         _puntoSalida.trim().isEmpty) {
       _snack('Agrega al menos una parada para el tour/excursión.');
       return;
     }
-    if (_cleanPhone(_choferTelefono).isEmpty && _cleanPhone(_choferWhatsApp).isEmpty) {
+    if (_cleanPhone(_choferTelefono).isEmpty &&
+        _cleanPhone(_choferWhatsApp).isEmpty) {
       _snack('Agrega al menos teléfono o WhatsApp del chofer.');
       return;
     }
@@ -262,7 +265,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
     // Porcentajes (aseguramos fracción 0..1 aunque vengan como 30..100)
     final double dep = _deposit > 1 ? _deposit / 100.0 : _deposit;
-    final double fee = 0.10;
+    const double fee = 0.10;
 
     setState(() => _loading = true);
     try {
@@ -290,8 +293,10 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         pickupPoints: pickups.isEmpty ? null : pickups,
         depositPct: dep,
         feePct: fee,
-        agenciaNombre: _agenciaNombre.trim().isEmpty ? null : _agenciaNombre.trim(),
-        agenciaLogoUrl: _agenciaLogoUrl.trim().isEmpty ? null : _agenciaLogoUrl.trim(),
+        agenciaNombre:
+            _agenciaNombre.trim().isEmpty ? null : _agenciaNombre.trim(),
+        agenciaLogoUrl:
+            _agenciaLogoUrl.trim().isEmpty ? null : _agenciaLogoUrl.trim(),
         bannerUrl: _bannerUrl.trim().isEmpty ? null : _bannerUrl.trim(),
         bannerVideoUrl:
             _bannerVideoUrl.trim().isEmpty ? null : _bannerVideoUrl.trim(),
@@ -483,7 +488,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
               ),
             ),
             const SizedBox(height: 12),
-            _sectionTitle('Capacidad y finanzas', Icons.account_balance_wallet_outlined),
+            _sectionTitle(
+                'Capacidad y finanzas', Icons.account_balance_wallet_outlined),
             _card(
               child: Wrap(
                 runSpacing: 12,
@@ -536,7 +542,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                   if (_sentido == 'ida_y_vuelta')
                     _fechaPicker(
                       label: 'Fecha vuelta',
-                      text: _fechaVuelta == null ? 'Seleccionar…' : f.format(_fechaVuelta!),
+                      text: _fechaVuelta == null
+                          ? 'Seleccionar…'
+                          : f.format(_fechaVuelta!),
                       onTap: () => _pickFecha(esVuelta: true),
                     ),
                   const SizedBox(height: 8),
@@ -689,7 +697,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       decoration: InputDecoration(
         filled: true,
         fillColor: p.fieldFill,
-        border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+        border: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12))),
         labelStyle: TextStyle(color: p.labelMuted),
       ).copyWith(labelText: label),
       child: DropdownButtonHideUnderline(
@@ -700,7 +709,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
           items: items
               .map((e) => DropdownMenuItem<T>(
                     value: e,
-                    child: Text(e.toString(), style: TextStyle(color: p.inputText)),
+                    child: Text(e.toString(),
+                        style: TextStyle(color: p.inputText)),
                   ))
               .toList(),
           onChanged: onChanged,
@@ -728,7 +738,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
               borderRadius: BorderRadius.all(Radius.circular(12)),
             ),
           ),
-          validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+          validator: (v) =>
+              (v == null || v.trim().isEmpty) ? 'Requerido' : null,
           onChanged: (v) => _tipo = v.trim(),
         ),
         const SizedBox(height: 4),
@@ -778,7 +789,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
             const SizedBox(width: 6),
             Text(
               'Todo lo que incluye este tipo de viaje',
-              style: TextStyle(color: p.accentSoft, fontWeight: FontWeight.w800),
+              style:
+                  TextStyle(color: p.accentSoft, fontWeight: FontWeight.w800),
             ),
           ],
         ),
@@ -823,7 +835,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                 style: TextStyle(color: p.inputText),
                 decoration: InputDecoration(
                   labelText: 'Agregar incluye personalizado',
-                  hintText: 'Ej: Almuerzo buffet, fotos profesionales, entrada al parque',
+                  hintText:
+                      'Ej: Almuerzo buffet, fotos profesionales, entrada al parque',
                   labelStyle: TextStyle(color: p.labelMuted),
                   hintStyle: TextStyle(color: p.subtitleMuted),
                   filled: true,
@@ -879,7 +892,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         filled: true,
         fillColor: p.fieldFill,
         labelStyle: TextStyle(color: p.labelMuted),
-        border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+        border: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12))),
       ).copyWith(labelText: label),
       validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
       onSaved: (v) => onSaved(v!.trim()),
@@ -905,7 +919,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         hintStyle: TextStyle(color: p.subtitleMuted),
         filled: true,
         fillColor: p.fieldFill,
-        border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+        border: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12))),
       ),
       onChanged: onChanged,
     );
@@ -932,7 +947,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   }
 
   Future<void> _abrirWhatsAppChofer() async {
-    final p = _cleanPhone(_choferWhatsApp.isNotEmpty ? _choferWhatsApp : _choferTelefono);
+    final p = _cleanPhone(
+        _choferWhatsApp.isNotEmpty ? _choferWhatsApp : _choferTelefono);
     if (p.isEmpty) {
       _snack('Ingresa un WhatsApp/telefono valido del chofer.');
       return;
@@ -962,7 +978,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         labelStyle: TextStyle(color: p.labelMuted),
         filled: true,
         fillColor: p.fieldFill,
-        border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+        border: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12))),
       ),
       validator: (v) {
         if (v == null || v.trim().isEmpty) return 'Requerido';
@@ -1002,7 +1019,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Logo de agencia (opcional)', style: TextStyle(color: p.labelMuted)),
+        Text('Logo de agencia (opcional)',
+            style: TextStyle(color: p.labelMuted)),
         const SizedBox(height: 8),
         Row(
           children: [
@@ -1033,7 +1051,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.upload),
-                label: Text(_subiendoLogo ? 'Subiendo…' : (hasLogo ? 'Cambiar logo' : 'Subir logo')),
+                label: Text(_subiendoLogo
+                    ? 'Subiendo…'
+                    : (hasLogo ? 'Cambiar logo' : 'Subir logo')),
               ),
             ),
           ],
@@ -1049,7 +1069,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Banner e imagen / video promocional (opcional)', style: TextStyle(color: p.labelMuted)),
+        Text('Banner e imagen / video promocional (opcional)',
+            style: TextStyle(color: p.labelMuted)),
         const SizedBox(height: 8),
         ClipRRect(
           borderRadius: BorderRadius.circular(10),
@@ -1064,16 +1085,20 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                   Image.network(
                     _bannerUrl,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
-                        Icon(Icons.image_not_supported, color: p.faintIcon, size: 36),
+                    errorBuilder: (_, __, ___) => Icon(
+                        Icons.image_not_supported,
+                        color: p.faintIcon,
+                        size: 36),
                   )
                 else if (hasVideo)
                   Center(
-                    child: Icon(Icons.play_circle_outline, color: p.accent, size: 56),
+                    child: Icon(Icons.play_circle_outline,
+                        color: p.accent, size: 56),
                   )
                 else
                   Center(
-                    child: Text('Sin banner ni video', style: TextStyle(color: p.faintIcon)),
+                    child: Text('Sin banner ni video',
+                        style: TextStyle(color: p.faintIcon)),
                   ),
                 if (hasVideo && hasBanner)
                   Align(
@@ -1102,7 +1127,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                 )
               : const Icon(Icons.photo_library_outlined),
           label: Text(
-            _subiendoBanner ? 'Subiendo…' : (hasBanner ? 'Cambiar imagen banner' : 'Subir imagen banner'),
+            _subiendoBanner
+                ? 'Subiendo…'
+                : (hasBanner ? 'Cambiar imagen banner' : 'Subir imagen banner'),
           ),
         ),
         const SizedBox(height: 6),
@@ -1118,14 +1145,18 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
           label: Text(
             _subiendoBannerVideo
                 ? 'Subiendo video…'
-                : (hasVideo ? 'Cambiar video promocional' : 'Subir video promocional'),
+                : (hasVideo
+                    ? 'Cambiar video promocional'
+                    : 'Subir video promocional'),
           ),
         ),
         if (hasVideo)
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton(
-              onPressed: _subiendoBannerVideo ? null : () => setState(() => _bannerVideoUrl = ''),
+              onPressed: _subiendoBannerVideo
+                  ? null
+                  : () => setState(() => _bannerVideoUrl = ''),
               child: const Text('Quitar video'),
             ),
           ),
@@ -1229,7 +1260,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       }
       final uid = FirebaseAuth.instance.currentUser?.uid ?? 'anon';
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final ref = _storage.ref().child('agencias').child(uid).child('logo_$ts.jpg');
+      final ref =
+          _storage.ref().child('agencias').child(uid).child('logo_$ts.jpg');
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
       if (!mounted) return;
@@ -1259,7 +1291,11 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       }
       final uid = FirebaseAuth.instance.currentUser?.uid ?? 'anon';
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final ref = _storage.ref().child('viajes_pool').child(uid).child('banner_$ts.jpg');
+      final ref = _storage
+          .ref()
+          .child('viajes_pool')
+          .child(uid)
+          .child('banner_$ts.jpg');
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
       if (!mounted) return;
@@ -1307,7 +1343,11 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? 'anon';
       final ts = DateTime.now().millisecondsSinceEpoch;
       final ext = _extVideo(x.path);
-      final ref = _storage.ref().child('viajes_pool').child(uid).child('banner_video_$ts.$ext');
+      final ref = _storage
+          .ref()
+          .child('viajes_pool')
+          .child(uid)
+          .child('banner_video_$ts.$ext');
       await ref.putFile(
         file,
         SettableMetadata(contentType: _contentTypeVideo(x.path)),

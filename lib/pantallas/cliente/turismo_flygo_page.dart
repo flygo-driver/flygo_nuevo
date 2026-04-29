@@ -28,6 +28,36 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
   bool _cargandoUbicacion = true;
   bool _permisoNegadoForever = false;
 
+  int _turismoMapProgCameraDepth = 0;
+  bool _turismoPanelHidden = false;
+  Timer? _turismoMapGestureEndDebounce;
+
+  void _onTurismoMapCameraIdle() {
+    if (_turismoMapProgCameraDepth > 0) {
+      _turismoMapProgCameraDepth--;
+      return;
+    }
+    _turismoMapGestureEndDebounce?.cancel();
+    if (mounted) setState(() => _turismoPanelHidden = false);
+  }
+
+  void _onTurismoMapUserGesture() {
+    if (_turismoMapProgCameraDepth > 0) return;
+    setState(() => _turismoPanelHidden = true);
+  }
+
+  Future<void> _turismoMapAnimate(
+      Future<void> Function(GoogleMapController c) op) async {
+    final GoogleMapController? c = _mapController;
+    if (c == null) return;
+    _turismoMapProgCameraDepth++;
+    try {
+      await op(c);
+    } catch (_) {
+      if (_turismoMapProgCameraDepth > 0) _turismoMapProgCameraDepth--;
+    }
+  }
+
   // ===== TURISMO: tipo seleccionado =====
   String _tipoSeleccionado = 'Aeropuerto ↔ Hotel';
 
@@ -48,6 +78,7 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
   @override
   void dispose() {
     _posSub?.cancel();
+    _turismoMapGestureEndDebounce?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -106,8 +137,8 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
       });
 
       if (_mapController != null) {
-        await _mapController!.animateCamera(
-          CameraUpdate.newLatLngZoom(here, 14),
+        await _turismoMapAnimate(
+          (c) => c.animateCamera(CameraUpdate.newLatLngZoom(here, 14)),
         );
       }
 
@@ -142,8 +173,8 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
 
   Future<void> _centrarEnMiUbicacion() async {
     if (_mapController == null) return;
-    await _mapController!.animateCamera(
-      CameraUpdate.newLatLngZoom(_center, 14),
+    await _turismoMapAnimate(
+      (c) => c.animateCamera(CameraUpdate.newLatLngZoom(_center, 14)),
     );
   }
 
@@ -176,6 +207,17 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () async {
+            final nav = Navigator.of(context);
+            if (nav.canPop()) {
+              nav.pop();
+              return;
+            }
+            await Navigator.of(context, rootNavigator: true).maybePop();
+          },
+        ),
         centerTitle: true,
         title: const Text(
           'Turismo FlyGo',
@@ -195,6 +237,19 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
                 zoom: 12,
               ),
               onMapCreated: (c) => _mapController = c,
+              onTap: (_) {
+                if (_turismoMapProgCameraDepth > 0) return;
+                _onTurismoMapUserGesture();
+                _turismoMapGestureEndDebounce?.cancel();
+                _turismoMapGestureEndDebounce = Timer(
+                  const Duration(milliseconds: 420),
+                  () {
+                    if (mounted) setState(() => _turismoPanelHidden = false);
+                  },
+                );
+              },
+              onCameraMoveStarted: _onTurismoMapUserGesture,
+              onCameraIdle: _onTurismoMapCameraIdle,
               markers: _markers,
               myLocationEnabled: !_permisoNegadoForever,
               myLocationButtonEnabled: false,
@@ -239,137 +294,182 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
             ),
           ),
 
+          if (_turismoPanelHidden)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 20,
+              child: SafeArea(
+                child: Center(
+                  child: Material(
+                    color: const Color(0xFF1E1E1E),
+                    borderRadius: BorderRadius.circular(24),
+                    child: InkWell(
+                      onTap: () => setState(() => _turismoPanelHidden = false),
+                      borderRadius: BorderRadius.circular(24),
+                      child: const Padding(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.keyboard_arrow_up_rounded,
+                                color: Colors.white, size: 22),
+                            SizedBox(width: 8),
+                            Text(
+                              'Opciones turismo',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
           // ===== PANEL TURISMO (tipo flygo/Driver) =====
           Align(
             alignment: Alignment.bottomCenter,
-            child: Container(
-              margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.black54,
-                    blurRadius: 18,
-                    offset: Offset(0, -4),
-                  ),
-                ],
-                border: Border.all(color: const Color(0xFF49F18B).withValues(alpha: 0.4)),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Handle
-                  Center(
-                    child: Container(
-                      width: 42,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(3),
+            child: AnimatedSlide(
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+              offset: _turismoPanelHidden ? const Offset(0, 1.12) : Offset.zero,
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(22),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black54,
+                      blurRadius: 18,
+                      offset: Offset(0, -4),
+                    ),
+                  ],
+                  border: Border.all(
+                      color: const Color(0xFF49F18B).withValues(alpha: 0.4)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Handle
+                    Center(
+                      child: Container(
+                        width: 42,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
+                    const SizedBox(height: 10),
 
-                  const Text(
-                    'Turismo FlyGo',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
+                    const Text(
+                      'Turismo FlyGo',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Traslados de aeropuerto, hoteles, playas, eventos y más.',
-                    style: TextStyle(
-                      color: Colors.white54,
-                      fontSize: 12,
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Traslados de aeropuerto, hoteles, playas, eventos y más.',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 14),
+                    const SizedBox(height: 14),
 
-                  // Chips de tipo de turismo
-                  const Text(
-                    '¿Qué tipo de servicio turístico necesitas?',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontWeight: FontWeight.w600,
+                    // Chips de tipo de turismo
+                    const Text(
+                      '¿Qué tipo de servicio turístico necesitas?',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _opciones.map((op) {
-                      final activo = op == _tipoSeleccionado;
-                      return ChoiceChip(
-                        label: Text(
-                          op,
-                          style: TextStyle(
-                            color: activo ? Colors.black : Colors.white70,
-                            fontWeight: FontWeight.w600,
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _opciones.map((op) {
+                        final activo = op == _tipoSeleccionado;
+                        return ChoiceChip(
+                          label: Text(
+                            op,
+                            style: TextStyle(
+                              color: activo ? Colors.black : Colors.white70,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          selected: activo,
+                          selectedColor: const Color(0xFF49F18B),
+                          backgroundColor: const Color(0xFF111827),
+                          onSelected: (_) {
+                            setState(() => _tipoSeleccionado = op);
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Botón principal: Solicitar ahora
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _irSolicitarAhora,
+                        icon: const Icon(Icons.local_taxi),
+                        label: const Text('Solicitar ahora (Turismo)'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF49F18B),
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          textStyle: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
                           ),
                         ),
-                        selected: activo,
-                        selectedColor: const Color(0xFF49F18B),
-                        backgroundColor: const Color(0xFF111827),
-                        onSelected: (_) {
-                          setState(() => _tipoSeleccionado = op);
-                        },
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
 
-                  // Botón principal: Solicitar ahora
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _irSolicitarAhora,
-                      icon: const Icon(Icons.local_taxi),
-                      label: const Text('Solicitar ahora (Turismo)'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF49F18B),
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        textStyle: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 15,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                    // Botón secundario: Programar viaje
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _irProgramarViaje,
+                        icon: const Icon(Icons.schedule_outlined),
+                        label: const Text('Programar viaje turístico'),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          side: const BorderSide(color: Color(0xFF49F18B)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          foregroundColor: Colors.white,
+                          textStyle: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-
-                  // Botón secundario: Programar viaje
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _irProgramarViaje,
-                      icon: const Icon(Icons.schedule_outlined),
-                      label: const Text('Programar viaje turístico'),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        side: const BorderSide(color: Color(0xFF49F18B)),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        foregroundColor: Colors.white,
-                        textStyle: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

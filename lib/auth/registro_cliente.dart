@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/servicios/auth_service.dart';
-import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
@@ -74,12 +73,9 @@ class _RegistroClienteState extends State<RegistroCliente> {
       }
       await LegalAcceptanceService.saveAcceptanceForCurrentUser();
 
-      // 3) Ir a home cliente
+      // 3) Mismo flujo que login: verificación correo + shell cliente
       if (!mounted) return;
-      nav.pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const ClienteHome()),
-        (r) => false,
-      );
+      nav.pushNamedAndRemoveUntil('/auth_check', (r) => false);
     } on FirebaseAuthException catch (e) {
       String texto = 'No se pudo registrar.';
       switch (e.code) {
@@ -110,12 +106,14 @@ class _RegistroClienteState extends State<RegistroCliente> {
     super.dispose();
   }
 
-  InputDecoration _decoracion(BuildContext context, String texto, IconData icono) {
+  InputDecoration _decoracion(
+      BuildContext context, String texto, IconData icono) {
     final cs = Theme.of(context).colorScheme;
 
     return InputDecoration(
       labelText: texto,
-      labelStyle: TextStyle(color: cs.onSurface.withOpacity(0.85), fontSize: 18),
+      labelStyle:
+          TextStyle(color: cs.onSurface.withValues(alpha: 0.85), fontSize: 18),
       prefixIcon: Icon(icono, color: cs.primary),
       enabledBorder: OutlineInputBorder(
         borderSide: BorderSide(color: cs.primary),
@@ -145,7 +143,8 @@ class _RegistroClienteState extends State<RegistroCliente> {
               TextFormField(
                 controller: _nombre,
                 style: TextStyle(color: cs.onSurface),
-                decoration: _decoracion(context, 'Nombre completo', Icons.person),
+                decoration:
+                    _decoracion(context, 'Nombre completo', Icons.person),
                 validator: (v) =>
                     (v == null || v.trim().isEmpty) ? 'Campo requerido' : null,
                 autofillHints: const [AutofillHints.name],
@@ -165,7 +164,8 @@ class _RegistroClienteState extends State<RegistroCliente> {
                 controller: _email,
                 style: TextStyle(color: cs.onSurface),
                 keyboardType: TextInputType.emailAddress,
-                decoration: _decoracion(context, 'Correo electrónico', Icons.email),
+                decoration:
+                    _decoracion(context, 'Correo electrónico', Icons.email),
                 validator: (v) =>
                     (v == null || !v.contains('@')) ? 'Correo inválido' : null,
                 autofillHints: const [AutofillHints.email],
@@ -189,7 +189,7 @@ class _RegistroClienteState extends State<RegistroCliente> {
                 title: Text(
                   'Acepto los Terminos y Condiciones y la Politica de Privacidad de RAI DRIVER, operado por Open ASK Service SRL (RNC: 1320-11767).',
                   style: TextStyle(
-                    color: cs.onSurface.withOpacity(0.85),
+                    color: cs.onSurface.withValues(alpha: 0.85),
                     fontSize: 12,
                   ),
                 ),
@@ -207,8 +207,7 @@ class _RegistroClienteState extends State<RegistroCliente> {
               ),
               const SizedBox(height: 30),
               _cargando
-                  ? const Center(
-                      child: CircularProgressIndicator())
+                  ? const Center(child: CircularProgressIndicator())
                   : Center(
                       child: ElevatedButton.icon(
                         onPressed: _acceptedLegal ? _registrar : null,

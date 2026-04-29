@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/utils/calculos/estados.dart';
+
 /// ======================
 ///  SERVICIO (sin UI)
 /// ======================
@@ -48,7 +50,8 @@ class AccionesViajeTaxistaService {
       final data = solSnap.data() as Map<String, dynamic>;
       final estado = (data['estado'] ?? '').toString();
       if (estado != stSolicitudPendiente) {
-        throw StateError('La solicitud ya no está disponible (estado: $estado).');
+        throw StateError(
+            'La solicitud ya no está disponible (estado: $estado).');
       }
 
       final clienteId = (data['clienteId'] ?? '').toString();
@@ -170,6 +173,9 @@ class AccionesViajeTaxistaService {
       if (estado == stViajeFinalizado) {
         throw StateError('El viaje ya fue finalizado.');
       }
+      if (EstadosViaje.esEstadoSinCancelacionApp(estado)) {
+        throw StateError(EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp);
+      }
 
       tx.update(vRef, <String, dynamic>{
         'estado': stViajeCanceladoTaxista,
@@ -217,6 +223,7 @@ class AccionesViajeTaxistaService {
 /// ======================
 class AccionesViajeTaxista extends StatefulWidget {
   final String viajeId;
+
   /// Estados esperados: 'creado', 'en_curso', 'finalizado', etc.
   final String estadoActual;
 

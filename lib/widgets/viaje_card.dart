@@ -11,10 +11,10 @@ class ViajeCard extends StatelessWidget {
   final double? distanciaKm;
   final String metodoPago;
   final String tipoVehiculo;
-  final bool programado;         // true = PROGRAMADO, false = AHORA
-  final String? estado;          // opcional: aceptado / en_curso...
+  final bool programado; // true = PROGRAMADO, false = AHORA
+  final String? estado; // opcional: aceptado / en_curso...
   final VoidCallback? onTap;
-  final bool showAceptar;        // ← en vistas de taxista suele venir true
+  final bool showAceptar; // ← en vistas de taxista suele venir true
   final VoidCallback? onAceptar;
   final Widget? trailing;
 
@@ -47,7 +47,9 @@ class ViajeCard extends StatelessWidget {
 
   String _km(double? v) {
     if (v == null || v <= 0) return '— km';
-    return v >= 100 ? '${v.toStringAsFixed(0)} km' : '${v.toStringAsFixed(1)} km';
+    return v >= 100
+        ? '${v.toStringAsFixed(0)} km'
+        : '${v.toStringAsFixed(1)} km';
   }
 
   String _fecha(DateTime? dt) {
@@ -61,7 +63,8 @@ class ViajeCard extends StatelessWidget {
 
     // Quitar país / ruido
     var s = raw
-        .replaceAll(RegExp(r'\bRep(ú|u)blica Dominicana\b', caseSensitive: false), '')
+        .replaceAll(
+            RegExp(r'\bRep(ú|u)blica Dominicana\b', caseSensitive: false), '')
         .replaceAll(RegExp(r'\bDominican Republic\b', caseSensitive: false), '')
         .replaceAll(RegExp(r'\bRD\b', caseSensitive: false), '')
         .replaceAll(RegExp(r'\s{2,}'), ' ')
@@ -70,16 +73,19 @@ class ViajeCard extends StatelessWidget {
 
     // Normalizaciones útiles
     final low = s.toLowerCase();
-    if (low.contains('aeropuerto') && (low.contains('las america') || low.contains('aila'))) {
+    if (low.contains('aeropuerto') &&
+        (low.contains('las america') || low.contains('aila'))) {
       final ciudad = _extraerCiudad(s);
       final right = ciudad.isEmpty ? '' : ' • $ciudad';
       return 'Aeropuerto Las Américas (AILA)$right';
     }
 
     // Quitar “Santo Domingo D.N.” variantes
-    s = s.replaceAll(RegExp(r'Santo Domingo\s*D\.?N\.?', caseSensitive: false), 'Santo Domingo');
+    s = s.replaceAll(RegExp(r'Santo Domingo\s*D\.?N\.?', caseSensitive: false),
+        'Santo Domingo');
 
-    final partes = s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final partes =
+        s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     if (partes.isEmpty) return '—';
 
     var principal = partes.first;
@@ -93,12 +99,15 @@ class ViajeCard extends StatelessWidget {
   }
 
   String _extraerCiudad(String s) {
-    final partes = s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final partes =
+        s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     if (partes.isEmpty) return '';
     for (var i = partes.length - 1; i >= 0; i--) {
       final p = partes[i];
       final l = p.toLowerCase();
-      final esPais = l.contains('república dominicana') || l.contains('dominican republic') || l == 'rd';
+      final esPais = l.contains('república dominicana') ||
+          l.contains('dominican republic') ||
+          l == 'rd';
       if (!esPais) return p;
     }
     return '';
@@ -162,18 +171,22 @@ class ViajeCard extends StatelessWidget {
                 children: [
                   _EstadoChip(
                     label: programado ? 'PROGRAMADO' : 'AHORA',
-                    secundario: (estado ?? '').isNotEmpty ? estado!.toUpperCase() : null,
+                    secundario: (estado ?? '').isNotEmpty
+                        ? estado!.toUpperCase()
+                        : null,
                     color: _chipColor(),
                   ),
                   const Spacer(),
                   if (fechaHora != null)
                     Row(
                       children: [
-                        const Icon(Icons.schedule, size: 16, color: Colors.white70),
+                        const Icon(Icons.schedule,
+                            size: 16, color: Colors.white70),
                         const SizedBox(width: 6),
                         Text(
                           _fecha(fechaHora),
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12),
                         ),
                       ],
                     ),
@@ -219,14 +232,17 @@ class ViajeCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 6),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.18)),
                       ),
                       child: Text(
                         _km(distanciaKm),
-                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12),
                       ),
                     ),
                   ],
@@ -261,23 +277,24 @@ class ViajeCard extends StatelessWidget {
                         if (ganaTxt != null)
                           Text(
                             'Gana: $ganaTxt',
-                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12),
                           ),
                       ],
                     ),
                   ] else ...[
-                   // Vista taxista (showAceptar=true): SOLO ganancia en super grande
-Text(
-  ganaTxt, // ← quita el '!'
-  textAlign: TextAlign.right,
-  style: const TextStyle(
-    color: Color(0xFF49F18B),
-    fontSize: 40,
-    fontWeight: FontWeight.w900,
-    letterSpacing: -0.5,
-  ),
-),
- ],
+                    // Vista taxista (showAceptar=true): SOLO ganancia en super grande
+                    Text(
+                      ganaTxt, // ← quita el '!'
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        color: Color(0xFF49F18B),
+                        fontSize: 40,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ],
 
                   if (trailing != null) ...[
                     const SizedBox(width: 8),
@@ -365,7 +382,8 @@ class _EstadoChip extends StatelessWidget {
   final String label;
   final String? secundario;
   final Color color;
-  const _EstadoChip({required this.label, required this.color, this.secundario});
+  const _EstadoChip(
+      {required this.label, required this.color, this.secundario});
 
   @override
   Widget build(BuildContext context) {
@@ -392,7 +410,8 @@ class _EstadoChip extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               secundario!,
-              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: Colors.white70, fontWeight: FontWeight.w600),
             ),
           ],
         ],

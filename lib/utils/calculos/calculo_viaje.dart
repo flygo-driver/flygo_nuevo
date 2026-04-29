@@ -11,8 +11,7 @@ class CalculoViaje {
     const R = 6371.0; // Radio de la Tierra en km
     final dLat = _gradosARadianes(lat2 - lat1);
     final dLon = _gradosARadianes(lon2 - lon1);
-    final a =
-        sin(dLat / 2) * sin(dLat / 2) +
+    final a = sin(dLat / 2) * sin(dLat / 2) +
         cos(_gradosARadianes(lat1)) *
             cos(_gradosARadianes(lat2)) *
             sin(dLon / 2) *

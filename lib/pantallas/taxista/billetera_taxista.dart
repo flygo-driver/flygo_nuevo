@@ -11,7 +11,6 @@ import 'package:flygo_nuevo/utils/estilos.dart';
 import 'package:flygo_nuevo/servicios/billetera_service.dart';
 import 'package:flygo_nuevo/modelo/liquidacion.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
-import 'package:flygo_nuevo/widgets/taxista_drawer.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 
 class BilleteraTaxista extends StatefulWidget {
@@ -46,7 +45,8 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: EstilosFlyGo.fondoOscuro,
-        title: const Text('Solicitar retiro', style: TextStyle(color: EstilosFlyGo.textoBlanco)),
+        title: const Text('Solicitar retiro',
+            style: TextStyle(color: EstilosFlyGo.textoBlanco)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -55,15 +55,21 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
             const SizedBox(height: 10),
             TextField(
               controller: ctrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Monto en RD\$', hintText: 'Ej: 1500.00'),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                  labelText: 'Monto en RD\$', hintText: 'Ej: 1500.00'),
               style: const TextStyle(color: Colors.white),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: _enviando ? null : () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          ElevatedButton(onPressed: _enviando ? null : () => Navigator.pop(ctx, true), child: const Text('Solicitar')),
+          TextButton(
+              onPressed: _enviando ? null : () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar')),
+          ElevatedButton(
+              onPressed: _enviando ? null : () => Navigator.pop(ctx, true),
+              child: const Text('Solicitar')),
         ],
       ),
     );
@@ -75,12 +81,14 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
 
     if (monto <= 0) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Monto inválido.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Monto inválido.')));
       return;
     }
     if (monto > saldoActual) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('El monto excede el saldo disponible.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('El monto excede el saldo disponible.')));
       return;
     }
 
@@ -88,10 +96,12 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       setState(() => _enviando = true);
       await BilleteraService.solicitarRetiro(uidTaxista: u.uid, monto: monto);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Solicitud enviada.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('✅ Solicitud enviada.')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ Error: $e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('❌ Error: $e')));
     } finally {
       if (mounted) setState(() => _enviando = false);
     }
@@ -103,17 +113,10 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
 
     return Scaffold(
       backgroundColor: EstilosFlyGo.fondoOscuro,
-      drawer: const TaxistaDrawer(),
       appBar: AppBar(
         backgroundColor: EstilosFlyGo.fondoOscuro,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: EstilosFlyGo.textoBlanco),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-            tooltip: 'Menú',
-          ),
-        ),
-        title: const Text("Mi Billetera", style: TextStyle(color: EstilosFlyGo.textoBlanco)),
+        title: const Text("Mi Billetera",
+            style: TextStyle(color: EstilosFlyGo.textoBlanco)),
         centerTitle: true,
         iconTheme: const IconThemeData(color: EstilosFlyGo.textoBlanco),
         actions: [
@@ -126,7 +129,9 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
         ],
       ),
       body: u == null
-          ? const Center(child: Text('Inicia sesión', style: TextStyle(color: EstilosFlyGo.textoBlanco)))
+          ? const Center(
+              child: Text('Inicia sesión',
+                  style: TextStyle(color: EstilosFlyGo.textoBlanco)))
           : RefreshIndicator(
               onRefresh: () async => setState(() {}),
               color: EstilosFlyGo.textoVerde,
@@ -147,36 +152,58 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                             comisionTotal: 0,
                             viajesCompletados: 0,
                           );
-                      if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+                      if (snap.connectionState == ConnectionState.waiting &&
+                          !snap.hasData) {
                         return const Center(
                           child: Padding(
                             padding: EdgeInsets.symmetric(vertical: 40),
-                            child:
-                                CircularProgressIndicator(color: EstilosFlyGo.textoVerde),
+                            child: CircularProgressIndicator(
+                                color: EstilosFlyGo.textoVerde),
                           ),
                         );
                       }
 
                       return Column(
                         children: [
-                          _infoBox("Saldo disponible", FormatosMoneda.rd(r.saldoDisponible), EstilosFlyGo.textoVerde),
+                          _infoBox(
+                              "Saldo disponible",
+                              FormatosMoneda.rd(r.saldoDisponible),
+                              EstilosFlyGo.textoVerde),
                           const SizedBox(height: 16),
-                          _infoBox("Ganancia Total", FormatosMoneda.rd(r.gananciaTotal), Colors.green),
+                          _infoBox("Ganancia Total",
+                              FormatosMoneda.rd(r.gananciaTotal), Colors.green),
                           const SizedBox(height: 16),
-                          _infoBox("Comisión acumulada (RAI)", FormatosMoneda.rd(r.comisionTotal), Colors.redAccent),
+                          _infoBox(
+                              "Comisión acumulada (RAI)",
+                              FormatosMoneda.rd(r.comisionTotal),
+                              Colors.redAccent),
                           const SizedBox(height: 16),
-                          _infoBox("Viajes Completados", "${r.viajesCompletados}", Colors.blueAccent),
+                          _infoBox("Viajes Completados",
+                              "${r.viajesCompletados}", Colors.blueAccent),
                           const SizedBox(height: 20),
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton.icon(
-                              onPressed: _enviando ? null : _solicitarRetiroDialog,
+                              onPressed:
+                                  _enviando ? null : _solicitarRetiroDialog,
                               icon: _enviando
-                                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                                  : const Icon(Icons.account_balance_wallet, color: EstilosFlyGo.textoVerde),
-                              label: Text(_enviando ? 'Enviando...' : 'Solicitar retiro',
-                                  style: const TextStyle(color: EstilosFlyGo.textoVerde, fontWeight: FontWeight.bold)),
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.white, minimumSize: const Size(double.infinity, 50)),
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2))
+                                  : const Icon(Icons.account_balance_wallet,
+                                      color: EstilosFlyGo.textoVerde),
+                              label: Text(
+                                  _enviando
+                                      ? 'Enviando...'
+                                      : 'Solicitar retiro',
+                                  style: const TextStyle(
+                                      color: EstilosFlyGo.textoVerde,
+                                      fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  minimumSize: const Size(double.infinity, 50)),
                             ),
                           ),
                         ],
@@ -197,20 +224,24 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                   const SizedBox(height: 10),
 
                   StreamBuilder<List<Liquidacion>>(
-                    stream: BilleteraService.streamLiquidacionesPorTaxista(u.uid),
+                    stream:
+                        BilleteraService.streamLiquidacionesPorTaxista(u.uid),
                     builder: (context, liqSnap) {
-                      if (liqSnap.connectionState == ConnectionState.waiting && !liqSnap.hasData) {
+                      if (liqSnap.connectionState == ConnectionState.waiting &&
+                          !liqSnap.hasData) {
                         return const Center(
                           child: Padding(
                             padding: EdgeInsets.symmetric(vertical: 20),
-                            child: CircularProgressIndicator(color: EstilosFlyGo.textoVerde),
+                            child: CircularProgressIndicator(
+                                color: EstilosFlyGo.textoVerde),
                           ),
                         );
                       }
 
                       final items = liqSnap.data ?? [];
                       if (items.isEmpty) {
-                        return const Text('Sin liquidaciones aún.', style: TextStyle(color: Colors.white70));
+                        return const Text('Sin liquidaciones aún.',
+                            style: TextStyle(color: Colors.white70));
                       }
 
                       final formatoFecha = DateFormat('dd/MM/yyyy HH:mm');
@@ -231,31 +262,42 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                             decoration: BoxDecoration(
                               color: Colors.grey[900],
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: color.withValues(alpha: 0.4)),
+                              border: Border.all(
+                                  color: color.withValues(alpha: 0.4)),
                             ),
                             child: Row(
                               children: [
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(FormatosMoneda.rd(l.monto),
-                                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w700)),
                                       const SizedBox(height: 4),
                                       Text('Solicitado: $fecha',
-                                          style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                          style: const TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 12)),
                                     ],
                                   ),
                                 ),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 6),
                                   decoration: BoxDecoration(
                                     color: color.withValues(alpha: 0.15),
                                     borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(color: color.withValues(alpha: 0.6)),
+                                    border: Border.all(
+                                        color: color.withValues(alpha: 0.6)),
                                   ),
                                   child: Text(l.estado.toUpperCase(),
-                                      style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+                                      style: TextStyle(
+                                          color: color,
+                                          fontWeight: FontWeight.w700)),
                                 ),
                               ],
                             ),
@@ -279,7 +321,8 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                     "• Las solicitudes de retiro descuentan tu saldo disponible.\n"
                     "• Cuando una liquidación se aprueba, queda reflejada en el historial.\n"
                     "• Próximamente podrás recibir transferencias automáticas.",
-                    style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.35),
+                    style: TextStyle(
+                        color: Colors.white70, fontSize: 16, height: 1.35),
                   ),
                 ],
               ),
@@ -299,9 +342,12 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(titulo, style: TextStyle(fontSize: 18, color: color, fontWeight: FontWeight.bold)),
+          Text(titulo,
+              style: TextStyle(
+                  fontSize: 18, color: color, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          Text(valor, style: const TextStyle(fontSize: 24, color: Colors.white)),
+          Text(valor,
+              style: const TextStyle(fontSize: 24, color: Colors.white)),
         ],
       ),
     );
@@ -337,7 +383,10 @@ class _HeaderTaxista extends StatelessWidget {
             Expanded(
               child: Text(
                 nombre.isEmpty ? 'Conductor' : nombre,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18),
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 18),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -387,7 +436,7 @@ class _CuentaEmpresaCard extends StatelessWidget {
               IconButton(
                 tooltip: 'Copiar cuenta',
                 onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: cuenta));
+                  await Clipboard.setData(const ClipboardData(text: cuenta));
                   // ignore: use_build_context_synchronously
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Número de cuenta copiado')),
@@ -410,7 +459,10 @@ class _CuentaEmpresaCard extends StatelessWidget {
           text: '$k: ',
           style: const TextStyle(color: Colors.white70),
           children: [
-            TextSpan(text: v, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+            TextSpan(
+                text: v,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w600)),
           ],
         ),
       ),

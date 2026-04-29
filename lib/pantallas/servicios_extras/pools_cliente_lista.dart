@@ -19,7 +19,13 @@ class PoolsClienteLista extends StatefulWidget {
 
 class _PoolsClienteListaState extends State<PoolsClienteLista> {
   final _towns = const [
-    'Todos', 'Santo Domingo', 'Santiago', 'La Romana', 'Higüey', 'San Pedro', 'San Cristóbal'
+    'Todos',
+    'Santo Domingo',
+    'Santiago',
+    'La Romana',
+    'Higüey',
+    'San Pedro',
+    'San Cristóbal'
   ];
   String _origenTown = 'Todos';
   late String _tipoFiltro;
@@ -29,7 +35,8 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
   @override
   void initState() {
     super.initState();
-    _tipoFiltro = widget.tipo.trim().isEmpty ? 'todos' : widget.tipo.trim().toLowerCase();
+    _tipoFiltro =
+        widget.tipo.trim().isEmpty ? 'todos' : widget.tipo.trim().toLowerCase();
   }
 
   @override
@@ -56,14 +63,19 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
     final badge = (d['servicioBadge'] ?? '').toString().toLowerCase();
     final agencia = (d['agenciaNombre'] ?? '').toString().toLowerCase();
     final destino = (d['destino'] ?? '').toString().toLowerCase();
-    return tipo.contains(q) || badge.contains(q) || agencia.contains(q) || destino.contains(q);
+    return tipo.contains(q) ||
+        badge.contains(q) ||
+        agencia.contains(q) ||
+        destino.contains(q);
   }
 
   bool _isEstadoVisible(String raw) {
     final s = raw.trim().toLowerCase();
+    // Incluye lleno: sigue visible hasta que el chofer inicie (en_ruta); entonces sale del catálogo.
     return s == 'abierto' ||
         s == 'preconfirmado' ||
         s == 'confirmado' ||
+        s == 'lleno' ||
         s == 'activo' ||
         s == 'disponible' ||
         s == 'buscando';
@@ -73,7 +85,12 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
     final f = _tipoFiltro.trim().toLowerCase();
     if (f.isEmpty || f == 'todos') return true;
     final tipo = (d['tipo'] ?? '').toString().trim().toLowerCase();
-    if (f == 'tour') return tipo == 'tour' || tipo == 'tours' || tipo == 'gira' || tipo == 'giras';
+    if (f == 'tour') {
+      return tipo == 'tour' ||
+          tipo == 'tours' ||
+          tipo == 'gira' ||
+          tipo == 'giras';
+    }
     if (f == 'consular') return tipo == 'consular' || tipo == 'consulares';
     if (f == 'excursion') return tipo == 'excursion' || tipo == 'excursiones';
     return tipo == f;
@@ -83,7 +100,9 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
     final raw = d['fechaSalida'] ?? d['fecha'] ?? d['fechaHora'];
     if (raw is Timestamp) return raw.toDate();
     if (raw is DateTime) return raw;
-    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    if (raw is String) {
+      return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
@@ -113,9 +132,12 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
     final agencia = (d['agenciaNombre'] ?? '').toString().trim();
     final taxista = (d['taxistaNombre'] ?? '').toString().trim();
     final badge = (d['servicioBadge'] ?? d['tipo'] ?? 'Gira').toString().trim();
-    final owner = agencia.isNotEmpty ? agencia : (taxista.isNotEmpty ? taxista : 'RAI Driver');
+    final owner = agencia.isNotEmpty
+        ? agencia
+        : (taxista.isNotEmpty ? taxista : 'RAI Driver');
     final fechaTxt = DateFormat('EEE d MMM • HH:mm', 'es').format(fecha);
-    final paradasTxt = paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ');
+    final paradasTxt =
+        paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ');
     final base = '''
 ${badge.toUpperCase()}
 Organiza: $owner
@@ -127,7 +149,8 @@ Paradas: $paradasTxt
 
 Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
 #RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
-'''.trim();
+'''
+        .trim();
     return '$base${PoolShareLink.shareFooter(poolId)}';
   }
 
@@ -146,7 +169,8 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('❌ $e')));
       }
     }
   }
@@ -160,16 +184,19 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
     int estadoRank(String raw) {
       final s = raw.trim().toLowerCase();
       if (s == 'abierto' || s == 'preconfirmado' || s == 'confirmado') return 0;
-      if (s == 'activo' || s == 'disponible' || s == 'buscando') return 1;
-      return 2;
+      if (s == 'lleno') return 1;
+      if (s == 'activo' || s == 'disponible' || s == 'buscando') return 2;
+      return 3;
     }
 
     final er = estadoRank((ad['estado'] ?? '').toString())
         .compareTo(estadoRank((bd['estado'] ?? '').toString()));
     if (er != 0) return er;
 
-    final agenciaA = (ad['agenciaNombre'] ?? '').toString().trim().toLowerCase();
-    final agenciaB = (bd['agenciaNombre'] ?? '').toString().trim().toLowerCase();
+    final agenciaA =
+        (ad['agenciaNombre'] ?? '').toString().trim().toLowerCase();
+    final agenciaB =
+        (bd['agenciaNombre'] ?? '').toString().trim().toLowerCase();
     final rankA = agenciaA.isEmpty ? 1 : 0;
     final rankB = agenciaB.isEmpty ? 1 : 0;
     if (rankA != rankB) return rankA.compareTo(rankB);
@@ -189,15 +216,18 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
     final f = DateFormat('EEE d MMM • HH:mm', 'es');
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textSecondary = isDark ? Colors.white70 : const Color(0xFF475467);
+    final Color textSecondary =
+        isDark ? Colors.white70 : const Color(0xFF475467);
     final Color textMuted = isDark ? Colors.white54 : const Color(0xFF667085);
     final Color accent = isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
     final Color scaffoldBg = isDark ? Colors.black : const Color(0xFFE8EAED);
     final Color ddBg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
-    final Color fieldFill = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC);
+    final Color fieldFill =
+        isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC);
     final Color fieldBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color cardBg = isDark ? const Color(0xFF121212) : Colors.white;
-    final Color cardBgDest = isDark ? const Color(0xFF182018) : const Color(0xFFE8F7EE);
+    final Color cardBgDest =
+        isDark ? const Color(0xFF182018) : const Color(0xFFE8F7EE);
     final Color cardBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color softFill = isDark ? Colors.white10 : const Color(0xFFEFF1F5);
 
@@ -231,10 +261,12 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                       items: _towns
                           .map((t) => DropdownMenuItem(
                                 value: t,
-                                child: Text(t, style: TextStyle(color: textPrimary)),
+                                child: Text(t,
+                                    style: TextStyle(color: textPrimary)),
                               ))
                           .toList(),
-                      onChanged: (v) => setState(() => _origenTown = v ?? _origenTown),
+                      onChanged: (v) =>
+                          setState(() => _origenTown = v ?? _origenTown),
                     ),
                   ],
                 ),
@@ -265,15 +297,25 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                   spacing: 8,
                   runSpacing: 6,
                   children: [
-                    for (final t in const ['todos', 'consular', 'tour', 'excursion'])
+                    for (final t in const [
+                      'todos',
+                      'consular',
+                      'tour',
+                      'excursion'
+                    ])
                       ChoiceChip(
                         selected: _tipoFiltro == t,
                         label: Text(t.toUpperCase()),
-                        selectedColor: isDark ? Colors.white24 : accent.withValues(alpha: 0.2),
-                        backgroundColor: isDark ? Colors.white10 : const Color(0xFFF2F4F7),
+                        selectedColor: isDark
+                            ? Colors.white24
+                            : accent.withValues(alpha: 0.2),
+                        backgroundColor:
+                            isDark ? Colors.white10 : const Color(0xFFF2F4F7),
                         labelStyle: TextStyle(
                           color: _tipoFiltro == t
-                              ? (isDark ? Colors.white : const Color(0xFF0B6B3A))
+                              ? (isDark
+                                  ? Colors.white
+                                  : const Color(0xFF0B6B3A))
                               : textSecondary,
                           fontWeight: FontWeight.w600,
                         ),
@@ -305,16 +347,14 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                   );
                 }
                 final now = DateTime.now();
-                final docs = (snap.data?.docs ?? [])
-                    .where((e) {
-                      final d = e.data();
-                      final fecha = _fechaSalida(d);
-                      return _matchesServicio(d) &&
-                          _matchesTipo(d) &&
-                          _isEstadoVisible((d['estado'] ?? '').toString()) &&
-                          fecha.isAfter(now.subtract(const Duration(minutes: 5)));
-                    })
-                    .toList()
+                final docs = (snap.data?.docs ?? []).where((e) {
+                  final d = e.data();
+                  final fecha = _fechaSalida(d);
+                  return _matchesServicio(d) &&
+                      _matchesTipo(d) &&
+                      _isEstadoVisible((d['estado'] ?? '').toString()) &&
+                      fecha.isAfter(now.subtract(const Duration(minutes: 5)));
+                }).toList()
                   ..sort(_sortByAgencyAndDate);
                 if (docs.isEmpty) {
                   return Center(
@@ -341,18 +381,29 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
 
                     final left = (cap - occ).clamp(0, cap);
                     final confirmado = estado == 'confirmado';
+                    final cuposLlenos =
+                        left == 0 || estado.trim().toLowerCase() == 'lleno';
                     final tipo = (d['tipo'] ?? 'consular').toString();
                     final badgeLabelRaw =
-                        (d['servicioBadge'] ?? d['tipo'] ?? '').toString().trim();
-                    final badge = badgeLabelRaw.isEmpty ? tipo.toUpperCase() : badgeLabelRaw.toUpperCase();
+                        (d['servicioBadge'] ?? d['tipo'] ?? '')
+                            .toString()
+                            .trim();
+                    final badge = badgeLabelRaw.isEmpty
+                        ? tipo.toUpperCase()
+                        : badgeLabelRaw.toUpperCase();
                     final origen = (d['origenTown'] ?? '').toString().trim();
                     final destino = (d['destino'] ?? '').toString().trim();
-                    final precioTxt = 'RD\$ ${(precio * mult).toStringAsFixed(0)} / pers';
-                    final agenciaNombre = (d['agenciaNombre'] ?? '').toString().trim();
-                    final agenciaLogoUrl = (d['agenciaLogoUrl'] ?? '').toString().trim();
-                    final taxistaNombre = (d['taxistaNombre'] ?? '').toString().trim();
+                    final precioTxt =
+                        'RD\$ ${(precio * mult).toStringAsFixed(0)} / pers';
+                    final agenciaNombre =
+                        (d['agenciaNombre'] ?? '').toString().trim();
+                    final agenciaLogoUrl =
+                        (d['agenciaLogoUrl'] ?? '').toString().trim();
+                    final taxistaNombre =
+                        (d['taxistaNombre'] ?? '').toString().trim();
                     final bannerUrl = (d['bannerUrl'] ?? '').toString().trim();
-                    final bannerVideoUrl = (d['bannerVideoUrl'] ?? '').toString().trim();
+                    final bannerVideoUrl =
+                        (d['bannerVideoUrl'] ?? '').toString().trim();
                     final marcaAgencia =
                         agenciaNombre.isNotEmpty || agenciaLogoUrl.isNotEmpty;
                     final destacada = marcaAgencia;
@@ -373,13 +424,16 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                           color: destacada ? cardBgDest : cardBg,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: destacada ? accent.withValues(alpha: .45) : cardBorder,
+                            color: destacada
+                                ? accent.withValues(alpha: .45)
+                                : cardBorder,
                           ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (bannerUrl.isNotEmpty || bannerVideoUrl.isNotEmpty) ...[
+                            if (bannerUrl.isNotEmpty ||
+                                bannerVideoUrl.isNotEmpty) ...[
                               PoolPromoStrip(
                                 bannerUrl: bannerUrl,
                                 bannerVideoUrl: bannerVideoUrl,
@@ -414,12 +468,14 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                               color: textSecondary,
                                             ),
                                           )
-                                        : Icon(Icons.business, color: textSecondary),
+                                        : Icon(Icons.business,
+                                            color: textSecondary),
                                   ),
                                 if (marcaAgencia) const SizedBox(width: 10),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         'Origen: $origen',
@@ -462,12 +518,15 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                               children: [
                                 if (confirmado)
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: Colors.green.withValues(alpha: .18),
+                                      color:
+                                          Colors.green.withValues(alpha: .18),
                                       borderRadius: BorderRadius.circular(999),
                                       border: Border.all(
-                                        color: Colors.greenAccent.withValues(alpha: .5),
+                                        color: Colors.greenAccent
+                                            .withValues(alpha: .5),
                                       ),
                                     ),
                                     child: Text(
@@ -478,13 +537,40 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       ),
                                     ),
                                   ),
+                                if (cuposLlenos)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.deepOrange
+                                          .withValues(alpha: .2),
+                                      borderRadius: BorderRadius.circular(999),
+                                      border: Border.all(
+                                        color: Colors.deepOrange
+                                            .withValues(alpha: .55),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      'Cupos completos',
+                                      style: TextStyle(
+                                        color: isDark
+                                            ? Colors.orangeAccent
+                                            : const Color(0xFFB45309),
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: _tipoColor(tipo).withValues(alpha: .18),
+                                    color:
+                                        _tipoColor(tipo).withValues(alpha: .18),
                                     borderRadius: BorderRadius.circular(999),
                                     border: Border.all(
-                                      color: _tipoColor(tipo).withValues(alpha: .5),
+                                      color: _tipoColor(tipo)
+                                          .withValues(alpha: .5),
                                     ),
                                   ),
                                   child: Text(
@@ -523,12 +609,14 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                     const SizedBox(height: 6),
                                     ...List.generate(paradas.length, (idx) {
                                       return Padding(
-                                        padding: const EdgeInsets.only(bottom: 3),
+                                        padding:
+                                            const EdgeInsets.only(bottom: 3),
                                         child: Text(
                                           '${idx + 1}. ${paradas[idx]}',
                                           maxLines: 2,
                                           overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(color: textSecondary),
+                                          style:
+                                              TextStyle(color: textSecondary),
                                         ),
                                       );
                                     }),
@@ -543,8 +631,12 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                   child: ClipRRect(
                                     borderRadius: BorderRadius.circular(6),
                                     child: LinearProgressIndicator(
-                                      value: cap == 0 ? 0 : (occ / cap).clamp(0, 1),
-                                      backgroundColor: isDark ? Colors.white12 : const Color(0xFFE4E7EC),
+                                      value: cap == 0
+                                          ? 0
+                                          : (occ / cap).clamp(0, 1),
+                                      backgroundColor: isDark
+                                          ? Colors.white12
+                                          : const Color(0xFFE4E7EC),
                                       color: accent,
                                       minHeight: 8,
                                     ),
@@ -564,7 +656,8 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                 Text(
                                   precioTxt,
                                   style: TextStyle(
-                                      color: accent, fontWeight: FontWeight.w800),
+                                      color: accent,
+                                      fontWeight: FontWeight.w800),
                                 ),
                               ],
                             ),
@@ -577,7 +670,8 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
-                                          builder: (_) => PoolsClienteDetalle(poolId: id),
+                                          builder: (_) =>
+                                              PoolsClienteDetalle(poolId: id),
                                         ),
                                       );
                                     },
@@ -585,7 +679,8 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       foregroundColor: textPrimary,
                                       side: BorderSide(color: cardBorder),
                                     ),
-                                    icon: const Icon(Icons.visibility_outlined, size: 18),
+                                    icon: const Icon(Icons.visibility_outlined,
+                                        size: 18),
                                     label: const Text('Ver detalle'),
                                   ),
                                 ),
@@ -596,15 +691,18 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
-                                          builder: (_) => PoolsClienteDetalle(poolId: id),
+                                          builder: (_) =>
+                                              PoolsClienteDetalle(poolId: id),
                                         ),
                                       );
                                     },
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: accent,
-                                      foregroundColor: isDark ? Colors.black : Colors.white,
+                                      foregroundColor:
+                                          isDark ? Colors.black : Colors.white,
                                     ),
-                                    icon: const Icon(Icons.event_seat_outlined, size: 18),
+                                    icon: const Icon(Icons.event_seat_outlined,
+                                        size: 18),
                                     label: const Text('Reservar asiento'),
                                   ),
                                 ),
@@ -625,10 +723,15 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       paradas: paradas,
                                       poolId: id,
                                     );
-                                    Share.share(texto, subject: 'Gira por cupos');
+                                    Share.share(texto,
+                                        subject: 'Gira por cupos');
                                   },
-                                  icon: Icon(Icons.share_outlined, color: accent),
-                                  label: Text('Publicar en redes', style: TextStyle(color: accent, fontWeight: FontWeight.w600)),
+                                  icon:
+                                      Icon(Icons.share_outlined, color: accent),
+                                  label: Text('Publicar en redes',
+                                      style: TextStyle(
+                                          color: accent,
+                                          fontWeight: FontWeight.w600)),
                                 ),
                                 TextButton.icon(
                                   onPressed: () {
@@ -643,7 +746,10 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                     _abrirWhatsAppConTexto(texto);
                                   },
                                   icon: Icon(Icons.chat, color: accent),
-                                  label: Text('WhatsApp', style: TextStyle(color: accent, fontWeight: FontWeight.w600)),
+                                  label: Text('WhatsApp',
+                                      style: TextStyle(
+                                          color: accent,
+                                          fontWeight: FontWeight.w600)),
                                 ),
                                 TextButton.icon(
                                   onPressed: () async {
@@ -655,7 +761,8 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       paradas: paradas,
                                       poolId: id,
                                     );
-                                    await Clipboard.setData(ClipboardData(text: texto));
+                                    await Clipboard.setData(
+                                        ClipboardData(text: texto));
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
@@ -665,8 +772,12 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       ),
                                     );
                                   },
-                                  icon: Icon(Icons.copy_outlined, color: accent),
-                                  label: Text('Copiar texto', style: TextStyle(color: accent, fontWeight: FontWeight.w600)),
+                                  icon:
+                                      Icon(Icons.copy_outlined, color: accent),
+                                  label: Text('Copiar texto',
+                                      style: TextStyle(
+                                          color: accent,
+                                          fontWeight: FontWeight.w600)),
                                 ),
                               ],
                             ),

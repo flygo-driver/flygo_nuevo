@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
 /// ===== Estados que usaremos =====
 /// Taxista: ok
@@ -22,6 +23,7 @@ const _estadosTaxista = <String>[
 /// IMPORTANTE: NO incluimos 'pendiente' porque eso hace que viajes programados
 /// (que suelen estar "pendiente") te manden a ViajeEnCurso.
 const _estadosClienteActivos = <String>[
+  'pendiente',
   'asignado',
   'aceptado',
   'en_camino_pickup',
@@ -34,6 +36,20 @@ const _estadosClienteActivos = <String>[
 bool _estadoClienteEsActivo(String estado) {
   final e = estado.trim();
   return _estadosClienteActivos.contains(e);
+}
+
+bool _clienteDebeEntrarViajeEnCurso(Map<String, dynamic> v) {
+  final String estado = (v['estado'] ?? '').toString().trim();
+  if (_estadoClienteEsActivo(estado) && estado != 'pendiente') return true;
+
+  // Para UX tipo InDrive: si el viaje acaba de crearse para "ahora"
+  // y quedó en pendiente mientras toma conductor, igual entramos al seguimiento.
+  final bool esPendiente = estado == 'pendiente';
+  if (!esPendiente) return false;
+
+  final bool programado = v['programado'] == true;
+  final bool esAhora = v['esAhora'] == true;
+  return !programado || esAhora;
 }
 
 /// ===== TAXISTA =====
@@ -94,13 +110,14 @@ class _TaxistaTripRouterState extends State<TaxistaTripRouter> {
     await _sub?.cancel();
     _sub = qFinal.snapshots().listen((snap) async {
       if (!mounted || _navegando) return;
-      if (snap.docs.isNotEmpty) {
-        _goOnce(() async {
-          await Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
-          );
-        });
-      }
+      if (snap.docs.isEmpty) return;
+      final v = snap.docs.first.data();
+      if (ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(v)) return;
+      _goOnce(() async {
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
+        );
+      });
     }, onError: (_) {
       // Silencioso: no rompemos el home si hay error transitorio
     });
@@ -162,7 +179,8 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return;
 
-    final userRef = FirebaseFirestore.instance.collection('usuarios').doc(u.uid);
+    final userRef =
+        FirebaseFirestore.instance.collection('usuarios').doc(u.uid);
 
     // (1) Navegación pos-creación: siguienteViajeId
     // FIX: Solo navega si el viaje existe Y está en estado activo real (no "pendiente").
@@ -171,21 +189,24 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
       if (!mounted || _navegando) return;
 
       final data = snap.data();
-      final String siguiente = (data?['siguienteViajeId'] ?? '').toString().trim();
+      final String siguiente =
+          (data?['siguienteViajeId'] ?? '').toString().trim();
       if (siguiente.isEmpty) return;
 
       try {
-        final vref = FirebaseFirestore.instance.collection('viajes').doc(siguiente);
+        final vref =
+            FirebaseFirestore.instance.collection('viajes').doc(siguiente);
         final vsnap = await vref.get();
         if (!vsnap.exists) return;
 
         final v = vsnap.data() as Map<String, dynamic>;
-        final estado = (v['estado'] ?? '').toString();
-
-        if (_estadoClienteEsActivo(estado)) {
+        if (ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(v)) return;
+        if (_clienteDebeEntrarViajeEnCurso(v)) {
           _goOnce(() async {
-            await Navigator.of(context).pushReplacement(
+            await Navigator.of(context, rootNavigator: true)
+                .pushAndRemoveUntil(
               MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
+              (route) => false,
             );
           });
         }
@@ -222,13 +243,16 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
     await _subActivos?.cancel();
     _subActivos = qFinal.snapshots().listen((snap) async {
       if (!mounted || _navegando) return;
-      if (snap.docs.isNotEmpty) {
-        _goOnce(() async {
-          await Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
-          );
-        });
-      }
+      if (snap.docs.isEmpty) return;
+      final v = snap.docs.first.data();
+      if (ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(v)) return;
+      if (!_clienteDebeEntrarViajeEnCurso(v)) return;
+      _goOnce(() async {
+        await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
+          (route) => false,
+        );
+      });
     }, onError: (_) {
       // Si falta índice o hay error, no rompemos la UI
     });

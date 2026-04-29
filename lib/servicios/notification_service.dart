@@ -25,18 +25,18 @@ class NotificationService {
   AudioPlayer? _timbrePlayer;
 
   // 🔔 CANALES ANDROID ACTUALIZADOS (SIN RASTRO DE FLYGO)
-  static const String _channelId   = 'rai_driver_offers_v1';  // ✅ NUEVO ID
-  static const String _channelName = 'Viajes disponibles';    // ✅ SIN FlyGo
+  static const String _channelId = 'rai_driver_offers_v1'; // ✅ NUEVO ID
+  static const String _channelName = 'Viajes disponibles'; // ✅ SIN FlyGo
   static const String _channelDesc = 'Alertas de nuevos viajes'; // ✅ SIN FlyGo
 
   /// Requisitos:
-/// - Coloca el audio en: android/app/src/main/res/raw/notification.wav  (minúsculas)
+  /// - Coloca el audio en: android/app/src/main/res/raw/notification.wav  (minúsculas)
   static const String _rawSound = 'notification';
 
   // Preferencias (anti-spam)
-  static const String _kSeenIds  = 'notif_seen_ids_v1';
-  static const String _kLastTs   = 'notif_last_ts_v1';
-  static const int    _debounceSeconds = 8;
+  static const String _kSeenIds = 'notif_seen_ids_v1';
+  static const String _kLastTs = 'notif_last_ts_v1';
+  static const int _debounceSeconds = 8;
 
   /// Inicializa plugin + canal con el sonido personalizado (idempotente).
   /// 🔐 Blindado con try/catch para que NUNCA tumbe el arranque de la app.
@@ -45,7 +45,7 @@ class NotificationService {
 
     try {
       const initAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-      const initDarwin  = DarwinInitializationSettings(
+      const initDarwin = DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
         requestSoundPermission: false,
@@ -56,9 +56,8 @@ class NotificationService {
       );
 
       // Canal Android 8+ (con sonido personalizado) - ACTUALIZADO
-      final android = _plugin
-          .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>();
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
 
       await android?.createNotificationChannel(
         const AndroidNotificationChannel(
@@ -75,8 +74,8 @@ class NotificationService {
       // ⚠️ Canal por defecto para FCM - ACTUALIZADO para coincidir con AndroidManifest
       await android?.createNotificationChannel(
         const AndroidNotificationChannel(
-          'rai_driver_notifications',  // ✅ Debe coincidir con AndroidManifest
-          'RAI Driver',                // ✅ Nombre visible
+          'rai_driver_notifications', // ✅ Debe coincidir con AndroidManifest
+          'RAI Driver', // ✅ Nombre visible
           description: 'Notificaciones de viajes y chat',
           importance: Importance.high,
           playSound: true,
@@ -163,7 +162,7 @@ class NotificationService {
     }
 
     // Debounce temporal (solo notificación visual; el sonido ya sonó arriba)
-    final nowMs  = DateTime.now().millisecondsSinceEpoch;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     final lastMs = prefs.getInt(_kLastTs) ?? 0;
     final diffSec = ((nowMs - lastMs) / 1000).floor();
     if (diffSec < _debounceSeconds) {
@@ -184,10 +183,10 @@ class NotificationService {
         styleInformation: BigTextStyleInformation(
           cuerpo,
           contentTitle: titulo,
-          summaryText: 'RAI Driver',  // ✅ ANTES: 'FlyGo' → AHORA: 'RAI Driver'
+          summaryText: 'RAI Driver', // ✅ ANTES: 'FlyGo' → AHORA: 'RAI Driver'
         ),
         category: AndroidNotificationCategory.event,
-        ticker: 'RAI Driver',  // ✅ ANTES: 'FlyGo' → AHORA: 'RAI Driver'
+        ticker: 'RAI Driver', // ✅ ANTES: 'FlyGo' → AHORA: 'RAI Driver'
       );
 
       // iOS: sin sonido del sistema (ya va por asset); alerta sí.
@@ -225,8 +224,9 @@ class NotificationService {
     final ts = DateTime.now().millisecondsSinceEpoch.toString();
     await notifyNuevoViaje(
       viajeId: 'test_$ts',
-      titulo: '🔔 Prueba de sonido RAI Driver',  // ✅ Actualizado
-      cuerpo: 'Este es el tono RAI Driver (canal $_channelId).',  // ✅ Actualizado
+      titulo: '🔔 Prueba de sonido RAI Driver', // ✅ Actualizado
+      cuerpo:
+          'Este es el tono RAI Driver (canal $_channelId).', // ✅ Actualizado
     );
   }
 

@@ -59,7 +59,8 @@ class AdminDrawer extends StatelessWidget {
       color: isLight ? cs.onSurfaceVariant : Colors.white70,
     );
     final subtleStyle = TextStyle(
-      color: isLight ? cs.onSurfaceVariant.withValues(alpha: 0.9) : Colors.white54,
+      color:
+          isLight ? cs.onSurfaceVariant.withValues(alpha: 0.9) : Colors.white54,
       fontSize: 12,
     );
     final iconNeutral = isLight ? cs.onSurface : Colors.white;
@@ -81,67 +82,71 @@ class AdminDrawer extends StatelessWidget {
               ),
             ),
             Divider(color: dividerColor),
-
             ListTile(
               leading: Icon(Icons.home, color: iconNeutral),
-              title: Text('Inicio Admin', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Inicio Admin',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () {
                 Navigator.of(context).pop();
                 Navigator.of(context).popUntil((r) => r.isFirst);
               },
             ),
-
             ListTile(
-              leading: Icon(Icons.analytics, color: isLight ? const Color(0xFF0F9D58) : Colors.greenAccent),
-              title: Text('Resumen de Comisiones', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              leading: Icon(Icons.analytics,
+                  color:
+                      isLight ? const Color(0xFF0F9D58) : Colors.greenAccent),
+              title: Text('Resumen de Comisiones',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               subtitle: Text('Estadísticas diarias', style: subtleStyle),
               onTap: () => _push(context, const ResumenComisionesAdmin()),
             ),
-
             ListTile(
-              leading: Icon(Icons.verified, color: isLight ? Colors.deepOrange : Colors.orangeAccent),
-              title: Text('Verificar Pagos', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              leading: Icon(Icons.verified,
+                  color: isLight ? Colors.deepOrange : Colors.orangeAccent),
+              title: Text('Verificar Pagos',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               subtitle: Text('Pendientes de revisión', style: subtleStyle),
               onTap: () => _push(context, const VerificarPagos()),
             ),
-
             ListTile(
               leading: Icon(Icons.attach_money, color: iconNeutral),
-              title: Text('Tarifas', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Tarifas',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const AdminTarifas()),
             ),
-
             ListTile(
               leading: Icon(Icons.local_offer, color: iconNeutral),
-              title: Text('Promociones', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Promociones',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const AdminPromosMxK()),
             ),
-
             ListTile(
               leading: Icon(Icons.verified_user, color: iconNeutral),
-              title: Text('Revisar Documentos', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Revisar Documentos',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const RevisionDocumentosAdmin()),
             ),
-
             ListTile(
               leading: Icon(Icons.manage_accounts, color: iconNeutral),
-              title: Text('Gestionar Usuarios', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Gestionar Usuarios',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const GestionarUsuariosAdmin()),
             ),
-
             ListTile(
               leading: Icon(Icons.bar_chart, color: iconNeutral),
-              title: Text('Reportes y Estadísticas', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Reportes y Estadísticas',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const ReportesAdmin()),
             ),
-
             ListTile(
-              leading: Icon(Icons.history, color: isLight ? Colors.blue.shade700 : Colors.lightBlueAccent),
-              title: Text('Histórico Promo MxK', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              leading: Icon(Icons.history,
+                  color:
+                      isLight ? Colors.blue.shade700 : Colors.lightBlueAccent),
+              title: Text('Histórico Promo MxK',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               subtitle: Text('Auditorías guardadas', style: subtleStyle),
               onTap: () => _push(context, const ReportesAdmin()),
             ),
-
             ValueListenableBuilder<ThemeMode>(
               valueListenable: ThemeModeService.mode,
               builder: (context, mode, _) {
@@ -151,7 +156,8 @@ class AdminDrawer extends StatelessWidget {
                     isLightMode ? Icons.light_mode : Icons.dark_mode,
                     color: iconNeutral,
                   ),
-                  title: Text('Modo claro', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+                  title: Text('Modo claro',
+                      style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
                   subtitle: Text('Personaliza apariencia', style: subtleStyle),
                   value: isLightMode,
                   onChanged: (v) => ThemeModeService.setMode(
@@ -159,56 +165,64 @@ class AdminDrawer extends StatelessWidget {
                   ),
                   thumbColor: WidgetStateProperty.resolveWith((states) {
                     if (states.contains(WidgetState.selected)) {
-                      return isLight ? const Color(0xFF0F9D58) : Colors.greenAccent;
+                      return isLight
+                          ? const Color(0xFF0F9D58)
+                          : Colors.greenAccent;
                     }
                     return null;
                   }),
                 );
               },
             ),
-
             Divider(color: dividerColor),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4),
               child: Text(
                 'TURISMO',
                 style: TextStyle(
-                  color: isLight ? Colors.deepPurple.shade700 : Colors.purpleAccent,
+                  color: isLight
+                      ? Colors.deepPurple.shade700
+                      : Colors.purpleAccent,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
-
             ListTile(
-              leading: Icon(Icons.pending_actions, color: isLight ? Colors.deepOrange : Colors.orangeAccent),
-              title: Text('Aprobar Solicitudes', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              leading: Icon(Icons.pending_actions,
+                  color: isLight ? Colors.deepOrange : Colors.orangeAccent),
+              title: Text('Aprobar Solicitudes',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               subtitle: Text('Pendientes de revisión', style: subtleStyle),
               onTap: () => _push(context, const AprobarChoferesTurismo()),
             ),
-
             ListTile(
               leading: Icon(Icons.travel_explore, color: iconNeutral),
-              title: Text('Viajes Turismo', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Viajes Turismo',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const ViajesTurismoAdmin()),
             ),
-
             ListTile(
-              leading: Icon(Icons.route, color: isLight ? const Color(0xFF2E7D32) : Colors.lightGreenAccent),
-              title: Text('Giras / tours por cupos', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              subtitle: Text('viajes_pool — estados y reservas', style: subtleStyle),
+              leading: Icon(Icons.route,
+                  color: isLight
+                      ? const Color(0xFF2E7D32)
+                      : Colors.lightGreenAccent),
+              title: Text('Giras / tours por cupos',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle:
+                  Text('viajes_pool — estados y reservas', style: subtleStyle),
               onTap: () => _push(context, const AdminGirasToursCupos()),
             ),
-
             ListTile(
               leading: Icon(Icons.tour, color: iconNeutral),
-              title: Text('Choferes Turismo', style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              title: Text('Choferes Turismo',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const TaxistasTurismoAdmin()),
             ),
-
             Divider(color: dividerColor),
-
             ListTile(
-              leading: Icon(Icons.logout, color: isLight ? Colors.red.shade700 : Colors.redAccent),
+              leading: Icon(Icons.logout,
+                  color: isLight ? Colors.red.shade700 : Colors.redAccent),
               title: Text(
                 'Cerrar Sesión',
                 style: TextStyle(

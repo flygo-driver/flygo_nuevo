@@ -2,7 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_disponible.dart';
+import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -41,18 +41,20 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
       scheme: 'mailto',
       path: email,
       queryParameters: {
-        'subject': 'Copia contrato conductor RAI Driver v$kTaxistaContractVersion',
+        'subject':
+            'Copia contrato conductor RAI Driver v$kTaxistaContractVersion',
         'body':
             'Hola,\n\nAdjuntamos referencia del contrato digital firmado en RAI Driver.\n\n'
-            'Version: $kTaxistaContractVersion\n'
-            'Fecha de firma: se registra en la plataforma.\n'
-            'PDF: $kTaxistaContractPdfUrl\n\nGracias.',
+                'Version: $kTaxistaContractVersion\n'
+                'Fecha de firma: se registra en la plataforma.\n'
+                'PDF: $kTaxistaContractPdfUrl\n\nGracias.',
       },
     );
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el correo para enviar la copia.')),
+        const SnackBar(
+            content: Text('No se pudo abrir el correo para enviar la copia.')),
       );
     }
   }
@@ -64,7 +66,10 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
 
     setState(() => _guardando = true);
     try {
-      await FirebaseFirestore.instance.collection('usuarios').doc(user.uid).set({
+      await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user.uid)
+          .set({
         'contratoTaxistaAceptado': true,
         'contratoTaxistaVersion': kTaxistaContractVersion,
         'contratoTaxistaAceptadoEn': FieldValue.serverTimestamp(),
@@ -80,8 +85,8 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
           backgroundColor: Colors.green,
         ),
       );
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const ViajeDisponible()),
+      Navigator.of(context, rootNavigator: true).pushReplacement(
+        MaterialPageRoute(builder: (_) => const TaxistaShell()),
       );
     } on FirebaseException catch (e) {
       if (!mounted) return;
@@ -116,10 +121,10 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: Colors.white24),
                 ),
-                child: SingleChildScrollView(
+                child: const SingleChildScrollView(
                   child: Text(
                     kTaxistaContractText,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white70,
                       height: 1.35,
                       fontSize: 14,
@@ -164,7 +169,8 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
               child: ElevatedButton.icon(
                 onPressed: (_acepta && !_guardando) ? _firmar : null,
                 icon: const Icon(Icons.draw),
-                label: Text(_guardando ? 'Guardando firma...' : 'Firmar y continuar'),
+                label: Text(
+                    _guardando ? 'Guardando firma...' : 'Firmar y continuar'),
               ),
             ),
           ],

@@ -44,7 +44,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
           children: [
             const SizedBox(height: 12),
             Container(
-              width: 44, height: 5,
+              width: 44,
+              height: 5,
               decoration: BoxDecoration(
                 color: Colors.white24,
                 borderRadius: BorderRadius.circular(3),
@@ -53,12 +54,14 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
             const SizedBox(height: 12),
             ListTile(
               leading: const Icon(Icons.photo_camera, color: Colors.white),
-              title: const Text('Tomar foto', style: TextStyle(color: Colors.white)),
+              title: const Text('Tomar foto',
+                  style: TextStyle(color: Colors.white)),
               onTap: () => Navigator.pop(context, ImageSource.camera),
             ),
             ListTile(
               leading: const Icon(Icons.photo_library, color: Colors.white),
-              title: const Text('Elegir de galería', style: TextStyle(color: Colors.white)),
+              title: const Text('Elegir de galería',
+                  style: TextStyle(color: Colors.white)),
               onTap: () => Navigator.pop(context, ImageSource.gallery),
             ),
             const SizedBox(height: 8),
@@ -92,10 +95,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
 
       // Nombre único para evitar cache y colisiones
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final ref = _storage.ref()
-          .child('perfiles')
-          .child(uid)
-          .child('avatar_$ts.jpg');
+      final ref =
+          _storage.ref().child('perfiles').child(uid).child('avatar_$ts.jpg');
 
       // Sube la imagen (contentType que cumple tus reglas: image/*)
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
@@ -175,8 +176,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
     final nombre = _nombreCtrl.text.trim();
     if (nombre.length < 2) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Nombre demasiado corto.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nombre demasiado corto.')));
       return;
     }
     setState(() => _guardando = true);
@@ -230,7 +231,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
     } on FirebaseException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ Test Storage: [${e.code}] ${e.message ?? ''}')),
+        SnackBar(
+            content: Text('❌ Test Storage: [${e.code}] ${e.message ?? ''}')),
       );
     } finally {
       if (mounted) {
@@ -245,12 +247,14 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
     if (user == null) {
       return const Scaffold(
         body: Center(
-          child: Text('No has iniciado sesión', style: TextStyle(color: Colors.white)),
+          child: Text('No has iniciado sesión',
+              style: TextStyle(color: Colors.white)),
         ),
       );
     }
 
-    final docRef = FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
+    final docRef =
+        FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -259,7 +263,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
         stream: docRef.snapshots(),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.greenAccent));
+            return const Center(
+                child: CircularProgressIndicator(color: Colors.greenAccent));
           }
 
           final data = snap.data?.data() ?? {};
@@ -286,18 +291,22 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                       right: -4,
                       bottom: -4,
                       child: ElevatedButton.icon(
-                        onPressed: _subiendo ? null : () => _cambiarFoto(user.uid),
+                        onPressed:
+                            _subiendo ? null : () => _cambiarFoto(user.uid),
                         icon: _subiendo
                             ? const SizedBox(
-                                width: 18, height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.camera_alt, color: Colors.green),
                         label: Text(_subiendo ? 'Subiendo…' : 'Cambiar'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.white,
                           foregroundColor: Colors.black87,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
                         ),
                       ),
                     ),
@@ -329,7 +338,8 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                   onPressed: _guardando ? null : () => _guardarNombre(user.uid),
                   icon: _guardando
                       ? const SizedBox(
-                          width: 18, height: 18,
+                          width: 18,
+                          height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.save, color: Colors.green),

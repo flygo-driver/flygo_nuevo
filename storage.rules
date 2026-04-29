@@ -77,6 +77,35 @@ service firebase.storage {
                       );
     }
 
+    /* ========= Firmas de recibos (FirmarPago) ========= */
+    match /firmas/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+                   && request.resource != null
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType == 'image/png';
+    }
+
+    /* ========= Pools turismo: logos / banners (pools_taxista_crear) ========= */
+    match /agencias/{uid}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid)
+                   && request.resource != null
+                   && request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
+    match /viajes_pool/{uid}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid)
+                   && request.resource != null
+                   && request.resource.size < 50 * 1024 * 1024
+                   && (
+                        request.resource.contentType.matches('image/.*') ||
+                        request.resource.contentType.matches('video/.*')
+                      );
+    }
+
     /* ========= Bloqueo por defecto ========= */
     match /{path=**} {
       allow read, write: if false;

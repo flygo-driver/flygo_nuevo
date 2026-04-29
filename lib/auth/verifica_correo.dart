@@ -215,8 +215,8 @@ class _VerificaCorreoPageState extends State<VerificaCorreoPage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.refresh),
-                label:
-                    Text(_checking ? 'Comprobando...' : 'Ya verifiqué, comprobar'),
+                label: Text(
+                    _checking ? 'Comprobando...' : 'Ya verifiqué, comprobar'),
               ),
             ),
             const Spacer(),

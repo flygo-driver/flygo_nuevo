@@ -1,52 +1,97 @@
 import 'package:flutter/material.dart';
 
-// Importa por paquete para evitar rutas relativas frágiles
+import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
+import 'package:flygo_nuevo/pantallas/taxista/taxista_cuenta_tab.dart';
+import 'package:flygo_nuevo/pantallas/taxista/taxista_servicios_tab.dart';
+import 'package:flygo_nuevo/pantallas/taxista/taxista_trabajo_hub.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_disponible.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
-import 'package:flygo_nuevo/pantallas/taxista/billetera_taxista.dart';
-import 'package:flygo_nuevo/pantallas/taxista/perfil_taxista.dart';
 
+/// Shell del taxista: una barra inferior fija; cada pestaña usa un [Navigator] anidado.
 class TaxistaShell extends StatefulWidget {
-  const TaxistaShell({super.key});
+  const TaxistaShell({super.key, this.openDocumentosOnLaunch = false});
+
+  /// Abre Cuenta y apila [DocumentosTaxista] (documentos pendientes al entrar).
+  final bool openDocumentosOnLaunch;
 
   @override
   State<TaxistaShell> createState() => _TaxistaShellState();
 }
 
 class _TaxistaShellState extends State<TaxistaShell> {
-  int _currentIndex = 0;
+  int _index = 0;
 
-  late final List<Widget> _pages = const [
-    // 👇 Usa tu clase real
-    ViajeDisponible(),
-    ViajeEnCursoTaxista(),
-    BilleteraTaxista(),
-    PerfilTaxista(),
-  ];
+  final List<GlobalKey<NavigatorState>> _navigatorKeys =
+      List<GlobalKey<NavigatorState>>.generate(
+          4, (_) => GlobalKey<NavigatorState>());
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.openDocumentosOnLaunch) {
+      _index = 3;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _navigatorKeys[3].currentState?.push<void>(
+              MaterialPageRoute<void>(
+                  builder: (_) => const DocumentosTaxista()),
+            );
+      });
+    }
+  }
+
+  Widget _tabNavigator(int index, Widget rootPage) {
+    return Navigator(
+      key: _navigatorKeys[index],
+      initialRoute: '/',
+      onGenerateRoute: (RouteSettings settings) {
+        if (settings.name == '/') {
+          return MaterialPageRoute<void>(
+            settings: settings,
+            builder: (_) => rootPage,
+          );
+        }
+        return null;
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      body: _pages[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: Colors.black,
-        selectedItemColor: Colors.greenAccent,
-        unselectedItemColor: Colors.white70,
-        currentIndex: _currentIndex,
-        type: BottomNavigationBarType.fixed,
-        onTap: (index) => setState(() => _currentIndex = index),
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.directions_car),
-            label: 'Disponibles',
+      body: IndexedStack(
+        index: _index,
+        children: [
+          _tabNavigator(0, const ViajeDisponible()),
+          _tabNavigator(1, const TaxistaTrabajoHub()),
+          _tabNavigator(2, const TaxistaServiciosTab()),
+          _tabNavigator(3, const TaxistaCuentaTab()),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (i) => setState(() => _index = i),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.local_taxi_outlined),
+            selectedIcon: Icon(Icons.local_taxi),
+            label: 'Recibir',
           ),
-          BottomNavigationBarItem(icon: Icon(Icons.map), label: 'En curso'),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.account_balance_wallet),
-            label: 'Billetera',
+          NavigationDestination(
+            icon: Icon(Icons.work_outline),
+            selectedIcon: Icon(Icons.work_rounded),
+            label: 'Trabajo',
           ),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Perfil'),
+          NavigationDestination(
+            icon: Icon(Icons.travel_explore_outlined),
+            selectedIcon: Icon(Icons.travel_explore),
+            label: 'Servicios',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person_rounded),
+            label: 'Cuenta',
+          ),
         ],
       ),
     );

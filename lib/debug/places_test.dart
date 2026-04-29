@@ -6,7 +6,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 // Prefijos para evitar choques de tipos
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
-import 'package:flutter_google_places_sdk/flutter_google_places_sdk.dart' as places;
+import 'package:flutter_google_places_sdk/flutter_google_places_sdk.dart'
+    as places;
 
 // Tu archivo con la API key (ajústalo si tu constante tiene otro nombre)
 import 'package:flygo_nuevo/keys.dart' as app_keys;
@@ -115,7 +116,7 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
   // usa LatLng si existe; si no, usa Location.
   List<places.PlaceField> _compatibleFields() {
     const values = places.PlaceField.values; // ✅ CORREGIDO: ahora es const
-    
+
     places.PlaceField? _byName(String n) {
       try {
         return values.firstWhere(
@@ -237,7 +238,8 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
     }
     if (lat == null || lng == null) return;
 
-    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    final uri =
+        Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
@@ -264,7 +266,8 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
                 decoration: InputDecoration(
                   hintText: 'Busca un lugar…',
                   hintStyle: const TextStyle(color: Colors.white54),
-                  prefixIcon: const Icon(Icons.search, color: Colors.greenAccent),
+                  prefixIcon:
+                      const Icon(Icons.search, color: Colors.greenAccent),
                   filled: true,
                   fillColor: const Color(0xFF121212),
                   border: OutlineInputBorder(
@@ -277,7 +280,8 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(14),
-                    borderSide: const BorderSide(color: Colors.greenAccent, width: 2),
+                    borderSide:
+                        const BorderSide(color: Colors.greenAccent, width: 2),
                   ),
                   suffixIcon: _loadingPreds
                       ? const Padding(
@@ -294,7 +298,8 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
                                 _queryCtrl.clear();
                                 setState(() => _predictions = []);
                               },
-                              icon: const Icon(Icons.clear, color: Colors.white70),
+                              icon: const Icon(Icons.clear,
+                                  color: Colors.white70),
                             )
                           : null),
                 ),
@@ -303,8 +308,10 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
 
             if (_error != null)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Text(_error!,
+                    style: const TextStyle(color: Colors.redAccent)),
               ),
 
             // Lista de sugerencias
@@ -351,7 +358,8 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
                                 ],
                               ),
                             ),
-                            const Icon(Icons.chevron_right, color: Colors.white54),
+                            const Icon(Icons.chevron_right,
+                                color: Colors.white54),
                           ],
                         ),
                       ),
@@ -406,7 +414,9 @@ class _PlacesTestPageState extends State<PlacesTestPage> {
                         ),
                       ],
                     ),
-                  if (!_loadingDetails && _selectedPlace == null && _predictions.isEmpty)
+                  if (!_loadingDetails &&
+                      _selectedPlace == null &&
+                      _predictions.isEmpty)
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 16),
                       child: Text('Escribe para buscar…',
@@ -471,10 +481,12 @@ class _PlaceDetailsCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(place.name ?? 'Sin nombre',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             if (place.address != null)
-              Text(place.address!, style: const TextStyle(color: Colors.white70)),
+              Text(place.address!,
+                  style: const TextStyle(color: Colors.white70)),
             const SizedBox(height: 6),
             Text('placeId: ${place.id}', style: const TextStyle(fontSize: 12)),
             if (lat != null && lng != null) ...[
@@ -489,10 +501,11 @@ class _PlaceDetailsCard extends StatelessWidget {
                 children: types
                     .map((t) => Chip(
                           label: Text(t,
-                              style:
-                                  const TextStyle(color: Colors.black, fontSize: 12)),
+                              style: const TextStyle(
+                                  color: Colors.black, fontSize: 12)),
                           backgroundColor: Colors.greenAccent,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                           visualDensity: VisualDensity.compact,
                         ))
                     .toList(),

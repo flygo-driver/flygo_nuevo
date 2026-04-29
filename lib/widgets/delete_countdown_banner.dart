@@ -2,10 +2,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 class DeleteCountdownBanner extends StatefulWidget {
-  final DateTime base;                // momento base (creado)
-  final Duration window;              // ventana (ej. 60s)
+  final DateTime base; // momento base (creado)
+  final Duration window; // ventana (ej. 60s)
   final VoidCallback onDeletePressed; // acción de borrar
-  final VoidCallback? onExpired;      // opcional
+  final VoidCallback? onExpired; // opcional
 
   const DeleteCountdownBanner({
     super.key,
@@ -59,7 +59,7 @@ class _DeleteCountdownBannerState extends State<DeleteCountdownBanner> {
     if (_left == Duration.zero) return const SizedBox.shrink();
 
     final total = widget.window.inSeconds.toDouble();
-    final left  = _left.inSeconds.clamp(0, widget.window.inSeconds).toDouble();
+    final left = _left.inSeconds.clamp(0, widget.window.inSeconds).toDouble();
     final progress = 1.0 - (left / total);
 
     return Container(

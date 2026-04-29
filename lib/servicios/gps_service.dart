@@ -15,8 +15,7 @@ class GpsService {
   static Future<bool> openLocationSettings() =>
       Geolocator.openLocationSettings();
 
-  static Future<bool> openAppSettings() =>
-      Geolocator.openAppSettings();
+  static Future<bool> openAppSettings() => Geolocator.openAppSettings();
 
   static Future<Position?> obtenerUbicacionActual({
     Duration timeout = const Duration(seconds: 10),

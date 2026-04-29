@@ -3,14 +3,12 @@
 import 'distancia_service.dart';
 
 class TarifaService {
-
   /// ✅ SOLO para viajes NORMALES y MOTOR
   /// ✅ TURISMO se maneja aparte
   static double calcularPrecioPorTipo({
     required double distanciaKm,
     required String tipoVehiculo,
   }) {
-
     // 🔥 1) Base (tu lógica actual)
     final double base = DistanciaService.calcularPrecio(distanciaKm);
 
@@ -55,8 +53,8 @@ class TarifaService {
   // ============================================
   // 🔥 FUNCIÓN QUE TE FALTABA
   // ============================================
-  static double _ajustarParaMotorSiAplica(double precioBase, String tipoVehiculo) {
-
+  static double _ajustarParaMotorSiAplica(
+      double precioBase, String tipoVehiculo) {
     const double factorMotor = 0.75;
     const double minimoMotor = 120.0;
 

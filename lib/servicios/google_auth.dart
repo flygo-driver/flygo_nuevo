@@ -1,12 +1,12 @@
 // lib/servicios/google_auth.dart
-import 'package:flutter/foundation.dart'
-    show kDebugMode, kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb, debugPrint;
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'package:flygo_nuevo/keys.dart';
+import 'package:flygo_nuevo/servicios/roles_service.dart';
 
 class GoogleAuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -25,10 +25,19 @@ class GoogleAuthService {
   static GoogleSignIn? _googleSignInMobile;
 
   static GoogleSignIn _googleSignInNativo() {
-    return _googleSignInMobile ??= GoogleSignIn(
-      scopes: const ['email', 'profile'],
-      serverClientId: AppKeys.googleOAuthWebClientId,
-    );
+    if (_googleSignInMobile != null) return _googleSignInMobile!;
+    final wid = AppKeys.googleOAuthWebClientId.trim();
+    // Sin serverClientId la app usa el OAuth client de Android (google-services.json),
+    // igual que versiones anteriores; con wid se pide idToken para Firebase Auth.
+    _googleSignInMobile = wid.isNotEmpty
+        ? GoogleSignIn(
+            scopes: const ['email', 'profile'],
+            serverClientId: wid,
+          )
+        : GoogleSignIn(
+            scopes: const ['email', 'profile'],
+          );
+    return _googleSignInMobile!;
   }
 
   static String friendlyAuthError(Object error, {required String rol}) {
@@ -64,7 +73,9 @@ class GoogleAuthService {
           return error.message ??
               'Esta cuenta no corresponde al perfil $rolTxt.';
         default:
-          if ((error.message ?? '').toLowerCase().contains('apiexception: 10')) {
+          if ((error.message ?? '')
+              .toLowerCase()
+              .contains('apiexception: 10')) {
             return 'Google Sign-In no está autorizado para esta app (SHA-1/SHA-256).';
           }
           return error.message ?? 'No se pudo iniciar con Google.';
@@ -92,12 +103,6 @@ class GoogleAuthService {
     UserCredential cred;
 
     try {
-      if (!kIsWeb && AppKeys.googleOAuthWebClientId.trim().isEmpty) {
-        throw FirebaseAuthException(
-          code: 'google-config-missing',
-          message: 'Falta googleOAuthWebClientId en keys.dart',
-        );
-      }
       _pendingEntradaRol = rolEntrada;
       if (kIsWeb) {
         final provider = GoogleAuthProvider()
@@ -105,43 +110,7 @@ class GoogleAuthService {
           ..addScope('profile');
         cred = await _auth.signInWithPopup(provider);
       } else {
-        GoogleSignInAccount? gUser = await _googleSignInNativo().signIn();
-        if (gUser == null) {
-          throw FirebaseAuthException(
-            code: 'aborted-by-user',
-            message: 'Inicio de sesión cancelado.',
-          );
-        }
-
-        GoogleSignInAuthentication gAuth = await gUser.authentication;
-        if (gAuth.idToken == null && gAuth.accessToken == null) {
-          try {
-            await _googleSignInNativo().signOut();
-          } catch (_) {}
-          final loose = GoogleSignIn(scopes: const ['email', 'profile']);
-          gUser = await loose.signIn();
-          if (gUser == null) {
-            throw FirebaseAuthException(
-              code: 'aborted-by-user',
-              message: 'Inicio de sesión cancelado.',
-            );
-          }
-          gAuth = await gUser.authentication;
-        }
-
-        if (gAuth.idToken == null && gAuth.accessToken == null) {
-          throw FirebaseAuthException(
-            code: 'google-token-null',
-            message: 'Google no devolvió tokens.',
-          );
-        }
-
-        final oauth = GoogleAuthProvider.credential(
-          idToken: gAuth.idToken,
-          accessToken: gAuth.accessToken,
-        );
-
-        cred = await _auth.signInWithCredential(oauth);
+        cred = await _signInNativeRobust();
       }
 
       final user = cred.user;
@@ -172,6 +141,67 @@ class GoogleAuthService {
     }
   }
 
+  static Future<UserCredential> _signInNativeRobust() async {
+    GoogleSignInAccount? gUser;
+    GoogleSignInAuthentication? gAuth;
+    Object? firstError;
+
+    try {
+      gUser = await _googleSignInNativo().signIn();
+      if (gUser == null) {
+        throw FirebaseAuthException(
+          code: 'aborted-by-user',
+          message: 'Inicio de sesión cancelado.',
+        );
+      }
+      gAuth = await gUser.authentication;
+      if (gAuth.idToken == null && gAuth.accessToken == null) {
+        throw FirebaseAuthException(
+          code: 'google-token-null',
+          message: 'Google no devolvió tokens.',
+        );
+      }
+      final oauth = GoogleAuthProvider.credential(
+        idToken: gAuth.idToken,
+        accessToken: gAuth.accessToken,
+      );
+      return await _auth.signInWithCredential(oauth);
+    } catch (e) {
+      firstError = e;
+      if (kDebugMode) debugPrint('Google native first attempt failed: $e');
+    }
+
+    // Reintento "como antes": limpiar sesión Google y pedir cuenta otra vez.
+    try {
+      await clearGoogleSignInSession();
+    } catch (_) {}
+
+    gUser = await GoogleSignIn(scopes: const ['email', 'profile']).signIn();
+    if (gUser == null) {
+      if (firstError is FirebaseAuthException &&
+          firstError.code == 'aborted-by-user') {
+        throw firstError;
+      }
+      throw FirebaseAuthException(
+        code: 'aborted-by-user',
+        message: 'Inicio de sesión cancelado.',
+      );
+    }
+    gAuth = await gUser.authentication;
+    if (gAuth.idToken == null && gAuth.accessToken == null) {
+      throw FirebaseAuthException(
+        code: 'google-token-null',
+        message: 'Google no devolvió tokens.',
+      );
+    }
+
+    final oauth = GoogleAuthProvider.credential(
+      idToken: gAuth.idToken,
+      accessToken: gAuth.accessToken,
+    );
+    return await _auth.signInWithCredential(oauth);
+  }
+
   static Future<void> _syncUsuarioFirestoreAfterGoogle({
     required User user,
     required String rolEntrada,
@@ -192,7 +222,8 @@ class GoogleAuthService {
         (dataUsuario['rol'] ?? '').toString().trim().toLowerCase();
     final rolRoles = (dataRol['rol'] ?? '').toString().trim().toLowerCase();
 
-    final bool esAdmin = (rolUsuarios == 'admin') || (rolRoles == 'admin');
+    final bool esAdmin = RolesService.esRolAdmin(rolUsuarios) ||
+        RolesService.esRolAdmin(rolRoles);
 
     if (!snapUsuario.exists) {
       if (!esAdmin && rolEntrada == 'cliente') {

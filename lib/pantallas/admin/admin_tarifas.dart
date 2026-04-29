@@ -166,47 +166,81 @@ class _AdminTarifasState extends State<AdminTarifas> {
 
       _jeepetaBaseCtrl.text = _getValor(general, 'Jeepeta', 'base', '80.0');
       _jeepetaPorKmCtrl.text = _getValor(general, 'Jeepeta', 'porKm', '30.0');
-      _jeepetaMinimoCtrl.text = _getValor(general, 'Jeepeta', 'minimo', '200.0');
+      _jeepetaMinimoCtrl.text =
+          _getValor(general, 'Jeepeta', 'minimo', '200.0');
 
       _minibusBaseCtrl.text = _getValor(general, 'Minibús', 'base', '120.0');
       _minibusPorKmCtrl.text = _getValor(general, 'Minibús', 'porKm', '35.0');
-      _minibusMinimoCtrl.text = _getValor(general, 'Minibús', 'minimo', '300.0');
+      _minibusMinimoCtrl.text =
+          _getValor(general, 'Minibús', 'minimo', '300.0');
 
       _minivanBaseCtrl.text = _getValor(general, 'Minivan', 'base', '100.0');
       _minivanPorKmCtrl.text = _getValor(general, 'Minivan', 'porKm', '32.0');
-      _minivanMinimoCtrl.text = _getValor(general, 'Minivan', 'minimo', '250.0');
+      _minivanMinimoCtrl.text =
+          _getValor(general, 'Minivan', 'minimo', '250.0');
 
-      _autobusBaseCtrl.text = _getValor(general, 'AutobusGuagua', 'base',
-          _getValor(general, 'Autobús/Guagua', 'base',
-              _getValor(general, 'Autobús', 'base', _getValor(general, 'Guagua', 'base', '200.0'))));
-      _autobusPorKmCtrl.text = _getValor(general, 'AutobusGuagua', 'porKm',
-          _getValor(general, 'Autobús/Guagua', 'porKm',
-              _getValor(general, 'Autobús', 'porKm', _getValor(general, 'Guagua', 'porKm', '45.0'))));
-      _autobusMinimoCtrl.text = _getValor(general, 'AutobusGuagua', 'minimo',
-          _getValor(general, 'Autobús/Guagua', 'minimo',
-              _getValor(general, 'Autobús', 'minimo', _getValor(general, 'Guagua', 'minimo', '500.0'))));
+      _autobusBaseCtrl.text = _getValor(
+          general,
+          'AutobusGuagua',
+          'base',
+          _getValor(
+              general,
+              'Autobús/Guagua',
+              'base',
+              _getValor(general, 'Autobús', 'base',
+                  _getValor(general, 'Guagua', 'base', '200.0'))));
+      _autobusPorKmCtrl.text = _getValor(
+          general,
+          'AutobusGuagua',
+          'porKm',
+          _getValor(
+              general,
+              'Autobús/Guagua',
+              'porKm',
+              _getValor(general, 'Autobús', 'porKm',
+                  _getValor(general, 'Guagua', 'porKm', '45.0'))));
+      _autobusMinimoCtrl.text = _getValor(
+          general,
+          'AutobusGuagua',
+          'minimo',
+          _getValor(
+              general,
+              'Autobús/Guagua',
+              'minimo',
+              _getValor(general, 'Autobús', 'minimo',
+                  _getValor(general, 'Guagua', 'minimo', '500.0'))));
 
       _motorBaseCtrl.text = _getValor(general, 'motor', 'base', '30.0');
       _motorPorKmCtrl.text = _getValor(general, 'motor', 'porKm', '12.0');
       _motorMinimoCtrl.text = _getValor(general, 'motor', 'minimo', '80.0');
 
       // Cargar valores de turismo
-      _turismoCarroBaseCtrl.text = _getValor(turismo, 'carro', 'tarifaBase', '80.0');
-      _turismoCarroPorKmCtrl.text = _getValor(turismo, 'carro', 'tarifaKm', '35.0');
-      _turismoCarroMinimoCtrl.text = _getValor(turismo, 'carro', 'precioMinimo', '250.0');
+      _turismoCarroBaseCtrl.text =
+          _getValor(turismo, 'carro', 'tarifaBase', '80.0');
+      _turismoCarroPorKmCtrl.text =
+          _getValor(turismo, 'carro', 'tarifaKm', '35.0');
+      _turismoCarroMinimoCtrl.text =
+          _getValor(turismo, 'carro', 'precioMinimo', '250.0');
 
-      _turismoJeepetaBaseCtrl.text = _getValor(turismo, 'jeepeta', 'tarifaBase', '150.0');
-      _turismoJeepetaPorKmCtrl.text = _getValor(turismo, 'jeepeta', 'tarifaKm', '40.0');
-      _turismoJeepetaMinimoCtrl.text = _getValor(turismo, 'jeepeta', 'precioMinimo', '500.0');
+      _turismoJeepetaBaseCtrl.text =
+          _getValor(turismo, 'jeepeta', 'tarifaBase', '150.0');
+      _turismoJeepetaPorKmCtrl.text =
+          _getValor(turismo, 'jeepeta', 'tarifaKm', '40.0');
+      _turismoJeepetaMinimoCtrl.text =
+          _getValor(turismo, 'jeepeta', 'precioMinimo', '500.0');
 
-      _turismoMinivanBaseCtrl.text = _getValor(turismo, 'minivan', 'tarifaBase', '250.0');
-      _turismoMinivanPorKmCtrl.text = _getValor(turismo, 'minivan', 'tarifaKm', '55.0');
-      _turismoMinivanMinimoCtrl.text = _getValor(turismo, 'minivan', 'precioMinimo', '700.0');
+      _turismoMinivanBaseCtrl.text =
+          _getValor(turismo, 'minivan', 'tarifaBase', '250.0');
+      _turismoMinivanPorKmCtrl.text =
+          _getValor(turismo, 'minivan', 'tarifaKm', '55.0');
+      _turismoMinivanMinimoCtrl.text =
+          _getValor(turismo, 'minivan', 'precioMinimo', '700.0');
 
-      _turismoBusBaseCtrl.text = _getValor(turismo, 'bus', 'tarifaBase', '400.0');
+      _turismoBusBaseCtrl.text =
+          _getValor(turismo, 'bus', 'tarifaBase', '400.0');
       _turismoBusPorKmCtrl.text = _getValor(turismo, 'bus', 'tarifaKm', '75.0');
-      _turismoBusMinimoCtrl.text = _getValor(turismo, 'bus', 'precioMinimo', '1200.0');
-
+      _turismoBusMinimoCtrl.text =
+          _getValor(turismo, 'bus', 'precioMinimo', '1200.0');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -217,7 +251,8 @@ class _AdminTarifasState extends State<AdminTarifas> {
     }
   }
 
-  String _getValor(Map<String, dynamic> mapa, String clave, String subclave, String fallback) {
+  String _getValor(Map<String, dynamic> mapa, String clave, String subclave,
+      String fallback) {
     try {
       final dynamic valor = mapa[clave]?[subclave];
       if (valor == null) return fallback;
@@ -232,7 +267,7 @@ class _AdminTarifasState extends State<AdminTarifas> {
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
     if (!mounted) return;
-    
+
     setState(() => _guardando = true);
 
     try {
@@ -285,11 +320,14 @@ class _AdminTarifasState extends State<AdminTarifas> {
         },
       };
 
-      await _db.collection('tarifas').doc('general').set(tarifasNormales, SetOptions(merge: true));
+      await _db
+          .collection('tarifas')
+          .doc('general')
+          .set(tarifasNormales, SetOptions(merge: true));
 
       // ✅ Guardar tarifas de turismo en documentos separados (como espera el servicio)
       final batch = _db.batch();
-      
+
       // Carro turismo
       batch.set(
         _db.collection('tarifa_turismo').doc('carro'),
@@ -383,7 +421,8 @@ class _AdminTarifasState extends State<AdminTarifas> {
           labelText: label,
           hintText: hint,
           labelStyle: TextStyle(color: AdminUi.secondary(context)),
-          hintStyle: TextStyle(color: AdminUi.secondary(context).withValues(alpha: 0.75)),
+          hintStyle: TextStyle(
+              color: AdminUi.secondary(context).withValues(alpha: 0.75)),
           filled: true,
           fillColor: AdminUi.inputFill(context),
           border: OutlineInputBorder(
@@ -398,7 +437,8 @@ class _AdminTarifasState extends State<AdminTarifas> {
             borderRadius: BorderRadius.circular(8),
             borderSide: BorderSide(color: cs.primary, width: 1.4),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         ),
         validator: (String? value) {
           if (value == null || value.isEmpty) return 'Requerido';
@@ -442,120 +482,196 @@ class _AdminTarifasState extends State<AdminTarifas> {
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),
         iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Administrar Tarifas', style: TextStyle(color: AdminUi.onCard(context))),
+        title: Text('Administrar Tarifas',
+            style: TextStyle(color: AdminUi.onCard(context))),
       ),
       body: _cargando
-          ? Center(child: CircularProgressIndicator(color: AdminUi.progressAccent(context)))
+          ? Center(
+              child: CircularProgressIndicator(
+                  color: AdminUi.progressAccent(context)))
           : Form(
               key: _formKey,
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: <Widget>[
                   _buildSeccion('🚗 VEHÍCULOS NORMALES', <Widget>[
-                    Text('Carro', style: TextStyle(color: AdminUi.secondary(context))),
+                    Text('Carro',
+                        style: TextStyle(color: AdminUi.secondary(context))),
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _carroBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base', controller: _carroBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _carroPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km', controller: _carroPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _carroMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo', controller: _carroMinimoCtrl)),
                     ]),
                     const SizedBox(height: 12),
-                    Text('Jeepeta', style: TextStyle(color: AdminUi.secondary(context))),
+                    Text('Jeepeta',
+                        style: TextStyle(color: AdminUi.secondary(context))),
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _jeepetaBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base', controller: _jeepetaBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _jeepetaPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km', controller: _jeepetaPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _jeepetaMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo', controller: _jeepetaMinimoCtrl)),
                     ]),
                     const SizedBox(height: 12),
-                    Text('Minibús', style: TextStyle(color: AdminUi.secondary(context))),
+                    Text('Minibús',
+                        style: TextStyle(color: AdminUi.secondary(context))),
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _minibusBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base', controller: _minibusBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _minibusPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km', controller: _minibusPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _minibusMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo', controller: _minibusMinimoCtrl)),
                     ]),
                     const SizedBox(height: 12),
-                    Text('Minivan', style: TextStyle(color: AdminUi.secondary(context))),
+                    Text('Minivan',
+                        style: TextStyle(color: AdminUi.secondary(context))),
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _minivanBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base', controller: _minivanBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _minivanPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km', controller: _minivanPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _minivanMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo', controller: _minivanMinimoCtrl)),
                     ]),
                     const SizedBox(height: 12),
-                    Text('Autobús/Guagua', style: TextStyle(color: AdminUi.secondary(context))),
+                    Text('Autobús/Guagua',
+                        style: TextStyle(color: AdminUi.secondary(context))),
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _autobusBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base', controller: _autobusBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _autobusPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km', controller: _autobusPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _autobusMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo', controller: _autobusMinimoCtrl)),
                     ]),
                   ]),
-
                   _buildSeccion('🛵 MOTOR', <Widget>[
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _motorBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base', controller: _motorBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _motorPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km', controller: _motorPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _motorMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo', controller: _motorMinimoCtrl)),
                     ]),
                   ]),
-
                   _buildSeccion('🏝️ TURISMO - CARRO', <Widget>[
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _turismoCarroBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base',
+                              controller: _turismoCarroBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _turismoCarroPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km',
+                              controller: _turismoCarroPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _turismoCarroMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo',
+                              controller: _turismoCarroMinimoCtrl)),
                     ]),
                   ]),
-
                   _buildSeccion('🏝️ TURISMO - JEEPETA', <Widget>[
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _turismoJeepetaBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base',
+                              controller: _turismoJeepetaBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _turismoJeepetaPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km',
+                              controller: _turismoJeepetaPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _turismoJeepetaMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo',
+                              controller: _turismoJeepetaMinimoCtrl)),
                     ]),
                   ]),
-
                   _buildSeccion('🏝️ TURISMO - MINIVAN', <Widget>[
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _turismoMinivanBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base',
+                              controller: _turismoMinivanBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _turismoMinivanPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km',
+                              controller: _turismoMinivanPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _turismoMinivanMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo',
+                              controller: _turismoMinivanMinimoCtrl)),
                     ]),
                   ]),
-
                   _buildSeccion('🏝️ TURISMO - BUS', <Widget>[
                     Row(children: <Widget>[
-                      Expanded(child: _buildCampo(label: 'Base', controller: _turismoBusBaseCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Base', controller: _turismoBusBaseCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Por km', controller: _turismoBusPorKmCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Por km',
+                              controller: _turismoBusPorKmCtrl)),
                       const SizedBox(width: 8),
-                      Expanded(child: _buildCampo(label: 'Mínimo', controller: _turismoBusMinimoCtrl)),
+                      Expanded(
+                          child: _buildCampo(
+                              label: 'Mínimo',
+                              controller: _turismoBusMinimoCtrl)),
                     ]),
                   ]),
-
                   const SizedBox(height: 20),
                   ElevatedButton.icon(
                     onPressed: _guardando ? null : _guardar,
                     icon: const Icon(Icons.save),
-                    label: Text(_guardando ? 'Guardando...' : 'Guardar Tarifas'),
+                    label:
+                        Text(_guardando ? 'Guardando...' : 'Guardar Tarifas'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                      foregroundColor: Theme.of(context).colorScheme.onPrimaryContainer,
+                      backgroundColor:
+                          Theme.of(context).colorScheme.primaryContainer,
+                      foregroundColor:
+                          Theme.of(context).colorScheme.onPrimaryContainer,
                       minimumSize: const Size(double.infinity, 50),
                     ),
                   ),

@@ -13,7 +13,8 @@ class ServiciosConsularesScreen extends StatelessWidget {
         backgroundColor: Colors.black,
         title: const Text(
           'Servicios Consulares',
-          style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w800),
+          style:
+              TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w800),
         ),
         centerTitle: true,
       ),
@@ -33,7 +34,10 @@ class ServiciosConsularesScreen extends StatelessWidget {
                 children: [
                   Text(
                     'Traslados por pueblo → ciudad (citas consulares)',
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold),
                   ),
                   SizedBox(height: 8),
                   Text(
@@ -56,7 +60,8 @@ class ServiciosConsularesScreen extends StatelessWidget {
                 onPressed: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const ProgramarViaje(modoAhora: false)),
+                    MaterialPageRoute(
+                        builder: (_) => const ProgramarViaje(modoAhora: false)),
                   );
                 },
                 icon: const Icon(Icons.event_available),

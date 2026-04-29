@@ -10,9 +10,11 @@ class ToursTuristicosScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textSecondary = isDark ? Colors.white70 : const Color(0xFF475467);
+    final Color textSecondary =
+        isDark ? Colors.white70 : const Color(0xFF475467);
     final Color accent = isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
-    final Color tipColor = isDark ? Colors.greenAccent : const Color(0xFF0B6B3A);
+    final Color tipColor =
+        isDark ? Colors.greenAccent : const Color(0xFF0B6B3A);
     final Color cardBg = isDark ? const Color(0xFF121212) : Colors.white;
     final Color cardBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color scaffoldBg = isDark ? Colors.black : const Color(0xFFE8EAED);
@@ -46,7 +48,10 @@ class ToursTuristicosScreen extends StatelessWidget {
               children: [
                 Text(
                   'Tours privados o en grupo con FlyGo',
-                  style: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                      color: textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -57,7 +62,8 @@ class ToursTuristicosScreen extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   'Tip: si habrá varias paradas, usa "múltiples paradas".',
-                  style: TextStyle(color: tipColor, fontWeight: FontWeight.w600),
+                  style:
+                      TextStyle(color: tipColor, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
@@ -69,7 +75,8 @@ class ToursTuristicosScreen extends StatelessWidget {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProgramarViaje(modoAhora: false)),
+                  MaterialPageRoute(
+                      builder: (_) => const ProgramarViaje(modoAhora: false)),
                 );
               },
               icon: const Icon(Icons.event_available),
@@ -88,7 +95,8 @@ class ToursTuristicosScreen extends StatelessWidget {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const ProgramarViajeMulti()),
+                  MaterialPageRoute(
+                      builder: (_) => const ProgramarViajeMulti()),
                 );
               },
               icon: Icon(Icons.alt_route, color: accent),

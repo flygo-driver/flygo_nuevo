@@ -18,3 +18,9 @@ const rutaPanelCliente = '/panel_cliente';
 const rutaPanelTaxista = '/panel_taxista';
 const rutaLoginCliente = '/login_cliente';
 const rutaLoginTaxista = '/login_taxista';
+
+/// Bola Ahorro — tablero intermunicipal (misma ruta que [MaterialApp.routes] en `main.dart`).
+const rutaBolaPueblo = '/bola_pueblo';
+
+/// Cliente: lista dedicada de conductores que publicaron «Voy para» (tipo oferta).
+const rutaBolaConductoresCliente = '/bola_conductores_cliente';

@@ -5,8 +5,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 // Destinos existentes en tu app
-import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
+import 'package:flygo_nuevo/widgets/admin_gate.dart';
+import 'package:flygo_nuevo/widgets/rai_linear_loading_body.dart';
 
 // Flujo selección / login
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
@@ -60,16 +62,6 @@ class _AuthCheckState extends State<AuthCheck> {
     );
   }
 
-  void _goNamed(String route, {Widget? fallback}) {
-    if (_navigated || !mounted) return;
-    try {
-      _navigated = true;
-      Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => false);
-    } catch (_) {
-      if (fallback != null) _go(fallback);
-    }
-  }
-
   Future<void> _run() async {
     setState(() {
       _busy = true;
@@ -106,13 +98,13 @@ class _AuthCheckState extends State<AuthCheck> {
 
       if (!mounted) return;
 
-      // 2) Redirigir
+      // 2) Redirigir (_sanitizeRol ya unifica administrador → admin)
       if (rol == 'admin') {
-        _goNamed('/admin', fallback: const ClienteHome());
+        _go(const AdminGate());
       } else if (rol == 'taxista') {
         _go(const TaxistaEntry());
       } else if (rol == 'cliente') {
-        _go(const ClienteHome());
+        _go(const ClienteShell());
       } else {
         // rol raro => volver a selección
         _go(const SeleccionUsuario());
@@ -146,7 +138,7 @@ class _AuthCheckState extends State<AuthCheck> {
           );
         }
         if (!mounted) return;
-        _go(const ClienteHome());
+        _go(const ClienteShell());
         return;
       } catch (_) {
         // si falla el fallback, seguimos al error UI
@@ -237,6 +229,7 @@ class _AuthCheckState extends State<AuthCheck> {
 
   String _sanitizeRol(String rol) {
     final r = rol.trim().toLowerCase();
+    if (r == 'administrador') return 'admin';
     if (r == 'admin' || r == 'taxista' || r == 'cliente') return r;
     return 'cliente';
   }
@@ -300,12 +293,7 @@ class _AuthCheckState extends State<AuthCheck> {
   Widget build(BuildContext context) {
     // Cargando
     if (_busy && _errorMsg == null) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: CircularProgressIndicator(color: Colors.greenAccent),
-        ),
-      );
+      return const RaiLinearLoadingBody(backgroundColor: Colors.black);
     }
 
     // Error UI (profesional para producción)
@@ -378,11 +366,6 @@ class _AuthCheckState extends State<AuthCheck> {
     }
 
     // fallback
-    return const Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-        child: CircularProgressIndicator(color: Colors.greenAccent),
-      ),
-    );
+    return const RaiLinearLoadingBody(backgroundColor: Colors.black);
   }
 }

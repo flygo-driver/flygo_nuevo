@@ -6,7 +6,8 @@ class ChatRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   static String _pairId(String a, String b) {
-    a = a.trim(); b = b.trim();
+    a = a.trim();
+    b = b.trim();
     return a.compareTo(b) < 0 ? '${a}_$b' : '${b}_$a';
   }
 
@@ -101,7 +102,8 @@ class ChatRepo {
     FirebaseException? lastErr;
 
     for (final cid in candidates) {
-      debugPrint('[CHAT] try cid="$cid"  uidA="$uidA" uidB="$uidB" viajeId="$v"');
+      debugPrint(
+          '[CHAT] try cid="$cid"  uidA="$uidA" uidB="$uidB" viajeId="$v"');
 
       // 1) tocar si existe y tengo permiso
       try {
@@ -147,9 +149,11 @@ class ChatRepo {
         );
   }
 
-  static Stream<QuerySnapshot<Map<String, dynamic>>> streamMensajes(String chatId) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamMensajes(
+      String chatId) {
     return _db
-        .collection('chats').doc(chatId)
+        .collection('chats')
+        .doc(chatId)
         .collection('mensajes')
         .orderBy('ts', descending: true)
         .limit(200)
@@ -162,7 +166,7 @@ class ChatRepo {
     required String texto,
   }) async {
     final chatRef = _db.collection('chats').doc(chatId);
-    final msgRef  = chatRef.collection('mensajes').doc();
+    final msgRef = chatRef.collection('mensajes').doc();
 
     await _db.runTransaction((tx) async {
       tx.set(msgRef, {
@@ -180,7 +184,8 @@ class ChatRepo {
     });
   }
 
-  static Stream<DocumentSnapshot<Map<String, dynamic>>> streamChat(String chatId) {
+  static Stream<DocumentSnapshot<Map<String, dynamic>>> streamChat(
+      String chatId) {
     return _db.collection('chats').doc(chatId).snapshots();
   }
 }

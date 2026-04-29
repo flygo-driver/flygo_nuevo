@@ -68,10 +68,10 @@ class PantallaEstadoViaje extends StatelessWidget {
                 final String estado = (viaje.estado.isNotEmpty)
                     ? viaje.estado
                     : (viaje.completado
-                          ? EstadosViaje.completado
-                          : (viaje.aceptado
-                                ? EstadosViaje.enCurso
-                                : EstadosViaje.pendiente));
+                        ? EstadosViaje.completado
+                        : (viaje.aceptado
+                            ? EstadosViaje.enCurso
+                            : EstadosViaje.pendiente));
 
                 return Padding(
                   padding: const EdgeInsets.all(24),

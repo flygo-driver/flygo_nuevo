@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import '../../widgets/cliente_drawer.dart';
 import '../../modelo/viaje.dart';
 import '../../data/viaje_data.dart';
 
@@ -16,16 +15,10 @@ class HistorialCliente extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      drawer: const ClienteDrawer(),
       appBar: AppBar(
         backgroundColor: Colors.black,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-          ),
-        ),
-        title: const Text('Historial de viajes', style: TextStyle(color: Colors.white)),
+        title: const Text('Historial de viajes',
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -67,12 +60,14 @@ class HistorialCliente extends StatelessWidget {
                     final v = viajes[index];
                     return Card(
                       color: Colors.grey[900],
-                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      margin: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
                       child: ListTile(
                         contentPadding: const EdgeInsets.all(12),
                         title: Text(
                           '${v.origen} → ${v.destino}',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w600),
                         ),
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -90,7 +85,9 @@ class HistorialCliente extends StatelessWidget {
                         ),
                         trailing: Text(
                           'RD\$${v.precio.toStringAsFixed(2)}',
-                          style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                              color: Colors.greenAccent,
+                              fontWeight: FontWeight.bold),
                         ),
                       ),
                     );

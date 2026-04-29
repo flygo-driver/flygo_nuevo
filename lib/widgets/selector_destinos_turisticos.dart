@@ -9,7 +9,6 @@ import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
-import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 
 class DestinoSeleccionado {
   final TurismoLugar lugar;
@@ -42,7 +41,8 @@ class SelectorDestinosTuristicos extends StatefulWidget {
   });
 
   @override
-  State<SelectorDestinosTuristicos> createState() => _SelectorDestinosTuristicosState();
+  State<SelectorDestinosTuristicos> createState() =>
+      _SelectorDestinosTuristicosState();
 }
 
 class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
@@ -53,7 +53,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   int _pasajeros = 1;
   TurismoLugar? _destinoSeleccionado;
   bool _calculando = false;
-  
+
   List<Map<String, dynamic>> _resultadosGoogle = [];
   bool _buscandoGoogle = false;
   Timer? _debounceTimer;
@@ -99,9 +99,24 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   };
 
   final List<Map<String, dynamic>> _opcionesVehiculo = [
-    {'value': 'carro', 'label': 'Carro Turismo', 'icon': '🚗', 'maxPasajeros': 4},
-    {'value': 'jeepeta', 'label': 'Jeepeta Turismo', 'icon': '🚙', 'maxPasajeros': 5},
-    {'value': 'minivan', 'label': 'Minivan Turismo', 'icon': '🚐', 'maxPasajeros': 8},
+    {
+      'value': 'carro',
+      'label': 'Carro Turismo',
+      'icon': '🚗',
+      'maxPasajeros': 4
+    },
+    {
+      'value': 'jeepeta',
+      'label': 'Jeepeta Turismo',
+      'icon': '🚙',
+      'maxPasajeros': 5
+    },
+    {
+      'value': 'minivan',
+      'label': 'Minivan Turismo',
+      'icon': '🚐',
+      'maxPasajeros': 8
+    },
     {'value': 'bus', 'label': 'Bus Turismo', 'icon': '🚌', 'maxPasajeros': 20},
   ];
 
@@ -117,13 +132,14 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   Future<int> _obtenerContadorViajes() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return 1;
-    
-    if (_contadorViajesCache != null && 
+
+    if (_contadorViajesCache != null &&
         _contadorTimestamp != null &&
-        DateTime.now().difference(_contadorTimestamp!) < const Duration(minutes: 5)) {
+        DateTime.now().difference(_contadorTimestamp!) <
+            const Duration(minutes: 5)) {
       return _contadorViajesCache!;
     }
-    
+
     try {
       final snapshot = await fs.FirebaseFirestore.instance
           .collection('viajes')
@@ -131,11 +147,11 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           .where('completado', isEqualTo: true)
           .count()
           .get();
-      
+
       final int contador = snapshot.count ?? 0;
       _contadorViajesCache = contador;
       _contadorTimestamp = DateTime.now();
-      
+
       return contador == 0 ? 1 : contador;
     } catch (e) {
       return 1;
@@ -146,12 +162,12 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   void initState() {
     super.initState();
     _tipoVehiculoSeleccionado = widget.tipoVehiculoInicial ?? 'carro';
-    
+
     // Organizar destinos por subtipo
     for (var lugar in TurismoCatalogoRD.lugares) {
       _destinosPorSubtipo.putIfAbsent(lugar.subtipo, () => []).add(lugar);
     }
-    
+
     // Ordenar subtipos
     final subtiposOrdenados = [
       TurismoCatalogoRD.aeropuerto,
@@ -169,7 +185,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       TurismoCatalogoRD.museo,
       TurismoCatalogoRD.lago,
     ].where((t) => _destinosPorSubtipo.containsKey(t)).toList();
-    
+
     _tabController = TabController(
       length: subtiposOrdenados.length,
       vsync: this,
@@ -188,7 +204,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     final query = _searchQuery.toLowerCase();
     return TurismoCatalogoRD.lugares.where((lugar) {
       return lugar.nombre.toLowerCase().contains(query) ||
-             lugar.ciudad.toLowerCase().contains(query);
+          lugar.ciudad.toLowerCase().contains(query);
     }).toList();
   }
 
@@ -206,9 +222,9 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       final service = LugaresService.instance;
       final resultados = await service.autocompletar(query, country: 'DO');
       final detalles = <Map<String, dynamic>>[];
-      
+
       final resultadosLimitados = resultados.take(5).toList();
-      
+
       for (var pred in resultadosLimitados) {
         final detalle = await service.detalle(pred.placeId);
         if (detalle != null && mounted) {
@@ -263,12 +279,19 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
         withTraffic: true,
         region: 'do',
       );
-      return result?.km ?? DistanciaService.calcularDistancia(
-        widget.latOrigen!, widget.lonOrigen!, lat, lon,
-      );
+      return result?.km ??
+          DistanciaService.calcularDistancia(
+            widget.latOrigen!,
+            widget.lonOrigen!,
+            lat,
+            lon,
+          );
     } catch (e) {
       return DistanciaService.calcularDistancia(
-        widget.latOrigen!, widget.lonOrigen!, lat, lon,
+        widget.latOrigen!,
+        widget.lonOrigen!,
+        lat,
+        lon,
       );
     }
   }
@@ -277,7 +300,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     if (_pasajeros > _maxPasajerosParaVehiculoActual) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
+          content: Text(
+              'Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
           backgroundColor: Colors.red,
         ),
       );
@@ -296,20 +320,20 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     try {
       final distancia = await _calcularDistancia(lugar['lat'], lugar['lon']);
       final contadorViajes = await _obtenerContadorViajes();
-      
+
       final precio = await TarifaServiceUnificado().calcularPrecio(
         tipoServicio: 'turismo',
         tipoVehiculo: _tipoVehiculoSeleccionado!,
         subtipoTurismo: 'busqueda',
         distanciaKm: distancia,
         idaVuelta: false,
-        contadorViajes: contadorViajes,  // ✅ AGREGADO
+        contadorViajes: contadorViajes, // ✅ AGREGADO
       );
       if (mounted) {
         setState(() {
           _calculando = false;
         });
-        
+
         final lugarTemp = TurismoLugar(
           id: 'google_${lugar['placeId']}',
           nombre: lugar['nombre'],
@@ -321,7 +345,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           imagen: null,
           popularidad: 0,
         );
-        
+
         widget.onDestinoSeleccionado(DestinoSeleccionado(
           lugar: lugarTemp,
           tipoVehiculo: _tipoVehiculoSeleccionado!,
@@ -346,7 +370,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     if (_pasajeros > _maxPasajerosParaVehiculoActual) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
+          content: Text(
+              'Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
           backgroundColor: Colors.red,
         ),
       );
@@ -367,14 +392,14 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     try {
       final distancia = await _calcularDistancia(destino.lat, destino.lon);
       final contadorViajes = await _obtenerContadorViajes();
-      
+
       final precio = await TarifaServiceUnificado().calcularPrecio(
         tipoServicio: 'turismo',
         tipoVehiculo: _tipoVehiculoSeleccionado!,
         subtipoTurismo: destino.subtipo,
         distanciaKm: distancia,
         idaVuelta: false,
-        contadorViajes: contadorViajes,  // ✅ AGREGADO
+        contadorViajes: contadorViajes, // ✅ AGREGADO
       );
       if (mounted) {
         setState(() {
@@ -418,181 +443,210 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
             children: [
               Column(
                 children: [
-          // Handle
-          Container(
-            margin: const EdgeInsets.only(top: 12),
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.white24,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              'Destinos Turísticos',
-              style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-          ),
+                  // Handle
+                  Container(
+                    margin: const EdgeInsets.only(top: 12),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text(
+                      'Destinos Turísticos',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
 
-          // Selector de tipo de vehículo
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Tipo de vehículo:', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                const SizedBox(height: 8),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: _opcionesVehiculo.map((opcion) {
-                      final isSelected = _tipoVehiculoSeleccionado == opcion['value'];
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: FilterChip(
-                          label: Text(
-                            opcion['label'] as String,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          avatar: Text(opcion['icon'] as String),
-                          selected: isSelected,
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() {
-                                _tipoVehiculoSeleccionado = opcion['value'];
-                                if (_pasajeros > opcion['maxPasajeros']) {
-                                  _pasajeros = opcion['maxPasajeros'];
-                                }
-                              });
-                            }
-                          },
-                          backgroundColor: Colors.grey[900],
-                          selectedColor: Colors.purple.withAlpha(77),
-                          checkmarkColor: Colors.white,
-                          labelStyle: TextStyle(
-                            color: isSelected ? Colors.purple : Colors.white,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  // Selector de tipo de vehículo
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Tipo de vehículo:',
+                            style:
+                                TextStyle(color: Colors.white70, fontSize: 14)),
+                        const SizedBox(height: 8),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: _opcionesVehiculo.map((opcion) {
+                              final isSelected =
+                                  _tipoVehiculoSeleccionado == opcion['value'];
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: FilterChip(
+                                  label: Text(
+                                    opcion['label'] as String,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  avatar: Text(opcion['icon'] as String),
+                                  selected: isSelected,
+                                  onSelected: (selected) {
+                                    if (selected) {
+                                      setState(() {
+                                        _tipoVehiculoSeleccionado =
+                                            opcion['value'];
+                                        if (_pasajeros >
+                                            opcion['maxPasajeros']) {
+                                          _pasajeros = opcion['maxPasajeros'];
+                                        }
+                                      });
+                                    }
+                                  },
+                                  backgroundColor: Colors.grey[900],
+                                  selectedColor: Colors.purple.withAlpha(77),
+                                  checkmarkColor: Colors.white,
+                                  labelStyle: TextStyle(
+                                    color: isSelected
+                                        ? Colors.purple
+                                        : Colors.white,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
                           ),
                         ),
-                      );
-                    }).toList(),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
 
-          const SizedBox(height: 12),
+                  const SizedBox(height: 12),
 
-          // Selector de pasajeros
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                const Text('Pasajeros:', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                const SizedBox(width: 16),
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[900],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.remove, color: Colors.white),
-                        onPressed: () {
-                          if (_pasajeros > 1) {
-                            setState(() => _pasajeros--);
-                          }
-                        },
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          '$_pasajeros',
-                          style: const TextStyle(color: Colors.white, fontSize: 16),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.add, color: Colors.white),
-                        onPressed: () {
-                          if (_pasajeros < _maxPasajerosParaVehiculoActual) {
-                            setState(() => _pasajeros++);
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Máximo $_maxPasajerosParaVehiculoActual pasajeros'),
-                                backgroundColor: Colors.orange,
+                  // Selector de pasajeros
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        const Text('Pasajeros:',
+                            style:
+                                TextStyle(color: Colors.white70, fontSize: 14)),
+                        const SizedBox(width: 16),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey[900],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.remove,
+                                    color: Colors.white),
+                                onPressed: () {
+                                  if (_pasajeros > 1) {
+                                    setState(() => _pasajeros--);
+                                  }
+                                },
                               ),
-                            );
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Barra de búsqueda
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextField(
-              style: const TextStyle(color: Colors.white),
-              scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 280),
-              decoration: InputDecoration(
-                hintText: 'Buscar cualquier lugar en RD...',
-                hintStyle: const TextStyle(color: Colors.white54),
-                prefixIcon: const Icon(Icons.search, color: Colors.white54),
-                suffixIcon: _buscandoGoogle
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                              Container(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 16),
+                                child: Text(
+                                  '$_pasajeros',
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 16),
+                                ),
+                              ),
+                              IconButton(
+                                icon:
+                                    const Icon(Icons.add, color: Colors.white),
+                                onPressed: () {
+                                  if (_pasajeros <
+                                      _maxPasajerosParaVehiculoActual) {
+                                    setState(() => _pasajeros++);
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                            'Máximo $_maxPasajerosParaVehiculoActual pasajeros'),
+                                        backgroundColor: Colors.orange,
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
                         ),
-                      )
-                    : (_searchQuery.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear, color: Colors.white54),
-                            onPressed: () {
-                              _onSearchChanged('');
-                              FocusScope.of(context).unfocus();
-                            },
-                          )
-                        : null),
-                filled: true,
-                fillColor: Colors.grey[900],
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              onChanged: _onSearchChanged,
-            ),
-          ),
+                      ],
+                    ),
+                  ),
 
-          const SizedBox(height: 16),
+                  const SizedBox(height: 16),
 
-          // Resultados
-          Expanded(
-            child: _buildResultados(),
-          ),
+                  // Barra de búsqueda
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white),
+                      scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 280),
+                      decoration: InputDecoration(
+                        hintText: 'Buscar cualquier lugar en RD...',
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        prefixIcon:
+                            const Icon(Icons.search, color: Colors.white54),
+                        suffixIcon: _buscandoGoogle
+                            ? const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              )
+                            : (_searchQuery.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear,
+                                        color: Colors.white54),
+                                    onPressed: () {
+                                      _onSearchChanged('');
+                                      FocusScope.of(context).unfocus();
+                                    },
+                                  )
+                                : null),
+                        filled: true,
+                        fillColor: Colors.grey[900],
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                      onChanged: _onSearchChanged,
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Resultados
+                  Expanded(
+                    child: _buildResultados(),
+                  ),
                 ],
               ),
               if (_calculando)
-                const Positioned.fill(
-                  child: CotizacionPrecioLoadingDimmed(
-                    accentColor: Color(0xFFBA68C8),
-                    isDark: true,
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  child: IgnorePointer(
+                    child: LinearProgressIndicator(
+                      minHeight: 3,
+                      color: const Color(0xFFBA68C8),
+                      backgroundColor: Colors.purple.withValues(alpha: 0.18),
+                    ),
                   ),
                 ),
             ],
@@ -612,7 +666,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(
                 'Resultados de Google:',
-                style: TextStyle(color: Colors.purple, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: Colors.purple, fontWeight: FontWeight.bold),
               ),
             ),
             Expanded(
@@ -636,7 +691,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                         lugar['nombre'],
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold),
                       ),
                       subtitle: Text(
                         lugar['direccion'],
@@ -644,7 +700,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      trailing: const Icon(Icons.add_circle, color: Colors.purple),
+                      trailing:
+                          const Icon(Icons.add_circle, color: Colors.purple),
                       onTap: () => _seleccionarDestinoGoogle(lugar),
                     ),
                   );
@@ -654,7 +711,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           ],
         );
       }
-      
+
       final locales = _destinosFiltrados;
       if (locales.isNotEmpty) {
         return Column(
@@ -664,7 +721,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(
                 'Destinos turísticos:',
-                style: TextStyle(color: Colors.purple, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: Colors.purple, fontWeight: FontWeight.bold),
               ),
             ),
             Expanded(

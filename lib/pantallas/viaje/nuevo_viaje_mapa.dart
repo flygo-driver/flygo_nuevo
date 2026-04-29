@@ -13,6 +13,7 @@ import '../../servicios/lugares_service.dart'; // <- sin "hide kGooglePlacesApiK
 import '../../servicios/distancia_service.dart';
 import '../../servicios/directions_service.dart';
 import '../../data/viaje_data.dart';
+import '../cliente/viaje_en_curso_cliente.dart';
 import '../../utils/estilos.dart';
 import '../../widgets/campo_lugar_autocomplete.dart';
 
@@ -47,6 +48,30 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
   // === GPS en tiempo real ===
   StreamSubscription<Position>? _gpsSub;
   bool _seguirMiGPS = true; // si true, la cámara sigue al usuario
+
+  int _nuevoViajeMapProgDepth = 0;
+  bool _nuevoViajeChromeHidden = false;
+
+  void _onNuevoViajeMapCameraIdle() {
+    if (_nuevoViajeMapProgDepth > 0) _nuevoViajeMapProgDepth--;
+  }
+
+  void _onNuevoViajeMapUserGesture() {
+    if (_nuevoViajeMapProgDepth > 0) return;
+    setState(() => _nuevoViajeChromeHidden = true);
+  }
+
+  Future<void> _nuevoViajeMapAnimate(
+      Future<void> Function(GoogleMapController c) op) async {
+    final GoogleMapController? c = _map;
+    if (c == null) return;
+    _nuevoViajeMapProgDepth++;
+    try {
+      await op(c);
+    } catch (_) {
+      if (_nuevoViajeMapProgDepth > 0) _nuevoViajeMapProgDepth--;
+    }
+  }
 
   @override
   void initState() {
@@ -89,7 +114,8 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
       timeLimit: Duration(seconds: 12),
     );
 
-    _gpsSub = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
+    _gpsSub =
+        Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
       if (!mounted) return;
       final here = LatLng(pos.latitude, pos.longitude);
 
@@ -100,7 +126,9 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
 
       // Seguir cámara si está habilitado
       if (_seguirMiGPS && _map != null) {
-        _map!.animateCamera(CameraUpdate.newLatLng(here));
+        unawaited(_nuevoViajeMapAnimate(
+          (c) => c.animateCamera(CameraUpdate.newLatLng(here)),
+        ));
       }
 
       // Actualiza sesgo para el autocompletar
@@ -114,7 +142,12 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
   void _onMapCreated(GoogleMapController c) {
     _map = c;
     if (_miCentro != null) {
-      _map!.moveCamera(CameraUpdate.newLatLngZoom(_miCentro!, 13));
+      _nuevoViajeMapProgDepth++;
+      try {
+        c.moveCamera(CameraUpdate.newLatLngZoom(_miCentro!, 13));
+      } catch (_) {
+        if (_nuevoViajeMapProgDepth > 0) _nuevoViajeMapProgDepth--;
+      }
     }
   }
 
@@ -147,7 +180,8 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
           markerId: const MarkerId('origen'),
           position: _origen!,
           infoWindow: InfoWindow(title: _origenLabel ?? 'Origen'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
           draggable: true,
           onDragEnd: (p) {
             _origen = p;
@@ -197,10 +231,14 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
         math.max(_origen!.longitude, _destino!.longitude),
       );
       final bounds = LatLngBounds(southwest: sw, northeast: ne);
-      _map!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 70));
+      unawaited(_nuevoViajeMapAnimate(
+        (c) => c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 70)),
+      ));
     } else {
       final p = _origen ?? _destino!;
-      _map!.animateCamera(CameraUpdate.newLatLngZoom(p, 14));
+      unawaited(_nuevoViajeMapAnimate(
+        (c) => c.animateCamera(CameraUpdate.newLatLngZoom(p, 14)),
+      ));
     }
   }
 
@@ -297,8 +335,7 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
       final routes = (map['routes'] as List?) ?? const [];
       if (routes.isEmpty) return null;
       final route0 = routes.first as Map<String, dynamic>;
-      final poly =
-          (route0['overview_polyline'] as Map?)?['points']?.toString();
+      final poly = (route0['overview_polyline'] as Map?)?['points']?.toString();
       return poly;
     } catch (_) {
       return null;
@@ -380,8 +417,12 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
         SnackBar(content: Text('Viaje creado ✅ (ID: $id)')),
       );
 
-      // Navegación futura:
-      // Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()));
+      Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder: (_) => const ViajeEnCursoCliente(),
+        ),
+        (route) => false,
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -410,38 +451,10 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          // Origen
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: CampoLugarAutocomplete(
-              label: 'Origen',
-              hint: '¿Dónde te recogemos?',
-              country: 'DO',
-              biasLat: _biasLat,
-              biasLon: _biasLon,
-              onPlaceSelected: _onSelectOrigen,
-            ),
-          ),
-          const SizedBox(height: 6),
-          // Destino
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: CampoLugarAutocomplete(
-              label: 'Destino',
-              hint: '¿A dónde vas?',
-              country: 'DO',
-              biasLat: _biasLat,
-              biasLon: _biasLon,
-              onPlaceSelected: _onSelectDestino,
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // Mapa
-          Expanded(
+          Positioned.fill(
             child: (_miCentro == null)
                 ? const Center(child: CircularProgressIndicator())
                 : GoogleMap(
@@ -450,6 +463,9 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
                       _biasLat = pos.target.latitude;
                       _biasLon = pos.target.longitude;
                     },
+                    onTap: (_) => _onNuevoViajeMapUserGesture(),
+                    onCameraMoveStarted: _onNuevoViajeMapUserGesture,
+                    onCameraIdle: _onNuevoViajeMapCameraIdle,
                     initialCameraPosition: CameraPosition(
                       target: _miCentro!,
                       zoom: 12.5,
@@ -463,65 +479,141 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
                     trafficEnabled: true,
                   ),
           ),
-
-          // Resumen + CTA
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-            decoration: BoxDecoration(
-              // Si tu SDK no soporta withValues, cambia a withOpacity(0.7)
-              color: Colors.black.withValues(alpha: 0.7),
-              border: const Border(top: BorderSide(color: Colors.white12)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        '${_fmtKm(_distKm)} • ${_fmtTiempo()}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
+          if (_nuevoViajeChromeHidden)
+            Positioned(
+              top: MediaQuery.paddingOf(context).top + 6,
+              left: 12,
+              right: 12,
+              child: Material(
+                color: Colors.black.withValues(alpha: 0.82),
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: () => setState(() => _nuevoViajeChromeHidden = false),
+                  borderRadius: BorderRadius.circular(12),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.edit_location_alt_outlined,
+                            color: Colors.white, size: 20),
+                        SizedBox(width: 10),
+                        Text(
+                          'Mostrar origen y destino',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                    Text(
-                      _fmtRD(_precio),
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
+                  ),
+                ),
+              ),
+            ),
+          AnimatedSlide(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+            offset:
+                _nuevoViajeChromeHidden ? const Offset(0, -1.08) : Offset.zero,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    CampoLugarAutocomplete(
+                      label: 'Origen',
+                      hint: '¿Dónde te recogemos?',
+                      country: 'DO',
+                      biasLat: _biasLat,
+                      biasLon: _biasLon,
+                      onPlaceSelected: _onSelectOrigen,
+                    ),
+                    const SizedBox(height: 6),
+                    CampoLugarAutocomplete(
+                      label: 'Destino',
+                      hint: '¿A dónde vas?',
+                      country: 'DO',
+                      biasLat: _biasLat,
+                      biasLon: _biasLon,
+                      onPlaceSelected: _onSelectDestino,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: AnimatedSlide(
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+              offset:
+                  _nuevoViajeChromeHidden ? const Offset(0, 1.08) : Offset.zero,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.7),
+                  border: const Border(top: BorderSide(color: Colors.white12)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            '${_fmtKm(_distKm)} • ${_fmtTiempo()}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          _fmtRD(_precio),
+                          style: const TextStyle(
+                            color: Colors.greenAccent,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onPressed: (_origen != null &&
+                                _destino != null &&
+                                _precio != null)
+                            ? _confirmarViaje
+                            : null,
+                        child: const Text(
+                          'Confirmar viaje',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 16),
+                        ),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    onPressed:
-                        (_origen != null && _destino != null && _precio != null)
-                            ? _confirmarViaje
-                            : null,
-                    child: const Text(
-                      'Confirmar viaje',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ],

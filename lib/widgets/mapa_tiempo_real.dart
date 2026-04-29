@@ -9,16 +9,28 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
 class MapaTiempoReal extends StatefulWidget {
-  final LatLng? origen;           // Ubicación del cliente/pickup
-  final String? origenNombre;     // Nombre del origen
-  final LatLng? destino;          // Ubicación del destino final
-  final String? destinoNombre;    // Nombre del destino
-  final bool mostrarOrigen;       // Si debe mostrar el marcador de origen
-  final bool mostrarDestino;      // Si debe mostrar el marcador de destino
-  final LatLng? ubicacionTaxista; // Ubicación del taxista (para que el cliente vea)
-  final bool mostrarTaxista;      // Si mostrar el marcador del taxista
-  final bool esCliente;           // Si es la vista del cliente
-  final bool esTaxista;           // Si es la vista del taxista
+  final LatLng? origen; // Ubicación del cliente/pickup
+  final String? origenNombre; // Nombre del origen
+  final LatLng? destino; // Ubicación del destino final
+  final String? destinoNombre; // Nombre del destino
+  final bool mostrarOrigen; // Si debe mostrar el marcador de origen
+  final bool mostrarDestino; // Si debe mostrar el marcador de destino
+  final LatLng?
+      ubicacionTaxista; // Ubicación del taxista (para que el cliente vea)
+  final bool mostrarTaxista; // Si mostrar el marcador del taxista
+  final bool esCliente; // Si es la vista del cliente
+  final bool esTaxista; // Si es la vista del taxista
+  /// Línea fija (ej. vista previa en detalle pool: origen → paradas → destino). No llama a Directions.
+  final List<LatLng>? polylinePreviewPoints;
+
+  /// Rutas calculadas fuera (ej. [ViajeEnCursoTaxista] vía Directions). Se fusionan con las del mapa.
+  final Set<Polyline>? overlayPolylines;
+
+  /// Gesto real del usuario en el mapa (no animaciones de cámara del widget). Ej. colapsar hoja inferior.
+  final VoidCallback? onUserInteractWithMap;
+
+  /// Cuando el usuario suelta el mapa (cámara en reposo) o tras un tap sin mover cámara.
+  final VoidCallback? onUserMapGestureEnd;
 
   const MapaTiempoReal({
     super.key,
@@ -32,6 +44,10 @@ class MapaTiempoReal extends StatefulWidget {
     this.mostrarTaxista = false,
     this.esCliente = false,
     this.esTaxista = true,
+    this.polylinePreviewPoints,
+    this.overlayPolylines,
+    this.onUserInteractWithMap,
+    this.onUserMapGestureEnd,
   });
 
   @override
@@ -52,6 +68,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   bool _following = true; // si es true, la cámara te sigue
   bool _mapReady = false;
 
+  /// Evita confundir [onUserInteractWithMap] con movimientos por código (GPS, fit bounds, etc.).
+  int _programmaticCameraDepth = 0;
+
   // Antirebote de animaciones de cámara (siempre respectar; antes solo si _movingCamera y permitía spam)
   DateTime _lastAnim = DateTime.fromMillisecondsSinceEpoch(0);
   final Duration _animMinGap = const Duration(milliseconds: 650);
@@ -62,10 +81,15 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
 
   LatLng? _destinoSeleccionado; // si el usuario deja presionado
 
+  Timer? _mapGestureEndDebounce;
+
   @override
   void initState() {
     super.initState();
     _iniciarUbicacion();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _actualizarMarcadores();
+    });
   }
 
   @override
@@ -73,13 +97,24 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     super.didUpdateWidget(oldWidget);
     final bool origenChanged = oldWidget.origen != widget.origen;
     final bool destinoChanged = oldWidget.destino != widget.destino;
-    final bool taxiChanged = oldWidget.ubicacionTaxista != widget.ubicacionTaxista;
+    final bool taxiChanged =
+        oldWidget.ubicacionTaxista != widget.ubicacionTaxista;
 
     // Solo re-centrar cámara cuando cambian origen/destino (puntos fijos del viaje).
     // Si solo se mueve el taxista, actualizar marcadores sin animar la cámara (evita parpadeo).
-    if (origenChanged || destinoChanged) {
+    final bool previewChanged = !_listLatLngEquals(
+      oldWidget.polylinePreviewPoints,
+      widget.polylinePreviewPoints,
+    );
+    if (origenChanged || destinoChanged || previewChanged) {
       _actualizarMarcadores();
-      if (destinoChanged) {
+      final List<LatLng>? pts = widget.polylinePreviewPoints;
+      if (previewChanged && pts != null && pts.length >= 2) {
+        _following = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _fitTo(pts.first, pts.last);
+        });
+      } else if (destinoChanged) {
         _centrarEnPuntoImportante();
       } else if (origenChanged) {
         final LatLng? o0 = oldWidget.origen;
@@ -103,8 +138,20 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     }
   }
 
+  static bool _listLatLngEquals(List<LatLng>? a, List<LatLng>? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].latitude != b[i].latitude || a[i].longitude != b[i].longitude) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   @override
   void dispose() {
+    _mapGestureEndDebounce?.cancel();
     _markerRefreshDebounce?.cancel();
     _posSub?.cancel();
     _map?.dispose();
@@ -131,10 +178,10 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
 
   void _centrarEnPuntoImportante() {
     if (!_mapReady || _map == null) return;
-    
+
     LatLng target;
-    
-    // Prioridad: 
+
+    // Prioridad:
     // 1. Si es taxista y debe mostrar origen (cliente) -> centrar en cliente
     // 2. Si debe mostrar destino -> centrar en destino
     // 3. Si no, centrar en ubicación actual
@@ -150,7 +197,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     } else {
       target = _fallback;
     }
-    
+
     _animateTo(target, zoom: 16);
   }
 
@@ -177,9 +224,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
           title: widget.esTaxista ? 'Recoger cliente' : 'Mi ubicación',
           snippet: widget.origenNombre ?? 'Punto de recogida',
         ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          widget.esTaxista ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueBlue
-        ),
+        icon: BitmapDescriptor.defaultMarkerWithHue(widget.esTaxista
+            ? BitmapDescriptor.hueAzure
+            : BitmapDescriptor.hueBlue),
         zIndexInt: 1,
       ));
     }
@@ -206,9 +253,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
         infoWindow: InfoWindow(
           title: widget.esTaxista ? 'Mi ubicación' : 'Mi ubicación',
         ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          widget.esTaxista ? BitmapDescriptor.hueRed : BitmapDescriptor.hueAzure
-        ),
+        icon: BitmapDescriptor.defaultMarkerWithHue(widget.esTaxista
+            ? BitmapDescriptor.hueRed
+            : BitmapDescriptor.hueAzure),
         zIndexInt: 2,
       ));
     }
@@ -221,6 +268,18 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
         infoWindow: const InfoWindow(title: 'Destino seleccionado'),
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
         zIndexInt: 1,
+      ));
+    }
+
+    _polylines.removeWhere((p) => p.polylineId.value == 'preview_trip');
+    final pts = widget.polylinePreviewPoints;
+    if (pts != null && pts.length >= 2) {
+      _polylines.add(Polyline(
+        polylineId: const PolylineId('preview_trip'),
+        points: pts,
+        width: 5,
+        color: const Color(0xFF49F18B),
+        geodesic: true,
       ));
     }
 
@@ -239,7 +298,8 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     }
     if (!mounted) return;
 
-    final denied = p == LocationPermission.denied || p == LocationPermission.deniedForever;
+    final denied =
+        p == LocationPermission.denied || p == LocationPermission.deniedForever;
     setState(() => _myLocEnabled = !denied);
     if (denied) return;
 
@@ -267,7 +327,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
         _animateTo(
           here,
           zoom: 17,
-          bearing: (pos.heading.isFinite && pos.speed > 0.5) ? pos.heading : _lastBearing,
+          bearing: (pos.heading.isFinite && pos.speed > 0.5)
+              ? pos.heading
+              : _lastBearing,
           followMode: true,
         );
       }
@@ -309,6 +371,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       }
     }
 
+    _programmaticCameraDepth++;
     try {
       await c.animateCamera(CameraUpdate.newCameraPosition(
         CameraPosition(
@@ -321,11 +384,15 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       _lastAnim = DateTime.now();
       if (followMode) _lastCameraFollowTarget = p;
     } catch (_) {
+      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
       try {
+        _programmaticCameraDepth++;
         c.moveCamera(CameraUpdate.newLatLngZoom(p, zoom ?? 16));
         _lastAnim = DateTime.now();
         if (followMode) _lastCameraFollowTarget = p;
-      } catch (_) {}
+      } catch (_) {
+        if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
+      }
     }
   }
 
@@ -333,14 +400,19 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     final c = _map;
     if (c == null || !_mapReady) return;
     final bounds = _boundsFrom(a, b);
+    _programmaticCameraDepth++;
     try {
       await c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
     } catch (_) {
+      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
       // segundo intento (algunas veces falla si aún no pintó el mapa)
       await Future.delayed(const Duration(milliseconds: 120));
+      _programmaticCameraDepth++;
       try {
         await c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
-      } catch (_) {}
+      } catch (_) {
+        if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
+      }
     }
   }
 
@@ -357,11 +429,35 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   // ====== Interacciones ======
+  void _onMapCameraIdle() {
+    if (_programmaticCameraDepth > 0) {
+      _programmaticCameraDepth--;
+      return;
+    }
+    _mapGestureEndDebounce?.cancel();
+    widget.onUserMapGestureEnd?.call();
+  }
+
   void _onUserGesture() {
+    if (_programmaticCameraDepth > 0) return;
+    _mapGestureEndDebounce?.cancel();
     if (_following) setState(() => _following = false);
+    widget.onUserInteractWithMap?.call();
+  }
+
+  void _onMapTap(LatLng _) {
+    if (_programmaticCameraDepth > 0) return;
+    _onUserGesture();
+    _mapGestureEndDebounce?.cancel();
+    _mapGestureEndDebounce = Timer(const Duration(milliseconds: 420), () {
+      if (!mounted) return;
+      widget.onUserMapGestureEnd?.call();
+    });
   }
 
   Future<void> _onLongPress(LatLng p) async {
+    _mapGestureEndDebounce?.cancel();
+    widget.onUserInteractWithMap?.call();
     _destinoSeleccionado = p;
     _actualizarMarcadores();
     final me = _lastLatLng ?? _fallback;
@@ -409,7 +505,8 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       children: [
         Positioned.fill(
           child: GoogleMap(
-            initialCameraPosition: const CameraPosition(target: _fallback, zoom: 12),
+            initialCameraPosition:
+                const CameraPosition(target: _fallback, zoom: 12),
             onMapCreated: (ctrl) {
               _map = ctrl;
               _mapReady = true;
@@ -424,10 +521,14 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
             zoomControlsEnabled: false,
             rotateGesturesEnabled: true,
             markers: _markers,
-            polylines: _polylines,
+            polylines: {
+              ..._polylines,
+              ...?widget.overlayPolylines,
+            },
             onLongPress: _onLongPress,
             onCameraMoveStarted: _onUserGesture,
-            onTap: (_) => _onUserGesture(),
+            onCameraIdle: _onMapCameraIdle,
+            onTap: _onMapTap,
             mapToolbarEnabled: false,
           ),
         ),
@@ -443,16 +544,24 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
               decoration: const BoxDecoration(
                 color: Color(0xFF1C1F23),
                 borderRadius: BorderRadius.all(Radius.circular(10)),
-                border: Border.fromBorderSide(BorderSide(color: Color(0x5949F18B))),
+                border:
+                    Border.fromBorderSide(BorderSide(color: Color(0x5949F18B))),
               ),
               child: Row(
                 children: [
-                  Icon(!_serviceOn ? Icons.location_off : Icons.privacy_tip_outlined, color: const Color(0xFF49F18B)),
+                  Icon(
+                      !_serviceOn
+                          ? Icons.location_off
+                          : Icons.privacy_tip_outlined,
+                      color: const Color(0xFF49F18B)),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      !_serviceOn ? 'Activa la ubicación del dispositivo' : 'Da permiso de ubicación a la app',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      !_serviceOn
+                          ? 'Activa la ubicación del dispositivo'
+                          : 'Da permiso de ubicación a la app',
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w700),
                     ),
                   ),
                 ],
@@ -476,7 +585,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
               ),
               const SizedBox(height: 10),
               // Botón centrar en origen (solo para taxista)
-              if (widget.esTaxista && widget.origen != null && widget.mostrarOrigen)
+              if (widget.esTaxista &&
+                  widget.origen != null &&
+                  widget.mostrarOrigen)
                 FloatingActionButton(
                   heroTag: 'center_origen',
                   mini: true,
@@ -487,7 +598,8 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
                 ),
               const SizedBox(height: 10),
               // Botón centrar en destino
-              if ((widget.destino != null && widget.mostrarDestino) || _destinoSeleccionado != null)
+              if ((widget.destino != null && widget.mostrarDestino) ||
+                  _destinoSeleccionado != null)
                 FloatingActionButton(
                   heroTag: 'center_destino',
                   mini: true,

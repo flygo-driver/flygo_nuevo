@@ -9,22 +9,24 @@ class DireccionUtils {
       {int max = 60, int maxPartes = 4, bool quitarPais = true}) {
     if (raw.trim().isEmpty) return '';
 
-    String s = raw
-        .replaceAll('\n', ' ')
-        .replaceAll(RegExp(r'\s{2,}'), ' ')
-        .trim();
+    String s =
+        raw.replaceAll('\n', ' ').replaceAll(RegExp(r'\s{2,}'), ' ').trim();
 
     // Normalizaciones comunes
     s = s
         .replaceAll(RegExp(r'Dominican Republic', caseSensitive: false), 'RD')
-        .replaceAll(RegExp(r'Rep(ú|u)blica Dominicana', caseSensitive: false), 'RD')
+        .replaceAll(
+            RegExp(r'Rep(ú|u)blica Dominicana', caseSensitive: false), 'RD')
         .replaceAll(RegExp(r',?\s*RD$', caseSensitive: false), ', RD')
-        .replaceAll(RegExp(r'\bSto\.?\s*Dgo\.?\b', caseSensitive: false), 'Santo Domingo')
+        .replaceAll(RegExp(r'\bSto\.?\s*Dgo\.?\b', caseSensitive: false),
+            'Santo Domingo')
         .replaceAll(RegExp(r'Higuey', caseSensitive: false), 'Higüey')
-        .replaceAll(RegExp(r'San Pedro de Macoris', caseSensitive: false), 'San Pedro de Macorís');
+        .replaceAll(RegExp(r'San Pedro de Macoris', caseSensitive: false),
+            'San Pedro de Macorís');
 
     // Partes por coma
-    final partes = s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final partes =
+        s.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 
     // Opcional: quitar el país si es RD para acortar
     if (quitarPais && partes.isNotEmpty) {

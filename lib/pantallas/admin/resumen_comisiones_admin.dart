@@ -16,7 +16,8 @@ class ResumenComisionesAdmin extends StatefulWidget {
   State<ResumenComisionesAdmin> createState() => _ResumenComisionesAdminState();
 }
 
-class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with SingleTickerProviderStateMixin {
+class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
+    with SingleTickerProviderStateMixin {
   Map<String, dynamic>? _resumenHoy;
   Map<String, dynamic>? _resumenSemana;
   Map<String, dynamic>? _resumenMes;
@@ -25,10 +26,30 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
   List<Map<String, dynamic>> _evolucionSemanal = [];
   bool _cargando = true;
   String? _errorCarga;
-  
+  bool _cargaEnCurso = false;
+
   late final TabController _tabController;
   final DateFormat _dateFormat = DateFormat('dd/MM/yyyy');
   final NumberFormat _numberFormat = NumberFormat('#,###', 'es');
+
+  static double _toDouble(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0;
+  }
+
+  static int _toInt(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.round();
+    return int.tryParse(v.toString()) ?? 0;
+  }
+
+  String _formatFecha(dynamic v) {
+    if (v is DateTime) return _dateFormat.format(v);
+    if (v is Timestamp) return _dateFormat.format(v.toDate());
+    return '—';
+  }
 
   @override
   void initState() {
@@ -44,68 +65,80 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
   }
 
   Future<void> _cargarDatos() async {
-    if (mounted) {
-      setState(() {
-        _cargando = true;
-        _errorCarga = null;
-      });
-    }
-
-    final bool esAdmin = await _validarRolAdmin();
-    if (!esAdmin) {
+    if (_cargaEnCurso) return;
+    _cargaEnCurso = true;
+    try {
       if (mounted) {
         setState(() {
-          _cargando = false;
-          _errorCarga = 'Esta cuenta no tiene rol administrador.';
+          _cargando = true;
+          _errorCarga = null;
         });
+      }
+
+      final bool esAdmin = await _validarRolAdmin();
+      if (!esAdmin) {
+        if (mounted) {
+          setState(() {
+            _cargando = false;
+            _errorCarga = 'Esta cuenta no tiene rol administrador.';
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content:
+                  Text('Acceso denegado: inicia sesión con un usuario admin'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final Map<String, dynamic>? resumenHoy = await _safeLoad(
+          () => ComisionesDiariasRepo.getComisionesHoy(), 'resumen_hoy');
+      final Map<String, dynamic>? resumenSemana = await _safeLoad(
+          () => ComisionesDiariasRepo.getComisionesSemana(), 'resumen_semana');
+      final Map<String, dynamic>? resumenMes = await _safeLoad(
+          () => ComisionesDiariasRepo.getComisionesMes(), 'resumen_mes');
+      final List<Map<String, dynamic>> topTaxistas = await _safeLoad(
+              () => ComisionesDiariasRepo.getTopTaxistasHoy(limite: 5),
+              'top_taxistas') ??
+          <Map<String, dynamic>>[];
+      final List<Map<String, dynamic>> evolucion = await _safeLoad(
+              () => ComisionesDiariasRepo.getEvolucionSemanal(), 'evolucion') ??
+          <Map<String, dynamic>>[];
+      final Map<String, dynamic>? auditoriaViajes = await _safeLoad(
+        () => ComisionesDiariasRepo.getAuditoriaViajesComision(dias: 30),
+        'auditoria',
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _resumenHoy = resumenHoy;
+        _resumenSemana = resumenSemana;
+        _resumenMes = resumenMes;
+        _auditoriaViajes = auditoriaViajes;
+        _topTaxistas = topTaxistas;
+        _evolucionSemanal = evolucion;
+        _cargando = false;
+        final bool sinResumenPrincipal = _resumenHoy == null &&
+            _resumenSemana == null &&
+            _resumenMes == null;
+        _errorCarga = sinResumenPrincipal
+            ? 'No se pudieron cargar las comisiones.'
+            : null;
+      });
+
+      if (mounted && _errorCarga != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Acceso denegado: inicia sesión con un usuario admin'),
+            content: Text('Error cargando datos'),
             backgroundColor: Colors.red,
           ),
         );
       }
-      return;
-    }
-
-    final Map<String, dynamic>? resumenHoy =
-        await _safeLoad(() => ComisionesDiariasRepo.getComisionesHoy(), 'resumen_hoy');
-    final Map<String, dynamic>? resumenSemana =
-        await _safeLoad(() => ComisionesDiariasRepo.getComisionesSemana(), 'resumen_semana');
-    final Map<String, dynamic>? resumenMes =
-        await _safeLoad(() => ComisionesDiariasRepo.getComisionesMes(), 'resumen_mes');
-    final List<Map<String, dynamic>> topTaxistas =
-        await _safeLoad(() => ComisionesDiariasRepo.getTopTaxistasHoy(limite: 5), 'top_taxistas') ??
-            <Map<String, dynamic>>[];
-    final List<Map<String, dynamic>> evolucion =
-        await _safeLoad(() => ComisionesDiariasRepo.getEvolucionSemanal(), 'evolucion') ??
-            <Map<String, dynamic>>[];
-    final Map<String, dynamic>? auditoriaViajes = await _safeLoad(
-      () => ComisionesDiariasRepo.getAuditoriaViajesComision(dias: 30),
-      'auditoria',
-    );
-
-    if (!mounted) return;
-    setState(() {
-      _resumenHoy = resumenHoy;
-      _resumenSemana = resumenSemana;
-      _resumenMes = resumenMes;
-      _auditoriaViajes = auditoriaViajes;
-      _topTaxistas = topTaxistas;
-      _evolucionSemanal = evolucion;
-      _cargando = false;
-      final bool sinResumenPrincipal =
-          _resumenHoy == null && _resumenSemana == null && _resumenMes == null;
-      _errorCarga = sinResumenPrincipal ? 'No se pudieron cargar las comisiones.' : null;
-    });
-
-    if (_errorCarga != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error cargando datos'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    } finally {
+      _cargaEnCurso = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -113,9 +146,13 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
     final User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return false;
     try {
-      final doc = await FirebaseFirestore.instance.collection('usuarios').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user.uid)
+          .get();
       final data = doc.data();
-      return (data?['rol']?.toString() ?? '') == 'admin';
+      final r = (data?['rol'] ?? '').toString().trim().toLowerCase();
+      return r == 'admin' || r == 'administrador';
     } catch (_) {
       return false;
     }
@@ -146,7 +183,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
         actions: <Widget>[
           IconButton(
             icon: Icon(Icons.refresh, color: AdminUi.appBarFg(context)),
-            onPressed: _cargarDatos,
+            onPressed: _cargaEnCurso ? null : _cargarDatos,
             tooltip: 'Actualizar',
           ),
         ],
@@ -163,26 +200,32 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
         ),
       ),
       body: _cargando
-          ? Center(child: CircularProgressIndicator(color: AdminUi.progressAccent(context)))
-          : (_errorCarga != null && _resumenHoy == null && _resumenSemana == null && _resumenMes == null)
+          ? Center(
+              child: CircularProgressIndicator(
+                  color: AdminUi.progressAccent(context)))
+          : (_errorCarga != null &&
+                  _resumenHoy == null &&
+                  _resumenSemana == null &&
+                  _resumenMes == null)
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
                       _errorCarga!,
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: AdminUi.secondary(context), fontSize: 16),
+                      style: TextStyle(
+                          color: AdminUi.secondary(context), fontSize: 16),
                     ),
                   ),
                 )
-          : TabBarView(
-              controller: _tabController,
-              children: <Widget>[
-                _buildHoyTab(),
-                _buildSemanaTab(),
-                _buildMesTab(),
-              ],
-            ),
+              : TabBarView(
+                  controller: _tabController,
+                  children: <Widget>[
+                    _buildHoyTab(),
+                    _buildSemanaTab(),
+                    _buildMesTab(),
+                  ],
+                ),
     );
   }
 
@@ -190,7 +233,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
   Widget _buildHoyTab() {
     if (_resumenHoy == null) {
       return Center(
-        child: Text('No hay datos', style: TextStyle(color: AdminUi.secondary(context))),
+        child: Text('No hay datos',
+            style: TextStyle(color: AdminUi.secondary(context))),
       );
     }
 
@@ -241,20 +285,20 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                 ),
               ),
               Text(
-                _dateFormat.format(_resumenHoy!['fecha']),
+                _formatFecha(_resumenHoy!['fecha']),
                 style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          
+
           // Métricas principales
           Row(
             children: <Widget>[
               _buildMetrica(
                 context,
                 'Total recaudado',
-                FormatosMoneda.rd(_resumenHoy!['totalRecaudado'] ?? 0),
+                FormatosMoneda.rd(_toDouble(_resumenHoy!['totalRecaudado'])),
                 Icons.account_balance_wallet,
                 AdminUi.onCard(context),
               ),
@@ -262,15 +306,15 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
               _buildMetrica(
                 context,
                 'Viajes',
-                '${_resumenHoy!['totalViajes'] ?? 0}',
+                '${_toInt(_resumenHoy!['totalViajes'])}',
                 Icons.trip_origin,
                 AdminUi.onCard(context),
               ),
             ],
           ),
-          
+
           const SizedBox(height: 16),
-          
+
           // Comisión (20%) destacada
           Container(
             padding: const EdgeInsets.all(16),
@@ -295,12 +339,13 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                     ),
                     Text(
                       'Plataforma RAI',
-                      style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+                      style: TextStyle(
+                          color: AdminUi.secondary(context), fontSize: 12),
                     ),
                   ],
                 ),
                 Text(
-                  FormatosMoneda.rd(_resumenHoy!['totalComisiones'] ?? 0),
+                  FormatosMoneda.rd(_toDouble(_resumenHoy!['totalComisiones'])),
                   style: const TextStyle(
                     color: Colors.green,
                     fontSize: 24,
@@ -310,9 +355,9 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
               ],
             ),
           ),
-          
+
           const SizedBox(height: 12),
-          
+
           // Ganancias de taxistas
           Container(
             padding: const EdgeInsets.all(12),
@@ -328,7 +373,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                   style: TextStyle(color: AdminUi.secondary(context)),
                 ),
                 Text(
-                  FormatosMoneda.rd(_resumenHoy!['totalGanancias'] ?? 0),
+                  FormatosMoneda.rd(_toDouble(_resumenHoy!['totalGanancias'])),
                   style: const TextStyle(
                     color: Colors.blue,
                     fontWeight: FontWeight.bold,
@@ -342,7 +387,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
     );
   }
 
-  Widget _buildMetrica(BuildContext context, String label, String value, IconData icon, Color color) {
+  Widget _buildMetrica(BuildContext context, String label, String value,
+      IconData icon, Color color) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(12),
@@ -359,7 +405,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                 const SizedBox(width: 4),
                 Text(
                   label,
-                  style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+                  style: TextStyle(
+                      color: AdminUi.secondary(context), fontSize: 12),
                 ),
               ],
             ),
@@ -381,7 +428,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
   Widget _buildTopTaxistas() {
     if (_topTaxistas.isEmpty) {
       return Center(
-        child: Text('Sin datos de taxistas hoy', style: TextStyle(color: AdminUi.secondary(context))),
+        child: Text('Sin datos de taxistas hoy',
+            style: TextStyle(color: AdminUi.secondary(context))),
       );
     }
 
@@ -410,19 +458,23 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
             ],
           ),
           const SizedBox(height: 16),
-          ..._topTaxistas.asMap().entries.map((MapEntry<int, Map<String, dynamic>> entry) {
+          ..._topTaxistas
+              .asMap()
+              .entries
+              .map((MapEntry<int, Map<String, dynamic>> entry) {
             final int index = entry.key + 1;
             final Map<String, dynamic> taxista = entry.value;
             return Container(
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: index == 1 
+                color: index == 1
                     ? Colors.amber.withValues(alpha: 0.1)
                     : AdminUi.card(context).withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: index == 1 ? Colors.amber : AdminUi.borderSubtle(context),
+                  color:
+                      index == 1 ? Colors.amber : AdminUi.borderSubtle(context),
                 ),
               ),
               child: Row(
@@ -438,7 +490,9 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                       child: Text(
                         '#$index',
                         style: TextStyle(
-                          color: index == 1 ? Colors.black : AdminUi.onCard(context),
+                          color: index == 1
+                              ? Colors.black
+                              : AdminUi.onCard(context),
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -450,15 +504,16 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         Text(
-                          taxista['nombre'],
+                          (taxista['nombre'] ?? '—').toString(),
                           style: TextStyle(
                             color: AdminUi.onCard(context),
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         Text(
-                          '${taxista['totalViajes']} viajes',
-                          style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
+                          '${_toInt(taxista['totalViajes'])} viajes',
+                          style: TextStyle(
+                              color: AdminUi.muted(context), fontSize: 12),
                         ),
                       ],
                     ),
@@ -467,7 +522,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: <Widget>[
                       Text(
-                        FormatosMoneda.rd(taxista['totalComisiones']),
+                        FormatosMoneda.rd(
+                            _toDouble(taxista['totalComisiones'])),
                         style: TextStyle(
                           color: AdminUi.progressAccent(context),
                           fontWeight: FontWeight.bold,
@@ -475,7 +531,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                       ),
                       Text(
                         'comisión',
-                        style: TextStyle(color: AdminUi.muted(context), fontSize: 10),
+                        style: TextStyle(
+                            color: AdminUi.muted(context), fontSize: 10),
                       ),
                     ],
                   ),
@@ -491,37 +548,44 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
   Widget _buildAuditoriaCard() {
     final data = _auditoriaViajes;
     if (data == null) return const SizedBox.shrink();
-    final int auditados = (data['auditados'] ?? 0) as int;
-    final int totalIncons = (data['totalInconsistencias'] ?? 0) as int;
+    final int auditados = _toInt(data['auditados']);
+    final int totalIncons = _toInt(data['totalInconsistencias']);
     final List<Map<String, dynamic>> inconsistencias =
-        ((data['inconsistencias'] ?? <dynamic>[]) as List).cast<Map<String, dynamic>>();
+        ((data['inconsistencias'] ?? <dynamic>[]) as List)
+            .cast<Map<String, dynamic>>();
     final List<Map<String, dynamic>> top =
-        ((data['topTaxistasInconsistentes'] ?? <dynamic>[]) as List).cast<Map<String, dynamic>>();
+        ((data['topTaxistasInconsistentes'] ?? <dynamic>[]) as List)
+            .cast<Map<String, dynamic>>();
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AdminUi.card(context),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: totalIncons > 0 ? Colors.orange : Colors.green),
+        border:
+            Border.all(color: totalIncons > 0 ? Colors.orange : Colors.green),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Auditoria de comisiones (30 dias): $auditados viajes',
-            style: TextStyle(color: AdminUi.onCard(context), fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: AdminUi.onCard(context), fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Text(
             totalIncons > 0
                 ? 'Inconsistencias detectadas: $totalIncons'
                 : 'Sin inconsistencias detectadas',
-            style: TextStyle(color: totalIncons > 0 ? Colors.orangeAccent : Colors.greenAccent),
+            style: TextStyle(
+                color:
+                    totalIncons > 0 ? Colors.orangeAccent : Colors.greenAccent),
           ),
           if (top.isNotEmpty) ...[
             const SizedBox(height: 10),
-            Text('Choferes con incidencias abiertas:', style: TextStyle(color: AdminUi.secondary(context))),
+            Text('Choferes con incidencias abiertas:',
+                style: TextStyle(color: AdminUi.secondary(context))),
             const SizedBox(height: 6),
             ...top.take(5).map((t) => Text(
                   '${t['uidTaxista']}: ${t['inconsistencias']}',
@@ -530,7 +594,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
           ],
           if (inconsistencias.isNotEmpty) ...[
             const SizedBox(height: 10),
-            Text('Primeras incidencias por viaje:', style: TextStyle(color: AdminUi.secondary(context))),
+            Text('Primeras incidencias por viaje:',
+                style: TextStyle(color: AdminUi.secondary(context))),
             const SizedBox(height: 6),
             ...inconsistencias.take(5).map((r) => Text(
                   '${r['viajeId']} - ${r['motivo']} (${r['uidTaxista']})',
@@ -548,8 +613,10 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
     }
 
     // Encontrar el valor máximo para escala
-    final double maxComision = _evolucionSemanal.fold(0.0, (double prev, Map<String, dynamic> item) {
-      return (item['comisiones'] > prev) ? item['comisiones'] : prev;
+    final double maxComision =
+        _evolucionSemanal.fold(0.0, (double prev, Map<String, dynamic> item) {
+      final c = _toDouble(item['comisiones']);
+      return c > prev ? c : prev;
     });
 
     return Container(
@@ -582,9 +649,9 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: _evolucionSemanal.map((Map<String, dynamic> dia) {
-                final double altura = maxComision > 0 
-                    ? (dia['comisiones'] / maxComision) * 80 
-                    : 0;
+                final com = _toDouble(dia['comisiones']);
+                final double altura =
+                    maxComision > 0 ? (com / maxComision) * 80 : 0;
                 return Expanded(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -593,18 +660,21 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
                         height: altura,
                         margin: const EdgeInsets.symmetric(horizontal: 4),
                         decoration: BoxDecoration(
-                          color: AdminUi.progressAccent(context).withValues(alpha: 0.45),
+                          color: AdminUi.progressAccent(context)
+                              .withValues(alpha: 0.45),
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        dia['nombreDia'],
-                        style: TextStyle(color: AdminUi.muted(context), fontSize: 10),
+                        (dia['nombreDia'] ?? '—').toString(),
+                        style: TextStyle(
+                            color: AdminUi.muted(context), fontSize: 10),
                       ),
                       Text(
-                        _numberFormat.format(dia['comisiones'].round()),
-                        style: TextStyle(color: AdminUi.secondary(context), fontSize: 9),
+                        _numberFormat.format(com.round()),
+                        style: TextStyle(
+                            color: AdminUi.secondary(context), fontSize: 9),
                       ),
                     ],
                   ),
@@ -643,7 +713,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
     );
   }
 
-  Widget _buildBotonAccion(String texto, IconData icono, VoidCallback onPressed) {
+  Widget _buildBotonAccion(
+      String texto, IconData icono, VoidCallback onPressed) {
     final cs = Theme.of(context).colorScheme;
     return ElevatedButton.icon(
       onPressed: onPressed,
@@ -664,7 +735,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
   Widget _buildSemanaTab() {
     if (_resumenSemana == null) {
       return Center(
-        child: Text('No hay datos', style: TextStyle(color: AdminUi.secondary(context))),
+        child: Text('No hay datos',
+            style: TextStyle(color: AdminUi.secondary(context))),
       );
     }
 
@@ -673,11 +745,11 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
       children: <Widget>[
         _buildTarjetaResumenPeriodo(
           'RESUMEN SEMANAL',
-          '${_dateFormat.format(_resumenSemana!['inicio'])} - ${_dateFormat.format(_resumenSemana!['fin'])}',
-          _resumenSemana!['totalRecaudado'] ?? 0,
-          _resumenSemana!['totalComisiones'] ?? 0,
-          _resumenSemana!['totalGanancias'] ?? 0,
-          _resumenSemana!['totalViajes'] ?? 0,
+          '${_formatFecha(_resumenSemana!['inicio'])} - ${_formatFecha(_resumenSemana!['fin'])}',
+          _toDouble(_resumenSemana!['totalRecaudado']),
+          _toDouble(_resumenSemana!['totalComisiones']),
+          _toDouble(_resumenSemana!['totalGanancias']),
+          _toInt(_resumenSemana!['totalViajes']),
         ),
         const SizedBox(height: 16),
         _buildEvolucionSemanal(),
@@ -689,7 +761,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
   Widget _buildMesTab() {
     if (_resumenMes == null) {
       return Center(
-        child: Text('No hay datos', style: TextStyle(color: AdminUi.secondary(context))),
+        child: Text('No hay datos',
+            style: TextStyle(color: AdminUi.secondary(context))),
       );
     }
 
@@ -698,11 +771,11 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
       children: <Widget>[
         _buildTarjetaResumenPeriodo(
           'RESUMEN MENSUAL',
-          _resumenMes!['mes'],
-          _resumenMes!['totalRecaudado'] ?? 0,
-          _resumenMes!['totalComisiones'] ?? 0,
-          _resumenMes!['totalGanancias'] ?? 0,
-          _resumenMes!['totalViajes'] ?? 0,
+          (_resumenMes!['mes'] ?? '—').toString(),
+          _toDouble(_resumenMes!['totalRecaudado']),
+          _toDouble(_resumenMes!['totalComisiones']),
+          _toDouble(_resumenMes!['totalGanancias']),
+          _toInt(_resumenMes!['totalViajes']),
         ),
       ],
     );
@@ -744,20 +817,25 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin> with Si
             ],
           ),
           const SizedBox(height: 20),
-          
-          _buildFilaResumen('Total recaudado', FormatosMoneda.rd(totalRecaudado), AdminUi.onCard(context)),
+          _buildFilaResumen('Total recaudado',
+              FormatosMoneda.rd(totalRecaudado), AdminUi.onCard(context)),
           Divider(color: AdminUi.borderSubtle(context), height: 16),
-          _buildFilaResumen('Comisión 20%', FormatosMoneda.rd(totalComisiones), Colors.green, bold: true),
+          _buildFilaResumen(
+              'Comisión 20%', FormatosMoneda.rd(totalComisiones), Colors.green,
+              bold: true),
           Divider(color: AdminUi.borderSubtle(context), height: 16),
-          _buildFilaResumen('Taxistas ganaron (80%)', FormatosMoneda.rd(totalGanancias), Colors.blue),
+          _buildFilaResumen('Taxistas ganaron (80%)',
+              FormatosMoneda.rd(totalGanancias), Colors.blue),
           Divider(color: AdminUi.borderSubtle(context), height: 16),
-          _buildFilaResumen('Total de viajes', '$totalViajes viajes', AdminUi.secondary(context)),
+          _buildFilaResumen('Total de viajes', '$totalViajes viajes',
+              AdminUi.secondary(context)),
         ],
       ),
     );
   }
 
-  Widget _buildFilaResumen(String label, String valor, Color color, {bool bold = false}) {
+  Widget _buildFilaResumen(String label, String valor, Color color,
+      {bool bold = false}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: <Widget>[

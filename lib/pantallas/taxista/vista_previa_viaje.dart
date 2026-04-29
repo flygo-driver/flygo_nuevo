@@ -10,6 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/widgets/cliente_perfil_conductor_chip.dart';
 
 class VistaPreviaViaje extends StatefulWidget {
   final Viaje viaje;
@@ -29,7 +30,8 @@ class VistaPreviaViaje extends StatefulWidget {
 }
 
 class _VistaPreviaViajeState extends State<VistaPreviaViaje> {
-  final Completer<GoogleMapController> _mapController = Completer<GoogleMapController>();
+  final Completer<GoogleMapController> _mapController =
+      Completer<GoogleMapController>();
   late final LatLng _origen;
   late final LatLng _destino;
 
@@ -68,7 +70,8 @@ class _VistaPreviaViajeState extends State<VistaPreviaViaje> {
     // Si origen y destino son iguales, usa un zoom por defecto
     if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
       await controller.animateCamera(
-        CameraUpdate.newCameraPosition(CameraPosition(target: _origen, zoom: 15)),
+        CameraUpdate.newCameraPosition(
+            CameraPosition(target: _origen, zoom: 15)),
       );
       return;
     }
@@ -85,10 +88,13 @@ class _VistaPreviaViajeState extends State<VistaPreviaViaje> {
     final v = widget.viaje;
 
     // Sólo precio que ve el taxista (sin descuentos/ahorros del cliente)
-    final double precioMostrar = (v.precioFinal > 0) ? v.precioFinal : (v.precio > 0 ? v.precio : 0);
+    final double precioMostrar =
+        (v.precioFinal > 0) ? v.precioFinal : (v.precio > 0 ? v.precio : 0);
 
     // Placeholder neutral (si luego agregas nombreCliente, úsalo aquí)
     const String nombreMostrar = 'Cliente';
+    final String uidClientePrev =
+        v.uidCliente.isNotEmpty ? v.uidCliente : v.clienteId;
 
     final theme = Theme.of(context);
 
@@ -96,7 +102,8 @@ class _VistaPreviaViajeState extends State<VistaPreviaViaje> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text('Detalle del viaje', style: TextStyle(color: Colors.white)),
+        title: const Text('Detalle del viaje',
+            style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: Column(
@@ -140,25 +147,38 @@ class _VistaPreviaViajeState extends State<VistaPreviaViaje> {
                 // Cliente
                 Text(
                   'Cliente: $nombreMostrar',
-                  style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: Colors.white70),
                 ),
+                if (uidClientePrev.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ClientePerfilConductorChip(
+                    uidCliente: uidClientePrev,
+                  ),
+                ],
                 const SizedBox(height: 10),
 
                 // Origen
-                Text('Origen', style: theme.textTheme.labelMedium?.copyWith(color: Colors.white54)),
+                Text('Origen',
+                    style: theme.textTheme.labelMedium
+                        ?.copyWith(color: Colors.white54)),
                 Text(
                   v.origen,
-                  style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white),
+                  style:
+                      theme.textTheme.bodyLarge?.copyWith(color: Colors.white),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 10),
 
                 // Destino
-                Text('Destino', style: theme.textTheme.labelMedium?.copyWith(color: Colors.white54)),
+                Text('Destino',
+                    style: theme.textTheme.labelMedium
+                        ?.copyWith(color: Colors.white54)),
                 Text(
                   v.destino,
-                  style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white),
+                  style:
+                      theme.textTheme.bodyLarge?.copyWith(color: Colors.white),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -197,8 +217,11 @@ class _VistaPreviaViajeState extends State<VistaPreviaViaje> {
                       child: ElevatedButton(
                         onPressed: () async {
                           try {
-                            await widget.onAceptar(); // MISMA lógica que en la lista
-                            if (!context.mounted) return; // guardia correcta para BuildContext tras await
+                            await widget
+                                .onAceptar(); // MISMA lógica que en la lista
+                            if (!context.mounted) {
+                              return; // guardia correcta para BuildContext tras await
+                            }
                             Navigator.of(context).pop(true);
                           } catch (_) {
                             // Errores ya se notifican en tu lógica original (snackbars, etc.)
