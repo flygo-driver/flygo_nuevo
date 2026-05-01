@@ -257,8 +257,7 @@ class _ViajeProgramadoConfirmacionState
 
         final data = doc.data()!;
         final uid = FirebaseAuth.instance.currentUser?.uid;
-        final cliente =
-            (data['uidCliente'] ?? data['clienteId'] ?? '').toString();
+        final cliente = ViajesRepo.uidClienteDesdeDocViaje(data);
         if (uid != null &&
             uid.isNotEmpty &&
             cliente.isNotEmpty &&

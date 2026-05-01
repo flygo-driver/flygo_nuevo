@@ -5,11 +5,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 class ViajeData {
   // ---------- Firestore ----------
@@ -89,12 +92,15 @@ class ViajeData {
 
   static int _toCents(num v) => (v * 100).round();
   static double _fromCents(int c) => c / 100.0;
-  static int _comision20Cents(int precioCents) =>
-      ((precioCents * 20) + 50) ~/ 100;
+  static int _comisionNominalCents(int precioCents) =>
+      PlataformaEconomia.comisionCentsDesdePrecioCents(
+        precioCents,
+        PlataformaEconomia.comisionPorcento,
+      );
 
   static Map<String, int> _partidasCentsDesdePrecio(num precioDbl) {
     final int pCents = _toCents(precioDbl);
-    final int cCents = _comision20Cents(pCents);
+    final int cCents = _comisionNominalCents(pCents);
     final int gCents = pCents - cCents;
     return <String, int>{
       'precio_cents': pCents,
@@ -288,7 +294,7 @@ class ViajeData {
 
     final Map<String, int> partidas = _partidasCentsDesdePrecio(precio);
 
-    final String estadoInicial = (metodoPago.toLowerCase().trim() == 'tarjeta')
+    final String estadoInicial = MetodoPagoViaje.esTarjeta(metodoPago)
         ? EstadosViaje.pendientePago
         : EstadosViaje.pendiente;
 
@@ -637,8 +643,8 @@ class ViajeData {
 
       final int precioCents =
           (data['precio_cents'] as int?) ?? _toCents(precioBase);
-      final int comisionCents =
-          (data['comision_cents'] as int?) ?? _comision20Cents(precioCents);
+      final int comisionCents = (data['comision_cents'] as int?) ??
+          _comisionNominalCents(precioCents);
       final int gananciaCents =
           (data['ganancia_cents'] as int?) ?? (precioCents - comisionCents);
 
@@ -1032,8 +1038,12 @@ class ViajeData {
         throw Exception('Estado inválido');
       }
 
+      final String codigoVerificacion =
+          ViajesRepo.codigoVerificacionSeisDigitosDesdeDoc(d);
       tx.update(ref, <String, dynamic>{
         'estado': _estadoCanon(EstadosViaje.aBordo),
+        'codigoVerificacion': codigoVerificacion,
+        'codigoVerificado': false,
         'pickupConfirmadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),

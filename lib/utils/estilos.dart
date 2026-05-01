@@ -1,7 +1,7 @@
 // lib/utils/estilo.dart
 import 'package:flutter/material.dart';
 
-class EstilosFlyGo {
+class EstilosRai {
   static const Color fondoOscuro = Colors.black;
   static const Color textoVerde = Colors.greenAccent;
   static const Color textoBlanco = Colors.white;

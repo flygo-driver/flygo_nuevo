@@ -1,5 +1,5 @@
 // lib/pantallas/cliente/turismo_flygo_page.dart
-// Pantalla Turismo FlyGo: mapa + panel tipo Uber/inDrive
+// Pantalla Turismo RAI: mapa + panel tipo Uber/inDrive
 
 import 'dart:async';
 
@@ -10,14 +10,14 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/widgets/auto_trip_router.dart';
 
-class TurismoFlyGoPage extends StatefulWidget {
-  const TurismoFlyGoPage({super.key});
+class TurismoRaiPage extends StatefulWidget {
+  const TurismoRaiPage({super.key});
 
   @override
-  State<TurismoFlyGoPage> createState() => _TurismoFlyGoPageState();
+  State<TurismoRaiPage> createState() => _TurismoRaiPageState();
 }
 
-class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
+class _TurismoRaiPageState extends State<TurismoRaiPage> {
   // ===== MAPA / GPS =====
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
@@ -220,7 +220,7 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
         ),
         centerTitle: true,
         title: const Text(
-          'Turismo FlyGo',
+          'Turismo RAI',
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w800,
@@ -333,7 +333,7 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
               ),
             ),
 
-          // ===== PANEL TURISMO (tipo flygo/Driver) =====
+          // ===== PANEL TURISMO (tipo RAI / Driver) =====
           Align(
             alignment: Alignment.bottomCenter,
             child: AnimatedSlide(
@@ -374,7 +374,7 @@ class _TurismoFlyGoPageState extends State<TurismoFlyGoPage> {
                     const SizedBox(height: 10),
 
                     const Text(
-                      'Turismo FlyGo',
+                      'Turismo RAI',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 20,
@@ -518,3 +518,6 @@ class _BannerTurismo extends StatelessWidget {
     );
   }
 }
+
+/// Alias por compatibilidad con rutas o imports antiguos; preferir [TurismoRaiPage].
+typedef TurismoFlyGoPage = TurismoRaiPage;

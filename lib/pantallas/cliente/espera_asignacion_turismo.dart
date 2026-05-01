@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
 class EsperaAsignacionTurismo extends StatefulWidget {
   final String viajeId;
@@ -65,13 +67,14 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: const RaiAppBar(
-        title: '🏝️ Turismo RAI',
-        backWhenCanPop: true,
-      ),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: const RaiAppBar(
+          title: '🏝️ Turismo RAI',
+          backWhenCanPop: true,
+        ),
+        body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
             .collection('viajes')
             .doc(widget.viajeId)
@@ -121,6 +124,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
           return _buildWaitingScreen(data);
         },
+      ),
       ),
     );
   }
@@ -254,10 +258,12 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
   }
 
   String _metodoPagoLabel(String raw) {
-    final s = raw.trim().toLowerCase();
-    if (s.contains('transfer')) return 'Transferencia bancaria';
-    if (s.contains('efect')) return 'Efectivo';
     if (raw.trim().isEmpty) return '—';
+    if (MetodoPagoViaje.esEfectivo(raw)) return 'Efectivo';
+    if (MetodoPagoViaje.esTransferencia(raw)) {
+      return 'Transferencia bancaria';
+    }
+    if (MetodoPagoViaje.esTarjeta(raw)) return 'Tarjeta';
     return raw.trim();
   }
 

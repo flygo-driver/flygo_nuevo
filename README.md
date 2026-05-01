@@ -1,3 +1,3 @@
-# FlyGo RD (Flutter + Firebase)
+# RAI Driver (Flutter + Firebase)
 
-App de movilidad para clientes y taxistas.
+App de movilidad para clientes y taxistas — marca **RAI Driver** (Open ASK Service SRL).

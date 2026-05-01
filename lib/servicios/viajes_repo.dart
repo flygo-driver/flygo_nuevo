@@ -12,8 +12,15 @@ import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/taxista_prepago_ledger.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+
+/// Diagnóstico solo en debug: en release no expone UIDs ni estado interno por logcat.
+void _viajesRepoDebugLog(String message) {
+  if (kDebugMode) debugPrint(message);
+}
 
 class ViajesRepo {
   /// Alias hacia [TripPublishWindows.poolLeadMinutesProgramado] (compat. UI / logs).
@@ -36,6 +43,16 @@ class ViajesRepo {
       _db.collection('viajes');
   static CollectionReference<Map<String, dynamic>> get _pagosCol =>
       _db.collection('pagos');
+
+  /// Devuelve un PIN de 6 dígitos; si el documento ya tiene uno válido, lo conserva.
+  static String codigoVerificacionSeisDigitosDesdeDoc(Map<String, dynamic> d) {
+    final String s = (d['codigoVerificacion'] ?? d['codigo_verificacion'] ?? '')
+        .toString()
+        .replaceAll(RegExp(r'\D'), '');
+    if (s.length == 6) return s;
+    return (100000 + (DateTime.now().millisecondsSinceEpoch % 900000))
+        .toString();
+  }
 
   /// Si `config/encadenamiento_viajes.maxMetrosPickupDesdeDestinoActivo` > 0, al reservar siguiente
   /// viaje se exige que el pickup del candidato esté a esa distancia del **destino** del viaje activo.
@@ -83,14 +100,13 @@ class ViajesRepo {
     return (la, lo);
   }
 
-  /// Comisión nominal plataforma (RAI), alineada con `ComisionesDiariasRepo` y partidas en `viajes`.
-  /// Los importes reales siempre salen de `comision_cents` / `precio_cents` por viaje.
-  static const int comisionPlataformaPorcentoNominal = 20;
-
   static int _toCents(num v) => (v * 100).round();
   static double _fromCents(int c) => c / 100.0;
-  static int _comision20Cents(int precioCents) =>
-      ((precioCents * 20) + 50) ~/ 100;
+  static int _comisionNominalCents(int precioCents) =>
+      PlataformaEconomia.comisionCentsDesdePrecioCents(
+        precioCents,
+        PlataformaEconomia.comisionPorcento,
+      );
 
   static Map<String, int> _partidasCents(Map<String, dynamic> data) {
     final dynamic pC = data['precio_cents'];
@@ -106,13 +122,21 @@ class ViajesRepo {
     final dynamic precioRaw =
         data['precioFinal'] ?? data['precio'] ?? data['total'];
     final int precioCents = _toCents((precioRaw is num) ? precioRaw : 0);
-    final int comisionCents = _comision20Cents(precioCents);
+    final int comisionCents = _comisionNominalCents(precioCents);
     final int gananciaCents = precioCents - comisionCents;
     return <String, int>{
       'precio_cents': precioCents,
       'comision_cents': comisionCents,
       'ganancia_cents': gananciaCents,
     };
+  }
+
+  /// UID del cliente en el documento del viaje.
+  /// Importante: `(uidCliente ?? clienteId)` falla si `uidCliente` es `''` (no null): no cae a `clienteId`.
+  static String uidClienteDesdeDocViaje(Map<String, dynamic> d) {
+    final String u = (d['uidCliente'] ?? '').toString().trim();
+    if (u.isNotEmpty) return u;
+    return (d['clienteId'] ?? '').toString().trim();
   }
 
   // ==============================================================
@@ -165,8 +189,10 @@ class ViajesRepo {
     final String? bolaMirrorId = bolaPuebloId?.trim();
     final bool esEspejoNegociacionBola =
         bolaMirrorId != null && bolaMirrorId.isNotEmpty;
-    // Espejo Bola: misma comisión 10% que CF [aceptarOfertaBola] / BolaPuebloRepo (no 20% pool).
-    final int pctComision = esEspejoNegociacionBola ? 10 : 20;
+    // Espejo Bola: misma comisión 10% que CF [aceptarOfertaBola] / BolaPuebloRepo.
+    final int pctComision = esEspejoNegociacionBola
+        ? PlataformaEconomia.comisionPorcentoBolaEspejo
+        : PlataformaEconomia.comisionPorcento;
     final int comisionCents = (precioCents * pctComision) ~/ 100;
     final int gananciaCents = precioCents - comisionCents;
 
@@ -222,7 +248,7 @@ class ViajesRepo {
       estadoInicial = 'pendiente_admin';
     } else {
       // Tarjeta: `pendiente_pago` hasta pasarela (cuando PayConfig active UI de tarjeta).
-      estadoInicial = (metodoPago.toLowerCase().trim() == 'tarjeta')
+      estadoInicial = MetodoPagoViaje.esTarjeta(metodoPago)
           ? EstadosViaje.pendientePago
           : EstadosViaje.pendiente;
     }
@@ -385,12 +411,12 @@ class ViajesRepo {
   }
 
   static Future<void> ensureTaxistaLibre(String uidTaxista) async {
-    debugPrint('🟡 ensureTaxistaLibre - uid: $uidTaxista');
+    _viajesRepoDebugLog('🟡 ensureTaxistaLibre - uid: $uidTaxista');
     try {
       final userDoc = await _db.collection('usuarios').doc(uidTaxista).get();
       final String viajeActivoId =
           (userDoc.data()?['viajeActivoId'] ?? '').toString();
-      debugPrint('📄 ensureTaxistaLibre - viajeActivoId: $viajeActivoId');
+      _viajesRepoDebugLog('📄 ensureTaxistaLibre - viajeActivoId: $viajeActivoId');
 
       final hasActive = await _col
           .where('uidTaxista', isEqualTo: uidTaxista)
@@ -398,7 +424,7 @@ class ViajesRepo {
           .limit(1)
           .get()
           .then((q) => q.docs.isNotEmpty);
-      debugPrint('📄 ensureTaxistaLibre - hasActiveQuery: $hasActive');
+      _viajesRepoDebugLog('📄 ensureTaxistaLibre - hasActiveQuery: $hasActive');
 
       if (!hasActive) {
         await _db.collection('usuarios').doc(uidTaxista).set({
@@ -407,23 +433,23 @@ class ViajesRepo {
           'actualizadoEn': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
-      debugPrint('✅ ensureTaxistaLibre - OK');
+      _viajesRepoDebugLog('✅ ensureTaxistaLibre - OK');
     } catch (e) {
-      debugPrint('❌ ensureTaxistaLibre error: $e');
+      _viajesRepoDebugLog('❌ ensureTaxistaLibre error: $e');
       rethrow;
     }
   }
 
   static Future<void> ensureSiguienteCoherente(String uidTaxista) async {
-    debugPrint('🟡 ensureSiguienteCoherente - uid: $uidTaxista');
+    _viajesRepoDebugLog('🟡 ensureSiguienteCoherente - uid: $uidTaxista');
     final uRef = _db.collection('usuarios').doc(uidTaxista);
     try {
       final u = await uRef.get();
       final m = u.data() ?? {};
       final String nextId = (m['siguienteViajeId'] ?? '').toString();
-      debugPrint('📄 ensureSiguienteCoherente - siguienteViajeId: $nextId');
+      _viajesRepoDebugLog('📄 ensureSiguienteCoherente - siguienteViajeId: $nextId');
       if (nextId.isEmpty) {
-        debugPrint('✅ ensureSiguienteCoherente - OK (sin siguiente)');
+        _viajesRepoDebugLog('✅ ensureSiguienteCoherente - OK (sin siguiente)');
         return;
       }
 
@@ -431,7 +457,7 @@ class ViajesRepo {
       final v = await vRef.get();
       if (!v.exists) {
         await uRef.set({'siguienteViajeId': ''}, SetOptions(merge: true));
-        debugPrint('✅ ensureSiguienteCoherente - limpiado (viaje no existe)');
+        _viajesRepoDebugLog('✅ ensureSiguienteCoherente - limpiado (viaje no existe)');
         return;
       }
       final d = v.data()!;
@@ -448,7 +474,7 @@ class ViajesRepo {
           uidAsig.isEmpty &&
           reservadoPor == uidTaxista &&
           !reservaVencida;
-      debugPrint(
+      _viajesRepoDebugLog(
           '📄 ensureSiguienteCoherente - estado=$estado uidAsig=$uidAsig reservadoPor=$reservadoPor ok=$ok');
 
       if (!ok) {
@@ -469,9 +495,9 @@ class ViajesRepo {
               SetOptions(merge: true));
         });
       }
-      debugPrint('✅ ensureSiguienteCoherente - OK');
+      _viajesRepoDebugLog('✅ ensureSiguienteCoherente - OK');
     } catch (e) {
-      debugPrint('❌ ensureSiguienteCoherente error: $e');
+      _viajesRepoDebugLog('❌ ensureSiguienteCoherente error: $e');
       rethrow;
     }
   }
@@ -656,7 +682,7 @@ class ViajesRepo {
           ? Map<String, dynamic>.from(resp.data as Map)
           : <String, dynamic>{};
       if (data['ok'] == true) {
-        debugPrint('✅ aceptarViajeSeguro fallback OK');
+        _viajesRepoDebugLog('✅ aceptarViajeSeguro fallback OK');
         await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
         await _db.collection('usuarios').doc(uidTaxista).set(
           {
@@ -670,7 +696,7 @@ class ViajesRepo {
         return 'ok';
       }
     } on FirebaseFunctionsException catch (e) {
-      debugPrint('❌ aceptarViajeSeguro: ${e.code} ${e.message}');
+      _viajesRepoDebugLog('❌ aceptarViajeSeguro: ${e.code} ${e.message}');
       if (e.code == 'failed-precondition') {
         final m = (e.message ?? '').trim();
         if (m == 'bloqueado-pago-semanal') return 'bloqueado-pago-semanal';
@@ -679,7 +705,7 @@ class ViajesRepo {
         }
       }
     } catch (cfErr) {
-      debugPrint('❌ aceptarViajeSeguro fallback error: $cfErr');
+      _viajesRepoDebugLog('❌ aceptarViajeSeguro fallback error: $cfErr');
     }
     return null;
   }
@@ -692,28 +718,28 @@ class ViajesRepo {
     String placa = '',
     String tipoVehiculo = '',
   }) async {
-    debugPrint(
+    _viajesRepoDebugLog(
         '🟡 INICIO claimTripWithReason - viajeId: $viajeId, taxista: $uidTaxista');
     final vRef = _col.doc(viajeId);
     final uRef = _db.collection('usuarios').doc(uidTaxista);
 
     try {
       await _db.runTransaction((tx) async {
-        debugPrint('🟡 TX START claimTripWithReason');
+        _viajesRepoDebugLog('🟡 TX START claimTripWithReason');
         final vSnap = await tx.get(vRef);
         if (!vSnap.exists) {
-          debugPrint('❌ Viaje no existe');
+          _viajesRepoDebugLog('❌ Viaje no existe');
           throw 'no-existe';
         }
         final d = vSnap.data()!;
-        debugPrint(
+        _viajesRepoDebugLog(
             '📄 Data actual: estado=${d['estado']}, uidTaxista=${d['uidTaxista']}, taxistaId=${d['taxistaId']}');
 
         final String estadoRaw = (d['estado'] ?? '').toString().trim();
         final String estadoNorm = EstadosViaje.normalizar(estadoRaw);
         if (!ViajePoolTaxistaGate.estadoPermiteClaimPool(
             estadoRaw, estadoNorm)) {
-          debugPrint('❌ Estado incorrecto: $estadoRaw (norm=$estadoNorm)');
+          _viajesRepoDebugLog('❌ Estado incorrecto: $estadoRaw (norm=$estadoNorm)');
           throw 'estado-no-pendiente';
         }
 
@@ -721,7 +747,7 @@ class ViajesRepo {
             ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
                 ((d['taxistaId'] ?? '') as String).isNotEmpty;
         if (yaAsignado) {
-          debugPrint(
+          _viajesRepoDebugLog(
               '❌ Ya tiene taxista: uidTaxista=${d['uidTaxista']}, taxistaId=${d['taxistaId']}');
           throw 'ya-asignado';
         }
@@ -729,13 +755,13 @@ class ViajesRepo {
         final now = DateTime.now();
         final tsAA = d['acceptAfter'];
         if (tsAA is Timestamp && now.isBefore(tsAA.toDate())) {
-          debugPrint(
+          _viajesRepoDebugLog(
               '❌ acceptAfter-futuro: ${tsAA.toDate().toIso8601String()} > ${now.toIso8601String()}');
           throw 'acceptAfter-futuro';
         }
         final tsPub = d['publishAt'];
         if (tsPub is Timestamp && tsPub.toDate().isAfter(now)) {
-          debugPrint(
+          _viajesRepoDebugLog(
               '❌ publish-futuro: ${tsPub.toDate().toIso8601String()} > ${now.toIso8601String()}');
           throw 'publish-futuro';
         }
@@ -747,7 +773,7 @@ class ViajesRepo {
         final reservaVigente = reservadoPor.isNotEmpty &&
             (reservadoHasta == null || reservadoHasta.isAfter(now));
         if (reservaVigente && reservadoPor != uidTaxista) {
-          debugPrint(
+          _viajesRepoDebugLog(
               '❌ Reservado por otro: reservadoPor=$reservadoPor, reservadoHasta=$reservadoHasta');
           throw 'reservado-otro';
         }
@@ -759,16 +785,16 @@ class ViajesRepo {
         if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
             uData, bSnap.data())) {
           if (uData['tienePagoPendiente'] == true) {
-            debugPrint(
+            _viajesRepoDebugLog(
                 '❌ Taxista bloqueado: comisión efectivo / tienePagoPendiente');
             throw 'bloqueado-pago-semanal';
           }
-          debugPrint('❌ Taxista bloqueado: prepago / comisión legacy');
+          _viajesRepoDebugLog('❌ Taxista bloqueado: prepago / comisión legacy');
           throw 'bloqueado-comision-efectivo';
         }
         final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
         if (viajeActivoId.isNotEmpty) {
-          debugPrint('❌ Taxista ocupado con viajeActivoId=$viajeActivoId');
+          _viajesRepoDebugLog('❌ Taxista ocupado con viajeActivoId=$viajeActivoId');
           throw 'taxista-ocupado';
         }
 
@@ -798,7 +824,7 @@ class ViajesRepo {
           tipoVehiculoFormateado = '🚗 NORMAL';
         }
 
-        debugPrint('🟢 Intentando actualizar viaje...');
+        _viajesRepoDebugLog('🟢 Intentando actualizar viaje...');
         tx.update(vRef, {
           'uidTaxista': uidTaxista,
           'taxistaId': uidTaxista,
@@ -834,10 +860,10 @@ class ViajesRepo {
               'actualizadoEn': FieldValue.serverTimestamp(),
             },
             SetOptions(merge: true));
-        debugPrint('✅ TX preparada correctamente (update viaje + set usuario)');
+        _viajesRepoDebugLog('✅ TX preparada correctamente (update viaje + set usuario)');
       });
 
-      debugPrint('✅ Transacción completada');
+      _viajesRepoDebugLog('✅ Transacción completada');
       await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
       await _db.collection('usuarios').doc(uidTaxista).set(
         {
@@ -848,11 +874,11 @@ class ViajesRepo {
         SetOptions(merge: true),
       );
       await _ensureChatForTrip(viajeId);
-      debugPrint('✅ Post-proceso completado');
+      _viajesRepoDebugLog('✅ Post-proceso completado');
 
       return 'ok';
     } on FirebaseException catch (e) {
-      debugPrint(
+      _viajesRepoDebugLog(
           '❌ FirebaseException en claimTripWithReason: code=${e.code}, message=${e.message}');
       final String code = e.code.toLowerCase();
       if (code == 'permission-denied' || code == 'permission_denied') {
@@ -868,7 +894,7 @@ class ViajesRepo {
       }
       return 'permiso:${e.code}';
     } catch (e) {
-      debugPrint('❌ ERROR GENERAL en claimTripWithReason: $e');
+      _viajesRepoDebugLog('❌ ERROR GENERAL en claimTripWithReason: $e');
       final String msg = e.toString().toLowerCase();
       if (msg.contains('permission-denied') ||
           msg.contains('permission_denied')) {
@@ -1373,9 +1399,12 @@ class ViajesRepo {
         throw Exception('Estado inválido para a_bordo');
       }
       final partidas = _partidasCents(d);
+      final String codigoVerificacion = codigoVerificacionSeisDigitosDesdeDoc(d);
       tx.update(ref, {
         'estado': EstadosViaje.aBordo,
         'activo': true,
+        'codigoVerificacion': codigoVerificacion,
+        'codigoVerificado': false,
         'precio_cents': partidas['precio_cents'],
         'comision_cents': partidas['comision_cents'],
         'ganancia_cents': partidas['ganancia_cents'],
@@ -1462,23 +1491,19 @@ class ViajesRepo {
       final int precioCents = partidas['precio_cents']!;
       final int comisionCents = partidas['comision_cents']!;
       final int gananciaCents = partidas['ganancia_cents']!;
-      final String metodoRaw =
-          (d['metodoPago'] ?? '').toString().toLowerCase().trim();
+      final String metodoStr = (d['metodoPago'] ?? '').toString();
       final bool pagoRegistrado = (d['pagoRegistrado'] == true);
 
       final String uidCliente =
           (d['uidCliente'] ?? d['clienteId'] ?? '').toString();
 
       if (!pagoRegistrado) {
-        final bool esEfectivo = metodoRaw.contains('efectivo');
-        final String metodoAsiento = esEfectivo
-            ? 'efectivo'
-            : (metodoRaw.contains('transfer') ? 'transferencia' : 'tarjeta');
+        final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoStr);
+        final String metodoAsiento =
+            MetodoPagoViaje.asientoCategoria(metodoStr);
 
         tx.update(ref, {
-          'metodoPago': esEfectivo
-              ? 'Efectivo'
-              : (metodoRaw.contains('transfer') ? 'Transferencia' : 'Tarjeta'),
+          'metodoPago': MetodoPagoViaje.etiquetaDocumento(metodoStr),
           'payment.status':
               esEfectivo ? 'cash_collected' : 'pending_transfer_proof',
           'payment.provider': esEfectivo ? 'cash' : 'transfer',
@@ -1576,7 +1601,7 @@ class ViajesRepo {
             'totalCents': precioCents,
             'comisionCents': comisionCents,
             'gananciaCents': gananciaCents,
-            'comisionPlataformaPct': comisionPlataformaPorcentoNominal,
+            'comisionPlataformaPct': PlataformaEconomia.comisionPorcento,
             'fuenteAsiento': 'completar_viaje_taxista',
             'metodo': metodoAsiento,
             'estado': esEfectivo ? 'comision_pendiente' : 'por_liquidar',
@@ -1838,8 +1863,10 @@ class ViajesRepo {
       if (!snap.exists) throw Exception('El viaje no existe');
 
       final d = snap.data()!;
-      final String cliente = (d['uidCliente'] ?? d['clienteId']).toString();
-      if (cliente != uidCliente) throw Exception('No autorizado');
+      final String cliente = uidClienteDesdeDocViaje(d);
+      if (cliente.isEmpty || cliente != uidCliente) {
+        throw Exception('No autorizado');
+      }
 
       final String estado = (d['estado'] ?? '').toString();
       final n = EstadosViaje.normalizar(estado);
@@ -1880,17 +1907,25 @@ class ViajesRepo {
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
-
-      tx.set(
-          _db.collection('usuarios').doc(uidCliente),
-          {
-            'viajeActivoId': '',
-            'siguienteViajeId': '',
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true));
     });
+
+    try {
+      await _db.collection('usuarios').doc(uidCliente).set(
+        {
+          'viajeActivoId': '',
+          'siguienteViajeId': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    } catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'cancelarPorCliente: limpiar viajeActivoId del cliente',
+      );
+    }
 
     if (uidTaxistaAfter.isNotEmpty) {
       try {
@@ -2036,8 +2071,7 @@ class ViajesRepo {
             controller.add(null);
             return;
           }
-          final String uidCliDoc =
-              (data['uidCliente'] ?? data['clienteId'] ?? '').toString();
+          final String uidCliDoc = uidClienteDesdeDocViaje(data);
           final String estado =
               EstadosViaje.normalizar((data['estado'] ?? '').toString());
           final bool visible = estado == EstadosViaje.pendiente ||

@@ -1,4 +1,4 @@
-// android/app/build.gradle.kts - FLYGO_NUEVO (DEV)
+// android/app/build.gradle.kts — RAI Driver (release: key.properties + R8/ProGuard)
 
 import java.io.File
 import java.util.Properties

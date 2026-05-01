@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
+
 class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
 
@@ -53,14 +55,8 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
     if (resolvedLeading == null && backWhenCanPop) {
       resolvedLeading = IconButton(
         icon: const Icon(Icons.arrow_back, color: Colors.white),
-        onPressed: () async {
-          final nav = Navigator.of(context);
-          if (nav.canPop()) {
-            nav.pop();
-            return;
-          }
-          await Navigator.of(context, rootNavigator: true).maybePop();
-        },
+        tooltip: 'Atrás',
+        onPressed: () => intentarSalirAlGate(context),
       );
     }
     resolvedLeading ??= Padding(

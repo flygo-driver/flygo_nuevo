@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">RAI Driver</string>
 
-    <!-- 🔑 Maps SDK for Android -->
+    <!-- Maps/Places: debe ser la misma clave restringida en Google Cloud que uses en la app (ver lib/keys.dart). -->
     <string name="google_maps_api_key">AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w</string>
 
     <!-- 🔔 Canal por defecto para FCM / notificaciones -->

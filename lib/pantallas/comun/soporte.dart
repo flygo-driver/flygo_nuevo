@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:flygo_nuevo/keys.dart' show kAppDisplayName;
+import 'package:flygo_nuevo/legal/terms_data.dart' show kTermsContactEmail;
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class Soporte extends StatelessWidget {
   const Soporte({super.key});
 
-  // Datos de contacto FlyGo
-  static const _soporteEmail = 'soporte@flygo.do';
+  /// Mismo correo que `terms_data` / tienda (ajusta en un solo sitio).
+  static String get _soporteEmail => kTermsContactEmail;
   static const _soporteTelefono = '+1 829 379 2133'; // visible en UI
   static const _whatsappNumero = '+18293792133'; // E.164
 
@@ -26,9 +29,9 @@ class Soporte extends StatelessWidget {
   }
 
   Future<void> _enviarCorreo(BuildContext context) async {
-    final subject = Uri.encodeComponent('Soporte FlyGo - Ayuda');
+    final subject = Uri.encodeComponent('Soporte RAI Driver - Ayuda');
     final body = Uri.encodeComponent(
-      'Hola FlyGo,\n\n'
+      'Hola equipo RAI Driver,\n\n'
       'Necesito ayuda con:\n'
       '- Describe tu problema aquí...\n\n'
       'Información adicional (opcional):\n'
@@ -47,7 +50,8 @@ class Soporte extends StatelessWidget {
 
   Future<void> _abrirWhatsApp(BuildContext context) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
-    final mensaje = Uri.encodeComponent('Hola FlyGo, necesito ayuda.');
+    final mensaje =
+        Uri.encodeComponent('Hola RAI Driver, necesito ayuda.');
 
     // 1) App
     final waScheme =
@@ -75,13 +79,14 @@ class Soporte extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: const RaiAppBar(
-        title: 'Soporte',
-        backWhenCanPop: true,
-      ),
-      body: ListView(
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: const RaiAppBar(
+          title: 'Soporte',
+          backWhenCanPop: true,
+        ),
+        body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // Contacto rápido
@@ -178,11 +183,12 @@ class Soporte extends StatelessWidget {
 
           Center(
             child: Text(
-              'FlyGo • v1.0.0',
+              '$kAppDisplayName · Soporte',
               style: TextStyle(color: Colors.white.withValues(alpha: 0.6)),
             ),
           ),
         ],
+      ),
       ),
     );
   }

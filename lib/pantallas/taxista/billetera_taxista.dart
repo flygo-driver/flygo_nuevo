@@ -44,9 +44,9 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: EstilosFlyGo.fondoOscuro,
+        backgroundColor: EstilosRai.fondoOscuro,
         title: const Text('Solicitar retiro',
-            style: TextStyle(color: EstilosFlyGo.textoBlanco)),
+            style: TextStyle(color: EstilosRai.textoBlanco)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -112,18 +112,18 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
     final u = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: EstilosRai.fondoOscuro,
       appBar: AppBar(
-        backgroundColor: EstilosFlyGo.fondoOscuro,
+        backgroundColor: EstilosRai.fondoOscuro,
         title: const Text("Mi Billetera",
-            style: TextStyle(color: EstilosFlyGo.textoBlanco)),
+            style: TextStyle(color: EstilosRai.textoBlanco)),
         centerTitle: true,
-        iconTheme: const IconThemeData(color: EstilosFlyGo.textoBlanco),
+        iconTheme: const IconThemeData(color: EstilosRai.textoBlanco),
         actions: [
           const SaldoGananciasChip(),
           IconButton(
             onPressed: _enviando ? null : () => setState(() {}),
-            icon: const Icon(Icons.refresh, color: EstilosFlyGo.textoBlanco),
+            icon: const Icon(Icons.refresh, color: EstilosRai.textoBlanco),
             tooltip: 'Actualizar',
           ),
         ],
@@ -131,11 +131,11 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       body: u == null
           ? const Center(
               child: Text('Inicia sesión',
-                  style: TextStyle(color: EstilosFlyGo.textoBlanco)))
+                  style: TextStyle(color: EstilosRai.textoBlanco)))
           : RefreshIndicator(
               onRefresh: () async => setState(() {}),
-              color: EstilosFlyGo.textoVerde,
-              backgroundColor: EstilosFlyGo.fondoOscuro,
+              color: EstilosRai.textoVerde,
+              backgroundColor: EstilosRai.fondoOscuro,
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
@@ -158,7 +158,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                           child: Padding(
                             padding: EdgeInsets.symmetric(vertical: 40),
                             child: CircularProgressIndicator(
-                                color: EstilosFlyGo.textoVerde),
+                                color: EstilosRai.textoVerde),
                           ),
                         );
                       }
@@ -168,7 +168,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                           _infoBox(
                               "Saldo disponible",
                               FormatosMoneda.rd(r.saldoDisponible),
-                              EstilosFlyGo.textoVerde),
+                              EstilosRai.textoVerde),
                           const SizedBox(height: 16),
                           _infoBox("Ganancia Total",
                               FormatosMoneda.rd(r.gananciaTotal), Colors.green),
@@ -193,13 +193,13 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                                       child: CircularProgressIndicator(
                                           strokeWidth: 2))
                                   : const Icon(Icons.account_balance_wallet,
-                                      color: EstilosFlyGo.textoVerde),
+                                      color: EstilosRai.textoVerde),
                               label: Text(
                                   _enviando
                                       ? 'Enviando...'
                                       : 'Solicitar retiro',
                                   style: const TextStyle(
-                                      color: EstilosFlyGo.textoVerde,
+                                      color: EstilosRai.textoVerde,
                                       fontWeight: FontWeight.bold)),
                               style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.white,
@@ -217,9 +217,9 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                   const SizedBox(height: 28),
                   const Text("Historial de liquidaciones",
                       style: TextStyle(
-                        fontSize: EstilosFlyGo.tamanioLetraGrande,
+                        fontSize: EstilosRai.tamanioLetraGrande,
                         fontWeight: FontWeight.bold,
-                        color: EstilosFlyGo.textoBlanco,
+                        color: EstilosRai.textoBlanco,
                       )),
                   const SizedBox(height: 10),
 
@@ -233,7 +233,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                           child: Padding(
                             padding: EdgeInsets.symmetric(vertical: 20),
                             child: CircularProgressIndicator(
-                                color: EstilosFlyGo.textoVerde),
+                                color: EstilosRai.textoVerde),
                           ),
                         );
                       }
@@ -310,14 +310,14 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                   const SizedBox(height: 30),
                   const Text("¿Cómo funciona?",
                       style: TextStyle(
-                        fontSize: EstilosFlyGo.tamanioLetraGrande,
+                        fontSize: EstilosRai.tamanioLetraGrande,
                         fontWeight: FontWeight.bold,
-                        color: EstilosFlyGo.textoBlanco,
+                        color: EstilosRai.textoBlanco,
                       )),
                   const SizedBox(height: 8),
                   const Text(
                     "• Recibes el 80% de cada viaje completado.\n"
-                    "• FlyGo retiene el 20% como comisión.\n"
+                    "• RAI retiene el 20% como comisión.\n"
                     "• Las solicitudes de retiro descuentan tu saldo disponible.\n"
                     "• Cuando una liquidación se aprueba, queda reflejada en el historial.\n"
                     "• Próximamente podrás recibir transferencias automáticas.",

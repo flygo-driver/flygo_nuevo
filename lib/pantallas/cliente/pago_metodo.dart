@@ -96,7 +96,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
                 style: TextStyle(color: Colors.white),
               ),
               subtitle: const Text(
-                'Pagas al finalizar el viaje. FlyGo registra la comisión al taxista.',
+                'Pagas al finalizar el viaje. RAI registra la comisión al taxista.',
                 style: TextStyle(color: Colors.white70),
               ),
             ),

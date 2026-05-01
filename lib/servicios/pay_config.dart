@@ -1,36 +1,54 @@
 // lib/servicios/pay_config.dart
+//
+// Datos bancarios en release: opcionalmente por --dart-define (CI) sin editar código:
+//   --dart-define=RAI_PAY_BANK_NAME=...
+//   --dart-define=RAI_PAY_ACCOUNT_TYPE=...
+//   --dart-define=RAI_PAY_ACCOUNT_NUMBER=...
+//   --dart-define=RAI_PAY_ACCOUNT_HOLDER=...
+//   --dart-define=RAI_PAY_RNC=...
+//
+// Valores por defecto: los que ya usaba la app; verifica que coincidan con la cuenta real
+// operativa antes de publicar en Play Console.
+
 class PayConfig {
-  /// Cuando la pasarela de tarjeta esté lista (p. ej. en ~1 mes), pon `true` y
-  /// aparecerá "Tarjeta" en reserva / selección de método. Backend ya contempla
-  /// `pendiente_pago` para viajes con método tarjeta.
+  /// Cuando la pasarela de tarjeta esté lista, pon `true` y aparecerá "Tarjeta".
   static const bool pagosConTarjetaHabilitados = false;
 
-  /// Orden sugerido en bottom sheets de reserva (sin tarjeta hasta activar [pagosConTarjetaHabilitados]).
   static List<String> get metodosReservaVisibles => <String>[
         'Efectivo',
         'Transferencia',
         if (pagosConTarjetaHabilitados) 'Tarjeta',
       ];
 
-  // ✅ MOSTRAR SOLO ESTOS MÉTODOS EN TODA LA APP
   static const metodos = ['Transferencia', 'Efectivo'];
 
-  // ✅ CUENTA FLYGO (Rellena con tus datos reales)
-  static const bankName = 'Banco Popular Dominicano';
-  static const accountType = 'Cuenta Corriente';
-  static const accountNumber = '789-123456-7'; // ← CAMBIAR
-  static const accountHolder = 'FLYGO GO, SRL'; // ← CAMBIAR
-  static const rnc = '1-31-98765-4'; // ← CAMBIAR
+  static const String bankName = String.fromEnvironment(
+    'RAI_PAY_BANK_NAME',
+    defaultValue: 'Banco Popular Dominicano',
+  );
+  static const String accountType = String.fromEnvironment(
+    'RAI_PAY_ACCOUNT_TYPE',
+    defaultValue: 'Cuenta Corriente',
+  );
+  static const String accountNumber = String.fromEnvironment(
+    'RAI_PAY_ACCOUNT_NUMBER',
+    defaultValue: '789-123456-7',
+  );
+  static const String accountHolder = String.fromEnvironment(
+    'RAI_PAY_ACCOUNT_HOLDER',
+    defaultValue: 'Open ASK Service SRL',
+  );
+  static const String rnc = String.fromEnvironment(
+    'RAI_PAY_RNC',
+    defaultValue: '1320-11767',
+  );
 
-  // Tiempo de “bloqueo” de cupo mientras el cliente hace la transferencia
   static const reservaMinutos = 10;
 
-  // Texto fijo que verán al pagar
   static const instrucciones =
-      'Realiza la transferencia a la cuenta de FlyGo y sube el comprobante. '
+      'Realiza la transferencia a la cuenta de RAI (Open ASK Service SRL) y sube el comprobante. '
       'Tu reserva quedará en revisión y, al validar, quedará “Pagada”.';
 
-  // Referencia sugerida que el cliente puede poner en la transferencia
   static String referenciaSugerida(String poolId, String uid) =>
-      'FLYGO-${poolId.substring(0, 6)}-${uid.substring(0, 6)}';
+      'RAI-${poolId.substring(0, 6)}-${uid.substring(0, 6)}';
 }

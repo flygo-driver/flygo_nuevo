@@ -47,7 +47,7 @@ class ToursTuristicosScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Tours privados o en grupo con FlyGo',
+                  'Tours privados o en grupo con RAI Driver',
                   style: TextStyle(
                       color: textPrimary,
                       fontSize: 18,

@@ -33,7 +33,7 @@ class PayInstructions extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Cuenta FlyGo (Transferencia)',
+          const Text('Cuenta RAI — transferencia',
               style: TextStyle(
                   color: Colors.greenAccent, fontWeight: FontWeight.w800)),
           const SizedBox(height: 8),

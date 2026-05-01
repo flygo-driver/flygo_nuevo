@@ -28,7 +28,7 @@ class WelcomePage extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // ------- Arriba: paracaídas + FLYGO + textos -------
+                    // ------- Arriba: paracaídas + logo + textos -------
                     Padding(
                       padding: const EdgeInsets.fromLTRB(22, 22, 22, 0),
                       child: Column(

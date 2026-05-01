@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/pagos/payment_gateway.dart' as pg;
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/taxista_prepago_ledger.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 
 /// Persistencia de pagos (cliente/taxista) + actualización de estado en viajes.
@@ -162,7 +163,9 @@ class PagoData {
       double total = _asDouble(m['precioFinal'] ?? m['precio']);
       if (total <= 0) {
         // Si no tenemos total en el documento, derivamos desde la comisión (20%)
-        total = (comision > 0) ? (comision / 0.20) : 0.0;
+        total = (comision > 0)
+            ? (comision / PlataformaEconomia.factorComision)
+            : 0.0;
       }
 
       final totalCents = _toCents(total);
@@ -421,7 +424,9 @@ class PagoData {
   static Future<void> registrarMovimientoPorViaje(Viaje v) async {
     final total =
         (v.precio > 0) ? v.precio : (v.precioFinal > 0 ? v.precioFinal : 0.0);
-    final comision = (v.comision > 0) ? v.comision : (total * 0.20);
+    final comision = (v.comision > 0)
+        ? v.comision
+        : (total * PlataformaEconomia.factorComision);
     final ganancia =
         (v.gananciaTaxista > 0) ? v.gananciaTaxista : (total - comision);
 

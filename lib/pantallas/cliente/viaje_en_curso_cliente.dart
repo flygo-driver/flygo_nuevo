@@ -20,9 +20,12 @@ import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
@@ -55,6 +58,36 @@ String _safeMoney(num? n) {
   } catch (_) {
     return FormatosMoneda.rd(0);
   }
+}
+
+/// Barra lineal (evita doble círculo con el diálogo de bloqueo; más actual que el spinner).
+Widget _cargaLinealOscura({String? mensaje}) {
+  return Center(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              minHeight: 4,
+              color: Colors.greenAccent,
+              backgroundColor: Colors.white.withValues(alpha: 0.12),
+            ),
+          ),
+          if (mensaje != null && mensaje.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              mensaje,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
 }
 
 String _s(Object? x) => x?.toString() ?? '';
@@ -101,11 +134,13 @@ String _viajeDocMapUiSig(DocumentSnapshot<Map<String, dynamic>> ds) {
   final bool codigoOk = d['codigoVerificado'] == true;
   final bool completado = d['completado'] == true;
   final int wp = (d['waypoints'] is List) ? (d['waypoints'] as List).length : 0;
+  final String codPin = (d['codigoVerificacion'] ?? d['codigo_verificacion'] ?? '')
+      .toString();
 
   // Mayor precisión en coords para mapa en vivo (taxista / cliente).
   return '${ds.id}|$est|${r6(dLat)}|${r6(dLon)}|${r6(d['latCliente'])}|${r6(d['lonCliente'])}|'
       '${r6(d['latDestino'])}|${r6(d['lonDestino'])}|$tid|$codigoOk|$completado|'
-      '${d['metodoPago']}|${d['precio']}|$wp';
+      '${d['metodoPago']}|${d['precio']}|$wp|$codPin';
 }
 
 class ViajeEnCursoCliente extends StatefulWidget {
@@ -815,10 +850,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (_mostrarRutaHaciaDestinoCliente(v) &&
         _isValidCoord(v.latCliente, v.lonCliente) &&
         _isValidCoord(v.latDestino, v.lonDestino)) {
+      final List<({double lat, double lon})>? vias = _coordsWaypointsValidos(v);
       await _drawRoute(
         _latLng(v.latCliente, v.lonCliente),
         _latLng(v.latDestino, v.lonDestino),
         id: 'ruta',
+        viaIntermediate: vias,
       );
     }
 
@@ -853,6 +890,22 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final List<LatLng> pts = <LatLng>[
       if (_isValidCoord(v.latCliente, v.lonCliente))
         _latLng(v.latCliente, v.lonCliente),
+      ...(() {
+        final List<LatLng> wpts = <LatLng>[];
+        final List<Map<String, dynamic>>? raw = v.waypoints;
+        if (raw != null && _mostrarRutaHaciaDestinoCliente(v)) {
+          for (final Map<String, dynamic> m in raw) {
+            final double? la = _coordDoubleMap(m['lat']);
+            final double? lo = _coordDoubleMap(m['lon'] ?? m['lng']);
+            if (la != null &&
+                lo != null &&
+                _isValidCoord(la, lo)) {
+              wpts.add(LatLng(la, lo));
+            }
+          }
+        }
+        return wpts;
+      })(),
       if (_mostrarRutaHaciaDestinoCliente(v) &&
           _isValidCoord(v.latDestino, v.lonDestino))
         _latLng(v.latDestino, v.lonDestino),
@@ -907,12 +960,53 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }
   }
 
+  /// Para rutas con paradas: firma estable para redibujar si cambian coords en Firestore.
+  String _firmaWaypointsViaje(Viaje v) {
+    final List<Map<String, dynamic>>? w = v.waypoints;
+    if (w == null || w.isEmpty) return '';
+    final StringBuffer b = StringBuffer();
+    for (final Map<String, dynamic> m in w) {
+      final double? la = _coordDoubleMap(m['lat']);
+      final double? lo = _coordDoubleMap(m['lon'] ?? m['lng']);
+      if (la != null &&
+          lo != null &&
+          la.isFinite &&
+          lo.isFinite &&
+          _isValidCoord(la, lo)) {
+        b.write('${la.toStringAsFixed(5)},${lo.toStringAsFixed(5)};');
+      }
+    }
+    return b.toString();
+  }
+
+  double? _coordDoubleMap(dynamic x) {
+    if (x is num) return x.toDouble();
+    if (x is String) return double.tryParse(x);
+    return null;
+  }
+
+  List<({double lat, double lon})>? _coordsWaypointsValidos(Viaje v) {
+    final List<Map<String, dynamic>>? raw = v.waypoints;
+    if (raw == null || raw.isEmpty) return null;
+    final List<({double lat, double lon})> out =
+        <({double lat, double lon})>[];
+    for (final Map<String, dynamic> m in raw) {
+      final double? la = _coordDoubleMap(m['lat']);
+      final double? lo = _coordDoubleMap(m['lon'] ?? m['lng']);
+      if (la == null || lo == null) continue;
+      if (!_isValidCoord(la, lo)) continue;
+      out.add((lat: la, lon: lo));
+    }
+    return out.isEmpty ? null : out;
+  }
+
   Future<void> _drawRoute(
     LatLng a,
     LatLng b, {
     required String id,
     Color color = const Color(0xFF49F18B),
     int width = 6,
+    List<({double lat, double lon})>? viaIntermediate,
   }) async {
     try {
       final dynamic dir = await DirectionsService.drivingDistanceKm(
@@ -920,6 +1014,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         originLon: a.longitude,
         destLat: b.latitude,
         destLon: b.longitude,
+        waypoints:
+            (viaIntermediate != null && viaIntermediate.isNotEmpty)
+                ? viaIntermediate
+                : null,
         withTraffic: true,
         region: 'do',
       );
@@ -1014,10 +1112,66 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     } catch (_) {}
   }
 
+  /// Tras un fallo (p. ej. permiso al limpiar `usuarios/`), el viaje ya pudo quedar `cancelado` en `viajes/`.
+  Future<bool> _viajeQuedoCanceladoEnServidor(String viajeId) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> ds = await FirebaseFirestore
+          .instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get();
+      if (!ds.exists) return true;
+      final String est =
+          EstadosViaje.normalizar((ds.data()?['estado'] ?? '').toString());
+      return est == EstadosViaje.cancelado || est == EstadosViaje.rechazado;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void _limpiarCacheCierreViaje() {
     _lastNonEmptyViajeActivoId = '';
     _viajeCierreDocSnap = null;
     _viajeCierreFetchKey = null;
+  }
+
+  Widget _bodySinViajeActivo({required String mensaje}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              mensaje,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => intentarSalirAlGate(context),
+                icon: const Icon(Icons.home_rounded, size: 20),
+                label: const Text('Volver al inicio'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  textStyle: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  elevation: 0,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _abrirFlujoPostViaje(
@@ -1053,7 +1207,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   /// Transferencia: mostrar cuenta del taxista en cuanto hay conductor y el viaje no terminó (antes solo a bordo / en ruta).
   bool _mostrarDatosTransferenciaCliente(Viaje v, String estadoBase) {
-    if (!v.metodoPago.toLowerCase().contains('transfer')) return false;
+    if (!MetodoPagoViaje.esTransferencia(v.metodoPago)) return false;
     if (v.uidTaxista.isEmpty) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
     return true;
@@ -1063,7 +1217,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (_cancelandoViajeCliente) return;
     final String uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     if (uid.isEmpty) return;
-    if (mounted) setState(() => _cancelandoViajeCliente = true);
 
     final TextEditingController motivoCtrl = TextEditingController();
     String? errorMotivo;
@@ -1198,9 +1351,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }
 
     if (motivo == null || motivo.isEmpty) {
-      if (mounted) setState(() => _cancelandoViajeCliente = false);
       return;
     }
+
+    if (mounted) setState(() => _cancelandoViajeCliente = true);
 
     try {
       await _runWithBlocking(() async {
@@ -1243,11 +1397,26 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         await _limpiarActivoDelUsuario(uid);
       });
     } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied' &&
+          await _viajeQuedoCanceladoEnServidor(v.id)) {
+        if (!mounted) return;
+        setState(() => _cancelandoViajeCliente = false);
+        Navigator.of(context).pushNamedAndRemoveUntil(
+            kRutaGateAuth, (r) => false);
+        return;
+      }
       if (!mounted) return;
+      final String detalle = errorAuthEs(e);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
-          SnackBar(content: Text('No se pudo cancelar: ${e.code}')),
+          SnackBar(
+            content: Text(
+              e.code == 'permission-denied'
+                  ? 'No se pudo cancelar: permiso denegado. Si acabas de entrar, vuelve a iniciar sesión o prueba otra red.'
+                  : 'No se pudo cancelar: $detalle',
+            ),
+          ),
         );
       if (mounted) setState(() => _cancelandoViajeCliente = false);
       return;
@@ -1261,6 +1430,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       if (mounted) setState(() => _cancelandoViajeCliente = false);
       return;
     } catch (e) {
+      final String lower = e.toString().toLowerCase();
+      if ((lower.contains('permission-denied') ||
+              lower.contains('permission_denied')) &&
+          await _viajeQuedoCanceladoEnServidor(v.id)) {
+        if (!mounted) return;
+        setState(() => _cancelandoViajeCliente = false);
+        Navigator.of(context).pushNamedAndRemoveUntil(
+            kRutaGateAuth, (r) => false);
+        return;
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -1273,7 +1452,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
     if (!mounted) return;
     setState(() => _cancelandoViajeCliente = false);
-    Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
+    Navigator.of(context).pushNamedAndRemoveUntil(kRutaGateAuth, (r) => false);
   }
 
   // Watch viaje doc
@@ -1411,22 +1590,51 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   Future<void> _runWithBlocking(Future<void> Function() task) async {
     if (!mounted) return;
-    final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
     final barrier = Theme.of(context).brightness == Brightness.dark
         ? Colors.black54
         : Colors.black26;
+    BuildContext? loaderContext;
     showDialog<void>(
       context: context,
+      useRootNavigator: true,
       barrierDismissible: false,
       barrierColor: barrier,
-      builder: (BuildContext dialogContext) => PopScope(
-        canPop: false,
-        child: Center(
-          child: CircularProgressIndicator(
-            color: Theme.of(dialogContext).colorScheme.primary,
+      builder: (BuildContext dialogContext) {
+        loaderContext = dialogContext;
+        final ColorScheme cs = Theme.of(dialogContext).colorScheme;
+        return PopScope(
+          canPop: false,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 36),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      minHeight: 4,
+                      color: cs.primary,
+                      backgroundColor:
+                          cs.surfaceContainerHighest.withValues(alpha: 0.6),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Cancelando viaje…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: cs.onSurface.withValues(alpha: 0.88),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
     try {
       await task().timeout(
@@ -1436,8 +1644,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         ),
       );
     } finally {
-      if (rootNav.mounted && rootNav.canPop()) {
-        rootNav.pop();
+      final BuildContext? lc = loaderContext;
+      if (lc != null && lc.mounted) {
+        try {
+          final NavigatorState nav = Navigator.of(lc, rootNavigator: true);
+          if (nav.mounted) {
+            nav.pop();
+          }
+        } catch (_) {
+          if (mounted) {
+            try {
+              Navigator.of(context, rootNavigator: true).maybePop();
+            } catch (_) {}
+          }
+        }
       }
     }
   }
@@ -2498,19 +2718,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   Widget build(BuildContext context) {
     final User? u = FirebaseAuth.instance.currentUser;
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: RaiAppBar(
-        title: 'Mi viaje en curso',
-        backWhenCanPop: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white70),
-            onPressed: () => setState(() {}),
-          ),
-        ],
-      ),
-      body: (u == null)
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: RaiAppBar(
+          title: 'Mi viaje en curso',
+          backWhenCanPop: true,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh, color: Colors.white70),
+              onPressed: () => setState(() {}),
+            ),
+          ],
+        ),
+        body: (u == null)
           ? const Center(
               child: Text('Inicia sesión para ver tu viaje.',
                   style: TextStyle(color: Colors.white70)),
@@ -2523,16 +2744,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   .distinct(),
               builder: (context, userSnap) {
                 if (userSnap.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                      child:
-                          CircularProgressIndicator(color: Colors.greenAccent));
+                  return _cargaLinealOscura();
                 }
                 if (userSnap.hasError ||
                     !userSnap.hasData ||
                     !userSnap.data!.exists) {
-                  return const Center(
-                      child: Text('No tienes viaje activo.',
-                          style: TextStyle(color: Colors.white70)));
+                  return _bodySinViajeActivo(
+                      mensaje: 'No tienes viaje activo.');
                 }
 
                 final Map<String, dynamic> userData =
@@ -2585,26 +2803,19 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       if (done || canc) {
                         _programarFlujoPostViaje(
                             viajeId: docSnap.id, uid: u.uid);
-                        return const Center(
-                          child: CircularProgressIndicator(
-                              color: Colors.greenAccent),
-                        );
+                        return _cargaLinealOscura();
                       }
                     }
 
                     if (docSnap == null ||
                         !docSnap.exists ||
                         docSnap.id != lost) {
-                      return const Center(
-                        child: CircularProgressIndicator(
-                            color: Colors.greenAccent),
-                      );
+                      return _cargaLinealOscura();
                     }
                   }
 
-                  return const Center(
-                    child: Text('No tienes viaje activo en este momento.',
-                        style: TextStyle(color: Colors.white70)),
+                  return _bodySinViajeActivo(
+                    mensaje: 'No tienes viaje activo en este momento.',
                   );
                 }
 
@@ -2629,9 +2840,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           _viajeDocMapUiSig(a) == _viajeDocMapUiSig(b)),
                   builder: (context, vSnap) {
                     if (vSnap.connectionState == ConnectionState.waiting) {
-                      return const Center(
-                          child: CircularProgressIndicator(
-                              color: Colors.greenAccent));
+                      return _cargaLinealOscura();
                     }
 
                     if (vSnap.hasError ||
@@ -2640,9 +2849,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
                         await _limpiarActivoDelUsuario(u.uid);
                       });
-                      return const Center(
-                        child: Text('No tienes viaje activo en este momento.',
-                            style: TextStyle(color: Colors.white70)),
+                      return _bodySinViajeActivo(
+                        mensaje:
+                            'No tienes viaje activo en este momento.',
                       );
                     }
 
@@ -2653,16 +2862,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     );
 
                     final String uidClienteViaje =
-                        (data['uidCliente'] ?? data['clienteId'] ?? '')
-                            .toString();
+                        ViajesRepo.uidClienteDesdeDocViaje(data);
                     if (uidClienteViaje.isNotEmpty &&
                         uidClienteViaje != u.uid) {
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
                         await _limpiarActivoDelUsuario(u.uid);
                       });
-                      return const Center(
-                        child: Text('No tienes viaje activo en este momento.',
-                            style: TextStyle(color: Colors.white70)),
+                      return _bodySinViajeActivo(
+                        mensaje:
+                            'No tienes viaje activo en este momento.',
                       );
                     }
 
@@ -2681,10 +2889,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     if (EstadosViaje.esTerminal(estadoBase)) {
                       _stopClienteUbicacionEnViaje();
                       _programarFlujoPostViaje(viajeId: v.id, uid: u.uid);
-                      return const Center(
-                        child: CircularProgressIndicator(
-                            color: Colors.greenAccent),
-                      );
+                      return _cargaLinealOscura();
                     }
 
                     // Ubicación del cliente en Firestore en tiempo real durante el viaje activo.
@@ -2819,7 +3024,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         '${v.id}|${EstadosViaje.normalizar(v.estado)}|'
                         '${v.latCliente},${v.lonCliente}|'
                         '${v.latDestino},${v.lonDestino}|'
-                        '${v.latTaxista},${v.lonTaxista}';
+                        '${v.latTaxista},${v.lonTaxista}|'
+                        '${_firmaWaypointsViaje(v)}';
                     if (routeKey != _lastRouteKey) {
                       _lastRouteKey = routeKey;
                       _scheduleDrawRoute(v);
@@ -2828,7 +3034,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     final String boundsKey =
                         '${v.id}|${v.latCliente},${v.lonCliente}|'
                         '${v.latDestino},${v.lonDestino}|'
-                        '${v.latTaxista},${v.lonTaxista}';
+                        '${v.latTaxista},${v.lonTaxista}|'
+                        '${_firmaWaypointsViaje(v)}';
                     if (_map != null && boundsKey != _lastBoundsKey) {
                       _lastBoundsKey = boundsKey;
                       WidgetsBinding.instance
@@ -2929,18 +3136,26 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                 return;
                               }
                               _mapGestureEndDebounce?.cancel();
-                              _expandirSheetTrasMapaInteract();
+                              // Motor: no reexpandir la tarjeta al parar la cámara; el usuario
+                              // baja el panel a mano para ver el mapa y no debe "subir sola".
+                              if (!v.esMotor) {
+                                _expandirSheetTrasMapaInteract();
+                              }
                             },
                             onTap: (_) {
                               if (_programmaticCameraDepth > 0) return;
                               _colapsarSheetPorTapMapa();
                               _mapGestureEndDebounce?.cancel();
-                              _mapGestureEndDebounce = Timer(
-                                const Duration(milliseconds: 420),
-                                () {
-                                  if (mounted) _expandirSheetTrasMapaInteract();
-                                },
-                              );
+                              if (!v.esMotor) {
+                                _mapGestureEndDebounce = Timer(
+                                  const Duration(milliseconds: 420),
+                                  () {
+                                    if (mounted) {
+                                      _expandirSheetTrasMapaInteract();
+                                    }
+                                  },
+                                );
+                              }
                             },
                             myLocationEnabled: _myLoc,
                             myLocationButtonEnabled: false,
@@ -3262,13 +3477,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           initialChildSize: _kSheetInitialMitad,
                           minChildSize: _kSheetMinPickupNav,
                           maxChildSize: 0.9,
-                          snap: true,
-                          snapSizes: const [
-                            _kSheetMinPickupNav,
-                            0.35,
-                            _kSheetInitialMitad,
-                            0.9,
-                          ],
+                          // En motor: arrastre continuo; en otros servicios se mantienen anclajes.
+                          snap: !v.esMotor,
+                          snapSizes: v.esMotor
+                              ? null
+                              : const [
+                                  _kSheetMinPickupNav,
+                                  0.35,
+                                  _kSheetInitialMitad,
+                                  0.9,
+                                ],
                           builder: (context, scrollController) {
                             return Container(
                               decoration: BoxDecoration(
@@ -3285,6 +3503,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                               ),
                               child: ListView(
                                 controller: scrollController,
+                                // Con poco contenido, sin esto el panel a veces no reacciona al
+                                // arrastre vertical (comportamiento de DraggableScrollableSheet).
+                                physics: v.esMotor
+                                    ? const AlwaysScrollableScrollPhysics(
+                                        parent: ClampingScrollPhysics(),
+                                      )
+                                    : null,
                                 padding: EdgeInsets.fromLTRB(
                                   16,
                                   8,
@@ -3809,18 +4034,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                           onPressed: _cancelandoViajeCliente
                                               ? null
                                               : () => _deleteOrCancelEstricto(v),
-                                          icon: _cancelandoViajeCliente
-                                              ? const SizedBox(
-                                                  width: 18,
-                                                  height: 18,
-                                                  child: CircularProgressIndicator(
-                                                    strokeWidth: 2,
-                                                  ),
-                                                )
-                                              : const Icon(
-                                                  Icons.cancel_outlined,
-                                                  size: 20,
-                                                ),
+                                          icon: const Icon(
+                                            Icons.cancel_outlined,
+                                            size: 20,
+                                          ),
                                           label: Text(
                                             _cancelandoViajeCliente
                                                 ? 'Cancelando...'
@@ -3895,6 +4112,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 );
               },
             ),
+      ),
     );
   }
 }

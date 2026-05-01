@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/turismo_selector_screen.dart';
 import 'package:flygo_nuevo/pantallas/cliente/turismo_selector.dart';
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class TurismoBienvenida extends StatelessWidget {
@@ -27,13 +28,14 @@ class TurismoBienvenida extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: const RaiAppBar(
-        title: '🏝️ Turismo RAI',
-        backWhenCanPop: true,
-      ),
-      body: SafeArea(
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: const RaiAppBar(
+          title: '🏝️ Turismo RAI',
+          backWhenCanPop: true,
+        ),
+        body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -103,6 +105,7 @@ class TurismoBienvenida extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

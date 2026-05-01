@@ -19,7 +19,7 @@ class TerminosCondicionesPage extends StatelessWidget {
         children: const [
           _P('Última actualización: 2025-09-14'),
           _H('1. Aceptación'),
-          _P('Al usar FlyGo aceptas estas condiciones. Ajusta este texto con tus reglas reales.'),
+          _P('Al usar RAI DRIVER aceptas estas condiciones. Ajusta este texto con tus reglas reales.'),
           _H('2. Uso permitido'),
           _P('Describe qué está permitido y qué no, pagos, cancelaciones, seguridad, etc.'),
           _H('3. Responsabilidades'),

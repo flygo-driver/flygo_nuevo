@@ -6,6 +6,7 @@
 // que usan `ViajesRepo`/`PagoData` directamente.
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../config/plataforma_economia.dart';
 import '../../data/pago_data.dart';
 import '../../data/viaje_data.dart';
 import '../../modelo/viaje.dart';
@@ -33,10 +34,15 @@ class ViajeEnCursoTaxistaLogic {
     final total = (data['precio'] ?? viaje.precio) as num;
     final comision = ((data['comision'] ?? 0) as num) > 0
         ? (data['comision'] as num).toDouble()
-        : double.parse((total * 0.20).toStringAsFixed(2));
+        : double.parse(
+            (total * PlataformaEconomia.factorComision).toStringAsFixed(2),
+          );
     final driverAmount = ((data['gananciaTaxista'] ?? 0) as num) > 0
         ? (data['gananciaTaxista'] as num).toDouble()
-        : double.parse((total * 0.80).toStringAsFixed(2));
+        : double.parse(
+            (total * (1.0 - PlataformaEconomia.factorComision))
+                .toStringAsFixed(2),
+          );
 
     if (metodo == 'Tarjeta') {
       if (paymentStatus != 'captured') {

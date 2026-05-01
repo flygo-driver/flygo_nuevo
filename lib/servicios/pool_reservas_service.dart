@@ -1,5 +1,6 @@
 // lib/servicios/pool_reservas_service.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
 class PoolReservasService {
   static final _pools = FirebaseFirestore.instance.collection('viajes_pool');
@@ -30,7 +31,7 @@ class PoolReservasService {
 
       final reservasRef = poolRef.collection('reservas').doc();
 
-      final estado = (metodoPago.toLowerCase() == 'efectivo')
+      final estado = MetodoPagoViaje.esEfectivo(metodoPago)
           ? 'reservado_efectivo' // paga al abordar
           : 'pendiente_pago'; // subirá comprobante y validamos
 
@@ -48,7 +49,7 @@ class PoolReservasService {
       // Actualiza ocupación y monto reservado (solo transferencia suma depósito como "reservado")
       tx.update(poolRef, {
         'asientosReservados': FieldValue.increment(seats),
-        if (metodoPago.toLowerCase() == 'transferencia')
+        if (MetodoPagoViaje.esTransferencia(metodoPago))
           'montoReservado': FieldValue.increment(deposit),
       });
 

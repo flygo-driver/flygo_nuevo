@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class TurismoSelector extends StatelessWidget {
@@ -42,13 +43,14 @@ class TurismoSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: const RaiAppBar(
-        title: '🏝️ Turismo',
-        backWhenCanPop: true,
-      ),
-      body: SafeArea(
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: const RaiAppBar(
+          title: '🏝️ Turismo',
+          backWhenCanPop: true,
+        ),
+        body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -120,6 +122,7 @@ class TurismoSelector extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

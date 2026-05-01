@@ -14,6 +14,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
@@ -1176,14 +1177,15 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
       fontWeight: FontWeight.w600,
     );
 
-    return Scaffold(
-      backgroundColor: scheme.surface,
-      appBar: const RaiAppBar(
-        title: '',
-        titleSemanticsLabel: 'Solicitar viaje en motor',
-        backWhenCanPop: true,
-      ),
-      body: Stack(
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: scheme.surface,
+        appBar: const RaiAppBar(
+          title: '',
+          titleSemanticsLabel: 'Solicitar viaje en motor',
+          backWhenCanPop: true,
+        ),
+        body: Stack(
         children: [
           // ===== MAPA =====
           Positioned.fill(
@@ -1556,6 +1558,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
             },
           ),
         ],
+      ),
       ),
     );
   }

@@ -12,6 +12,7 @@ import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
 /// Modo viaje Bola: navegación y pasos a pantalla completa (cliente o taxista asignado).
 class BolaPuebloViajeActivoPage extends StatelessWidget {
@@ -568,7 +569,8 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                 label:
                                                     const Text('Efectivo'),
                                                 selected:
-                                                    metodoPago == 'efectivo',
+                                                    MetodoPagoViaje.esEfectivo(
+                                                        metodoPago),
                                                 onSelected: (_) async {
                                                   try {
                                                     await BolaPuebloRepo
@@ -591,8 +593,10 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                               ChoiceChip(
                                                 label: const Text(
                                                     'Transferencia'),
-                                                selected: metodoPago ==
-                                                    'transferencia',
+                                                selected:
+                                                    MetodoPagoViaje
+                                                        .esTransferencia(
+                                                            metodoPago),
                                                 onSelected: (_) async {
                                                   try {
                                                     await BolaPuebloRepo
@@ -634,8 +638,9 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                   CrossAxisAlignment.start,
                                               children: [
                                                 Text(
-                                                  metodoPago ==
-                                                          'transferencia'
+                                                  MetodoPagoViaje
+                                                          .esTransferencia(
+                                                              metodoPago)
                                                       ? 'Transferencia al conductor'
                                                       : 'Pago en efectivo',
                                                   style: TextStyle(
@@ -647,8 +652,9 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                 ),
                                                 const SizedBox(height: 6),
                                                 Text(
-                                                  metodoPago ==
-                                                          'transferencia'
+                                                  MetodoPagoViaje
+                                                          .esTransferencia(
+                                                              metodoPago)
                                                       ? 'Al cerrar el viaje, enviás el dinero '
                                                           'del acuerdo a la cuenta que el conductor tiene '
                                                           'registrada en RAI (abajo). La comisión RAI se '
@@ -668,8 +674,8 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                               ],
                                             ),
                                           ),
-                                          if (metodoPago ==
-                                                  'transferencia' &&
+                                          if (MetodoPagoViaje.esTransferencia(
+                                                  metodoPago) &&
                                               soyTaxistaAsignado) ...[
                                             const SizedBox(height: 10),
                                             Builder(
@@ -741,8 +747,8 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                               },
                                             ),
                                           ],
-                                          if (metodoPago ==
-                                                  'transferencia' &&
+                                          if (MetodoPagoViaje.esTransferencia(
+                                                  metodoPago) &&
                                               soyClienteAsignado &&
                                               uidTaxista.isNotEmpty)
                                             StreamBuilder<

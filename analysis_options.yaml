@@ -1,4 +1,4 @@
-# Reglas del analizador para FlyGo (producción)
+# Reglas del analizador para RAI Driver (producción)
 # Mantiene correctitud y baja ruido visual.
 
 include: package:flutter_lints/flutter.yaml

@@ -10,6 +10,7 @@ import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
 class ProgramarViajeLogic {
   static Future<void> programar({
@@ -21,8 +22,7 @@ class ProgramarViajeLogic {
   }) async {
     await RolesService.ensureUserDoc(clienteId, defaultRol: Roles.cliente);
 
-    final metodo = viaje.metodoPago.toLowerCase().trim();
-    final estadoInicial = (metodo == 'tarjeta')
+    final estadoInicial = MetodoPagoViaje.esTarjeta(viaje.metodoPago)
         ? EstadosViaje.pendientePago
         : EstadosViaje.pendiente;
 

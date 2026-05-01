@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
+import '../../utils/navegacion_salida_app.dart';
 import '../../widgets/rai_app_bar.dart';
 import '../../modelo/viaje.dart';
 import '../../data/viaje_data.dart';
@@ -16,12 +17,13 @@ class HistorialViajesCliente extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
     final formato = DateFormat('dd/MM/yyyy - HH:mm');
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: const RaiAppBar(
-        title: 'Historial de viajes',
-        backWhenCanPop: true,
-      ),
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: const RaiAppBar(
+          title: 'Historial de viajes',
+          backWhenCanPop: true,
+        ),
       body: user == null
           ? const Center(
               child: Text(
@@ -123,6 +125,7 @@ class HistorialViajesCliente extends StatelessWidget {
                 );
               },
             ),
+      ),
     );
   }
 }

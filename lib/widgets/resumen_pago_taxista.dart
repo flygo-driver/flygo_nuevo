@@ -39,7 +39,7 @@ class ResumenPagoTaxista extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             _row('💰 Precio Total del Viaje:', FormatosMoneda.rd(precioTotal)),
-            _row('🧾 Comisión de FlyGo (20%):', FormatosMoneda.rd(comision)),
+            _row('🧾 Comisión RAI (20%):', FormatosMoneda.rd(comision)),
             _row('🚖 Ganancia del Taxista:', FormatosMoneda.rd(ganancia)),
             const SizedBox(height: 12),
             const Divider(color: Colors.white12),
@@ -120,7 +120,7 @@ class _PendienteDeComision extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Comisión pendiente con FlyGo: ${FormatosMoneda.rd(monto)}',
+              'Comisión pendiente con RAI: ${FormatosMoneda.rd(monto)}',
               style: const TextStyle(
                   color: Colors.white, fontWeight: FontWeight.w700),
             ),

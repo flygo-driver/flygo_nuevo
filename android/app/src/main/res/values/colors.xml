@@ -23,7 +23,7 @@
     <!-- Splash/background por si se usa en estilos/manifest -->
     <color name="launch_background">#FF000000</color>
 
-    <!-- Paleta FlyGo opcional -->
+    <!-- Paleta RAI (opcional; nombres legacy flygo_* por compat. si algún recurso los referencia) -->
     <color name="flygo_green">#00C853</color>
     <color name="flygo_dark">#101010</color>
 </resources>

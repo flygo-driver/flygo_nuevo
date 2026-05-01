@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart'
     show GeoPoint, Timestamp, FieldValue;
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
 /// Modelo de Viaje usado en la app (cliente y taxista).
 class Viaje {
@@ -536,7 +537,7 @@ class Viaje {
         : TripPublishWindows.startWindowAtForScheduledPickup(fechaHora, now);
 
     // Estado inicial según método de pago
-    final String estadoInicial = (metodoPago.toLowerCase().trim() == 'tarjeta')
+    final String estadoInicial = MetodoPagoViaje.esTarjeta(metodoPago)
         ? EstadosViaje.pendientePago
         : EstadosViaje.pendiente;
 

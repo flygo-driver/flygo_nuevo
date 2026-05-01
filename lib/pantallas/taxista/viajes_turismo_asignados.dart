@@ -35,10 +35,10 @@ class ViajesTurismoAsignadosTaxista extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: EstilosRai.fondoOscuro,
       // drawer: const TaxistaDrawer(),
       appBar: AppBar(
-        backgroundColor: EstilosFlyGo.fondoOscuro,
+        backgroundColor: EstilosRai.fondoOscuro,
         iconTheme: const IconThemeData(color: Colors.white),
         title: const Text(
           'Mis viajes turismo',
@@ -68,7 +68,7 @@ class ViajesTurismoAsignadosTaxista extends StatelessWidget {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(
                     child: CircularProgressIndicator(
-                        color: EstilosFlyGo.textoVerde),
+                        color: EstilosRai.textoVerde),
                   );
                 }
 

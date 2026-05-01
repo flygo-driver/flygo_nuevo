@@ -75,7 +75,7 @@ class DirectionsService {
       final resp = await http.get(uri);
       if (resp.statusCode != 200) {
         if (kDebugMode) {
-          print('🔴 Directions HTTP ${resp.statusCode}: ${resp.body}');
+          debugPrint('Directions HTTP ${resp.statusCode}: ${resp.body}');
         }
         return null;
       }
@@ -84,7 +84,7 @@ class DirectionsService {
       final status = (data['status'] as String? ?? '');
       if (status != 'OK') {
         if (kDebugMode) {
-          print('🔴 Directions status=$status, error=${data['error_message']}');
+          debugPrint('Directions status=$status, error=${data['error_message']}');
         }
         return null;
       }
@@ -145,8 +145,8 @@ class DirectionsService {
       );
     } catch (e, st) {
       if (kDebugMode) {
-        print('🔴 Directions exception: $e');
-        print(st);
+        debugPrint('Directions exception: $e');
+        debugPrint('$st');
       }
       return null;
     }

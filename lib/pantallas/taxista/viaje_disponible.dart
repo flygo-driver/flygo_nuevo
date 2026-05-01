@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print, prefer_const_constructors, prefer_const_literals_to_create_immutables
 
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
@@ -710,7 +711,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         telefono: '',
         placa: '',
       );
-      print('🔴 RESULTADO claimTripWithReason: $res');
+      if (kDebugMode) debugPrint('[claimTripWithReason] $res');
 
       if (!mounted) return;
 

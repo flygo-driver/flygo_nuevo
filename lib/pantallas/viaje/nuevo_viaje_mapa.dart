@@ -434,9 +434,9 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: EstilosRai.fondoOscuro,
       appBar: AppBar(
-        backgroundColor: EstilosFlyGo.fondoOscuro,
+        backgroundColor: EstilosRai.fondoOscuro,
         title: const Text('Nuevo Viaje', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [

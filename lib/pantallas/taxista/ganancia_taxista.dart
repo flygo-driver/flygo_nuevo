@@ -381,7 +381,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                         height: 28,
                       ),
                       Text(
-                        'Comisión acumulada (FlyGo):',
+                        'Comisión acumulada (RAI):',
                         style: TextStyle(
                           fontSize: 16,
                           color: cs.onSurfaceVariant,

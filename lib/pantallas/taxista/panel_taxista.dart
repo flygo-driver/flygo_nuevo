@@ -26,7 +26,7 @@ class PanelTaxista extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.greenAccent,
-        title: const Text('FlyGo — Taxista'),
+        title: const Text('RAI Driver — Taxista'),
         actions: [
           IconButton(
             tooltip: 'Mi perfil (cambiar foto)',

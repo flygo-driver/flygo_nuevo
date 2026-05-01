@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_crear_publicacion_flow.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 export 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
@@ -1957,20 +1958,64 @@ class BolaTaxistaAcordadaFlow extends StatefulWidget {
       BolaTaxistaAcordadaFlowState();
 }
 
-class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow> {
+class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
+    with WidgetsBindingObserver {
   late bool _pasoNavegacionListo;
   late bool _pasoAbordoListo;
   bool _busyAbordo = false;
+  DateTime? _lastResumeSnackAt;
+
+  static String _prefNavPickupBola(String docId) => 'bp_nav_pickup_$docId';
+
+  Future<void> _persistNavPickupBola(bool value) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      if (value) {
+        await p.setBool(_prefNavPickupBola(widget.docId), true);
+      } else {
+        await p.remove(_prefNavPickupBola(widget.docId));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _restoreNavPickupBola({bool forceSnack = false}) async {
+    if (!mounted || widget.pickupConfirmadoServidor) return;
+    if (_pasoNavegacionListo) return;
+    bool saved = false;
+    try {
+      final p = await SharedPreferences.getInstance();
+      saved = p.getBool(_prefNavPickupBola(widget.docId)) ?? false;
+    } catch (_) {
+      return;
+    }
+    if (!mounted || !saved) return;
+    setState(() => _pasoNavegacionListo = true);
+    final now = DateTime.now();
+    if (!forceSnack &&
+        _lastResumeSnackAt != null &&
+        now.difference(_lastResumeSnackAt!) < const Duration(seconds: 6)) {
+      return;
+    }
+    _lastResumeSnackAt = now;
+    ScaffoldMessenger.of(context).showSnackBar(
+      BolaPuebloTheme.snack(
+        context,
+        'Volviste a RAI Driver. Continúa con "Subió el cliente" y luego el código.',
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (widget.pickupConfirmadoServidor) {
       _pasoNavegacionListo = true;
       _pasoAbordoListo = true;
     } else {
       _pasoNavegacionListo = false;
       _pasoAbordoListo = false;
+      unawaited(_restoreNavPickupBola());
     }
   }
 
@@ -1978,11 +2023,85 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow> {
   void didUpdateWidget(covariant BolaTaxistaAcordadaFlow oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.pickupConfirmadoServidor && !_pasoAbordoListo) {
+      unawaited(_persistNavPickupBola(false));
       setState(() {
         _pasoNavegacionListo = true;
         _pasoAbordoListo = true;
       });
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_restoreNavPickupBola(forceSnack: true));
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Widget _resumenPasoProfesional(BolaPuebloColors c) {
+    final String titulo;
+    final String detalle;
+    final IconData icono;
+    final Color color;
+    if (!_pasoNavegacionListo) {
+      titulo = 'Paso actual: encuentro con el pasajero';
+      detalle = 'Abre Waze/Maps y al llegar marca "Llegué al punto".';
+      icono = Icons.navigation_rounded;
+      color = BolaPuebloTheme.accent;
+    } else if (!_pasoAbordoListo) {
+      titulo = 'Paso actual: confirmar abordo';
+      detalle = 'Cuando suba el pasajero, toca "Subió el cliente".';
+      icono = Icons.person_add_alt_1_rounded;
+      color = Colors.tealAccent.shade400;
+    } else {
+      titulo = 'Paso actual: validar código de salida';
+      detalle = 'Pide el PIN al pasajero y comienza la ruta al destino.';
+      icono = Icons.pin_rounded;
+      color = Colors.amberAccent;
+    }
+    return Container(
+      key: ValueKey<String>('bp_step_$titulo'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(icono, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titulo,
+                  style: TextStyle(
+                    color: c.onSurface,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detalle,
+                  style: TextStyle(color: c.onMuted, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -2018,6 +2137,21 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow> {
                 style: TextStyle(
                     color: c.onMuted, fontSize: 12.5, height: 1.35),
               ),
+              const SizedBox(height: 12),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 260),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SizeTransition(
+                    sizeFactor: animation,
+                    axisAlignment: -1,
+                    child: child,
+                  ),
+                ),
+                child: _resumenPasoProfesional(c),
+              ),
               const SizedBox(height: 18),
               if (!_pasoNavegacionListo) ...[
                 // — 1 Encuentro —
@@ -2044,7 +2178,10 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow> {
                       recogidaLon: widget.origenLon,
                     );
                     if (!mounted) return;
-                    if (ok) setState(() => _pasoNavegacionListo = true);
+                    if (ok) {
+                      unawaited(_persistNavPickupBola(true));
+                      setState(() => _pasoNavegacionListo = true);
+                    }
                   },
                   icon: const Icon(Icons.navigation_rounded, size: 22),
                   label: const Text('Ir a recoger al cliente'),
@@ -2053,6 +2190,7 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow> {
                 OutlinedButton.icon(
                   style: BolaPuebloUi.outlineAccent(context),
                   onPressed: () {
+                    unawaited(_persistNavPickupBola(true));
                     setState(() => _pasoNavegacionListo = true);
                     ScaffoldMessenger.of(context).showSnackBar(
                       BolaPuebloTheme.snack(
@@ -2117,6 +2255,7 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow> {
                               uidTaxista: widget.user.uid,
                             );
                             if (!mounted || !context.mounted) return;
+                            unawaited(_persistNavPickupBola(false));
                             setState(() {
                               _pasoAbordoListo = true;
                               _busyAbordo = false;

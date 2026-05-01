@@ -77,7 +77,7 @@ class AdminDrawer extends StatelessWidget {
               leading: Icon(Icons.admin_panel_settings, color: iconNeutral),
               title: Text('Panel Administrativo', style: titleStyle),
               subtitle: Text(
-                'FlyGo - Sistema de Gestión',
+                'RAI Driver — Administración',
                 style: bodyStyle.copyWith(fontSize: 13),
               ),
             ),

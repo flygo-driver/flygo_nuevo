@@ -1,4 +1,6 @@
-storePassword=TU_STORE_PASSWORD
-keyPassword=TU_KEY_PASSWORD
-keyAlias=flygo
-storeFile=flygo_keystore.jks
+# Copia este archivo a android/key.properties y rellena (no subas key.properties al repo).
+# storeFile puede ser ruta relativa a la carpeta android/ (p. ej. upload-keystore.jks).
+storePassword=
+keyPassword=
+keyAlias=
+storeFile=

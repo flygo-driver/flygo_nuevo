@@ -60,21 +60,21 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: EstilosRai.fondoOscuro,
       appBar: AppBar(
-        backgroundColor: EstilosFlyGo.fondoOscuro,
-        foregroundColor: EstilosFlyGo.textoBlanco,
+        backgroundColor: EstilosRai.fondoOscuro,
+        foregroundColor: EstilosRai.textoBlanco,
         title: const Text(
           "Historial de Viajes",
           style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
-        iconTheme: const IconThemeData(color: EstilosFlyGo.textoBlanco),
+        iconTheme: const IconThemeData(color: EstilosRai.textoBlanco),
         actions: const [SaldoGananciasChip()],
       ),
       body: cargando
           ? const Center(
-              child: CircularProgressIndicator(color: EstilosFlyGo.textoVerde),
+              child: CircularProgressIndicator(color: EstilosRai.textoVerde),
             )
           : (historial.isEmpty
               ? const Center(
@@ -85,8 +85,8 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                 )
               : RefreshIndicator(
                   onRefresh: _cargarHistorial,
-                  color: EstilosFlyGo.textoVerde,
-                  backgroundColor: EstilosFlyGo.fondoOscuro,
+                  color: EstilosRai.textoVerde,
+                  backgroundColor: EstilosRai.fondoOscuro,
                   child: ListView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
                     itemCount: historial.length,

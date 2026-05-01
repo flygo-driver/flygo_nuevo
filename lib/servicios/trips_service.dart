@@ -12,6 +12,10 @@ import '../modelo/viaje.dart';
 class TripsService {
   TripsService._();
 
+  static void _log(String message) {
+    if (kDebugMode) debugPrint(message);
+  }
+
   static final _db = FirebaseFirestore.instance;
   static final _auth = FirebaseAuth.instance;
 
@@ -37,11 +41,11 @@ class TripsService {
       if (idToken != null) 'Authorization': 'Bearer $idToken',
     };
 
-    debugPrint('[CF HTTP] POST $url payload=$payload');
+    _log('[CF HTTP] POST $url payload=$payload');
     final res = await http.post(url, headers: headers, body: body);
 
     if (res.statusCode != 200) {
-      debugPrint('[CF HTTP] $name -> ${res.statusCode} ${res.body}');
+      _log('[CF HTTP] $name -> ${res.statusCode} ${res.body}');
       throw FirebaseException(
         plugin: 'cloud_functions_http',
         code: 'http-${res.statusCode}',
@@ -78,7 +82,7 @@ class TripsService {
     data['nombreTaxista'] = '';
 
     final ref = await _db.collection('viajes').add(data);
-    debugPrint('[Viajes] creado ${ref.id}');
+    _log('[Viajes] creado ${ref.id}');
     return ref.id;
   }
 
@@ -89,7 +93,7 @@ class TripsService {
     try {
       final functions = cf.FirebaseFunctions.instanceFor(region: _region);
       final callable = functions.httpsCallable('issueBoardingPin');
-      debugPrint('[CF plugin] issueBoardingPin call tripId=$tripId');
+      _log('[CF plugin] issueBoardingPin call tripId=$tripId');
       final res = await callable.call(<String, dynamic>{
         'tripId': tripId,
         'ttlMinutes': ttlMinutes,
@@ -102,7 +106,7 @@ class TripsService {
       final DateTime? expires = DateTime.tryParse(expIso);
       return (pin: pin, expiresAt: expires);
     } catch (e) {
-      debugPrint('[CF plugin] issueBoardingPin FALLÓ -> $e');
+      _log('[CF plugin] issueBoardingPin FALLÓ -> $e');
       final data = await _callCallableHttp('issueBoardingPin', {
         'tripId': tripId,
         'ttlMinutes': ttlMinutes,
@@ -117,10 +121,10 @@ class TripsService {
     try {
       final functions = cf.FirebaseFunctions.instanceFor(region: _region);
       final callable = functions.httpsCallable('confirmBoarding');
-      debugPrint('[CF plugin] confirmBoarding call tripId=$tripId pin=$pin');
+      _log('[CF plugin] confirmBoarding call tripId=$tripId pin=$pin');
       await callable.call(<String, dynamic>{'tripId': tripId, 'pin': pin});
     } catch (e) {
-      debugPrint('[CF plugin] confirmBoarding FALLÓ -> $e');
+      _log('[CF plugin] confirmBoarding FALLÓ -> $e');
       await _callCallableHttp(
           'confirmBoarding', {'tripId': tripId, 'pin': pin});
     }

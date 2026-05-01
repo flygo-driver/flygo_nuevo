@@ -387,7 +387,7 @@ class _CompletarPerfilTaxistaState extends State<CompletarPerfilTaxista> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Perfil completado. Bienvenido a FlyGo Taxista!'),
+          content: Text('✅ Perfil completado. Bienvenido a RAI Driver (taxista).'),
           backgroundColor: Colors.green,
         ),
       );

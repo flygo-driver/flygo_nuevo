@@ -22,6 +22,7 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 
 // Tus servicios/componentes
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
@@ -42,6 +43,7 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 // ✅ IMPORTS PARA TURISMO
 import 'package:flygo_nuevo/widgets/turismo_destinos_sheet_host.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
 // ✅ NUEVO SERVICIO UNIFICADO DE TARIFAS
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
@@ -244,21 +246,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       default:
         return Colors.greenAccent;
     }
-  }
-
-  Future<void> _salirDeTurismoAInicioCliente() async {
-    final nav = Navigator.of(context);
-    if (nav.canPop()) {
-      nav.pop();
-      return;
-    }
-
-    final rootNav = Navigator.of(context, rootNavigator: true);
-    final didPopRoot = await rootNav.maybePop();
-    if (didPopRoot) return;
-
-    if (!mounted) return;
-    rootNav.pushNamedAndRemoveUntil('/auth_check', (route) => false);
   }
 
   @override
@@ -2352,26 +2339,25 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     final pRuta = _paletasOrigenDestino(isDark, tipoServicio);
     final bool uiRutaMockup = tipoServicio != 'turismo';
 
-    return Scaffold(
-      backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
-      appBar: RaiAppBar(
-        title: 'Programar Viaje',
-        backWhenCanPop: true,
-        leading: SafeArea(
-          bottom: false,
-          child: IconButton(
-            icon: Icon(
-              Icons.arrow_back_rounded,
-              color: isDark ? Colors.white : const Color(0xFF101828),
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
+        appBar: RaiAppBar(
+          title: 'Programar Viaje',
+          backWhenCanPop: true,
+          leading: SafeArea(
+            bottom: false,
+            child: IconButton(
+              icon: Icon(
+                Icons.arrow_back_rounded,
+                color: isDark ? Colors.white : const Color(0xFF101828),
+              ),
+              tooltip: 'Volver',
+              onPressed: () => intentarSalirAlGate(context),
             ),
-            tooltip: 'Cancelar',
-            onPressed: tipoServicio == 'turismo'
-                ? _salirDeTurismoAInicioCliente
-                : () => Navigator.of(context).maybePop(),
           ),
         ),
-      ),
-      body: Stack(
+        body: Stack(
         children: [
           Positioned.fill(
             child: AbsorbPointer(
@@ -3640,9 +3626,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                         ],
                                       ),
                                     ),
-                                    if (metodoPago
-                                        .toLowerCase()
-                                        .contains('transfer'))
+                                    if (MetodoPagoViaje.esTransferencia(
+                                        metodoPago))
                                       Padding(
                                         padding: const EdgeInsets.only(top: 8),
                                         child: Container(
@@ -3836,6 +3821,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             },
           ),
         ],
+      ),
       ),
     );
   }

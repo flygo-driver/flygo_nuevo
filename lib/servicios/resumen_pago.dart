@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 
 class ResumenPago extends StatefulWidget {
   final String viajeId;
@@ -32,8 +33,10 @@ class _ResumenPagoState extends State<ResumenPago> {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
     try {
-      final comision = widget.montoTotal * 0.20;
-      final ganancia = widget.montoTotal * 0.80;
+      final comision =
+          PlataformaEconomia.comisionRdDesdeTotal(widget.montoTotal);
+      final ganancia =
+          PlataformaEconomia.gananciaTaxistaRdDesdeTotal(widget.montoTotal);
 
       await FirebaseFirestore.instance
           .collection("viajes")
@@ -43,6 +46,7 @@ class _ResumenPagoState extends State<ResumenPago> {
         "metodoPago": metodoPago,
         "montoTotal": widget.montoTotal,
         "gananciaTaxista": ganancia,
+        // Campo histórico Firestore/reportes (`comisionFlygo`).
         "comisionFlyGo": comision,
         "pagoRegistradoPor": uid,
         "pagoRegistradoEn": FieldValue.serverTimestamp(),
@@ -65,8 +69,9 @@ class _ResumenPagoState extends State<ResumenPago> {
 
   @override
   Widget build(BuildContext context) {
-    final comision = widget.montoTotal * 0.20;
-    final ganancia = widget.montoTotal * 0.80;
+    final comision = PlataformaEconomia.comisionRdDesdeTotal(widget.montoTotal);
+    final ganancia =
+        PlataformaEconomia.gananciaTaxistaRdDesdeTotal(widget.montoTotal);
 
     return Scaffold(
       appBar: AppBar(
@@ -90,7 +95,7 @@ class _ResumenPagoState extends State<ResumenPago> {
             Text("Ganancia taxista: RD\$${ganancia.toStringAsFixed(2)}",
                 style:
                     const TextStyle(color: Colors.greenAccent, fontSize: 18)),
-            Text("Comisión FlyGo: RD\$${comision.toStringAsFixed(2)}",
+            Text("Comisión RAI: RD\$${comision.toStringAsFixed(2)}",
                 style: const TextStyle(color: Colors.redAccent, fontSize: 18)),
             const SizedBox(height: 20),
             const Text("Método de pago:",

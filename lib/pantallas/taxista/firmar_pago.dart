@@ -79,13 +79,13 @@ class _FirmarPagoState extends State<FirmarPago> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: EstilosRai.fondoOscuro,
       appBar: AppBar(
         title: const Text(
           "Firmar Recibo",
           style: TextStyle(color: Colors.white),
         ),
-        backgroundColor: EstilosFlyGo.fondoOscuro,
+        backgroundColor: EstilosRai.fondoOscuro,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: cargando

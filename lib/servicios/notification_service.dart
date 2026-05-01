@@ -26,8 +26,8 @@ class NotificationService {
 
   // 🔔 CANALES ANDROID ACTUALIZADOS (SIN RASTRO DE FLYGO)
   static const String _channelId = 'rai_driver_offers_v1'; // ✅ NUEVO ID
-  static const String _channelName = 'Viajes disponibles'; // ✅ SIN FlyGo
-  static const String _channelDesc = 'Alertas de nuevos viajes'; // ✅ SIN FlyGo
+  static const String _channelName = 'Viajes disponibles';
+  static const String _channelDesc = 'Alertas de nuevos viajes';
 
   /// Requisitos:
   /// - Coloca el audio en: android/app/src/main/res/raw/notification.wav  (minúsculas)
@@ -183,10 +183,10 @@ class NotificationService {
         styleInformation: BigTextStyleInformation(
           cuerpo,
           contentTitle: titulo,
-          summaryText: 'RAI Driver', // ✅ ANTES: 'FlyGo' → AHORA: 'RAI Driver'
+          summaryText: 'RAI Driver',
         ),
         category: AndroidNotificationCategory.event,
-        ticker: 'RAI Driver', // ✅ ANTES: 'FlyGo' → AHORA: 'RAI Driver'
+        ticker: 'RAI Driver',
       );
 
       // iOS: sin sonido del sistema (ya va por asset); alerta sí.

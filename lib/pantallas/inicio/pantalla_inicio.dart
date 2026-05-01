@@ -22,7 +22,7 @@ class PantallaInicio extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Text(
-              "Bienvenido a FlyGo RD",
+              "Bienvenido a RAI Driver",
               style: TextStyle(
                 fontSize: 26,
                 color: Colors.white,

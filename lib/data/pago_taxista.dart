@@ -34,13 +34,13 @@ class _PagoTaxistaState extends State<PagoTaxista> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: EstilosFlyGo.fondoOscuro,
+      backgroundColor: EstilosRai.fondoOscuro,
       appBar: AppBar(
         title: const Text(
           "Historial de Pagos",
           style: TextStyle(color: Colors.white),
         ),
-        backgroundColor: EstilosFlyGo.fondoOscuro,
+        backgroundColor: EstilosRai.fondoOscuro,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: cargando

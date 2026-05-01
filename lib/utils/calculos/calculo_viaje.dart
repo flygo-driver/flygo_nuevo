@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+
 class CalculoViaje {
   // Distancia Haversine entre dos puntos GPS
   static double calcularDistancia(
@@ -44,14 +46,11 @@ class CalculoViaje {
     return double.parse(precio.toStringAsFixed(2));
   }
 
-  // Calcular comisión de FlyGo (20%) y ganancia del taxista (80%)
   static Map<String, double> calcularComisionYGanancia(double precioTotal) {
-    final comision = precioTotal * 0.20;
-    final ganancia = precioTotal - comision;
-
+    final m = PlataformaEconomia.comisionYGananciaDesdePrecio(precioTotal);
     return {
-      'comision': double.parse(comision.toStringAsFixed(2)),
-      'gananciaTaxista': double.parse(ganancia.toStringAsFixed(2)),
+      'comision': m['comision']!,
+      'gananciaTaxista': m['gananciaTaxista']!,
     };
   }
 }

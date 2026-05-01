@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 
 class ComisionesDiariasRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -50,11 +51,6 @@ class ComisionesDiariasRepo {
   }
 
   // ==============================================================
-  // COMISIÓN BASE: 20% plataforma (RAI) — alineado con asientos en `pagos` y `ViajesRepo`.
-  // ==============================================================
-  static const double _COMISION_BASE = 0.20;
-
-  // ==============================================================
   // CALCULAR COMISIÓN (con posibilidad de ajuste individual)
   // ==============================================================
   static double _calcularComision(Map<String, dynamic> data) {
@@ -72,9 +68,9 @@ class ComisionesDiariasRepo {
       // if (comisionEspecial != null) return comisionEspecial;
     }
 
-    // PRIORIDAD 3: Comisión base 20% para TODOS
+    // PRIORIDAD 3: Comisión nominal plataforma ([PlataformaEconomia.comisionPorcento]).
     final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
-    return precio * _COMISION_BASE;
+    return precio * PlataformaEconomia.factorComision;
   }
 
   // ==============================================================
@@ -139,7 +135,7 @@ class ComisionesDiariasRepo {
       'totalViajes': totalViajes,
       'porcentajeComision': totalRecaudado > 0
           ? (totalComisiones / totalRecaudado * 100).toStringAsFixed(1)
-          : '20.0', // Por defecto 20%
+          : PlataformaEconomia.comisionPorcento.toStringAsFixed(1),
       // Desglose por tipo (para análisis)
       'desglose': {
         'normales': {

@@ -19,6 +19,7 @@ import 'package:flygo_nuevo/servicios/pay_config.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
@@ -1428,13 +1429,14 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       ],
     );
 
-    return Scaffold(
-      backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
-      appBar: const RaiAppBar(
-        title: 'Múltiples paradas',
-        backWhenCanPop: true,
-      ),
-      body: Stack(
+    return FlygoSalidaSegura(
+      child: Scaffold(
+        backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
+        appBar: const RaiAppBar(
+          title: 'Múltiples paradas',
+          backWhenCanPop: true,
+        ),
+        body: Stack(
         children: <Widget>[
           ListView(
             padding: const EdgeInsets.all(16),
@@ -1824,6 +1826,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               ),
             ),
         ],
+      ),
       ),
     );
   }

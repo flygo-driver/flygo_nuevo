@@ -12,6 +12,8 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
@@ -22,6 +24,7 @@ import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart'; // 🔥 ESTA LÍNEA
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/shell/taxista_shell.dart';
@@ -31,9 +34,8 @@ import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
-const bool kLog = true;
 void logDbg(String msg) {
-  if (kLog) debugPrint('[VIAJE_TX] $msg');
+  if (kDebugMode) debugPrint('[VIAJE_TX] $msg');
 }
 
 const bool _diagTripFlow =
@@ -56,9 +58,15 @@ class ViajeEnCursoTaxista extends StatefulWidget {
 // ... resto del código igual
 
 class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
   @override
   bool get wantKeepAlive => true;
+
+  /// Evita leer SharedPreferences en cada frame del stream.
+  String? _navPickupPrefsLoadedForId;
+
+  /// Antispam del snackbar al volver de Waze/Maps (resumed).
+  DateTime? _lastNavResumeSnackAt;
 
   GoogleMapController? _map;
 
@@ -518,8 +526,129 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
+  static String _prefKeyNavPickup(String viajeId) => 'vctx_nav_pickup_$viajeId';
+
+  Future<void> _persistNavPickupFlag(String viajeId, bool value) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      if (value) {
+        await p.setBool(_prefKeyNavPickup(viajeId), true);
+      } else {
+        await p.remove(_prefKeyNavPickup(viajeId));
+      }
+    } catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'viaje_en_curso_taxista: persist nav pickup',
+      );
+    }
+  }
+
+  /// Si el taxista eligió Waze/Maps y el proceso se mató o la RAM limpió el estado,
+  /// restauramos «navegación iniciada» para no bloquear «Cliente a bordo».
+  Future<void> _loadNavPickupPrefs(Viaje v, {bool force = false}) async {
+    final estadoBase = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado
+                  ? EstadosViaje.aceptado
+                  : EstadosViaje.pendiente)),
+    );
+    if (!EstadosViaje.esAceptado(estadoBase)) {
+      _navPickupPrefsLoadedForId = null;
+      try {
+        final p = await SharedPreferences.getInstance();
+        if (p.containsKey(_prefKeyNavPickup(v.id))) {
+          await p.remove(_prefKeyNavPickup(v.id));
+        }
+      } catch (e, st) {
+        await ErrorReporting.reportError(
+          e,
+          stack: st,
+          context: 'viaje_en_curso_taxista: clear stale nav pickup pref',
+        );
+      }
+      return;
+    }
+    if (!force && _navPickupPrefsLoadedForId == v.id) return;
+
+    try {
+      final p = await SharedPreferences.getInstance();
+      final saved = p.getBool(_prefKeyNavPickup(v.id)) ?? false;
+      _navPickupPrefsLoadedForId = v.id;
+      if (mounted && saved) {
+        setState(() => _navegacionIniciada = true);
+      }
+    } catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'viaje_en_curso_taxista: load nav pickup prefs',
+      );
+    }
+  }
+
+  Future<void> _handleAppResumedTrasNavegacionExterna() async {
+    if (!mounted) return;
+    final v = _cachedViaje;
+    if (v == null) return;
+    await _loadNavPickupPrefs(v, force: true);
+    if (!mounted) return;
+
+    final estadoBase = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado
+                  ? EstadosViaje.aceptado
+                  : EstadosViaje.pendiente)),
+    );
+    final bool enPickup = EstadosViaje.esAceptado(estadoBase);
+    final bool enRutaDestino = EstadosViaje.esEnCurso(estadoBase);
+    if (!enPickup && !enRutaDestino) return;
+
+    final now = DateTime.now();
+    if (_lastNavResumeSnackAt != null &&
+        now.difference(_lastNavResumeSnackAt!) < const Duration(seconds: 6)) {
+      return;
+    }
+    if (enPickup && !_navegacionIniciada && !_clienteCerca) return;
+
+    _lastNavResumeSnackAt = now;
+    if (enPickup) {
+      _tripFlowSnack(
+        'Volviste a RAI Driver. Continúa: Cliente a bordo → código → destino.',
+        backgroundColor: Colors.blueGrey.shade800,
+      );
+      return;
+    }
+    _tripFlowSnack(
+      'Volviste a RAI Driver. Si ya llegaste, confirma llegada y finaliza el viaje.',
+      backgroundColor: Colors.blueGrey.shade800,
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_handleAppResumedTrasNavegacionExterna());
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cancelSub?.cancel();
     _map?.dispose();
     _viajeNavSheetCtrl.dispose();
@@ -589,6 +718,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
       final gpsOk = await _asegurarGps(v.id);
       if (!gpsOk && mounted) {
+        unawaited(_persistNavPickupFlag(v.id, false));
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) setState(() => _navegacionIniciada = false);
         });
@@ -638,6 +768,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               }
             },
             onCancel: () {
+              unawaited(_persistNavPickupFlag(v.id, false));
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) setState(() => _navegacionIniciada = false);
               });
@@ -651,7 +782,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         }
       }
 
+      if (mounted && eligioAppExterna) {
+        unawaited(_persistNavPickupFlag(v.id, true));
+      }
+
       if (mounted && !eligioAppExterna) {
+        unawaited(_persistNavPickupFlag(v.id, false));
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) setState(() => _navegacionIniciada = false);
         });
@@ -687,6 +823,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
     } catch (e) {
       logDbg('Error iniciando navegación: $e');
+      unawaited(_persistNavPickupFlag(v.id, false));
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           setState(() => _navegacionIniciada = false);
@@ -732,7 +869,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         }
       }
 
-      await FirebaseFirestore.instance.collection('viajes').doc(v.id).update({
+      final refViaje = FirebaseFirestore.instance.collection('viajes').doc(v.id);
+      final snapAbordo = await refViaje.get();
+      final dAbordo = snapAbordo.data() ?? <String, dynamic>{};
+      final String codRaw = (dAbordo['codigoVerificacion'] ??
+              dAbordo['codigo_verificacion'] ??
+              '')
+          .toString()
+          .replaceAll(RegExp(r'\D'), '');
+      final Map<String, dynamic> patchAbordo = {
         'estado': EstadosViaje.aBordo,
         'clienteAbordo': true,
         'clienteAbordoEn': FieldValue.serverTimestamp(),
@@ -743,7 +888,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         'pickupConfirmadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
-      });
+      };
+      if (codRaw.length != 6) {
+        patchAbordo['codigoVerificacion'] =
+            ViajesRepo.codigoVerificacionSeisDigitosDesdeDoc(dAbordo);
+        patchAbordo['codigoVerificado'] = false;
+      }
+      await refViaje.update(patchAbordo);
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -770,6 +921,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       // Recargar viaje
       final snapshot =
           await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
+      unawaited(_persistNavPickupFlag(v.id, false));
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && snapshot.exists) {
           final viajeActualizado = Viaje.fromMap(v.id, snapshot.data()!);
@@ -1064,7 +1216,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       // está completado, pero mostramos mensaje + reintento.
       // ────────────────────────────────────────────────────────────────
       double total = v.precio;
-      double comision = v.precio * 0.20;
+      double comision = v.precio * PlataformaEconomia.factorComision;
       double ganancia = v.precio - comision;
       String metodo = v.metodoPago.toString().toLowerCase().trim();
       final String uidTxDefault = v.uidTaxista.isNotEmpty ? v.uidTaxista : uid;
@@ -1074,7 +1226,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         final uidTx = uidTxDefault;
         if (uidTx.isEmpty) throw Exception('uidTaxista vacío (pago)');
 
-        if (metodo == 'efectivo') {
+        if (MetodoPagoViaje.esEfectivo(metodo)) {
           await PagoData.registrarComisionCash(
             viajeId: v.id,
             taxistaId: uidTx,
@@ -1108,7 +1260,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         } else {
           final comisionCampo =
               _toDouble(data['comision'] ?? data['comisionFlyGo']);
-          comision = comisionCampo > 0 ? comisionCampo : (total * 0.20);
+          comision = comisionCampo > 0
+              ? comisionCampo
+              : (total * PlataformaEconomia.factorComision);
         }
 
         final gc = data['ganancia_cents'];
@@ -1870,6 +2024,49 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     return 0;
   }
 
+  Widget _estadoProfesionalCard({
+    required IconData icon,
+    required Color color,
+    required String titulo,
+    required String detalle,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titulo,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detalle,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _progresoOperativoViaje(String estadoBase) {
     final int etapa = _etapaActualViaje(estadoBase);
     const labels = <String>[
@@ -2287,6 +2484,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
                 if (v == null) {
                   _cachedViaje = null;
+                  _navPickupPrefsLoadedForId = null;
                   _stopGps();
                   return Column(
                     children: [
@@ -2357,6 +2555,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
                 // Actualizar cache
                 if (_cachedViaje?.id != v.id) {
+                  _navPickupPrefsLoadedForId = null;
                   _cachedViaje = v;
                   _escucharCancelacionRemota(v.id);
 
@@ -2380,6 +2579,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   }
                 }
 
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) unawaited(_loadNavPickupPrefs(v));
+                });
+
                 final fecha = formato.format(v.fechaHora);
                 final total = FormatosMoneda.rd(v.precio);
 
@@ -2398,6 +2601,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       Navigator.of(context, rootNavigator: true);
 
                   WidgetsBinding.instance.addPostFrameCallback((_) async {
+                    unawaited(_persistNavPickupFlag(v.id, false));
                     _stopGps();
                     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
                     if (uid.isNotEmpty) {
@@ -2616,6 +2820,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   // ==================== BARRA DE ACCIONES ====================
 
   Widget _actionBar(Viaje v, String estadoBase) {
+    final String actionStateKey =
+        '$estadoBase|${_navegacionIniciada ? 1 : 0}|${_clienteCerca ? 1 : 0}|${v.codigoVerificado ? 1 : 0}';
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2623,9 +2829,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: _getActionButtons(v, estadoBase),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 260),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SizeTransition(
+            sizeFactor: animation,
+            axisAlignment: -1,
+            child: child,
+          ),
+        ),
+        child: Column(
+          key: ValueKey<String>(actionStateKey),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: _getActionButtons(v, estadoBase),
+        ),
       ),
     );
   }
@@ -2638,6 +2858,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       final bool puedeMarcarAbordo = _navegacionIniciada || _clienteCerca;
 
       return [
+        _estadoProfesionalCard(
+          icon: Icons.directions_car_filled_rounded,
+          color: Colors.lightBlueAccent,
+          titulo: 'Paso actual: ir al punto de recogida',
+          detalle: 'Siguiente acción esperada: confirmar "Cliente a bordo".',
+        ),
         const SizedBox(height: 12),
         const Text(
           'Paso 1: ve al cliente · Paso 2: confirma abordo · Paso 3: código que te dicta · Paso 4: navegas al destino',
@@ -2886,6 +3112,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (EstadosViaje.esAbordo(estadoBase)) {
       if (!_codigoEsperadoValido(v.codigoVerificacion)) {
         return [
+          _estadoProfesionalCard(
+            icon: Icons.warning_amber_rounded,
+            color: Colors.orangeAccent,
+            titulo: 'Paso actual: validar código de inicio',
+            detalle:
+                'No hay PIN válido en el viaje; contacta soporte antes de continuar.',
+          ),
           const SizedBox(height: 12),
           Container(
             width: double.infinity,
@@ -2934,6 +3167,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
       if (v.codigoVerificado) {
         return [
+          _estadoProfesionalCard(
+            icon: Icons.task_alt_rounded,
+            color: Colors.greenAccent,
+            titulo: 'Paso actual: código verificado',
+            detalle:
+                'Siguiente acción esperada: abrir navegación al destino y conducir.',
+          ),
           const SizedBox(height: 12),
           const Text(
             'Código verificado',
@@ -3010,6 +3250,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
 
       return [
+        _estadoProfesionalCard(
+          icon: Icons.pin_rounded,
+          color: Colors.amberAccent,
+          titulo: 'Paso actual: solicitar PIN al cliente',
+          detalle:
+              'Siguiente acción esperada: validar el código para iniciar la ruta.',
+        ),
         const SizedBox(height: 12),
         const Text(
           'Paso 3 — Código con el cliente',
@@ -3110,6 +3357,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
     if (EstadosViaje.esEnCurso(estadoBase)) {
       return [
+        _estadoProfesionalCard(
+          icon: Icons.route_rounded,
+          color: Colors.lightBlueAccent,
+          titulo: 'Paso actual: en ruta al destino',
+          detalle:
+              'Siguiente acción esperada: al llegar, confirmar y finalizar el viaje.',
+        ),
         const SizedBox(height: 12),
         const Text(
           'En camino al destino',

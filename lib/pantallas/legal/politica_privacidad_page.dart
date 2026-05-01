@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/legal/terms_data.dart' show kTermsContactEmail;
 
 class PoliticaPrivacidadPage extends StatelessWidget {
   const PoliticaPrivacidadPage({super.key});
@@ -14,7 +15,7 @@ class PoliticaPrivacidadPage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
         children: [
-          Text('Política de Privacidad de FlyGo',
+          Text('Política de Privacidad de RAI DRIVER',
               style: text.headlineSmall
                   ?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
           const SizedBox(height: 6),
@@ -22,7 +23,7 @@ class PoliticaPrivacidadPage extends StatelessWidget {
               style: text.bodySmall?.copyWith(color: Colors.white54)),
           const SizedBox(height: 18),
           _h('1. Responsable del tratamiento'),
-          _p('Open Ask Service, RNC 132011767 (“FlyGo”, “nosotros”). Contacto: privacidad@flygo.do'),
+          _p('Open ASK Service SRL, RNC 1320-11767 (“RAI DRIVER”, “nosotros”). Contacto: $kTermsContactEmail'),
           _h('2. Datos que tratamos'),
           _b([
             'Identificación y contacto: nombre, email, teléfono.',
@@ -53,7 +54,7 @@ class PoliticaPrivacidadPage extends StatelessWidget {
               'Ciertos registros se conservan por periodos adicionales para seguridad y cooperación con autoridades.'),
           _h('6. Destinatarios y transferencias'),
           _b([
-            'Proveedores tecnológicos que actúan por cuenta de FlyGo (alojamiento, mensajería, pagos).',
+            'Proveedores tecnológicos que actúan por cuenta de RAI DRIVER (alojamiento, mensajería, pagos).',
             'Autoridades competentes cuando exista obligación legal o requerimiento válido.',
             'No vendemos datos personales.',
           ]),
@@ -62,7 +63,7 @@ class PoliticaPrivacidadPage extends StatelessWidget {
             'Acceso, rectificación, actualización y eliminación cuando proceda.',
             'Oposición o limitación del tratamiento en casos previstos por la ley.',
             'Portabilidad en los supuestos aplicables.',
-            'Canales: privacidad@flygo.do y la opción “Eliminar cuenta”.',
+            'Canales: $kTermsContactEmail y la opción “Eliminar cuenta”.',
           ]),
           _h('8. Ubicación y permisos'),
           _p('La ubicación es necesaria para mostrar mapas, calcular rutas, ETA, asignar viajes y reforzar seguridad. '
@@ -72,7 +73,7 @@ class PoliticaPrivacidadPage extends StatelessWidget {
           _h('10. Menores'),
           _p('No dirigimos el servicio a menores sin autorización del representante legal. Podemos verificar y suspender cuentas que incumplan este requisito.'),
           _h('11. Cámaras a bordo (cuando se exijan)'),
-          _p('Para protección de pasajeros y conductores, FlyGo podrá exigir cámaras internas en el vehículo conforme a la legislación vigente. '
+          _p('Para protección de pasajeros y conductores, RAI DRIVER podrá exigir cámaras internas en el vehículo conforme a la legislación vigente. '
               'Las grabaciones se tratarán con fines de seguridad, control de calidad y cooperación con autoridades.'),
           _h('12. Cookies/SDKs'),
           _p('Podemos utilizar SDKs de analítica y mensajería para métricas de uso y diagnóstico de fallos. Puedes desactivar ciertas mediciones desde los ajustes del dispositivo.'),
@@ -80,7 +81,7 @@ class PoliticaPrivacidadPage extends StatelessWidget {
           _p('Podremos actualizar esta Política con aviso en la app o canales oficiales. El uso continuado tras el aviso implica aceptación.'),
           const SizedBox(height: 18),
           Text(
-            'Operador: Open Ask Service, RNC 132011767\nContacto privacidad: privacidad@flygo.do',
+            'Operador: Open ASK Service SRL, RNC 1320-11767\nContacto: $kTermsContactEmail',
             style: text.bodySmall?.copyWith(color: Colors.white60),
           ),
         ],
