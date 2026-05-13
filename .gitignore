@@ -41,3 +41,6 @@ web/.dart_tool/
 # Otros
 *.log
 
+# APK / paquetes de release fuera de build/
+dist/
+
