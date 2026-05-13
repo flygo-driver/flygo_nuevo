@@ -1,4 +1,5 @@
 // lib/pantallas/cliente/viaje_en_curso_cliente.dart
+// ignore_for_file: avoid_print -- [VIAJE_ACTIVO] / [FINALIZAR]
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -23,14 +24,20 @@ import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_live_conductores.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
+import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
+import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
 
 // ===== Helpers =====
 LatLng _latLng(double lat, double lon) => LatLng(lat, lon);
@@ -150,13 +157,7 @@ class ViajeEnCursoCliente extends StatefulWidget {
 }
 
 class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
-    with TickerProviderStateMixin {
-  /// Altura mínima del sheet (tap en mapa / pickup) — mapa casi a pantalla completa.
-  static const double _kSheetMinPickupNav = 0.11;
-
-  /// Apertura por defecto a media pantalla.
-  static const double _kSheetInitialMitad = 0.5;
-
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   GoogleMapController? _map;
   bool _myLoc = false;
 
@@ -169,18 +170,28 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeDocSub;
   String _lastNotifiedState = '';
 
+  /// Evita repetir el timbre in-app al reemitir el mismo doc del viaje.
+  String _clienteTimbreConductorSig = '';
+
+  /// Para evitar abrir la pantalla de Factura más de una vez por viaje.
+  String _facturaShownForViajeId = '';
+
   /// Publica la posición del cliente en el documento del viaje (Firestore en vivo).
   StreamSubscription<Position>? _clienteViajePosSub;
   String? _clienteViajePosViajeId;
+
+  /// Evita solapar varias corridas de [_ensureClienteUbicacionEnViaje] (mismo viaje).
+  String? _clienteViajeUbicacionEnsuringFor;
+
+  /// Tras fallo de permiso o GPS apagado en este viaje, no reintentar en cada
+  /// rebuild del stream; se limpia al [AppLifecycleState.resumed].
+  String? _clienteViajeUbicacionPermisoDenegadoViajeId;
 
   /// Seguimiento automático de cámara al taxista (el usuario puede soltar con gesto en el mapa).
   bool _seguirTaxistaCamara = true;
   DateTime? _ultimoSeguimientoTaxistaMs;
   double? _ultimoSeguimientoTaxLat;
   double? _ultimoSeguimientoTaxLon;
-
-  final DraggableScrollableController _sheetController =
-      DraggableScrollableController();
 
   /// Cámara movida por código (no colapsar/expandir tarjeta como si fuera gesto del usuario).
   int _programmaticCameraDepth = 0;
@@ -223,9 +234,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   late final AnimationController _radarCtrl;
   late final AnimationController _progresoBrilloCtrl;
 
+  /// Evita spam del snack al volver de Waze/Maps.
+  DateTime? _lastClienteNavResumeSnackAt;
+  DateTime? _lastClienteGpsSistemaSnackAt;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _radarCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
@@ -236,6 +252,111 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     )..repeat();
     _enableMyLocation();
     _lastNotifiedState = '';
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => unawaited(_verificarViajeTerminadoAlAbrirCliente()));
+  }
+
+  Future<void> _verificarViajeTerminadoAlAbrirCliente() async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null || !mounted) return;
+    print('[VIAJE_ACTIVO] cliente en_curso init: verificar si viaje ya cerró');
+    try {
+      final us = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(u.uid)
+          .get(const GetOptions(source: Source.server));
+      String resolvedViajeId =
+          (us.data()?['viajeActivoId'] ?? '').toString().trim();
+      Map<String, dynamic>? d;
+
+      if (resolvedViajeId.isNotEmpty) {
+        final vs = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(resolvedViajeId)
+            .get(const GetOptions(source: Source.server));
+        if (vs.exists) d = vs.data();
+      }
+      if (d == null) {
+        final snap = await ViajesRepo.getViajeActivoParaUsuario(u.uid);
+        if (snap != null && snap.exists) {
+          resolvedViajeId = snap.id;
+          final vs = await FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(resolvedViajeId)
+              .get(const GetOptions(source: Source.server));
+          if (vs.exists) d = vs.data();
+        }
+      }
+      if (d == null || !mounted || resolvedViajeId.isEmpty) return;
+
+      final st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final bool done =
+          d['completado'] == true || EstadosViaje.esTerminal(st);
+      if (done) {
+        print(
+            '[VIAJE_ACTIVO] cliente init: viaje terminal ($st) → factura/post-viaje');
+        print(
+            '[FINALIZAR] cliente init: _programarFlujoPostViaje viaje=$resolvedViajeId');
+        _programarFlujoPostViaje(viajeId: resolvedViajeId, uid: u.uid);
+      }
+    } catch (e) {
+      print('[VIAJE_ACTIVO] cliente init check error: $e');
+    }
+  }
+
+  Future<void> _refrescarViajeActivoClienteResume() async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null || !mounted) return;
+    print('[VIAJE_ACTIVO] cliente resumed: refresh viaje (Source.server)');
+    try {
+      String resolvedViajeId = '';
+      Map<String, dynamic>? d;
+
+      final us = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(u.uid)
+          .get(const GetOptions(source: Source.server));
+      resolvedViajeId =
+          (us.data()?['viajeActivoId'] ?? '').toString().trim();
+
+      if (resolvedViajeId.isNotEmpty) {
+        final vs = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(resolvedViajeId)
+            .get(const GetOptions(source: Source.server));
+        if (vs.exists) d = vs.data();
+      }
+      if (d == null) {
+        final snap = await ViajesRepo.getViajeActivoParaUsuario(u.uid);
+        if (snap != null && snap.exists) {
+          resolvedViajeId = snap.id;
+          final vs = await FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(resolvedViajeId)
+              .get(const GetOptions(source: Source.server));
+          if (vs.exists) d = vs.data();
+        }
+      }
+
+      if (d == null || resolvedViajeId.isEmpty) {
+        if (mounted) setState(() {});
+        return;
+      }
+
+      final st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final bool terminal =
+          d['completado'] == true || EstadosViaje.esTerminal(st);
+      if (terminal) {
+        print(
+            '[VIAJE_ACTIVO] cliente resumed: viaje terminal ($st) → factura/post-viaje');
+        print(
+            '[FINALIZAR] cliente resumed: _programarFlujoPostViaje viaje=$resolvedViajeId');
+        _programarFlujoPostViaje(viajeId: resolvedViajeId, uid: u.uid);
+      }
+      if (mounted) setState(() {});
+    } catch (e) {
+      print('[VIAJE_ACTIVO] cliente resume refresh error: $e');
+    }
   }
 
   @override
@@ -244,7 +365,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _routeDebounce?.cancel();
     _disposeDocWatch();
     _stopClienteUbicacionEnViaje();
-    _sheetController.dispose();
     _mensajeCercaniaTimer?.cancel();
     _driversSub?.cancel();
     _fotosDebounce?.cancel();
@@ -252,65 +372,140 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _progresoBrilloCtrl.dispose();
     _pickupEtaDebounce?.cancel();
     _mapGestureEndDebounce?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state != AppLifecycleState.resumed) return;
+    print('[VIAJE_ACTIVO] cliente lifecycle resumed');
+    _clienteViajeUbicacionPermisoDenegadoViajeId = null;
+    unawaited(_refrescarViajeActivoClienteResume());
+    final now = DateTime.now();
+    if (_lastClienteNavResumeSnackAt != null &&
+        now.difference(_lastClienteNavResumeSnackAt!) <
+            const Duration(seconds: 6)) {
+      return;
+    }
+    _lastClienteNavResumeSnackAt = now;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Seguís en tu viaje RAI: el mapa, el conductor y el estado se actualizan aquí. '
+            'Podés volver a abrir Waze o Maps cuando quieras.',
+          ),
+          duration: Duration(seconds: 4),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    });
   }
 
   void _stopClienteUbicacionEnViaje() {
     _clienteViajePosSub?.cancel();
     _clienteViajePosSub = null;
     _clienteViajePosViajeId = null;
+    _clienteViajeUbicacionEnsuringFor = null;
+    _clienteViajeUbicacionPermisoDenegadoViajeId = null;
+  }
+
+  void _maybeSnackActivarGpsSistemaCliente() {
+    final DateTime now = DateTime.now();
+    if (_lastClienteGpsSistemaSnackAt != null &&
+        now.difference(_lastClienteGpsSistemaSnackAt!) <
+            const Duration(seconds: 14)) {
+      return;
+    }
+    _lastClienteGpsSistemaSnackAt = now;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Activa la ubicación del teléfono (GPS). Así el conductor puede verte.',
+          ),
+          duration: const Duration(seconds: 5),
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label: 'Ubicación',
+            onPressed: () => unawaited(GpsService.openLocationSettings()),
+          ),
+        ),
+      );
+    });
   }
 
   Future<void> _ensureClienteUbicacionEnViaje(String viajeId) async {
     if (_clienteViajePosViajeId == viajeId && _clienteViajePosSub != null) {
       return;
     }
-
-    await _clienteViajePosSub?.cancel();
-    _clienteViajePosViajeId = viajeId;
-
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-    }
-    if (perm == LocationPermission.denied ||
-        perm == LocationPermission.deniedForever) {
+    if (_clienteViajeUbicacionPermisoDenegadoViajeId == viajeId) {
       return;
     }
-    if (!await Geolocator.isLocationServiceEnabled()) {
+    if (_clienteViajeUbicacionEnsuringFor == viajeId) {
       return;
     }
+    _clienteViajeUbicacionEnsuringFor = viajeId;
+    try {
+      await _clienteViajePosSub?.cancel();
+      _clienteViajePosSub = null;
 
-    final LocationSettings settings =
-        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
-            ? AndroidSettings(
-                accuracy: LocationAccuracy.high,
-                distanceFilter: 8,
-                intervalDuration: const Duration(seconds: 2),
-              )
-            : const LocationSettings(
-                accuracy: LocationAccuracy.high,
-                distanceFilter: 10,
-              );
+      final ({bool serviceEnabled, LocationPermission permission}) snap =
+          await GpsService.checkServiceThenRequestPermissionIfNeeded();
+      if (!snap.serviceEnabled) {
+        _clienteViajeUbicacionPermisoDenegadoViajeId = viajeId;
+        _maybeSnackActivarGpsSistemaCliente();
+        return;
+      }
+      final LocationPermission perm = snap.permission;
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        _clienteViajeUbicacionPermisoDenegadoViajeId = viajeId;
+        return;
+      }
 
-    final ref = FirebaseFirestore.instance.collection('viajes').doc(viajeId);
-    _clienteViajePosSub =
-        Geolocator.getPositionStream(locationSettings: settings).listen(
-      (Position p) async {
-        try {
-          await ref.set(
-            {
-              'latCliente': p.latitude,
-              'lonCliente': p.longitude,
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          );
-        } catch (_) {}
-      },
-      onError: (_) {},
-    );
+      _clienteViajePosViajeId = viajeId;
+
+      final LocationSettings settings =
+          (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+              ? AndroidSettings(
+                  accuracy: LocationAccuracy.high,
+                  distanceFilter: 8,
+                  intervalDuration: const Duration(seconds: 2),
+                )
+              : const LocationSettings(
+                  accuracy: LocationAccuracy.high,
+                  distanceFilter: 10,
+                );
+
+      final DocumentReference<Map<String, dynamic>> ref =
+          FirebaseFirestore.instance.collection('viajes').doc(viajeId);
+      _clienteViajePosSub =
+          Geolocator.getPositionStream(locationSettings: settings).listen(
+        (Position p) async {
+          try {
+            await ref.set(
+              {
+                'latCliente': p.latitude,
+                'lonCliente': p.longitude,
+                'updatedAt': FieldValue.serverTimestamp(),
+                'actualizadoEn': FieldValue.serverTimestamp(),
+              },
+              SetOptions(merge: true),
+            );
+          } catch (_) {}
+        },
+        onError: (_) {},
+      );
+    } finally {
+      if (_clienteViajeUbicacionEnsuringFor == viajeId) {
+        _clienteViajeUbicacionEnsuringFor = null;
+      }
+    }
   }
 
   void _maybeAnimarCamaraAlTaxista(Viaje v, String estadoBase) {
@@ -318,9 +513,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (!_isValidCoord(v.latTaxista, v.lonTaxista)) return;
     if (v.uidTaxista.isEmpty) return;
     // Pickup + trayecto al destino: el pasajero puede seguir al conductor en el mapa.
+    // Incluye `a_bordo` con código OK (conductor ya puede ir al destino antes de que el estado pase a `en_curso`).
     if (!(estadoBase == EstadosViaje.aceptado ||
         estadoBase == EstadosViaje.enCaminoPickup ||
-        estadoBase == EstadosViaje.enCurso)) {
+        estadoBase == EstadosViaje.enCurso ||
+        (estadoBase == EstadosViaje.aBordo && v.codigoVerificado))) {
       return;
     }
 
@@ -359,24 +556,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     });
   }
 
-  /// Mientras interactúas con el mapa: tarjeta al mínimo; al soltar (cámara idle) vuelve a la mitad.
-  void _colapsarSheetPorTapMapa() {
-    if (!_sheetController.isAttached) return;
-    _sheetController.animateTo(
-      _kSheetMinPickupNav,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-    );
-  }
+  /// Panel inferior ya no es sheet arrastrable: mapa + scroll fijo (mismo patrón que conductor).
+  void _colapsarSheetPorTapMapa() {}
 
-  void _expandirSheetTrasMapaInteract() {
-    if (!_sheetController.isAttached) return;
-    _sheetController.animateTo(
-      _kSheetInitialMitad,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-    );
-  }
+  void _expandirSheetTrasMapaInteract() {}
 
   void _maybeColapsarSheetPickupNav(Viaje v, String estadoBase) {
     if (_sheetCollapsedPickupForViajeId == v.id) return;
@@ -390,13 +573,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             estadoBase == EstadosViaje.enCaminoPickup) &&
         _isValidCoord(v.latTaxista, v.lonTaxista);
     if (!esperandoPool && !turismoSinConductor && !fasePickup) return;
-    if (!_sheetController.isAttached) return;
     _sheetCollapsedPickupForViajeId = v.id;
-    _sheetController.animateTo(
-      _kSheetMinPickupNav,
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.easeOutCubic,
-    );
     if (fasePickup && !_seguirTaxistaCamara) {
       setState(() => _seguirTaxistaCamara = true);
     }
@@ -631,11 +808,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   Future<void> _enableMyLocation() async {
-    LocationPermission p = await Geolocator.checkPermission();
-    if (p == LocationPermission.denied) {
-      p = await Geolocator.requestPermission();
-    }
+    final ({bool serviceEnabled, LocationPermission permission}) snap =
+        await GpsService.checkServiceThenRequestPermissionIfNeeded();
     if (!mounted) return;
+    if (!snap.serviceEnabled) {
+      setState(() => _myLoc = false);
+      _maybeSnackActivarGpsSistemaCliente();
+      return;
+    }
+    final LocationPermission p = snap.permission;
     final bool denied = (p == LocationPermission.denied ||
         p == LocationPermission.deniedForever);
     setState(() => _myLoc = !denied);
@@ -1182,6 +1363,27 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (!mounted) return;
     setState(_limpiarCacheCierreViaje);
     if (!mounted) return;
+
+    // Mostrar la factura ANTES del PostViajeClienteFlow.
+    // El `await` garantiza que la factura sea la primera pantalla que ve el
+    // cliente al completarse el viaje y que el flujo post-viaje (calificación
+    // + propina) solo se empuje cuando cierre la factura. Idempotente por
+    // `viajeId` para que jamás se abra dos veces para el mismo viaje aunque
+    // el listener se redispare.
+    if (_facturaShownForViajeId != viajeId) {
+      _facturaShownForViajeId = viajeId;
+      try {
+        await FacturaViaje.mostrar(
+          context,
+          viajeId: viajeId,
+          role: 'cliente',
+        );
+      } catch (_) {
+        // No bloqueamos el flujo post-viaje si la factura falla en presentar.
+      }
+      if (!mounted) return;
+    }
+
     await Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (_) => PostViajeClienteFlow(viajeId: viajeId),
@@ -1193,6 +1395,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       {required String viajeId, required String uid}) {
     if (_abriendoFlujoPostViaje) return;
     if (_navPostViajeParaId == viajeId) return;
+    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
     _navPostViajeParaId = viajeId;
     _abriendoFlujoPostViaje = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -1459,6 +1662,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   void _disposeDocWatch() {
     _viajeDocSub?.cancel();
     _viajeDocSub = null;
+    _clienteTimbreConductorSig = '';
   }
 
   void _watchViajeDoc(String viajeId) {
@@ -1477,8 +1681,19 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       final String estado = (d['estado'] ?? '').toString();
       final String estN = EstadosViaje.normalizar(estado);
 
-      final bool tieneTaxista =
-          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().isNotEmpty;
+      final String tid =
+          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+      if (tid.isNotEmpty &&
+          (estN == EstadosViaje.aceptado ||
+              estN == EstadosViaje.enCaminoPickup)) {
+        final String sig = '$viajeId|$tid';
+        if (_clienteTimbreConductorSig != sig) {
+          _clienteTimbreConductorSig = sig;
+          unawaited(NotificationService.I.playPoolOfferSoundInApp());
+        }
+      }
+
+      final bool tieneTaxista = tid.isNotEmpty;
       final bool esEstadoValido = (estN == EstadosViaje.aceptado ||
           estN == EstadosViaje.enCaminoPickup);
       final bool esCambioEstado = _lastNotifiedState != estN;
@@ -1496,6 +1711,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           );
         }
       }
+
+      // NOTA: la apertura de la factura se realiza DENTRO de
+      // [_abrirFlujoPostViaje] con `await`, justo antes de empujar el
+      // PostViajeClienteFlow. Antes había un disparo aquí que competía con
+      // ese pushReplacement (race condition) y la factura podía no
+      // mostrarse o desaparecer al instante. La bandera
+      // `_facturaShownForViajeId` se sigue usando como guard de
+      // idempotencia desde el flujo post-viaje.
     }, onError: (Object _) {});
   }
 
@@ -2337,6 +2560,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           );
                           return;
                         }
+                        unawaited(ViajeComunicacionRepo.notificarIntentoComunicacion(
+                          viajeId: v.id,
+                          tipo: 'llamada',
+                        ));
                         await telefonoLaunchUri(telefonoUriLlamada(tc));
                       },
                     ),
@@ -2363,6 +2590,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           );
                           return;
                         }
+                        unawaited(ViajeComunicacionRepo.notificarIntentoComunicacion(
+                          viajeId: v.id,
+                          tipo: 'whatsapp',
+                        ));
                         const String waMsg = 'Hola, soy tu cliente de RAI.';
                         if (await telefonoLaunchUri(
                           telefonoUriWhatsAppApp(tc, waMsg),
@@ -2397,6 +2628,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   ),
                 ],
               ),
+              if (v.uidTaxista.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                ViajeChatMensajesEnVivo(
+                  viajeId: v.id,
+                  miUid: FirebaseAuth.instance.currentUser?.uid ?? '',
+                  otroUid: v.uidTaxista,
+                  otroNombre: nombre,
+                ),
+              ],
               const SizedBox(height: 10),
               if (_isValidCoord(v.latTaxista, v.lonTaxista)) ...[
                 SizedBox(
@@ -2580,6 +2820,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         final cuenta = data['numeroCuenta'] ?? '';
         final titular =
             (data['titularCuenta'] ?? data['titular'] ?? '').toString();
+        // Tipo de cuenta opcional (Ahorros / Corriente / Cheques). Si el taxista
+        // no lo ha configurado todavía, simplemente no se muestra esa línea.
+        final String tipoCuenta =
+            (data['tipoCuenta'] ?? '').toString().trim();
 
         if (banco.isEmpty || cuenta.isEmpty || titular.isEmpty) {
           return Container(
@@ -2623,14 +2867,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               const SizedBox(height: 4),
               Text('Titular: $titular',
                   style: const TextStyle(color: Colors.white70)),
+              if (tipoCuenta.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('Tipo de cuenta: $tipoCuenta',
+                    style: const TextStyle(color: Colors.white70)),
+              ],
               const SizedBox(height: 8),
               const Text('Realiza el pago directamente al taxista.',
                   style: TextStyle(color: Colors.white54, fontSize: 12)),
               const SizedBox(height: 12),
               Builder(
                 builder: (_) {
-                  final String estadoTransfer =
-                      (viajeData['estado'] ?? '').toString();
+                  final String estadoPago =
+                      (viajeData['estadoPago'] ?? '').toString().trim().toLowerCase();
+                  final String paymentStatus =
+                      (viajeData['payment']?['status'] ?? '').toString().trim().toLowerCase();
                   final String comprobante =
                       (viajeData['comprobanteTransferenciaUrl'] ?? '')
                           .toString();
@@ -2640,7 +2891,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           .trim();
                   final bool confirmada =
                       viajeData['transferenciaConfirmada'] == true;
-                  if (confirmada) {
+                  if (confirmada || estadoPago == 'verificado') {
                     return const Text(
                       'Transferencia validada por Administracion.',
                       style: TextStyle(
@@ -2648,7 +2899,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           fontWeight: FontWeight.w700),
                     );
                   }
-                  if (estadoTransfer == 'pendiente_confirmacion') {
+                  if (estadoPago == 'pagado' ||
+                      paymentStatus == 'pending_admin_confirmation') {
                     return const Text(
                       'Comprobante enviado. Pendiente de validacion.',
                       style: TextStyle(
@@ -2656,7 +2908,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           fontWeight: FontWeight.w700),
                     );
                   }
-                  if (estadoTransfer == 'transferencia_rechazada') {
+                  if (paymentStatus == 'bank_transfer_rejected') {
                     return Column(
                       children: [
                         Text(
@@ -3031,10 +3283,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       _scheduleDrawRoute(v);
                     }
 
+                    // Encuadre automático: NO incluir cada ping del taxista (provoca zoom in/out
+                    // compitiendo con «Seguir conductor» y parpadeo). El movimiento del conductor
+                    // se refleja en marcador + [_maybeAnimarCamaraAlTaxista]; «Centrar ambos» sigue
+                    // disponible para ver pickup+conductor en una vista.
                     final String boundsKey =
-                        '${v.id}|${v.latCliente},${v.lonCliente}|'
+                        '${v.id}|$estadoBase|${v.latCliente},${v.lonCliente}|'
                         '${v.latDestino},${v.lonDestino}|'
-                        '${v.latTaxista},${v.lonTaxista}|'
                         '${_firmaWaypointsViaje(v)}';
                     if (_map != null && boundsKey != _lastBoundsKey) {
                       _lastBoundsKey = boundsKey;
@@ -3056,8 +3311,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         v.codigoVerificacion ?? '';
                     final bool codigoVerificado = v.codigoVerificado;
 
-                    // ===== DETECCIÓN DE CERCANÍA (nunca setState durante build) =====
-                    if (_isValidCoord(v.latTaxista, v.lonTaxista) &&
+                    // ===== DETECCIÓN DE CERCANÍA (solo fase pickup; en `en_curso` el cliente en
+                    // Firestore puede quedar congelado si la app pasajero no está en primer plano
+                    // → la distancia taxista-cliente salta y el banner parpadea). =====
+                    if ((estadoBase == EstadosViaje.aceptado ||
+                            estadoBase == EstadosViaje.enCaminoPickup) &&
+                        _isValidCoord(v.latTaxista, v.lonTaxista) &&
                         _isValidCoord(v.latCliente, v.lonCliente)) {
                       final double distanciaTaxista =
                           DistanciaService.calcularDistancia(
@@ -3088,8 +3347,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       }
                     }
 
-                    return Stack(
+                    return Column(
                       children: [
+                        Expanded(
+                          flex: 3,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
                         RepaintBoundary(
                           child: GoogleMap(
                             key: ValueKey<String>('gmap-${v.id}'),
@@ -3112,9 +3376,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   }
                                 }
                                 final String bk =
-                                    '${v.id}|${v.latCliente},${v.lonCliente}|'
+                                    '${v.id}|$estadoBase|${v.latCliente},${v.lonCliente}|'
                                     '${v.latDestino},${v.lonDestino}|'
-                                    '${v.latTaxista},${v.lonTaxista}';
+                                    '${_firmaWaypointsViaje(v)}';
                                 if (_lastBoundsKey != bk) {
                                   _lastBoundsKey = bk;
                                   await _fitBoundsFor(v);
@@ -3287,8 +3551,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                                         ? 'Seguí la ubicación del conductor en el mapa; '
                                                             'tocá «Seguir conductor» si soltaste el seguimiento.'
                                                         : (_pickupEtaDetalle ??
-                                                            'Mapa en vivo: podés seguir el desplazamiento y '
-                                                                'subir o bajar la tarjeta inferior arrastrando.'),
+                                                                'Deslizá el panel inferior para ver todos los detalles del viaje.'),
                                                     key: ValueKey<String>(
                                                       estadoBase ==
                                                               EstadosViaje
@@ -3472,23 +3735,65 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             ),
                           ),
                         if (esperandoTaxista) _radarSearchingOverlay(),
-                        DraggableScrollableSheet(
-                          controller: _sheetController,
-                          initialChildSize: _kSheetInitialMitad,
-                          minChildSize: _kSheetMinPickupNav,
-                          maxChildSize: 0.9,
-                          // En motor: arrastre continuo; en otros servicios se mantienen anclajes.
-                          snap: !v.esMotor,
-                          snapSizes: v.esMotor
-                              ? null
-                              : const [
-                                  _kSheetMinPickupNav,
-                                  0.35,
-                                  _kSheetInitialMitad,
-                                  0.9,
-                                ],
-                          builder: (context, scrollController) {
-                            return Container(
+                        if (pulsoTaxistaEnMapa)
+                          Positioned(
+                            left: 12,
+                            right: 12,
+                            bottom: 10,
+                            child: Material(
+                              elevation: 8,
+                              borderRadius: BorderRadius.circular(14),
+                              color: Colors.black.withValues(alpha: 0.88),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.local_taxi,
+                                        color: Colors.greenAccent, size: 22),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        _lineaEtaPickupCliente(v, estadoBase),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                          height: 1.25,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Material(
+                            color: Colors.black,
+                            child: SafeArea(
+                              top: false,
+                              child: SingleChildScrollView(
+                                physics: v.esMotor
+                                    ? const AlwaysScrollableScrollPhysics(
+                                        parent: ClampingScrollPhysics(),
+                                      )
+                                    : const ClampingScrollPhysics(),
+                                padding: EdgeInsets.fromLTRB(
+                                  16,
+                                  8,
+                                  16,
+                                  20 +
+                                      MediaQuery.of(context)
+                                          .viewPadding
+                                          .bottom +
+                                      76,
+                                ),
+                                child: Container(
                               decoration: BoxDecoration(
                                 color: Colors.black,
                                 borderRadius: const BorderRadius.vertical(
@@ -3501,23 +3806,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   ),
                                 ],
                               ),
-                              child: ListView(
-                                controller: scrollController,
-                                // Con poco contenido, sin esto el panel a veces no reacciona al
-                                // arrastre vertical (comportamiento de DraggableScrollableSheet).
-                                physics: v.esMotor
-                                    ? const AlwaysScrollableScrollPhysics(
-                                        parent: ClampingScrollPhysics(),
-                                      )
-                                    : null,
-                                padding: EdgeInsets.fromLTRB(
-                                  16,
-                                  8,
-                                  16,
-                                  20 +
-                                      MediaQuery.of(context).viewPadding.bottom +
-                                      76,
-                                ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Center(
                                     child: Container(
@@ -4069,45 +4360,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     ),
                                 ],
                               ),
-                            );
-                          },
-                        ),
-                        if (pulsoTaxistaEnMapa)
-                          Positioned(
-                            left: 12,
-                            right: 12,
-                            bottom: MediaQuery.sizeOf(context).height *
-                                (_kSheetMinPickupNav + 0.02),
-                            child: Material(
-                              elevation: 8,
-                              borderRadius: BorderRadius.circular(14),
-                              color: Colors.black.withValues(alpha: 0.88),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 12),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.local_taxi,
-                                        color: Colors.greenAccent, size: 22),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Text(
-                                        _lineaEtaPickupCliente(v, estadoBase),
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 14,
-                                          height: 1.25,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
                             ),
                           ),
-                      ],
-                    );
+                        ),
+                      ),
+                    ),
+                  ],
+                );
                   },
                 );
               },

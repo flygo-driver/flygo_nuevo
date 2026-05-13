@@ -160,6 +160,21 @@ class ChatRepo {
         .snapshots();
   }
 
+  /// Pocos mensajes para vista previa en viaje (sin ListView anidado largo).
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamMensajesPreview(
+    String chatId, {
+    int limit = 24,
+  }) {
+    final int n = limit.clamp(1, 60);
+    return _db
+        .collection('chats')
+        .doc(chatId)
+        .collection('mensajes')
+        .orderBy('ts', descending: true)
+        .limit(n)
+        .snapshots();
+  }
+
   static Future<void> enviar({
     required String chatId,
     required String deUid,

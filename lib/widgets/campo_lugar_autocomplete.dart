@@ -24,8 +24,13 @@ class CampoLugarAutocomplete extends StatefulWidget {
   final ValueChanged<DetalleLugar> onPlaceSelected;
   final ValueChanged<String>? onTextChanged;
   final int minChars;
-  final bool showQuickSuggestions; // NUEVO: mostrar sugerencias rápidas
-  final bool showCategories; // NUEVO: mostrar categorías
+  /// Conservados por compatibilidad con callsites existentes, pero la sección
+  /// "Lugares populares" se eliminó por UX. Cualquier valor pasado se ignora.
+  final bool showQuickSuggestions;
+
+  /// Conservados por compatibilidad con callsites existentes, pero la sección
+  /// "Buscar por categoría" se eliminó por UX. Cualquier valor pasado se ignora.
+  final bool showCategories;
   /// Si se define, el campo usa estos colores (p. ej. teal/azul alineado al paso origen/destino).
   final Color? fieldAccent;
   final Color? fieldFill;
@@ -49,8 +54,8 @@ class CampoLugarAutocomplete extends StatefulWidget {
     this.biasLon,
     this.onTextChanged,
     this.minChars = 1,
-    this.showQuickSuggestions = true, // Activado por defecto
-    this.showCategories = true, // Activado por defecto
+    this.showQuickSuggestions = false, // Sección eliminada por UX
+    this.showCategories = false, // Sección eliminada por UX
     this.fieldAccent,
     this.fieldFill,
     this.prefixIcon,
@@ -90,82 +95,6 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   static const int _maxRecientes = 4;
   static const String _prefsRecientesV2 = 'lugares_recientes_v2';
   static const String _prefsRecientesLegacy = 'lugares_recientes';
-
-  // NUEVO: lugares populares de RD
-  final List<Map<String, dynamic>> _lugaresPopulares = [
-    {
-      'nombre': 'Santo Domingo',
-      'icon': Icons.location_city,
-      'color': Colors.blue
-    },
-    {'nombre': 'Santiago', 'icon': Icons.location_city, 'color': Colors.indigo},
-    {'nombre': 'Punta Cana', 'icon': Icons.beach_access, 'color': Colors.amber},
-    {
-      'nombre': 'Puerto Plata',
-      'icon': Icons.beach_access,
-      'color': Colors.orange
-    },
-    {
-      'nombre': 'La Romana',
-      'icon': Icons.location_city,
-      'color': Colors.purple
-    },
-    {'nombre': 'Bávaro', 'icon': Icons.beach_access, 'color': Colors.teal},
-    {'nombre': 'Jarabacoa', 'icon': Icons.terrain, 'color': Colors.green},
-    {'nombre': 'Constanza', 'icon': Icons.terrain, 'color': Colors.lightGreen},
-  ];
-
-  // NUEVO: categorías de búsqueda
-  final List<Map<String, dynamic>> _categorias = [
-    {
-      'nombre': 'Restaurantes',
-      'tipo': 'restaurant',
-      'icon': Icons.restaurant,
-      'color': Colors.red
-    },
-    {
-      'nombre': 'Hoteles',
-      'tipo': 'lodging',
-      'icon': Icons.hotel,
-      'color': Colors.purple
-    },
-    {
-      'nombre': 'Aeropuerto',
-      'tipo': 'airport',
-      'icon': Icons.local_airport,
-      'color': Colors.blue
-    },
-    {
-      'nombre': 'Hospital',
-      'tipo': 'hospital',
-      'icon': Icons.local_hospital,
-      'color': Colors.redAccent
-    },
-    {
-      'nombre': 'Supermercado',
-      'tipo': 'supermarket',
-      'icon': Icons.shopping_cart,
-      'color': Colors.green
-    },
-    {
-      'nombre': 'Farmacia',
-      'tipo': 'pharmacy',
-      'icon': Icons.local_pharmacy,
-      'color': Colors.cyan
-    },
-    {
-      'nombre': 'Gasolinera',
-      'tipo': 'gas_station',
-      'icon': Icons.local_gas_station,
-      'color': Colors.orange
-    },
-    {
-      'nombre': 'Banco',
-      'tipo': 'bank',
-      'icon': Icons.account_balance,
-      'color': Colors.brown
-    },
-  ];
 
   @override
   void initState() {
@@ -609,28 +538,6 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     }
   }
 
-  // NUEVO: seleccionar categoría
-  Future<void> _seleccionarCategoria(String tipo, String nombre) async {
-    _controller.text = nombre;
-    widget.onTextChanged?.call(nombre);
-
-    // Buscar lugares de esa categoría cerca
-    if (widget.biasLat != null && widget.biasLon != null) {
-      // Aquí podrías implementar búsqueda por categoría
-      // Por ahora, buscamos lugares cercanos
-      final sugs = await _svc.autocompletar(
-        nombre,
-        biasLat: widget.biasLat,
-        biasLon: widget.biasLon,
-        country: widget.country ?? 'DO',
-      );
-
-      if (sugs.isNotEmpty && mounted) {
-        await _selectPrediction(sugs.first);
-      }
-    }
-  }
-
   Color? _fillFromInputTheme(ThemeData theme) {
     final Object? fill = theme.inputDecorationTheme.fillColor;
     if (fill == null) return null;
@@ -740,14 +647,8 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
             ),
           ),
           const SizedBox(height: 8),
-          if (widget.showQuickSuggestions &&
-              _controller.text.isEmpty &&
-              _focus.hasFocus)
-            _buildQuickSuggestions(),
-          if (widget.showCategories &&
-              _controller.text.isEmpty &&
-              _focus.hasFocus)
-            _buildCategoriesSection(),
+          // Las secciones "Lugares populares" y "Buscar por categoría" fueron
+          // eliminadas por UX. Solo se conserva "Recientes" + autocomplete.
           if (_recientes.isNotEmpty &&
               _controller.text.isEmpty &&
               _focus.hasFocus)
@@ -757,140 +658,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     );
   }
 
-  // NUEVO: sugerencias rápidas (lugares populares)
-  Widget _buildQuickSuggestions() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final headerColor = isDark
-        ? Colors.white70
-        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Text(
-              'Lugares populares',
-              style: TextStyle(
-                color: headerColor,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _lugaresPopulares.map((lugar) {
-              return InkWell(
-                onTap: () => _seleccionarPopular(lugar['nombre']),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: (lugar['color'] as Color).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: lugar['color']),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(lugar['icon'], color: lugar['color'], size: 16),
-                      const SizedBox(width: 6),
-                      Text(
-                        lugar['nombre'],
-                        style: TextStyle(
-                          color: lugar['color'],
-                          fontWeight: FontWeight.w500,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-
-  // NUEVO: categorías de búsqueda
-  Widget _buildCategoriesSection() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final headerColor = isDark
-        ? Colors.white70
-        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Text(
-              'Buscar por categoría',
-              style: TextStyle(
-                color: headerColor,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          SizedBox(
-            height: 90,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: _categorias.length,
-              itemBuilder: (context, index) {
-                final cat = _categorias[index];
-                return Container(
-                  width: 80,
-                  margin: const EdgeInsets.only(right: 8),
-                  child: InkWell(
-                    onTap: () =>
-                        _seleccionarCategoria(cat['tipo'], cat['nombre']),
-                    child: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: (cat['color'] as Color).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: cat['color']),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(cat['icon'], color: cat['color'], size: 28),
-                          const SizedBox(height: 4),
-                          Text(
-                            cat['nombre'],
-                            style: TextStyle(
-                              color: cat['color'],
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-
-  // NUEVO: lugares recientes
+  // Lugares recientes (única sección visible junto al autocomplete).
   Widget _buildRecientesSection() {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;

@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../modelo/viaje.dart';
 import '../../data/viaje_data.dart';
+import '../comun/factura_viaje.dart';
 
 class HistorialCliente extends StatelessWidget {
   const HistorialCliente({super.key});
@@ -62,32 +63,88 @@ class HistorialCliente extends StatelessWidget {
                       color: Colors.grey[900],
                       margin: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 8),
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.all(12),
-                        title: Text(
-                          '${v.origen} → ${v.destino}',
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.w600),
+                      child: InkWell(
+                        // Toda la tarjeta abre la factura del viaje. La
+                        // pantalla de factura es de SOLO LECTURA y reusa
+                        // exactamente el mismo widget que se muestra al
+                        // finalizar el viaje, con datos bancarios + estado
+                        // de pago + posibilidad de subir comprobante si es
+                        // transferencia y aún no se envió.
+                        onTap: () => FacturaViaje.mostrar(
+                          context,
+                          viajeId: v.id,
+                          role: 'cliente',
                         ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const SizedBox(height: 4),
-                            Text(
-                              'Fecha: ${formatoFecha.format(v.fechaHora)}',
-                              style: const TextStyle(color: Colors.white70),
-                            ),
-                            Text(
-                              'Pago: ${v.metodoPago}',
-                              style: const TextStyle(color: Colors.white70),
-                            ),
-                          ],
-                        ),
-                        trailing: Text(
-                          'RD\$${v.precio.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                              color: Colors.greenAccent,
-                              fontWeight: FontWeight.bold),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '${v.origen} → ${v.destino}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Fecha: ${formatoFecha.format(v.fechaHora)}',
+                                      style: const TextStyle(
+                                          color: Colors.white70),
+                                    ),
+                                    Text(
+                                      'Pago: ${v.metodoPago}',
+                                      style: const TextStyle(
+                                          color: Colors.white70),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    const Row(
+                                      children: [
+                                        Icon(
+                                          Icons.receipt_long_rounded,
+                                          color: Colors.greenAccent,
+                                          size: 14,
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          'Ver factura',
+                                          style: TextStyle(
+                                            color: Colors.greenAccent,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    'RD\$${v.precio.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      color: Colors.greenAccent,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  const Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: Colors.white38,
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     );

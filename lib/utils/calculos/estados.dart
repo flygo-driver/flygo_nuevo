@@ -125,6 +125,9 @@ class EstadosViaje {
   static bool esEnCaminoPickup(String e) => normalizar(e) == enCaminoPickup;
   static bool esAbordo(String e) => normalizar(e) == aBordo;
   static bool esEnCurso(String e) => normalizar(e) == enCurso;
+  /// Callable de cierre contable: acepta `en_curso` o `a_bordo` (PIN verificado sin bug de transición).
+  static bool taxistaPuedeInvocarFinalizar(String e) =>
+      esEnCurso(e) || esAbordo(e);
   static bool esCompletado(String e) => normalizar(e) == completado;
   static bool esCancelado(String e) => normalizar(e) == cancelado;
   static bool esRechazado(String e) => normalizar(e) == rechazado;

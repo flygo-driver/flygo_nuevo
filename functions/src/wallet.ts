@@ -1,34 +1,19 @@
 import * as functions from "firebase-functions/v2";
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
 
-const db = () => getFirestore();
-
-// Cuando un viaje se completa -> acreditamos billetera
+/**
+ * Legacy deshabilitado: antes, al pasar a `estado === completado`, escribía en
+ * `billeteras/{uid}/movimientos` y `empresa/comisiones/movimientos` con 80/20 fijo
+ * sobre `precio`, duplicando y desalineando la lógica real de comisión/prepago.
+ *
+ * Fuente de verdad del cierre financiero: `finalizarViajeSeguro` (finance.ts) →
+ * `billeteras_taxista`, asientos en `pagos`, `pagoDetalle`, `settlement`, etc.
+ *
+ * Se conserva el export y el trigger para que un `firebase deploy` solo actualice
+ * la función (no hace falta borrarla a mano en GCP).
+ */
 export const onViajeCompleted = functions.firestore.onDocumentUpdated(
   "viajes/{viajeId}",
-  async (event) => {
-    const before = event.data?.before.data();
-    const after = event.data?.after.data();
-    if (!before || !after) return;
-    if (before.estado !== "completado" && after.estado === "completado") {
-      const uidTaxista = after.uidTaxista;
-      const monto = after.precio || 0;
-      const ganancia = monto * 0.8;
-      const comision = monto * 0.2;
-
-      await db().collection("billeteras").doc(uidTaxista).collection("movimientos").add({
-        tipo: "ingreso",
-        monto: ganancia,
-        viajeId: event.params.viajeId,
-        createdAt: FieldValue.serverTimestamp(),
-      });
-
-      await db().collection("empresa").doc("comisiones").collection("movimientos").add({
-        tipo: "comision",
-        monto: comision,
-        viajeId: event.params.viajeId,
-        createdAt: FieldValue.serverTimestamp(),
-      });
-    }
-  }
+  async () => {
+    // Intencionalmente vacío: no escribir en Firestore desde aquí.
+  },
 );

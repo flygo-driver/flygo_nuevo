@@ -68,7 +68,7 @@ class ComisionesDiariasRepo {
       // if (comisionEspecial != null) return comisionEspecial;
     }
 
-    // PRIORIDAD 3: Comisión nominal plataforma ([PlataformaEconomia.comisionPorcento]).
+    // PRIORIDAD 3: Comisión nominal plataforma ([PlataformaEconomia.comisionViajePorcentaje]).
     final precio = (data['precio'] as num?)?.toDouble() ?? 0.0;
     return precio * PlataformaEconomia.factorComision;
   }
@@ -135,7 +135,7 @@ class ComisionesDiariasRepo {
       'totalViajes': totalViajes,
       'porcentajeComision': totalRecaudado > 0
           ? (totalComisiones / totalRecaudado * 100).toStringAsFixed(1)
-          : PlataformaEconomia.comisionPorcento.toStringAsFixed(1),
+          : PlataformaEconomia.comisionViajePorcentaje.toStringAsFixed(1),
       // Desglose por tipo (para análisis)
       'desglose': {
         'normales': {

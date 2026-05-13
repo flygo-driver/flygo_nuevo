@@ -768,7 +768,9 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            PagosTaxistaRepo.mensajeRecargaBannerLista,
+                            'No puedes participar en Bola Ahorro: tu saldo prepago de comisión '
+                            'en efectivo es insuficiente o tienes pagos / bloqueos pendientes en cuenta. '
+                            'Es la misma regla que el pool de viajes.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: col.onMuted,
@@ -779,8 +781,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            'Misma regla que el pool: saldo prepago mínimo / comisión RAI '
-                            '(y la bandera de cuenta si aplica). Regularizá en Mis pagos.',
+                            'Recarga y regulariza en Mis pagos para volver a ofertar o tomar viajes.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: col.onMuted.withValues(alpha: 0.92),

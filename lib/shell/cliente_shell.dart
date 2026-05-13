@@ -1,10 +1,19 @@
+// ignore_for_file: avoid_print
+
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_cuenta_tab.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_experiencias_tab.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_mis_viajes_hub.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_fidelidad_milestone_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_listener.dart';
+import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
 
 /// Shell del cliente: barra inferior fija; cada pestaña usa un [Navigator] anidado
 /// (pantallas con [Navigator.push] no tapan Inicio / Mis viajes / etc.).
@@ -31,9 +40,41 @@ class _ClienteShellScaffold extends StatefulWidget {
 class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
   int _index = 0;
 
+  final GlobalKey _viajeEnCursoShellKey = GlobalKey();
+
   final List<GlobalKey<NavigatorState>> _navigatorKeys =
       List<GlobalKey<NavigatorState>>.generate(
           4, (_) => GlobalKey<NavigatorState>());
+
+  StreamSubscription<bool>? _viajeActivoSub;
+  bool? _viajeActivoShell;
+
+  @override
+  void initState() {
+    super.initState();
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      _viajeActivoShell = false;
+    } else {
+      _viajeActivoSub =
+          ActiveTripService.streamTieneViajeActivo(uid).listen((bool ok) {
+        if (!mounted) return;
+        if (_viajeActivoShell != ok) {
+          print('[VIAJE_ACTIVO] cliente_shell stream tieneActivo=$ok');
+          setState(() => _viajeActivoShell = ok);
+        }
+      }, onError: (Object e) {
+        print('[VIAJE_ACTIVO] cliente_shell stream error: $e');
+        if (mounted) setState(() => _viajeActivoShell = false);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _viajeActivoSub?.cancel();
+    super.dispose();
+  }
 
   Widget _tabNavigator(int index, Widget rootPage) {
     return Navigator(
@@ -53,14 +94,56 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
   @override
   Widget build(BuildContext context) {
+    final String? uidOffline = FirebaseAuth.instance.currentUser?.uid;
+    if (_viajeActivoShell == null) {
+      return Scaffold(
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            RaiOfflineBanner(uid: uidOffline),
+            const Expanded(
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ],
+        ),
+      );
+    }
+    final bool full = _viajeActivoShell == true ||
+        ActiveTripService.debeMantenerOverlayViajeEnShell;
+    if (full) {
+      print(
+          '[VIAJE_ACTIVO] cliente_shell: pantalla completa ViajeEnCursoCliente (sin tabs)');
+      return Scaffold(
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            RaiOfflineBanner(uid: uidOffline),
+            Expanded(
+              child: ViajeEnCursoCliente(key: _viajeEnCursoShellKey),
+            ),
+          ],
+        ),
+      );
+    }
     return Scaffold(
-      body: IndexedStack(
-        index: _index,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _tabNavigator(0, const ClienteHome()),
-          _tabNavigator(1, const ClienteMisViajesHub()),
-          _tabNavigator(2, const ClienteExperienciasTab()),
-          _tabNavigator(3, const ClienteCuentaTab()),
+          RaiOfflineBanner(uid: uidOffline),
+          Expanded(
+            child: IndexedStack(
+              index: _index,
+              children: [
+                _tabNavigator(
+                  0,
+                  const ViajeSolicitadoActivoBootstrap(child: ClienteHome()),
+                ),
+                _tabNavigator(1, const ClienteMisViajesHub()),
+                _tabNavigator(2, const ClienteExperienciasTab()),
+                _tabNavigator(3, const ClienteCuentaTab()),
+              ],
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(

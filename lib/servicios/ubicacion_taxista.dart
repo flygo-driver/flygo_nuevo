@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 
 class UbicacionTaxista {
   static StreamSubscription<Position>? _subscription;
@@ -112,17 +113,14 @@ class UbicacionTaxista {
 
   /// Obtiene la ubicación actual una sola vez.
   static Future<Position> obtenerUbicacionActual() async {
-    final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
+    final snap = await GpsService.checkServiceThenRequestPermissionIfNeeded();
+    if (!snap.serviceEnabled) {
       throw Exception('Servicios de ubicación desactivados');
     }
 
-    LocationPermission permission = await Geolocator.checkPermission();
+    final LocationPermission permission = snap.permission;
     if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        throw Exception('Permisos de ubicación denegados');
-      }
+      throw Exception('Permisos de ubicación denegados');
     }
     if (permission == LocationPermission.deniedForever) {
       throw Exception('Permisos de ubicación denegados permanentemente');

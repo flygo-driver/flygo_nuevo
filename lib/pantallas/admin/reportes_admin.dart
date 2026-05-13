@@ -3,11 +3,14 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_ui_theme.dart';
+import '../../servicios/admin_reportes_service.dart';
 
 class ReportesAdmin extends StatefulWidget {
   const ReportesAdmin({super.key});
@@ -26,6 +29,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
   int _diasReportes = 7;
   String _filtroPromo = 'todos';
   int _diasAuditoriaPromo = 30;
+  String _tipoExport = 'viajes';
+  int _diasExport = 7;
+  bool _exportando = false;
 
   double _toDouble(dynamic v) {
     if (v is num) return v.toDouble();
@@ -131,6 +137,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
             children: [
               _chipPeriodo(context),
+              const SizedBox(height: 12),
+              _exportesBackendCard(context),
               const SizedBox(height: 14),
               _cardNumero(context, 'Total viajes', total.toString()),
               const SizedBox(height: 10),
@@ -200,6 +208,140 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         ],
       ),
     );
+  }
+
+  Widget _exportesBackendCard(BuildContext context) {
+    const tipos = <String>[
+      'viajes',
+      'pagos',
+      'comisiones',
+      'bloqueos',
+      'incidencias',
+    ];
+    final DateTime to = DateTime.now();
+    final DateTime from = to.subtract(Duration(days: _diasExport));
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AdminUi.card(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AdminUi.borderSubtle(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Exportables backend (CSV + URL temporal)',
+            style: TextStyle(
+              color: AdminUi.onCard(context),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 190,
+                child: DropdownButtonFormField<String>(
+                  value: _tipoExport,
+                  decoration: const InputDecoration(labelText: 'Tipo de reporte'),
+                  items: tipos
+                      .map((e) => DropdownMenuItem<String>(
+                            value: e,
+                            child: Text(e),
+                          ))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _tipoExport = v);
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 170,
+                child: DropdownButtonFormField<int>(
+                  value: _diasExport,
+                  decoration: const InputDecoration(labelText: 'Rango'),
+                  items: const [
+                    DropdownMenuItem(value: 1, child: Text('1 día')),
+                    DropdownMenuItem(value: 7, child: Text('7 días')),
+                    DropdownMenuItem(value: 30, child: Text('30 días')),
+                    DropdownMenuItem(value: 90, child: Text('90 días')),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _diasExport = v);
+                  },
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: _exportando
+                    ? null
+                    : () => _generarReporteBackend(from: from, to: to),
+                icon: _exportando
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download_outlined),
+                label: Text(_exportando ? 'Generando...' : 'Generar CSV'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Descarga firmada por 1 hora. Solo admins pueden generarla.',
+            style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _generarReporteBackend({
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    if (_exportando) return;
+    setState(() => _exportando = true);
+    try {
+      final res = await AdminReportesService.generarCsv(
+        reportType: _tipoExport,
+        from: from,
+        to: to,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Reporte generado: ${res.reportType}. Abriendo descarga...'),
+        ),
+      );
+      final uri = Uri.parse(res.downloadUrl);
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error reporte (${e.code}): ${e.message ?? "sin mensaje"}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error generando reporte: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _exportando = false);
+    }
   }
 
   Widget _filtroReportesCard(BuildContext context) {

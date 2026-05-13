@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/auth/login_cliente.dart';
 import 'package:flygo_nuevo/auth/login_taxista.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
+import 'package:flygo_nuevo/app_flavor.dart';
 
 class SeleccionUsuario extends StatelessWidget {
   const SeleccionUsuario({super.key});
@@ -103,32 +104,42 @@ class SeleccionUsuario extends StatelessWidget {
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
                       child: Column(
                         children: [
-                          _BigButton(
-                            background: btnBg,
-                            foreground: accent,
-                            icon: Icons.person,
-                            label: 'SOY CLIENTE',
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const LoginCliente()),
-                              );
-                            },
+                          // FLAVOR SPLIT: cliente solo botón cliente, conductor solo botón taxista, all ambos
+                          Visibility(
+                            visible: !isConductorFlavor,
+                            child: _BigButton(
+                              background: btnBg,
+                              foreground: accent,
+                              icon: Icons.person,
+                              label: 'SOY CLIENTE',
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => const LoginCliente()),
+                                );
+                              },
+                            ),
                           ),
-                          const SizedBox(height: 10),
-                          _BigButton(
-                            background: btnBg,
-                            foreground: accent,
-                            icon: Icons.local_taxi,
-                            label: 'SOY TAXISTA',
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const LoginTaxista()),
-                              );
-                            },
+                          Visibility(
+                            visible: isAllFlavors,
+                            child: const SizedBox(height: 10),
+                          ),
+                          Visibility(
+                            visible: !isClienteFlavor,
+                            child: _BigButton(
+                              background: btnBg,
+                              foreground: accent,
+                              icon: Icons.local_taxi,
+                              label: 'SOY TAXISTA',
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => const LoginTaxista()),
+                                );
+                              },
+                            ),
                           ),
                           const SizedBox(height: 18),
                           const _UberStyleLegalFooter(),

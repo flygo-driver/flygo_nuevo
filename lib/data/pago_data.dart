@@ -203,9 +203,13 @@ class PagoData {
         var saldo = saldoIni;
         final fromPend = p < comisionRd ? p : comisionRd;
         p = _round2(p - fromPend);
-        final rem = comisionRd - fromPend;
-        saldo = (saldo - rem).clamp(0.0, double.infinity);
-        final saldoFin = _round2(saldo);
+        final rem = _round2(comisionRd - fromPend);
+        // Lo que el prepago puede cubrir; el resto vuelve a legacy (no se pierde caja).
+        final cubiertoPrepago = rem <= saldo ? rem : saldo;
+        final faltantePrepago = _round2(rem - cubiertoPrepago);
+        saldo = _round2(saldo - cubiertoPrepago);
+        p = _round2(p + faltantePrepago);
+        final saldoFin = saldo;
         bPatch['comisionPendiente'] = _round2(p);
         bPatch['saldoPrepagoComisionRd'] = saldoFin;
         bPatch['primerViajeComisionGratisConsumido'] = true;
@@ -267,8 +271,8 @@ class PagoData {
       return true;
     });
 
-    // 3) Mismo doc que ViajesRepo (`pagos/viaje_*_asiento`) para admin y reporting unificado.
     if (actualizado) {
+      await PagosTaxistaRepo.sincronizarBloqueoOperativo(taxistaId);
       final post = await viajeRef.get();
       final pm = post.data() ?? <String, dynamic>{};
       final int tc = (pm['total_cents'] is int)
@@ -291,7 +295,7 @@ class PagoData {
           'totalCents': tc,
           'comisionCents': cc,
           'gananciaCents': gc,
-          'comisionPlataformaPct': 20,
+          'comisionPlataformaPct': PlataformaEconomia.comisionViajePorcentaje,
           'fuenteAsiento': 'registrar_comision_cash',
           'metodo': 'efectivo',
           'estado': 'comision_pendiente',
@@ -491,9 +495,12 @@ class PagoData {
         var saldo = saldoIni;
         final fromPend = p < comisionRd ? p : comisionRd;
         p = _round2(p - fromPend);
-        final rem = comisionRd - fromPend;
-        saldo = (saldo - rem).clamp(0.0, double.infinity);
-        final saldoFin = _round2(saldo);
+        final rem = _round2(comisionRd - fromPend);
+        final cubiertoPrepago = rem <= saldo ? rem : saldo;
+        final faltantePrepago = _round2(rem - cubiertoPrepago);
+        saldo = _round2(saldo - cubiertoPrepago);
+        p = _round2(p + faltantePrepago);
+        final saldoFin = saldo;
         bPatch['comisionPendiente'] = _round2(p);
         bPatch['saldoPrepagoComisionRd'] = saldoFin;
         bPatch['primerViajeComisionGratisConsumido'] = true;
@@ -512,5 +519,6 @@ class PagoData {
       }
       tx.set(billeRef, bPatch, SetOptions(merge: true));
     });
+    await PagosTaxistaRepo.sincronizarBloqueoOperativo(taxistaId);
   }
 }

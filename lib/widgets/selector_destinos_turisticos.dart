@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
+import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 
 class DestinoSeleccionado {
   final TurismoLugar lugar;
@@ -428,13 +429,34 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    // Tematización del sheet basada en el color de fondo personalizado
+    // del cliente (CustomThemeService). Antes el sheet era 100% negro y
+    // chocaba con cualquier color elegido (blanco, agua, rosado, amarillo).
+    // Ahora el fondo del sheet usa cardOn(themedBg) y todos los textos /
+    // bordes / chips se calculan por contraste WCAG sobre ese fondo, así
+    // las opciones SIEMPRE son legibles. El púrpura se mantiene como
+    // identidad visual de "Turismo".
+    final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
+    final Color sheetBg = CustomThemeService.cardOn(themedBg);
+    final Color textPrimary = CustomThemeService.textOn(sheetBg);
+    final Color textMuted = CustomThemeService.textMutedOn(sheetBg);
+    final Color textSubtle = CustomThemeService.textSubtleOn(sheetBg);
+    final Color borderSoft = CustomThemeService.borderOn(sheetBg);
+    // Superficie ligeramente elevada (chips, input, cards de resultados).
+    final bool sheetIsDark =
+        ThemeData.estimateBrightnessForColor(sheetBg) == Brightness.dark;
+    final Color surfaceRaised = sheetIsDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.black.withValues(alpha: 0.05);
+    const Color accent = Colors.purple;
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Container(
         height: MediaQuery.sizeOf(context).height * 0.85,
-        decoration: const BoxDecoration(
-          color: Colors.black,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        decoration: BoxDecoration(
+          color: sheetBg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border.all(color: borderSoft, width: 0.5),
         ),
         child: ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -449,30 +471,33 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                     width: 40,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: Colors.white24,
+                      color: textSubtle.withValues(alpha: 0.45),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
-                  const Padding(
-                    padding: EdgeInsets.all(16),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
                     child: Text(
                       'Destinos Turísticos',
                       style: TextStyle(
-                          color: Colors.white,
+                          color: textPrimary,
                           fontSize: 20,
                           fontWeight: FontWeight.bold),
                     ),
                   ),
 
-                  // Selector de tipo de vehículo
+                  // Selector de tipo de vehículo (chips). Las opciones AHORA
+                  // son visibles sobre cualquier fondo: el fondo del chip
+                  // usa surfaceRaised derivado del sheet, el texto usa
+                  // textPrimary calculado por contraste WCAG.
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Tipo de vehículo:',
+                        Text('Tipo de vehículo:',
                             style:
-                                TextStyle(color: Colors.white70, fontSize: 14)),
+                                TextStyle(color: textMuted, fontSize: 14)),
                         const SizedBox(height: 8),
                         SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
@@ -502,16 +527,20 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                                       });
                                     }
                                   },
-                                  backgroundColor: Colors.grey[900],
-                                  selectedColor: Colors.purple.withAlpha(77),
-                                  checkmarkColor: Colors.white,
-                                  labelStyle: TextStyle(
+                                  backgroundColor: surfaceRaised,
+                                  selectedColor: accent.withAlpha(77),
+                                  checkmarkColor: accent,
+                                  side: BorderSide(
                                     color: isSelected
-                                        ? Colors.purple
-                                        : Colors.white,
+                                        ? accent.withValues(alpha: 0.7)
+                                        : borderSoft,
+                                    width: isSelected ? 1.4 : 0.8,
+                                  ),
+                                  labelStyle: TextStyle(
+                                    color: isSelected ? accent : textPrimary,
                                     fontWeight: isSelected
                                         ? FontWeight.bold
-                                        : FontWeight.normal,
+                                        : FontWeight.w500,
                                   ),
                                 ),
                               );
@@ -529,21 +558,22 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Row(
                       children: [
-                        const Text('Pasajeros:',
+                        Text('Pasajeros:',
                             style:
-                                TextStyle(color: Colors.white70, fontSize: 14)),
+                                TextStyle(color: textMuted, fontSize: 14)),
                         const SizedBox(width: 16),
                         Container(
                           decoration: BoxDecoration(
-                            color: Colors.grey[900],
+                            color: surfaceRaised,
                             borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: borderSoft),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.remove,
-                                    color: Colors.white),
+                                icon: Icon(Icons.remove,
+                                    color: textPrimary),
                                 onPressed: () {
                                   if (_pasajeros > 1) {
                                     setState(() => _pasajeros--);
@@ -555,13 +585,13 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                                     const EdgeInsets.symmetric(horizontal: 16),
                                 child: Text(
                                   '$_pasajeros',
-                                  style: const TextStyle(
-                                      color: Colors.white, fontSize: 16),
+                                  style: TextStyle(
+                                      color: textPrimary, fontSize: 16),
                                 ),
                               ),
                               IconButton(
                                 icon:
-                                    const Icon(Icons.add, color: Colors.white),
+                                    Icon(Icons.add, color: textPrimary),
                                 onPressed: () {
                                   if (_pasajeros <
                                       _maxPasajerosParaVehiculoActual) {
@@ -586,17 +616,18 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
                   const SizedBox(height: 16),
 
-                  // Barra de búsqueda
+                  // Barra de búsqueda. Texto/hint/icons derivados del fondo
+                  // del sheet para garantizar contraste con cualquier color.
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: TextField(
-                      style: const TextStyle(color: Colors.white),
+                      style: TextStyle(color: textPrimary),
                       scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 280),
                       decoration: InputDecoration(
                         hintText: 'Buscar cualquier lugar en RD...',
-                        hintStyle: const TextStyle(color: Colors.white54),
+                        hintStyle: TextStyle(color: textSubtle),
                         prefixIcon:
-                            const Icon(Icons.search, color: Colors.white54),
+                            Icon(Icons.search, color: textSubtle),
                         suffixIcon: _buscandoGoogle
                             ? const Padding(
                                 padding: EdgeInsets.all(12),
@@ -609,8 +640,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                               )
                             : (_searchQuery.isNotEmpty
                                 ? IconButton(
-                                    icon: const Icon(Icons.clear,
-                                        color: Colors.white54),
+                                    icon: Icon(Icons.clear,
+                                        color: textSubtle),
                                     onPressed: () {
                                       _onSearchChanged('');
                                       FocusScope.of(context).unfocus();
@@ -618,10 +649,19 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                                   )
                                 : null),
                         filled: true,
-                        fillColor: Colors.grey[900],
+                        fillColor: surfaceRaised,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: borderSoft),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide:
+                              BorderSide(color: accent.withValues(alpha: 0.6)),
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
+                          borderSide: BorderSide(color: borderSoft),
                         ),
                       ),
                       onChanged: _onSearchChanged,
@@ -632,7 +672,15 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
                   // Resultados
                   Expanded(
-                    child: _buildResultados(),
+                    child: _buildResultados(
+                      sheetBg: sheetBg,
+                      surfaceRaised: surfaceRaised,
+                      textPrimary: textPrimary,
+                      textMuted: textMuted,
+                      textSubtle: textSubtle,
+                      borderSoft: borderSoft,
+                      accent: accent,
+                    ),
                   ),
                 ],
               ),
@@ -645,7 +693,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                     child: LinearProgressIndicator(
                       minHeight: 3,
                       color: const Color(0xFFBA68C8),
-                      backgroundColor: Colors.purple.withValues(alpha: 0.18),
+                      backgroundColor: accent.withValues(alpha: 0.18),
                     ),
                   ),
                 ),
@@ -656,18 +704,26 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     );
   }
 
-  Widget _buildResultados() {
+  Widget _buildResultados({
+    required Color sheetBg,
+    required Color surfaceRaised,
+    required Color textPrimary,
+    required Color textMuted,
+    required Color textSubtle,
+    required Color borderSoft,
+    required Color accent,
+  }) {
     if (_searchQuery.isNotEmpty) {
       if (_resultadosGoogle.isNotEmpty) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(
                 'Resultados de Google:',
                 style: TextStyle(
-                    color: Colors.purple, fontWeight: FontWeight.bold),
+                    color: accent, fontWeight: FontWeight.bold),
               ),
             ),
             Expanded(
@@ -678,30 +734,32 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                   final lugar = _resultadosGoogle[index];
                   return Card(
                     margin: const EdgeInsets.only(bottom: 8),
-                    color: Colors.grey[900],
+                    color: surfaceRaised,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(color: borderSoft),
                     ),
                     child: ListTile(
-                      leading: const CircleAvatar(
-                        backgroundColor: Colors.purple,
-                        child: Icon(Icons.location_on, color: Colors.white),
+                      leading: CircleAvatar(
+                        backgroundColor: accent,
+                        child: const Icon(Icons.location_on,
+                            color: Colors.white),
                       ),
                       title: Text(
                         lugar['nombre'],
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            color: textPrimary,
+                            fontWeight: FontWeight.bold),
                       ),
                       subtitle: Text(
                         lugar['direccion'],
-                        style: const TextStyle(color: Colors.white54),
+                        style: TextStyle(color: textSubtle),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      trailing:
-                          const Icon(Icons.add_circle, color: Colors.purple),
+                      trailing: Icon(Icons.add_circle, color: accent),
                       onTap: () => _seleccionarDestinoGoogle(lugar),
                     ),
                   );
@@ -717,26 +775,33 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(
                 'Destinos turísticos:',
                 style: TextStyle(
-                    color: Colors.purple, fontWeight: FontWeight.bold),
+                    color: accent, fontWeight: FontWeight.bold),
               ),
             ),
             Expanded(
-              child: _buildListaDestinos(locales),
+              child: _buildListaDestinos(
+                locales,
+                surfaceRaised: surfaceRaised,
+                textPrimary: textPrimary,
+                textSubtle: textSubtle,
+                borderSoft: borderSoft,
+                accent: accent,
+              ),
             ),
           ],
         );
       }
 
       if (!_buscandoGoogle) {
-        return const Center(
+        return Center(
           child: Text(
             'No se encontraron lugares',
-            style: TextStyle(color: Colors.white54),
+            style: TextStyle(color: textSubtle),
           ),
         );
       }
@@ -749,9 +814,9 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           controller: _tabController,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
-          labelColor: Colors.purple,
-          unselectedLabelColor: Colors.white54,
-          indicatorColor: Colors.purple,
+          labelColor: accent,
+          unselectedLabelColor: textMuted,
+          indicatorColor: accent,
           dividerColor: Colors.transparent,
           tabs: _destinosPorSubtipo.keys.map((subtipo) {
             return Tab(
@@ -765,7 +830,14 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
             controller: _tabController,
             children: _destinosPorSubtipo.keys.map((subtipo) {
               final destinos = _destinosPorSubtipo[subtipo] ?? [];
-              return _buildListaDestinos(destinos);
+              return _buildListaDestinos(
+                destinos,
+                surfaceRaised: surfaceRaised,
+                textPrimary: textPrimary,
+                textSubtle: textSubtle,
+                borderSoft: borderSoft,
+                accent: accent,
+              );
             }).toList(),
           ),
         ),
@@ -773,12 +845,19 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     );
   }
 
-  Widget _buildListaDestinos(List<TurismoLugar> destinos) {
+  Widget _buildListaDestinos(
+    List<TurismoLugar> destinos, {
+    required Color surfaceRaised,
+    required Color textPrimary,
+    required Color textSubtle,
+    required Color borderSoft,
+    required Color accent,
+  }) {
     if (destinos.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           'No hay destinos en esta categoría',
-          style: TextStyle(color: Colors.white54),
+          style: TextStyle(color: textSubtle),
         ),
       );
     }
@@ -792,35 +871,35 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
         return Card(
           margin: const EdgeInsets.only(bottom: 8),
-          color: isSelected ? Colors.purple.withAlpha(51) : Colors.grey[900],
+          color: isSelected ? accent.withAlpha(51) : surfaceRaised,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
             side: BorderSide(
-              color: isSelected ? Colors.purple : Colors.transparent,
-              width: 1,
+              color: isSelected ? accent : borderSoft,
+              width: isSelected ? 1.4 : 0.6,
             ),
           ),
           child: ListTile(
             leading: CircleAvatar(
-              backgroundColor: Colors.purple.withAlpha(77),
+              backgroundColor: accent.withAlpha(77),
               child: Icon(
                 _iconos[destino.subtipo] ?? Icons.place,
-                color: Colors.purple,
+                color: accent,
               ),
             ),
             title: Text(
               destino.nombre,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: textPrimary),
             ),
             subtitle: Text(
               destino.ciudad,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white54),
+              style: TextStyle(color: textSubtle),
             ),
-            trailing: const Icon(Icons.chevron_right, color: Colors.white54),
+            trailing: Icon(Icons.chevron_right, color: textSubtle),
             onTap: () => _seleccionarDestino(destino),
           ),
         );

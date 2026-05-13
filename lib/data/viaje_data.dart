@@ -93,10 +93,7 @@ class ViajeData {
   static int _toCents(num v) => (v * 100).round();
   static double _fromCents(int c) => c / 100.0;
   static int _comisionNominalCents(int precioCents) =>
-      PlataformaEconomia.comisionCentsDesdePrecioCents(
-        precioCents,
-        PlataformaEconomia.comisionPorcento,
-      );
+      PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
 
   static Map<String, int> _partidasCentsDesdePrecio(num precioDbl) {
     final int pCents = _toCents(precioDbl);
@@ -226,6 +223,7 @@ class ViajeData {
     if (uid == null) throw Exception('No autenticado');
 
     final Map<String, int> partidas = _partidasCentsDesdePrecio(precio);
+    final int precioCents = partidas['precio_cents']!;
 
     final DocumentReference<Map<String, dynamic>> ref = _viajes.doc();
     await ref.set(<String, dynamic>{
@@ -240,11 +238,12 @@ class ViajeData {
       'lonCliente': _round6(lonCliente),
       'latDestino': _round6(latDestino),
       'lonDestino': _round6(lonDestino),
-      'precio': _fromCents(partidas['precio_cents']!),
+      'precio': _fromCents(precioCents),
+      'precio_cents': precioCents,
       'metodoPago': metodoPago,
-      'gananciaTaxista': _fromCents(partidas['ganancia_cents']!),
-      'comision': _fromCents(partidas['comision_cents']!),
-      ...partidas,
+      'estadoPago': 'pendiente',
+      'transferenciaConfirmada': false,
+      'pagoATaxistaPendiente': false,
       'latTaxista': 0.0,
       'lonTaxista': 0.0,
       'driverLat': 0.0,
@@ -329,12 +328,13 @@ class ViajeData {
       'startWindowAt': Timestamp.fromDate(startWindowDT),
       'publishAt': Timestamp.fromDate(publishAtDT),
       'precio': _fromCents(partidas['precio_cents']!),
+      'precio_cents': partidas['precio_cents']!,
       'metodoPago': metodoPago,
       'tipoVehiculo': tipoVehiculo,
       'idaYVuelta': idaYVuelta,
-      'gananciaTaxista': _fromCents(partidas['ganancia_cents']!),
-      'comision': _fromCents(partidas['comision_cents']!),
-      ...partidas,
+      'estadoPago': 'pendiente',
+      'transferenciaConfirmada': false,
+      'pagoATaxistaPendiente': false,
       'latTaxista': 0.0,
       'lonTaxista': 0.0,
       'driverLat': 0.0,

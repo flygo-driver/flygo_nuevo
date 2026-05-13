@@ -13,6 +13,7 @@ import '../../servicios/lugares_service.dart'; // <- sin "hide kGooglePlacesApiK
 import '../../servicios/distancia_service.dart';
 import '../../servicios/directions_service.dart';
 import '../../data/viaje_data.dart';
+import '../../servicios/analytics_rai.dart';
 import '../cliente/viaje_en_curso_cliente.dart';
 import '../../utils/estilos.dart';
 import '../../widgets/campo_lugar_autocomplete.dart';
@@ -411,6 +412,8 @@ class _NuevoViajeMapaState extends State<NuevoViajeMapa> {
         precio: _precio!,
         metodoPago: 'Efectivo', // Puedes cambiarlo desde una UI más adelante
       );
+
+      await AnalyticsRai.logTripRequested();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

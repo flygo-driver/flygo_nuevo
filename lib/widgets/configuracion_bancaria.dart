@@ -18,6 +18,15 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
   final _titularCtrl = TextEditingController();
   bool _cargando = false;
 
+  /// Tipo de cuenta seleccionado por el taxista. Se persiste en Firestore
+  /// dentro del mismo doc de usuario que el banco/cuenta/titular.
+  static const List<String> _tiposCuentaPermitidos = <String>[
+    'Ahorros',
+    'Corriente',
+    'Cheques',
+  ];
+  String? _tipoCuenta;
+
   @override
   void initState() {
     super.initState();
@@ -42,10 +51,14 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
         .get();
     if (doc.exists) {
       final data = doc.data()!;
+      final String tipoRaw = (data['tipoCuenta'] ?? '').toString().trim();
       setState(() {
         _bancoCtrl.text = data['banco'] ?? '';
         _cuentaCtrl.text = data['numeroCuenta'] ?? '';
         _titularCtrl.text = data['titularCuenta'] ?? data['titular'] ?? '';
+        // Solo aceptamos los valores de la lista para no romper el dropdown.
+        _tipoCuenta =
+            _tiposCuentaPermitidos.contains(tipoRaw) ? tipoRaw : null;
       });
     }
   }
@@ -63,6 +76,7 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
         'banco': _bancoCtrl.text.trim(),
         'numeroCuenta': _cuentaCtrl.text.trim(),
         'titularCuenta': _titularCtrl.text.trim(),
+        if (_tipoCuenta != null) 'tipoCuenta': _tipoCuenta,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
@@ -158,6 +172,26 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
                 ),
                 validator: (v) =>
                     v == null || v.trim().isEmpty ? 'Campo requerido' : null,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: _tipoCuenta,
+                style: textStyle,
+                decoration: _fieldDecoration(
+                  context,
+                  'Tipo de cuenta',
+                  'Selecciona Ahorros, Corriente o Cheques',
+                ),
+                items: _tiposCuentaPermitidos
+                    .map((t) => DropdownMenuItem<String>(
+                          value: t,
+                          child: Text(t, style: textStyle),
+                        ))
+                    .toList(),
+                onChanged: (v) => setState(() => _tipoCuenta = v),
+                validator: (v) => (v == null || v.isEmpty)
+                    ? 'Selecciona el tipo de cuenta'
+                    : null,
               ),
               const SizedBox(height: 24),
               SizedBox(

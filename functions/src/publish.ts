@@ -8,7 +8,7 @@ import {
   AHORA_THRESHOLD_MINUTES,
   poolOpensAtMsForScheduledPickup,
   startWindowAtMsForScheduledPickup,
-} from "./trip_publish_windows";
+} from "./trip_publish_windows.js";
 
 // initializeApp() ya se hace en src/index.ts
 const db = () => getFirestore();

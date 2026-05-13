@@ -4,6 +4,10 @@ import type { DocumentSnapshot } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { logger } from "firebase-functions";
+
+import { logAdminAudit } from "./audit.js";
+import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
 
 const db = () => getFirestore();
 const messaging = () => getMessaging();
@@ -13,6 +17,8 @@ const ANDROID_CHANNEL_TAXISTA = "rai_driver_notifications";
 
 /** Deuda legacy `comisionPendiente` (ya no crece con viajes nuevos): al llegar aquí se bloquea. */
 const UMBRAL_COMISION_LEGACY_RD = 500;
+/** Tope de deuda acumulada por comisiones de pool pendientes de validar por admin. */
+const UMBRAL_DEUDA_POOL_RD = 500;
 /** Tras el primer viaje en efectivo gratis, hace falta este saldo prepago mínimo para pool / tomar viajes. */
 const MIN_SALDO_PREPAGO_COMISION_RD = 200;
 /** Aviso preventivo antes del bloqueo por prepago. */
@@ -34,10 +40,6 @@ function toCents(v: unknown): number {
 
 function fromCents(c: number): number {
   return c / 100;
-}
-
-function comision20(precioCents: number): number {
-  return Math.floor((precioCents * 20 + 50) / 100);
 }
 
 function roleFromUserDoc(data: AnyMap | undefined): string {
@@ -66,6 +68,24 @@ function saldoPrepagoRdFromBilletera(data: AnyMap | undefined): number {
     return Number.isFinite(n) ? n : 0;
   }
   return 0;
+}
+
+function saldoReservadoGirasRdFromBilletera(data: AnyMap | undefined): number {
+  if (!data) return 0;
+  const v = data.saldoReservadoParaGiras;
+  if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v);
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  }
+  return 0;
+}
+
+/** Prepago disponible para viajes normales + giras (prepago − reservado en giras). */
+function saldoDisponiblePrepagoRdFromBilletera(data: AnyMap | undefined): number {
+  const prep = saldoPrepagoRdFromBilletera(data);
+  const res = saldoReservadoGirasRdFromBilletera(data);
+  return Math.max(0, prep - res);
 }
 
 function numOr(n: unknown, fallback: number): number {
@@ -106,7 +126,8 @@ async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: number; 
 }
 
 /**
- * Pool / aceptar viaje: deuda legacy ≥ 500; o prepago activo (primer efectivo ya consumido y sin deuda legacy) con saldo < mínimo.
+ * Pool / aceptar viaje: deuda legacy ≥ 500; o prepago activo (primer efectivo ya consumido y sin deuda legacy)
+ * con **saldo disponible** agotado (prepago − reservado en giras ≤ 0).
  * Mientras quede `comisionPendiente` legacy (>0 y <500), no exigimos saldo prepago (migración suave).
  */
 function bloqueoOperativoPrepago(data: AnyMap | undefined): boolean {
@@ -114,12 +135,28 @@ function bloqueoOperativoPrepago(data: AnyMap | undefined): boolean {
   if (pend + 1e-9 >= UMBRAL_COMISION_LEGACY_RD) return true;
   if (pend > 1e-6) return false;
   if (data?.primerViajeComisionGratisConsumido !== true) return false;
-  return saldoPrepagoRdFromBilletera(data) + 1e-9 < MIN_SALDO_PREPAGO_COMISION_RD;
+  return saldoDisponiblePrepagoRdFromBilletera(data) <= 1e-6;
 }
 
 function comisionPendienteDesdeSnap(snap: DocumentSnapshot | undefined): number {
   if (!snap?.exists) return 0;
   return comisionPendienteRdFromBilletera(snap.data() as AnyMap | undefined);
+}
+
+function toDateFromUnknown(v: unknown): Date | null {
+  if (v && typeof v === "object" && typeof (v as { toDate?: unknown }).toDate === "function") {
+    try {
+      return (v as { toDate: () => Date }).toDate();
+    } catch (_) {
+      return null;
+    }
+  }
+  if (v instanceof Date) return v;
+  if (typeof v === "string" || typeof v === "number") {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
 }
 
 /** FCM a tokens en push_tokens/{uid} (misma convención que scheduled_pool_notify). No lanza si no hay tokens. */
@@ -219,10 +256,12 @@ async function notificarSaldoPrepagoInsuficiente(
     if (pendDespues > eps) return;
     if (saldoAntes + eps < minimo) return;
     if (saldoDespues + eps >= minimo) return;
+    const pct = await getComisionViajePorcentajeCached();
+    const pctLabel = Number.isInteger(pct) ? `${pct}` : pct.toFixed(1);
     await enviarPushComisionTaxista(
       uid,
       "Falta crédito prepago",
-      `Tu saldo de comisión (efectivo) quedó en RD$${saldoDespues.toFixed(2)}. Recarga RD$${minimo.toFixed(0)} o más desde Mis pagos para seguir en pool y tomar viajes (el 20% de cada viaje en efectivo se descuenta de tu saldo).`,
+      `Tu saldo de comisión (efectivo) quedó en RD$${saldoDespues.toFixed(2)}. Recarga RD$${minimo.toFixed(0)} o más desde Mis pagos para seguir en pool y tomar viajes (el ${pctLabel}% de cada viaje en efectivo se descuenta de tu saldo).`,
       "taxista_prepago_comision_bajo_min",
     );
   } catch (e) {
@@ -279,11 +318,30 @@ async function notificarLegacyComisionTope(uid: string, pendAntes: number, pendD
 async function syncTienePagoPendiente(uidTaxista: string): Promise<boolean> {
   const billeSnap = await db().collection("billeteras_taxista").doc(uidTaxista).get();
   const bloqueoComision = bloqueoOperativoPrepago(billeSnap.data() as AnyMap | undefined);
-  // Misma regla que la app: prepago bajo (tras primer efectivo) o deuda legacy ≥ tope.
-  const tienePagoPendiente = bloqueoComision;
+  // Deuda de pool pendiente de validación admin (acumulada por taxista).
+  const poolsPendSnap = await db()
+    .collection("viajes_pool")
+    .where("ownerTaxistaId", "==", uidTaxista)
+    .where("comisionPendientePagoAdmin", "==", true)
+    .limit(500)
+    .get();
+  let deudaPoolPendienteRd = 0;
+  for (const doc of poolsPendSnap.docs) {
+    const d = (doc.data() ?? {}) as AnyMap;
+    const v = d.montoComisionPendienteAdmin ?? d.montoComision;
+    if (typeof v === "number" && Number.isFinite(v)) deudaPoolPendienteRd += v;
+    else if (typeof v === "string") {
+      const n = Number(v);
+      if (Number.isFinite(n)) deudaPoolPendienteRd += n;
+    }
+  }
+  const bloqueoPool = deudaPoolPendienteRd + 1e-9 >= UMBRAL_DEUDA_POOL_RD;
+  // Misma regla + deuda pool: prepago bajo/legacy o deuda pool acumulada >= tope.
+  const tienePagoPendiente = bloqueoComision || bloqueoPool;
   await db().collection("usuarios").doc(uidTaxista).set(
     {
       tienePagoPendiente,
+      deudaPoolPendienteRd: Number(deudaPoolPendienteRd.toFixed(2)),
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true },
@@ -336,9 +394,49 @@ export async function syncTaxistaComisionTrasBola(uidTaxista: string): Promise<v
   await syncPoolsPorPagoSemanal(uid, tienePagoPendiente);
 }
 
+/** Recalcula y aplica bloqueo operativo completo (bandera + pools). */
+export async function syncTaxistaBloqueoOperativo(uidTaxista: string): Promise<boolean> {
+  const uid = uidTaxista.trim();
+  if (!uid) return false;
+  const tienePagoPendiente = await syncTienePagoPendiente(uid);
+  await syncPoolsPorPagoSemanal(uid, tienePagoPendiente);
+  return tienePagoPendiente;
+}
+
 async function getRole(uid: string): Promise<string> {
   const snap = await db().collection("usuarios").doc(uid).get();
-  return roleFromUserDoc(snap.data() as AnyMap | undefined);
+  let rolUsuario = roleFromUserDoc(snap.data() as AnyMap | undefined).trim().toLowerCase();
+  if (rolUsuario === "administrador") rolUsuario = "admin";
+  // Misma convención que Firestore rules / app: chofer legacy "driver" = taxista.
+  if (rolUsuario === "driver") rolUsuario = "taxista";
+  if (rolUsuario) return rolUsuario;
+
+  const rolSnap = await db().collection("roles").doc(uid).get();
+  let rolRaw = String((rolSnap.data() as AnyMap | undefined)?.rol ?? "").trim().toLowerCase();
+  if (rolRaw === "administrador") rolRaw = "admin";
+  if (rolRaw === "driver") rolRaw = "taxista";
+  return rolRaw;
+}
+
+/** Alineado con EstadosViaje.normalizar (Flutter): alias legacy y espacios. */
+function normalizeEstadoViajeDoc(raw: unknown): string {
+  const s = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+  if (s === "encurso" || s === "en_curso" || s === "en_curzo") return "en_curso";
+  if (
+    s === "a_bordo" ||
+    s === "abordo" ||
+    s === "a_bordo_pickup" ||
+    s === "cliente_a_bordo"
+  ) {
+    return "a_bordo";
+  }
+  if (s === "finalizado" || s === "completado") return "completado";
+  return s;
+}
+
+/** Taxista puede cerrar contablemente si ya va al destino o quedó a bordo con PIN (sin bug de estado). */
+function estadoPermiteFinalizarTaxista(estadoNorm: string): boolean {
+  return estadoNorm === "en_curso" || estadoNorm === "a_bordo";
 }
 
 async function ensureIdempotencyStart(
@@ -398,6 +496,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
   const idem = await ensureIdempotencyStart(idemKey, "finalizar_viaje_seguro", uidActor);
   if (idem.done) return idem.result;
 
+  const comisionViajePct = await getComisionViajePorcentajeCached();
+
   const viajeRef = db().collection("viajes").doc(viajeId);
   const result = await db().runTransaction(async (tx) => {
     const vSnap = await tx.get(viajeRef);
@@ -406,7 +506,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
 
     const uidTaxista = String(d.uidTaxista ?? d.taxistaId ?? "");
     const uidCliente = String(d.uidCliente ?? d.clienteId ?? "");
-    const estado = String(d.estado ?? "");
+    const estado = normalizeEstadoViajeDoc(d.estado);
     const completado = d.completado === true;
     if (role === "taxista" && uidTaxista !== uidActor) {
       throw new HttpsError("permission-denied", "No autorizado para este viaje");
@@ -415,8 +515,21 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     if (completado || estado === "completado") {
       return { ok: true, viajeId, alreadyCompleted: true, uidTaxista };
     }
-    if (estado !== "en_curso") {
-      throw new HttpsError("failed-precondition", "El viaje no está en curso");
+    if (!estadoPermiteFinalizarTaxista(estado)) {
+      const rawEst = String(d.estado ?? "");
+      logger.warn("[FINALIZAR_ERROR] finalizarViajeSeguro estado no finalizable", {
+        viajeId,
+        uidActor,
+        estadoRaw: rawEst,
+        estadoNorm: estado,
+        completado,
+        codigoVerificado: d.codigoVerificado === true,
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        `No se puede finalizar ahora: el viaje está en estado "${rawEst || estado}". ` +
+          "Tenés que tener el cliente a bordo con código verificado e iniciar la ruta al destino, o ya estar en ruta. Si ya lo hiciste, esperá un segundo y reintentá.",
+      );
     }
 
     const precioCentsDb = typeof d.precio_cents === "number" ? Math.trunc(d.precio_cents) : null;
@@ -428,7 +541,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       : toCents(d.precioFinal ?? d.precio ?? d.total ?? 0);
     const comisionCents = (comisionCentsDb !== null && comisionCentsDb >= 0)
       ? comisionCentsDb
-      : comision20(precioCents);
+      : comisionCentsDesdePrecioCents(precioCents, comisionViajePct);
     const gananciaCents = (gananciaCentsDb !== null && gananciaCentsDb >= 0)
       ? gananciaCentsDb
       : Math.max(0, precioCents - comisionCents);
@@ -444,6 +557,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         "payment.status": esEfectivo ? "cash_collected" : "bank_transfer_received",
         "payment.provider": esEfectivo ? "cash" : "transfer",
         "payment.updatedAt": FieldValue.serverTimestamp(),
+        estadoPago: esEfectivo ? "pagado" : "pendiente",
         precio_cents: precioCents,
         comision_cents: comisionCents,
         ganancia_cents: gananciaCents,
@@ -501,8 +615,11 @@ export const finalizarViajeSeguro = onCall(async (request) => {
           let saldo = saldoIni;
           const fromPend = Math.min(p, comisionRd);
           p = Number.parseFloat((p - fromPend).toFixed(2));
-          const rem = comisionRd - fromPend;
-          saldo = Math.max(0, Number.parseFloat((saldo - rem).toFixed(2)));
+          const rem = Number.parseFloat((comisionRd - fromPend).toFixed(2));
+          const cubiertoPrepago = rem <= saldo ? rem : saldo;
+          const faltantePrepago = Number.parseFloat((rem - cubiertoPrepago).toFixed(2));
+          saldo = Number.parseFloat((saldo - cubiertoPrepago).toFixed(2));
+          p = Number.parseFloat((p + faltantePrepago).toFixed(2));
           billePatch.comisionPendiente = p;
           billePatch.saldoPrepagoComisionRd = saldo;
           billePatch.primerViajeComisionGratisConsumido = true;
@@ -532,7 +649,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
           totalCents: precioCents,
           comisionCents,
           gananciaCents,
-          comisionPlataformaPct: 20,
+          comisionPlataformaPct: comisionViajePct,
           fuenteAsiento: "finalizar_viaje_seguro_cf",
           metodo: metodoAsiento,
           estado: esEfectivo ? "comision_pendiente" : "por_liquidar",
@@ -585,12 +702,166 @@ export const finalizarViajeSeguro = onCall(async (request) => {
 
   const uidT = String((result as AnyMap).uidTaxista ?? "");
   if (uidT && (result as AnyMap).alreadyCompleted !== true) {
-    const tiene = await syncTienePagoPendiente(uidT);
-    await syncPoolsPorPagoSemanal(uidT, tiene);
+    await syncTaxistaBloqueoOperativo(uidT);
   }
 
   await markIdempotencyDone(idem.ref, result);
   return result;
+});
+
+// Cliente reporta transferencia sin alterar estado operativo del viaje.
+export const reportarTransferenciaClienteSeguro = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "cliente" && role !== "admin") {
+    throw new HttpsError("permission-denied", "Rol no autorizado");
+  }
+
+  const viajeId = String(request.data?.viajeId ?? "").trim();
+  const comprobanteUrl = String(request.data?.comprobanteUrl ?? "").trim();
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+  if (!comprobanteUrl) throw new HttpsError("invalid-argument", "Falta comprobanteUrl");
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  await db().runTransaction(async (tx) => {
+    const snap = await tx.get(viajeRef);
+    if (!snap.exists) throw new HttpsError("not-found", "Viaje no existe");
+    const d = (snap.data() ?? {}) as AnyMap;
+    const uidCliente = String(d.uidCliente ?? d.clienteId ?? "").trim();
+    if (role !== "admin" && uidCliente !== uidActor) {
+      throw new HttpsError("permission-denied", "No autorizado para este viaje");
+    }
+    tx.update(viajeRef, {
+      comprobanteTransferenciaUrl: comprobanteUrl,
+      transferenciaConfirmada: false,
+      estadoPago: "pagado",
+      "payment.status": "pending_admin_confirmation",
+      "payment.provider": "transfer",
+      "payment.updatedAt": FieldValue.serverTimestamp(),
+      transferenciaReportadaEn: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    });
+  });
+  return { ok: true, viajeId };
+});
+
+// Admin valida transferencia sin tocar estado del viaje.
+export const confirmarTransferenciaAdminSeguro = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "admin") throw new HttpsError("permission-denied", "Solo admin");
+
+  const viajeId = String(request.data?.viajeId ?? "").trim();
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  await viajeRef.set({
+    transferenciaConfirmada: true,
+    estadoPago: "verificado",
+    "payment.status": "bank_transfer_validated",
+    "payment.provider": "transfer",
+    "payment.updatedAt": FieldValue.serverTimestamp(),
+    pagoATaxistaPendiente: false,
+    pagoTaxistaPendiente: false,
+    updatedAt: FieldValue.serverTimestamp(),
+    actualizadoEn: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return { ok: true, viajeId };
+});
+
+// Taxista confirma que recibió la transferencia del cliente.
+// Misma escritura que `confirmarTransferenciaAdminSeguro`, pero validando
+// que el actor sea precisamente el `uidTaxista` del viaje. El admin sigue
+// pudiendo validar como respaldo (la CF de admin no se ha tocado).
+export const confirmarTransferenciaTaxistaSeguro = onCall(async (request) => {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "No autenticado");
+  }
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "taxista" && role !== "admin") {
+    throw new HttpsError("permission-denied", "Rol no autorizado");
+  }
+
+  const viajeId = String(request.data?.viajeId ?? "").trim();
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  await db().runTransaction(async (tx) => {
+    const snap = await tx.get(viajeRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Viaje no existe");
+    }
+    const d = (snap.data() ?? {}) as AnyMap;
+
+    // El admin puede confirmar cualquiera; el taxista solo el suyo.
+    const uidTaxistaDoc = String(d.uidTaxista ?? "").trim();
+    if (role !== "admin" && uidTaxistaDoc !== uidActor) {
+      throw new HttpsError(
+        "permission-denied",
+        "No autorizado para este viaje"
+      );
+    }
+
+    // Solo tiene sentido confirmar si ya hay comprobante reportado por el cliente.
+    const comprobante = String(d.comprobanteTransferenciaUrl ?? "").trim();
+    if (!comprobante) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Aún no hay comprobante reportado por el cliente"
+      );
+    }
+
+    // Idempotencia básica: si ya estaba confirmada, devolver ok sin reescribir.
+    if (d.transferenciaConfirmada === true) {
+      return;
+    }
+
+    tx.update(viajeRef, {
+      transferenciaConfirmada: true,
+      transferenciaConfirmadaPor: role === "admin" ? "admin" : "taxista",
+      transferenciaConfirmadaAt: FieldValue.serverTimestamp(),
+      estadoPago: "verificado",
+      "payment.status": "bank_transfer_validated",
+      "payment.provider": "transfer",
+      "payment.updatedAt": FieldValue.serverTimestamp(),
+      pagoATaxistaPendiente: false,
+      pagoTaxistaPendiente: false,
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    });
+  });
+  return { ok: true, viajeId };
+});
+
+export const rechazarTransferenciaAdminSeguro = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "admin") throw new HttpsError("permission-denied", "Solo admin");
+
+  const viajeId = String(request.data?.viajeId ?? "").trim();
+  const motivo = String(request.data?.motivo ?? "").trim();
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  await viajeRef.set({
+    transferenciaConfirmada: false,
+    estadoPago: "pendiente",
+    "payment.status": "bank_transfer_rejected",
+    "payment.provider": "transfer",
+    "payment.updatedAt": FieldValue.serverTimestamp(),
+    pagoATaxistaPendiente: false,
+    pagoTaxistaPendiente: false,
+    motivoRechazoTransferencia: motivo,
+    transferenciaRechazadaEn: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    actualizadoEn: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return { ok: true, viajeId };
 });
 
 export const approvePayment = onCall(async (request) => {
@@ -615,11 +886,32 @@ export const approvePayment = onCall(async (request) => {
     const estado = String(data.estado ?? "").trim().toLowerCase();
     const uidTaxista = String(data.uidTaxista ?? "");
     if (!uidTaxista) throw new HttpsError("failed-precondition", "Pago sin uidTaxista");
+    const fechaInicioSemana =
+      toDateFromUnknown(data.fechaInicioSemana) ??
+      toDateFromUnknown(data.fechaInicio);
+    const fechaFinSemana =
+      toDateFromUnknown(data.fechaFinSemana) ??
+      toDateFromUnknown(data.fechaFin);
 
     if (estado === "pagado") return { ok: true, pagoId, alreadyProcessed: true, estado: "pagado" };
     if (estado === "rechazado") throw new HttpsError("failed-precondition", "Pago ya rechazado");
     if (estado !== "pendiente" && estado !== "pendiente_verificacion") {
       throw new HttpsError("failed-precondition", `Estado no válido: ${estado}`);
+    }
+
+    let viajesLiquidados: string[] = [];
+    if (fechaInicioSemana && fechaFinSemana) {
+      const viajesSnap = await tx.get(
+        db()
+          .collection("viajes")
+          .where("uidTaxista", "==", uidTaxista)
+          .where("completado", "==", true)
+          .where("finalizadoEn", ">=", fechaInicioSemana)
+          .where("finalizadoEn", "<=", fechaFinSemana)
+          .orderBy("finalizadoEn", "desc")
+          .limit(200),
+      );
+      viajesLiquidados = viajesSnap.docs.map((d) => d.id);
     }
 
     tx.update(pagoRef, {
@@ -628,6 +920,9 @@ export const approvePayment = onCall(async (request) => {
       verificadoPor: uid,
       verificadoEn: FieldValue.serverTimestamp(),
       notaAdmin,
+      fechaInicioSemana: fechaInicioSemana ?? null,
+      fechaFinSemana: fechaFinSemana ?? null,
+      viajesLiquidados,
       updatedAt: FieldValue.serverTimestamp(),
     });
 
@@ -651,6 +946,16 @@ export const approvePayment = onCall(async (request) => {
     await syncPoolsPorPagoSemanal(uidTaxista, tiene);
   }
   await markIdempotencyDone(idem.ref, result);
+  logAdminAudit({
+    action: "approve_payment",
+    actorUid: uid,
+    resourceType: "pago_taxista",
+    resourceId: pagoId,
+    metadata: {
+      notaAdminLen: notaAdmin.length,
+      result: result as AnyMap,
+    },
+  });
   return result;
 });
 
@@ -699,6 +1004,16 @@ export const rejectPayment = onCall(async (request) => {
     await syncPoolsPorPagoSemanal(uidTaxista, tiene);
   }
   await markIdempotencyDone(idem.ref, result);
+  logAdminAudit({
+    action: "reject_payment",
+    actorUid: uid,
+    resourceType: "pago_taxista",
+    resourceId: pagoId,
+    metadata: {
+      notaAdminLen: notaAdmin.length,
+      result: result as AnyMap,
+    },
+  });
   return result;
 });
 
@@ -959,6 +1274,35 @@ export const onBilleteraTaxistaWritten = onDocumentWritten("billeteras_taxista/{
   await notificarLegacyComisionTope(uid, pendAntes, pendDespues);
 });
 
+/** Re-sincroniza bloqueo operativo cuando cambian deudas/comisión en pools del taxista. */
+export const onViajesPoolCommissionWritten = onDocumentWritten("viajes_pool/{poolId}", async (event) => {
+  const before = (event.data?.before.data() ?? {}) as AnyMap;
+  const after = (event.data?.after.data() ?? {}) as AnyMap;
+  const ownerBefore = String(before.ownerTaxistaId ?? "").trim();
+  const ownerAfter = String(after.ownerTaxistaId ?? "").trim();
+
+  const changedRelevant =
+    ownerBefore !== ownerAfter ||
+    before.comisionPendientePagoAdmin !== after.comisionPendientePagoAdmin ||
+    before.montoComision !== after.montoComision ||
+    before.comisionEstado !== after.comisionEstado;
+  if (!changedRelevant) return;
+
+  const owners = new Set<string>();
+  if (ownerBefore) owners.add(ownerBefore);
+  if (ownerAfter) owners.add(ownerAfter);
+  if (owners.size === 0) return;
+
+  for (const uid of owners) {
+    try {
+      const tiene = await syncTienePagoPendiente(uid);
+      await syncPoolsPorPagoSemanal(uid, tiene);
+    } catch (e) {
+      console.error("[onViajesPoolCommissionWritten]", uid, e);
+    }
+  }
+});
+
 /** Avisa a admins cuando un taxista pasa a bloqueado por comisión (`tienePagoPendiente: true`). */
 export const onUsuarioTaxistaBloqueoComision = onDocumentWritten("usuarios/{uid}", async (event) => {
   const uid = String(event.params?.uid ?? "").trim();
@@ -994,3 +1338,49 @@ export const onUsuarioTaxistaBloqueoComision = onDocumentWritten("usuarios/{uid}
     comisionPendienteRd: pend.toFixed(2),
   });
 });
+
+/** Endpoint liviano para escritorio: valida sesión admin y entrega resumen sin usar Firestore SDK en cliente. */
+export const desktopAdminSessionInfo = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+  const role = await getRole(uid);
+  const isAdmin = role === "admin" || role === "administrador";
+  if (!isAdmin) {
+    throw new HttpsError("permission-denied", "Solo admin");
+  }
+
+  const [pendientesSnap, pagadosHoySnap, bloqueadosSnap, comisionPendienteSnap] = await Promise.all([
+    db().collection("pagos_taxistas").where("estado", "in", ["pendiente", "pendiente_verificacion"]).limit(200).get(),
+    db().collection("pagos_taxistas").where("estado", "==", "pagado").limit(200).get(),
+    db().collection("usuarios").where("tienePagoPendiente", "==", true).limit(200).get(),
+    db().collection("billeteras_taxista").where("comisionPendiente", ">", 0).limit(200).get(),
+  ]);
+
+  const payload = {
+    ok: true,
+    uid,
+    role,
+    resumen: {
+      pagosPendientes: pendientesSnap.size,
+      pagosPagadosMuestra: pagadosHoySnap.size,
+      bloqueosActivosMuestra: bloqueadosSnap.size,
+      comisionPorVencerMuestra: comisionPendienteSnap.size,
+    },
+    serverTimeMs: Date.now(),
+  };
+
+  logAdminAudit({
+    action: "desktop_admin_session_info",
+    actorUid: uid,
+    resourceType: "session",
+    resourceId: uid,
+    metadata: {
+      resumen: payload.resumen,
+    },
+  });
+
+  return payload;
+});
+
+/** Alias HTTPS: misma implementación que `finalizarViajeSeguro` (callable `completarViajePorTaxista` en cliente). */
+export const completarViajePorTaxista = finalizarViajeSeguro;

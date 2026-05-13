@@ -97,3 +97,42 @@ export async function ledgerComisionBolaPuebloCf(
     desdePrepagoRd: Number(desdePrepago.toFixed(2)),
   });
 }
+
+export async function ledgerRecargaPrepagoVerificadaCf(
+  tx: Transaction,
+  params: {
+    uidTaxista: string;
+    recargaId: string;
+    saldoPrepagoAntes: number;
+    saldoPrepagoDespues: number;
+    comisionPendienteAntes: number;
+    comisionPendienteDespues: number;
+    montoAcreditadoRd: number;
+    referencia?: string;
+  },
+): Promise<void> {
+  const uid = params.uidTaxista.trim();
+  const rid = params.recargaId.trim();
+  if (!uid || !rid) return;
+
+  const ref = movColl(uid).doc(safeId(`recarga_prepago_${rid}`));
+  const snap = await tx.get(ref);
+  if (snap.exists) return;
+
+  tx.set(ref, {
+    schemaVersion: 1,
+    createdAt: FieldValue.serverTimestamp(),
+    tipo: "recarga_prepago",
+    fuente: "admin_verificar_recarga_comision_cf",
+    uidTaxista: uid,
+    recargaId: rid,
+    montoAcreditadoRd: Number(params.montoAcreditadoRd.toFixed(2)),
+    saldoPrepagoAntes: Number(params.saldoPrepagoAntes.toFixed(2)),
+    saldoPrepagoDespues: Number(params.saldoPrepagoDespues.toFixed(2)),
+    comisionPendienteAntes: Number(params.comisionPendienteAntes.toFixed(2)),
+    comisionPendienteDespues: Number(params.comisionPendienteDespues.toFixed(2)),
+    ...(params.referencia && params.referencia.trim()
+      ? { referencia: params.referencia.trim() }
+      : {}),
+  });
+}

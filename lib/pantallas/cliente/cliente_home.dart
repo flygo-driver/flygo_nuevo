@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/seleccion_servicio.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 
 class ClienteHome extends StatefulWidget {
@@ -13,6 +16,15 @@ class ClienteHome extends StatefulWidget {
 
 class _ClienteHomeState extends State<ClienteHome> {
   bool _cerrarBannerRegistro = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(ViajeSolicitadoActivo.redirigirSiHayViajeActivo(context));
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

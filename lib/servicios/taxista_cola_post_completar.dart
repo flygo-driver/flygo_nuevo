@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
@@ -13,11 +14,11 @@ class TaxistaColaPostCompletar {
     required BuildContext context,
     required String uidTaxista,
   }) async {
-    final String? siguienteId =
+    final PromoverColaTaxistaOutcome outcome =
         await ViajesRepo.promoverColaTrasFinalizarTaxista(
             uidTaxista: uidTaxista);
 
-    if (siguienteId != null && siguienteId.isNotEmpty) {
+    if (outcome.hadPromotion) {
       await UbicacionTaxista.marcarNoDisponible();
     } else {
       await UbicacionTaxista.marcarDisponible();
@@ -30,7 +31,7 @@ class TaxistaColaPostCompletar {
       final messenger = ScaffoldMessenger.maybeOf(context);
       final nav = Navigator.of(context, rootNavigator: true);
 
-      if (siguienteId != null && siguienteId.isNotEmpty) {
+      if (outcome.hadPromotion && outcome.promotedViajeId != null) {
         messenger?.showSnackBar(
           const SnackBar(
             content: Text(
@@ -45,8 +46,34 @@ class TaxistaColaPostCompletar {
           (route) => false,
         );
       } else {
+        final buf = StringBuffer(
+          '🏁 Viaje marcado como completado. Estás disponible en el mapa.',
+        );
+        if (outcome.code == 'bloqueado_operativo') {
+          buf.write(' ');
+          buf.write(outcome.message ??
+              PagosTaxistaRepo.mensajeRecargaTomarViajes);
+        } else if (outcome.code.startsWith('functions_') ||
+            outcome.code == 'invalid_response' ||
+            outcome.code == 'error') {
+          buf.write(' No se pudo asignar el siguiente viaje: ');
+          buf.write(outcome.message ?? outcome.code);
+        } else if (outcome.code == 'nothing_to_promote' &&
+            (outcome.message ?? '').isNotEmpty) {
+          buf.write(' ');
+          buf.write(outcome.message!);
+        }
         messenger?.showSnackBar(
-          const SnackBar(content: Text('🏁 Viaje marcado como completado')),
+          SnackBar(
+            content: Text(buf.toString()),
+            backgroundColor: outcome.code == 'bloqueado_operativo' ||
+                    outcome.code.startsWith('functions_') ||
+                    outcome.code == 'invalid_response' ||
+                    outcome.code == 'error'
+                ? Colors.orange
+                : null,
+            duration: const Duration(seconds: 5),
+          ),
         );
         nav.pushAndRemoveUntil(
           MaterialPageRoute<void>(builder: (_) => const TaxistaShell()),

@@ -1,9 +1,11 @@
 // lib/pantallas/taxista/viaje_en_curso_taxista.dart
+// ignore_for_file: avoid_print -- [VIAJE_ACTIVO] / [FINALIZAR] / [FINALIZAR_VIAJE]
 
 import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugPrint, defaultTargetPlatform, kDebugMode, kIsWeb;
@@ -17,9 +19,12 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
+import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
 import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart'; // 🔥 ESTA LÍNEA
@@ -27,9 +32,12 @@ import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
+import 'package:flygo_nuevo/utils/ux_log.dart';
+import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
 import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import 'package:flygo_nuevo/widgets/cliente_perfil_conductor_chip.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
+import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
 import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
@@ -46,16 +54,15 @@ void _diag(String msg) {
 
 /// Solo en debug/profile: ignorar distancias muy pequeñas (mismo dispositivo).
 const double kDebugMinDistance = 0.01; // ~10 m
-const double kFinalizarRadioMetros =
-    250; // Produccion: finalizar solo cerca del destino
+
+/// Radio máximo para habilitar el botón **Finalizar** (Geolocator vs pin de destino).
+const double kFinalizarRadioMetros = 50;
 
 class ViajeEnCursoTaxista extends StatefulWidget {
   const ViajeEnCursoTaxista({super.key});
   @override
   State<ViajeEnCursoTaxista> createState() => _ViajeEnCursoTaxistaState();
 }
-
-// ... resto del código igual
 
 class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
@@ -70,17 +77,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   GoogleMapController? _map;
 
-  /// Tarjeta de acciones/navegación: arrastrable; por defecto ~40% para dejar mapa visible.
-  final DraggableScrollableController _viajeNavSheetCtrl =
-      DraggableScrollableController();
-
-  static const double _kViajeNavSheetMin = 0.14;
-  static const double _kViajeNavSheetInitialMitad = 0.5;
-
   // ===== GPS =====
   StreamSubscription<Position>? _gpsSub;
   String? _gpsParaViajeId;
   bool _gpsActivo = false;
+
+  /// Reintento acotado si el stream de posición falla (p. ej. GPS apagado).
+  static const int _kMaxGpsStreamRecoveryIntentos = 3;
+  static const Duration _kGpsStreamRecoveryDelay = Duration(seconds: 5);
+  int _gpsStreamRecoveryIntentos = 0;
+  Timer? _gpsStreamRecoveryTimer;
 
   // ===== Acciones =====
   bool _actionBusy = false;
@@ -114,6 +120,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   // Cache del viaje actual
   Viaje? _cachedViaje;
   bool _isUpdatingLocation = false;
+
+  /// Distancia al pin de destino (último waypoint o destino); solo en `en_curso`.
+  double? _distanciaMetrosAlDestino;
 
   // ===== Stream principal (deduplicado: el taxista escribe GPS en el mismo doc → sin esto, cada ping reconstruye toda la pantalla) =====
   Stream<Viaje?> _stream() {
@@ -187,15 +196,269 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   double? _waypointLat(Map<String, dynamic> w) {
-    final x = w['lat'];
-    if (x is num) return x.toDouble();
-    return double.tryParse('$x');
+    for (final k in ['lat', 'latitude', 'latitud']) {
+      final x = w[k];
+      if (x is num && x.isFinite) return x.toDouble();
+      final d = double.tryParse('$x');
+      if (d != null && d.isFinite) return d;
+    }
+    return null;
   }
 
   double? _waypointLon(Map<String, dynamic> w) {
-    final x = w['lon'];
-    if (x is num) return x.toDouble();
-    return double.tryParse('$x');
+    for (final k in ['lon', 'lng', 'longitude', 'longitud']) {
+      final x = w[k];
+      if (x is num && x.isFinite) return x.toDouble();
+      final d = double.tryParse('$x');
+      if (d != null && d.isFinite) return d;
+    }
+    return null;
+  }
+
+  /// Punto de cierre: última parada con coordenadas o destino del documento.
+  ({double lat, double lon})? _coordsDestinoParaFinalizar(Viaje v) {
+    final wps = v.waypoints;
+    if (wps != null && wps.isNotEmpty) {
+      for (var i = wps.length - 1; i >= 0; i--) {
+        final lat = _waypointLat(wps[i]);
+        final lon = _waypointLon(wps[i]);
+        if (lat != null && lon != null && _coordsValid(lat, lon)) {
+          return (lat: lat, lon: lon);
+        }
+      }
+    }
+    if (_coordsValid(v.latDestino, v.lonDestino)) {
+      return (lat: v.latDestino, lon: v.lonDestino);
+    }
+    return null;
+  }
+
+  /// Mejor distancia al pin de destino: primero el ping **en vivo** del stream (navegación en curso),
+  /// luego lecturas puntuales y la posición guardada en el viaje.
+  Future<double?> _menorDistanciaMetrosAlDestinoParaFinalizar(
+    Viaje v,
+    ({double lat, double lon}) destino, {
+    (double, double)? pingStreamLatLon,
+  }) async {
+    final List<({double lat, double lon})> pts = [];
+
+    if (pingStreamLatLon != null) {
+      final double a = pingStreamLatLon.$1;
+      final double b = pingStreamLatLon.$2;
+      if (_coordsValid(a, b)) pts.add((lat: a, lon: b));
+    }
+
+    try {
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null && _coordsValid(last.latitude, last.longitude)) {
+        pts.add((lat: last.latitude, lon: last.longitude));
+      }
+    } catch (e) {
+      uxLog('GPS_FINALIZAR', 'getLastKnownPosition', e);
+    }
+
+    for (final LocationAccuracy acc in [
+      LocationAccuracy.high,
+      LocationAccuracy.medium,
+      LocationAccuracy.low,
+    ]) {
+      try {
+        final Position pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: acc,
+        );
+        if (_coordsValid(pos.latitude, pos.longitude)) {
+          pts.add((lat: pos.latitude, lon: pos.longitude));
+        }
+      } catch (e) {
+        uxLog('GPS_FINALIZAR', 'getCurrentPosition acc=$acc', e);
+      }
+    }
+
+    if (_coordsValid(v.latTaxista, v.lonTaxista)) {
+      pts.add((lat: v.latTaxista, lon: v.lonTaxista));
+    }
+    if (_cachedViaje != null &&
+        _coordsValid(_cachedViaje!.latTaxista, _cachedViaje!.lonTaxista)) {
+      pts.add((lat: _cachedViaje!.latTaxista, lon: _cachedViaje!.lonTaxista));
+    }
+
+    if (pts.isEmpty) return null;
+
+    double minM = double.infinity;
+    for (final ({double lat, double lon}) p in pts) {
+      final double d = Geolocator.distanceBetween(
+        p.lat,
+        p.lon,
+        destino.lat,
+        destino.lon,
+      );
+      if (d < minM) minM = d;
+    }
+    return minM;
+  }
+
+  /// Actualiza [_distanciaMetrosAlDestino] desde la posición en vivo (cola GPS).
+  void _recalcDistanciaDestino() {
+    final v = _cachedViaje;
+    if (v == null || !mounted) return;
+    final estadoBase = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    // Misma lógica que la ruta verde al destino: empieza a medir en cuanto el PIN
+    // quedó verificado, aunque Firestore tarde un instante en pasar a `en_curso`.
+    final bool rutaAlDestino = EstadosViaje.esEnCurso(estadoBase) ||
+        (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
+    if (!rutaAlDestino) {
+      if (_distanciaMetrosAlDestino != null) {
+        setState(() => _distanciaMetrosAlDestino = null);
+      }
+      return;
+    }
+    final dest = _coordsDestinoParaFinalizar(v);
+    if (dest == null) {
+      if (_distanciaMetrosAlDestino != null) {
+        setState(() => _distanciaMetrosAlDestino = null);
+      }
+      return;
+    }
+    // Ping en vivo del stream; si aún no hay fix, usar posición del doc (Firestore).
+    (double, double)? ping = _taxistaPosCola.value;
+    if (ping == null && _coordsValid(v.latTaxista, v.lonTaxista)) {
+      ping = (v.latTaxista, v.lonTaxista);
+    }
+    if (ping == null &&
+        _cachedViaje != null &&
+        _coordsValid(_cachedViaje!.latTaxista, _cachedViaje!.lonTaxista)) {
+      ping = (_cachedViaje!.latTaxista, _cachedViaje!.lonTaxista);
+    }
+    if (ping == null) {
+      if (_distanciaMetrosAlDestino != null) {
+        setState(() => _distanciaMetrosAlDestino = null);
+      }
+      return;
+    }
+    final d = Geolocator.distanceBetween(
+      ping.$1,
+      ping.$2,
+      dest.lat,
+      dest.lon,
+    );
+    final prev = _distanciaMetrosAlDestino;
+    if (prev == null || (d - prev).abs() > 3) {
+      setState(() => _distanciaMetrosAlDestino = d);
+    }
+  }
+
+  bool _puedeMostrarBotonFinalizar(Viaje v) {
+    final pin = _coordsDestinoParaFinalizar(v);
+    if (pin == null) return false;
+    final d = _distanciaMetrosAlDestino;
+    // Si aún no hay ping GPS en [_taxistaPosCola], la distancia puede ser null:
+    // igual mostramos Finalizar; [_finalizarViaje] vuelve a medir / confirma.
+    if (d == null) return true;
+    return d <= kFinalizarRadioMetros;
+  }
+
+  Future<void> _refrescarViajeDocDesdeFirestore() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      print('[VIAJE_ACTIVO] resume refresh skip (sin uid)');
+      return;
+    }
+    String? vid = _cachedViaje?.id;
+    if (vid == null || vid.isEmpty) {
+      try {
+        final us = await FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(uid)
+            .get();
+        vid = (us.data()?['viajeActivoId'] ?? '').toString().trim();
+      } catch (_) {}
+    }
+    if (vid == null || vid.isEmpty) {
+      print('[VIAJE_ACTIVO] resume refresh skip (sin viajeId)');
+      return;
+    }
+    print('[VIAJE_ACTIVO] resume refresh GET viajes/$vid');
+    try {
+      final snap =
+          await FirebaseFirestore.instance.collection('viajes').doc(vid).get();
+      if (!snap.exists || !mounted) return;
+      final fresh = Viaje.fromMap(snap.id, snap.data()!);
+      setState(() {
+        _cachedViaje = fresh.copyWith(
+          latTaxista: _cachedViaje?.latTaxista ?? fresh.latTaxista,
+          lonTaxista: _cachedViaje?.lonTaxista ?? fresh.lonTaxista,
+        );
+      });
+      _recalcDistanciaDestino();
+      print(
+          '[VIAJE_ACTIVO] resume refresh OK estado=${fresh.estado} completado=${fresh.completado}');
+    } catch (e, st) {
+      print('[VIAJE_ACTIVO] resume refresh error $e $st');
+    }
+  }
+
+  static String _textoDistanciaAlPin(double metros) {
+    if (metros < 1000) {
+      return '${metros.round()} m';
+    }
+    return '${(metros / 1000).toStringAsFixed(1)} km';
+  }
+
+  /// Diálogo según proximidad: en zona → cierre para factura/pago; fuera/sin GPS → confirmación explícita.
+  Future<bool?> _dialogoConfirmarFinalizarViaje(
+    BuildContext context, {
+    required bool hayPinDestino,
+    double? distanciaMetrosMin,
+  }) {
+    late final String body;
+
+    if (!hayPinDestino) {
+      body =
+          'No hay coordenadas de destino en este viaje. ¿Confirmás que ya terminó el servicio para emitir la factura al cliente?';
+    } else if (distanciaMetrosMin == null) {
+      body =
+          'No pudimos contrastar tu ubicación con el mapa (GPS). Si ya están en el punto de bajada y el cliente va a pagar o hacer una transferencia, podés finalizar para que vea el monto en la factura.';
+    } else if (distanciaMetrosMin <= kFinalizarRadioMetros) {
+      body =
+          'Tu posición está cerca del destino del viaje (cliente a bordo y en ruta). '
+          'Al finalizar, el cliente verá la factura con el monto y podrá pagar o transferir. ¿Finalizamos?';
+    } else {
+      final String dTxt = _textoDistanciaAlPin(distanciaMetrosMin);
+      body =
+          'Tu posición aparece a unos $dTxt del punto de destino guardado en el viaje (referencia de GPS, no es una ruta que “te falte” recorrer). '
+          'Si ya estás en el lugar de bajada y el pasajero va a pagar o transferir, podés finalizar igual para que salga la factura.';
+    }
+
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.black,
+        title: const Text(
+          'Finalizar viaje',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          body,
+          style: const TextStyle(color: Colors.white70, height: 1.35),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Ahora no', style: TextStyle(color: Colors.white70)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sí, finalizar'),
+          ),
+        ],
+      ),
+    );
   }
 
   String _uidClienteDe(Viaje v) {
@@ -280,6 +543,51 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   // ===== GPS control =====
+  void _programarRecuperacionGpsStream(String viajeId, Object error) {
+    logDbg('GPS stream error → recuperación programada: $error');
+    unawaited(_gpsSub?.cancel());
+    _gpsSub = null;
+    _gpsActivo = false;
+
+    if (!mounted) return;
+    final Viaje? v = _cachedViaje;
+    if (v == null || v.id != viajeId) return;
+
+    final String est = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    final bool enRuta = EstadosViaje.esEnCurso(est) ||
+        (EstadosViaje.esAbordo(est) && v.codigoVerificado);
+    if (!enRuta) {
+      _gpsStreamRecoveryIntentos = 0;
+      return;
+    }
+
+    _gpsStreamRecoveryIntentos++;
+    if (_gpsStreamRecoveryIntentos > _kMaxGpsStreamRecoveryIntentos) {
+      logDbg(
+          '🛑 GPS stream: máximo $_kMaxGpsStreamRecoveryIntentos reintentos alcanzado',
+      );
+      return;
+    }
+
+    _gpsStreamRecoveryTimer?.cancel();
+    _gpsStreamRecoveryTimer = Timer(_kGpsStreamRecoveryDelay, () {
+      _gpsStreamRecoveryTimer = null;
+      if (!mounted) return;
+      unawaited(() async {
+        final bool ok = await _asegurarGps(viajeId);
+        if (ok && mounted) {
+          _gpsStreamRecoveryIntentos = 0;
+        }
+      }());
+    });
+  }
+
   Future<void> _startGpsFor(String viajeId) async {
     logDbg('_startGpsFor($viajeId)');
     if (_gpsParaViajeId == viajeId && _gpsSub != null) return;
@@ -300,38 +608,50 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               );
     _gpsSub = Geolocator.getPositionStream(
       locationSettings: gpsSettings,
-    ).listen((p) async {
-      try {
-        await ref.update({
-          'latTaxista': p.latitude,
-          'lonTaxista': p.longitude,
-          'driverLat': p.latitude,
-          'driverLon': p.longitude,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        });
-        logDbg('📍 Ubicación enviada: ${p.latitude}, ${p.longitude}');
-        _taxistaPosCola.value = (p.latitude, p.longitude);
+    ).listen(
+      (p) async {
+        try {
+          _gpsStreamRecoveryTimer?.cancel();
+          _gpsStreamRecoveryTimer = null;
+          _gpsStreamRecoveryIntentos = 0;
 
-        if (mounted && _cachedViaje != null && _cachedViaje!.id == viajeId) {
-          _cachedViaje = _cachedViaje!
-              .copyWith(latTaxista: p.latitude, lonTaxista: p.longitude);
-        }
+          await ref.update({
+            'latTaxista': p.latitude,
+            'lonTaxista': p.longitude,
+            'driverLat': p.latitude,
+            'driverLon': p.longitude,
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          });
+          logDbg('📍 Ubicación enviada: ${p.latitude}, ${p.longitude}');
+          _taxistaPosCola.value = (p.latitude, p.longitude);
 
-        if (mounted &&
-            _cachedViaje != null &&
-            _coordsValid(_cachedViaje!.latCliente, _cachedViaje!.lonCliente)) {
-          _verificarCercaniaCliente(p.latitude, p.longitude,
-              _cachedViaje!.latCliente, _cachedViaje!.lonCliente);
-          _scheduleDrawRoute();
+          if (mounted && _cachedViaje != null && _cachedViaje!.id == viajeId) {
+            _cachedViaje = _cachedViaje!
+                .copyWith(latTaxista: p.latitude, lonTaxista: p.longitude);
+          }
+          _recalcDistanciaDestino();
+
+          if (mounted &&
+              _cachedViaje != null &&
+              _coordsValid(_cachedViaje!.latCliente, _cachedViaje!.lonCliente)) {
+            _verificarCercaniaCliente(p.latitude, p.longitude,
+                _cachedViaje!.latCliente, _cachedViaje!.lonCliente);
+            _scheduleDrawRoute();
+          }
+        } catch (e) {
+          logDbg('Error actualizando Firestore: $e');
         }
-      } catch (e) {
-        logDbg('Error actualizando Firestore: $e');
-      }
-    });
+      },
+      onError: (Object e) => _programarRecuperacionGpsStream(viajeId, e),
+      cancelOnError: false,
+    );
   }
 
   void _stopGps() {
+    _gpsStreamRecoveryTimer?.cancel();
+    _gpsStreamRecoveryTimer = null;
+    _gpsStreamRecoveryIntentos = 0;
     _gpsSub?.cancel();
     _gpsSub = null;
     _gpsActivo = false;
@@ -347,10 +667,27 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return true;
     }
 
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
+    final snap = await GpsService.checkServiceThenRequestPermissionIfNeeded();
+    if (!snap.serviceEnabled) {
+      if (!mounted) return false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Activa la ubicación del teléfono (GPS).'),
+              action: SnackBarAction(
+                label: 'Ubicación',
+                onPressed: () => unawaited(GpsService.openLocationSettings()),
+              ),
+            ),
+          );
+        }
+      });
+      logDbg('❌ GPS apagado');
+      return false;
     }
+
+    final LocationPermission perm = snap.permission;
     if (perm == LocationPermission.denied ||
         perm == LocationPermission.deniedForever) {
       if (!mounted) return false;
@@ -363,19 +700,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         }
       });
       logDbg('❌ Permiso denegado');
-      return false;
-    }
-
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      if (!mounted) return false;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Activa el GPS del teléfono')),
-          );
-        }
-      });
-      logDbg('❌ GPS apagado');
       return false;
     }
 
@@ -492,40 +816,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
   }
 
-  void _colapsarTarjetaViajePorMapa() {
-    if (!_viajeNavSheetCtrl.isAttached) return;
-    _viajeNavSheetCtrl.animateTo(
-      _kViajeNavSheetMin,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  void _expandirTarjetaViajeTrasMapa() {
-    if (!_viajeNavSheetCtrl.isAttached) return;
-    _viajeNavSheetCtrl.animateTo(
-      _kViajeNavSheetInitialMitad,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  /// Evita dos “tarjetas” a la vez: la hoja Waze/Maps encima de la del viaje.
-  void _plegarTarjetaViajeAntesNavSheet() {
-    if (!_viajeNavSheetCtrl.isAttached) return;
-    _viajeNavSheetCtrl.jumpTo(_kViajeNavSheetMin);
-  }
-
-  void _restaurarTarjetaViajeTrasNavSheet() {
-    if (!mounted) return;
-    if (!_viajeNavSheetCtrl.isAttached) return;
-    _viajeNavSheetCtrl.animateTo(
-      _kViajeNavSheetInitialMitad,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
   static String _prefKeyNavPickup(String viajeId) => 'vctx_nav_pickup_$viajeId';
 
   Future<void> _persistNavPickupFlag(String viajeId, bool value) async {
@@ -636,14 +926,74 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => unawaited(_verificarViajeTerminadoAlEntrarTaxista()));
+  }
+
+  Future<void> _verificarViajeTerminadoAlEntrarTaxista() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || !mounted) return;
+    print('[VIAJE_ACTIVO] taxista pantalla init: verificar si viaje ya cerró');
+    try {
+      final us = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get();
+      final vid = (us.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isEmpty) return;
+      final vs =
+          await FirebaseFirestore.instance.collection('viajes').doc(vid).get();
+      if (!vs.exists || !mounted) return;
+      final d = vs.data() ?? <String, dynamic>{};
+      final st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final done = d['completado'] == true ||
+          st == EstadosViaje.completado ||
+          st == EstadosViaje.cancelado ||
+          st == EstadosViaje.rechazado;
+      if (done) {
+        print('[VIAJE_ACTIVO] taxista init: viaje terminal → salir de pantalla');
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).maybePop();
+        }
+      }
+    } catch (e) {
+      print('[VIAJE_ACTIVO] taxista init check error: $e');
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
-      unawaited(_handleAppResumedTrasNavegacionExterna());
+      print('[VIAJE_ACTIVO] taxista lifecycle resumed');
+      unawaited(() async {
+        await _refrescarViajeDocDesdeFirestore();
+        if (!mounted) return;
+        await _reanudarGpsSiEnCursoTrasResume();
+        if (!mounted) return;
+        await _handleAppResumedTrasNavegacionExterna();
+      }());
     }
+  }
+
+  /// Tras volver de Waze/Maps o del sistema: si el viaje va al destino pero el
+  /// stream GPS quedó caído, reintenta [_asegurarGps] una vez (sin bucles).
+  Future<void> _reanudarGpsSiEnCursoTrasResume() async {
+    final Viaje? v = _cachedViaje;
+    if (v == null) return;
+    final String estadoBase = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    if (!EstadosViaje.esEnCurso(estadoBase)) return;
+    if (_gpsActivo) return;
+    logDbg(
+        '[VIAJE_ACTIVO] resume: reintentar GPS en_curso viaje=${v.id} (_gpsActivo=false)',
+    );
+    await _asegurarGps(v.id);
   }
 
   @override
@@ -651,7 +1001,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     WidgetsBinding.instance.removeObserver(this);
     _cancelSub?.cancel();
     _map?.dispose();
-    _viajeNavSheetCtrl.dispose();
+    _gpsStreamRecoveryTimer?.cancel();
+    _gpsStreamRecoveryTimer = null;
     _stopGps();
     _codigoCtrl.dispose();
     _routeDebounce?.cancel();
@@ -734,7 +1085,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
       if (mounted) {
         setState(() => _viajeSheetOcultoPorModalNav = true);
-        _plegarTarjetaViajeAntesNavSheet();
         try {
           await showNavegacionWazeMapsSheet(
             context,
@@ -777,7 +1127,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         } finally {
           if (mounted) {
             setState(() => _viajeSheetOcultoPorModalNav = false);
-            _restaurarTarjetaViajeTrasNavSheet();
           }
         }
       }
@@ -981,16 +1330,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
 
     try {
-      await FirebaseFirestore.instance
-          .collection('viajes')
-          .doc(viajeId)
-          .update({
-        'codigoVerificado': true,
-        'viajeIniciadoEn': FieldValue.serverTimestamp(),
-      });
-
       try {
-        await ViajesRepo.iniciarViaje(viajeId: viajeId, uidTaxista: uid);
+        await ViajesRepo.iniciarViaje(
+          viajeId: viajeId,
+          uidTaxista: uid,
+          pinVerificacion: ingresado,
+        );
       } catch (eInicio) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
@@ -1067,16 +1412,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _actionBusy = true;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
+      print('[FINALIZAR_VIAJE] _finalizarViaje abort: sin uid');
       _actionBusy = false;
       return;
     }
 
+      print('[FINALIZAR] _finalizarViaje start viajeId=${v.id} uid=$uid');
     final messenger = ScaffoldMessenger.of(context);
     final String estadoLocal = EstadosViaje.normalizar(v.estado);
 
-    // Hardening UX/produccion: finalizar solo cuando el viaje este en curso.
-    // Si la UI va atrasada por latencia, validamos tambien contra Firestore.
-    if (!EstadosViaje.esEnCurso(estadoLocal)) {
+    // Callable acepta `en_curso` o `a_bordo` (PIN verificado sin transición).
+    if (!EstadosViaje.taxistaPuedeInvocarFinalizar(estadoLocal)) {
       try {
         final snap = await FirebaseFirestore.instance
             .collection('viajes')
@@ -1085,12 +1431,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         final data = snap.data() ?? const <String, dynamic>{};
         final String estadoRemoto =
             EstadosViaje.normalizar((data['estado'] ?? '').toString());
-        if (!EstadosViaje.esEnCurso(estadoRemoto)) {
+        if (!EstadosViaje.taxistaPuedeInvocarFinalizar(estadoRemoto)) {
+          print(
+              '[FINALIZAR_ERROR] estado remoto no finalizable: $estadoRemoto viajeId=${v.id}');
           if (mounted) {
             messenger.showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Para finalizar, primero inicia el viaje hacia el destino.',
+                  'Para finalizar, primero tené el cliente a bordo con código verificado '
+                  'e iniciá la ruta al destino (o esperá a que la app actualice el estado).',
                 ),
                 backgroundColor: Colors.orange,
               ),
@@ -1100,6 +1449,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           return;
         }
       } catch (_) {
+        print('[FINALIZAR_ERROR] error validando estado remoto viajeId=${v.id}');
         if (mounted) {
           messenger.showSnackBar(
             const SnackBar(
@@ -1115,56 +1465,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
     }
 
-    // Produccion real: solo permitir finalizar cuando el taxista este cerca del destino.
-    if (_coordsValid(v.latDestino, v.lonDestino)) {
-      double? latTx;
-      double? lonTx;
-
-      if (_coordsValid(v.latTaxista, v.lonTaxista)) {
-        latTx = v.latTaxista;
-        lonTx = v.lonTaxista;
-      } else if (_cachedViaje != null &&
-          _coordsValid(_cachedViaje!.latTaxista, _cachedViaje!.lonTaxista)) {
-        latTx = _cachedViaje!.latTaxista;
-        lonTx = _cachedViaje!.lonTaxista;
-      } else {
-        try {
-          final pos = await Geolocator.getCurrentPosition();
-          latTx = pos.latitude;
-          lonTx = pos.longitude;
-        } catch (_) {
-          latTx = null;
-          lonTx = null;
-        }
-      }
-
-      if (latTx == null || lonTx == null || !_coordsValid(latTx, lonTx)) {
-        if (mounted) {
-          messenger.showSnackBar(
-            const SnackBar(
-              content: Text(
-                'No se pudo validar tu ubicacion. Activa GPS y acercate al destino para finalizar.',
-              ),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        _actionBusy = false;
-        return;
-      }
-
-      final distanciaM = Geolocator.distanceBetween(
-        latTx,
-        lonTx,
-        v.latDestino,
-        v.lonDestino,
+    final ({double lat, double lon})? pinParaRadio = _coordsDestinoParaFinalizar(v);
+    if (pinParaRadio != null) {
+      double? dm = _distanciaMetrosAlDestino;
+      dm ??= await _menorDistanciaMetrosAlDestinoParaFinalizar(
+        v,
+        pinParaRadio,
+        pingStreamLatLon: _taxistaPosCola.value,
       );
-      if (distanciaM > kFinalizarRadioMetros) {
+      if (dm != null && dm > kFinalizarRadioMetros) {
+        print(
+            '[FINALIZAR_VIAJE] rechazado: fuera de radio (${dm.toStringAsFixed(0)} m > $kFinalizarRadioMetros m)');
         if (mounted) {
           messenger.showSnackBar(
             SnackBar(
               content: Text(
-                'Aun no llegas al destino. Te faltan ${(distanciaM / 1000).toStringAsFixed(2)} km para finalizar.',
+                'Debés estar a menos de ${kFinalizarRadioMetros.toStringAsFixed(0)} m del destino para finalizar '
+                '(ahora ~${dm.toStringAsFixed(0)} m).',
               ),
               backgroundColor: Colors.orange,
             ),
@@ -1173,6 +1490,21 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         _actionBusy = false;
         return;
       }
+    }
+
+    // Cliente a bordo y en ruta al destino: asegurar stream GPS (ping en vivo) antes de medir cercanía.
+    await _asegurarGps(v.id);
+
+    // Perímetro al destino registrado (pin del viaje): en zona → mensaje corto; fuera/sin señal →
+    // mismo botón y diálogo alternativo (no se bloquea el cierre).
+    final ({double lat, double lon})? pinDestino = _coordsDestinoParaFinalizar(v);
+    double? distMinM;
+    if (pinDestino != null) {
+      distMinM = await _menorDistanciaMetrosAlDestinoParaFinalizar(
+        v,
+        pinDestino,
+        pingStreamLatLon: _taxistaPosCola.value,
+      );
     }
 
     if (!mounted) {
@@ -1180,35 +1512,134 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return;
     }
 
-    final ok = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: Colors.black,
-            title: const Text('Finalizar viaje',
-                style: TextStyle(color: Colors.white)),
-            content: const Text(
-                '¿Confirmas que el viaje terminó correctamente?',
-                style: TextStyle(color: Colors.white70)),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('No',
-                      style: TextStyle(color: Colors.white70))),
-              ElevatedButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Sí, finalizar')),
-            ],
-          ),
+    final ok = await _dialogoConfirmarFinalizarViaje(
+          context,
+          hayPinDestino: pinDestino != null,
+          distanciaMetrosMin: distMinM,
         ) ??
         false;
 
     if (!ok) {
+      print('[FINALIZAR_VIAJE] usuario canceló diálogo');
       _actionBusy = false;
       return;
     }
 
+    // Última comprobación de cercanía antes del callable (reusa [_distanciaMetrosAlDestino]).
+    final ({double lat, double lon})? pinUltimoCheck =
+        _coordsDestinoParaFinalizar(v);
+    double? dmPreCallable = _distanciaMetrosAlDestino;
+    if (pinUltimoCheck != null && dmPreCallable == null) {
+      dmPreCallable = await _menorDistanciaMetrosAlDestinoParaFinalizar(
+        v,
+        pinUltimoCheck,
+        pingStreamLatLon: _taxistaPosCola.value,
+      );
+    }
+    if (!mounted) {
+      _actionBusy = false;
+      return;
+    }
+    final dmFinalCheck = dmPreCallable;
+    if (dmFinalCheck != null && dmFinalCheck > 50) {
+      final double dmWarn = dmFinalCheck;
+      final continuar = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('¿Finalizar lejos del destino?'),
+              content: Text(
+                'La distancia al pin es de unos ${dmWarn.toStringAsFixed(0)} m '
+                '(más de 50 m). ¿Confirmás la finalización?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Finalizar igual'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!continuar) {
+        _actionBusy = false;
+        return;
+      }
+    }
+
     try {
-      await ViajesRepo.completarViajePorTaxista(viajeId: v.id, uidTaxista: uid);
+      print('[FINALIZAR] invocando ViajesRepo.completarViajePorTaxista');
+      try {
+        try {
+          final snapPre = await FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(v.id)
+              .get();
+          final dPre = snapPre.data() ?? const <String, dynamic>{};
+          final stPre = EstadosViaje.normalizar(
+              (dPre['estado'] ?? '').toString());
+          final compPre = dPre['completado'] == true;
+          print(
+            '[FINALIZAR_ERROR] pre-callable viajeId=${v.id} '
+            'estadoFirestore=$stPre completado=$compPre '
+            'codigoVerificado=${dPre['codigoVerificado'] == true}',
+          );
+        } catch (e, st) {
+          print(
+              '[FINALIZAR_ERROR] pre-callable lectura Firestore falló viajeId=${v.id}: $e $st');
+        }
+
+        final outcome = await ViajesRepo.completarViajePorTaxista(v.id);
+        if (outcome == CompletarViajeTaxistaOutcome.alreadyCompleted &&
+            mounted) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Viaje ya finalizado'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+        if (v.tipoServicio == 'bola_ahorro') {
+          if (kDebugMode) {
+            print('[BOLA_AHORRO] finalizar callable OK → sync bola viaje=${v.id}');
+          }
+          unawaited(BolaPuebloFirestoreSync.postCompletarViajeEspejo(v.id));
+        }
+      } on FirebaseFunctionsException catch (e, st) {
+        print(
+            '[FINALIZAR_ERROR] FirebaseFunctionsException viajeId=${v.id} '
+            '${e.code} ${e.message} $st');
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                'No se pudo finalizar el viaje: ${e.message ?? e.code}',
+              ),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+        _actionBusy = false;
+        return;
+      } catch (e, st) {
+        print('[FINALIZAR_ERROR] completarViaje viajeId=${v.id} $e $st');
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text('No se pudo finalizar el viaje: $e'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+        _actionBusy = false;
+        return;
+      }
+
+      print('[FINALIZAR] callable OK → post-proceso pago/factura');
 
       // ────────────────────────────────────────────────────────────────
       // Pagos / facturación:
@@ -1338,11 +1769,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       _stopGps();
 
       if (!mounted) return;
+      // Mostrar factura visual antes de salir hacia la cola del taxista.
+      // No interfiere: si se cierra normalmente o por back, el flujo continúa.
+      await FacturaViaje.mostrar(
+        context,
+        viajeId: v.id,
+        role: 'taxista',
+      );
+      if (!mounted) return;
       await TaxistaColaPostCompletar.navegarTrasCompletar(
         context: context,
         uidTaxista: uid,
       );
-    } catch (e) {
+    } catch (e, st) {
+      print('[FINALIZAR] _finalizarViaje catch outer $e $st');
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           messenger
@@ -1648,6 +2088,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                         style:
                             TextStyle(color: cs.onSurfaceVariant, fontSize: 15),
                       ),
+                      if (uidCliente.isNotEmpty &&
+                          FirebaseAuth.instance.currentUser?.uid != null) ...[
+                        const SizedBox(height: 12),
+                        ViajeChatMensajesEnVivo(
+                          viajeId: viajeId,
+                          miUid: FirebaseAuth.instance.currentUser!.uid,
+                          otroUid: uidCliente,
+                          otroNombre: nombre.isEmpty ? 'Cliente' : nombre,
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       FilledButton.icon(
                         onPressed: () async {
@@ -1662,6 +2112,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                             );
                             return;
                           }
+                          unawaited(
+                            ViajeComunicacionRepo.notificarIntentoComunicacion(
+                              viajeId: viajeId,
+                              tipo: 'llamada',
+                            ),
+                          );
                           await telefonoLaunchUri(telefonoUriLlamada(tel));
                         },
                         icon: Icon(Icons.call, color: cs.onPrimary),
@@ -1686,6 +2142,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                             );
                             return;
                           }
+                          unawaited(
+                            ViajeComunicacionRepo.notificarIntentoComunicacion(
+                              viajeId: viajeId,
+                              tipo: 'whatsapp',
+                            ),
+                          );
                           const String waMsg = 'Hola, soy tu taxista de RAI.';
                           if (await telefonoLaunchUri(
                             telefonoUriWhatsAppApp(tel, waMsg),
@@ -1754,7 +2216,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _selectorNavegacionAbierto = true;
     try {
       if (mounted) setState(() => _viajeSheetOcultoPorModalNav = true);
-      _plegarTarjetaViajeAntesNavSheet();
       try {
         await showNavegacionWazeMapsSheet(
           context,
@@ -1774,7 +2235,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       } finally {
         if (mounted) {
           setState(() => _viajeSheetOcultoPorModalNav = false);
-          _restaurarTarjetaViajeTrasNavSheet();
         }
       }
     } finally {
@@ -2400,17 +2860,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                     );
                     return Column(
                       children: [
-                        Expanded(
+                        const Expanded(
                           flex: 3,
                           child: RepaintBoundary(
                             child: MapaTiempoReal(
-                              key: const ValueKey<String>('mapa-cache-viaje'),
+                              key: ValueKey<String>('mapa-cache-viaje'),
                               esTaxista: true,
                               esCliente: false,
-                              onUserInteractWithMap:
-                                  _colapsarTarjetaViajePorMapa,
-                              onUserMapGestureEnd:
-                                  _expandirTarjetaViajeTrasMapa,
                             ),
                           ),
                         ),
@@ -2435,6 +2891,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                                     style: const TextStyle(
                                         fontSize: 18,
                                         color: Colors.greenAccent)),
+                                // Desglose informativo (solo lectura, no
+                                // modifica el cálculo): comisión RAI y neto.
+                                _DesgloseComisionNeto(precio: v.precio),
                                 const SizedBox(height: 8),
                                 Text('📍 Estado: ${_labelEstado(estadoBase)}',
                                     style: const TextStyle(
@@ -2485,18 +2944,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 if (v == null) {
                   _cachedViaje = null;
                   _navPickupPrefsLoadedForId = null;
+                  _distanciaMetrosAlDestino = null;
                   _stopGps();
                   return Column(
                     children: [
-                      Expanded(
+                      const Expanded(
                         flex: 3,
                         child: RepaintBoundary(
                           child: MapaTiempoReal(
-                            key: const ValueKey<String>('mapa-sin-viaje'),
+                            key: ValueKey<String>('mapa-sin-viaje'),
                             esTaxista: true,
                             esCliente: false,
-                            onUserInteractWithMap: _colapsarTarjetaViajePorMapa,
-                            onUserMapGestureEnd: _expandirTarjetaViajeTrasMapa,
                           ),
                         ),
                       ),
@@ -2556,6 +3014,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 // Actualizar cache
                 if (_cachedViaje?.id != v.id) {
                   _navPickupPrefsLoadedForId = null;
+                  _distanciaMetrosAlDestino = null;
                   _cachedViaje = v;
                   _escucharCancelacionRemota(v.id);
 
@@ -2581,6 +3040,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) unawaited(_loadNavPickupPrefs(v));
+                  _recalcDistanciaDestino();
                 });
 
                 final fecha = formato.format(v.fechaHora);
@@ -2650,10 +3110,32 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                         ? LatLng(v.latDestino, v.lonDestino)
                         : null;
 
-                return Stack(
-                  fit: StackFit.expand,
+                if (_viajeSheetOcultoPorModalNav) {
+                  return RepaintBoundary(
+                    child: MapaTiempoReal(
+                      key: ValueKey<String>('mapa-${v.id}'),
+                      origen: puntoOrigen,
+                      origenNombre: v.origen,
+                      destino: puntoDestino,
+                      destinoNombre: v.destino,
+                      mostrarOrigen: mostrarOrigen,
+                      mostrarDestino: mostrarDestino,
+                      esTaxista: true,
+                      esCliente: false,
+                      mostrarTaxista: false,
+                      ubicacionTaxista:
+                          _coordsValid(v.latTaxista, v.lonTaxista)
+                              ? LatLng(v.latTaxista, v.lonTaxista)
+                              : null,
+                      overlayPolylines: _polylines,
+                    ),
+                  );
+                }
+
+                return Column(
                   children: [
-                    Positioned.fill(
+                    Expanded(
+                      flex: 3,
                       child: RepaintBoundary(
                         child: MapaTiempoReal(
                           key: ValueKey<String>('mapa-${v.id}'),
@@ -2671,135 +3153,145 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                                   ? LatLng(v.latTaxista, v.lonTaxista)
                                   : null,
                           overlayPolylines: _polylines,
-                          onUserInteractWithMap: _colapsarTarjetaViajePorMapa,
-                          onUserMapGestureEnd: _expandirTarjetaViajeTrasMapa,
                         ),
                       ),
                     ),
-                    Transform.translate(
-                      offset: _viajeSheetOcultoPorModalNav
-                          ? Offset(
-                              0,
-                              MediaQuery.sizeOf(context).height + 80,
-                            )
-                          : Offset.zero,
-                      child: DraggableScrollableSheet(
-                        controller: _viajeNavSheetCtrl,
-                        initialChildSize: _kViajeNavSheetInitialMitad,
-                        minChildSize: _kViajeNavSheetMin,
-                        maxChildSize: 0.92,
-                        snap: true,
-                        snapSizes: const <double>[
-                          0.14,
-                          0.40,
-                          _kViajeNavSheetInitialMitad,
-                          0.62,
-                          0.92,
-                        ],
-                        builder: (context, scrollController) {
-                        return Container(
-                          decoration: const BoxDecoration(
-                            color: Colors.black,
-                            borderRadius:
-                                BorderRadius.vertical(top: Radius.circular(20)),
-                            border: Border(
-                                top: BorderSide(color: Color(0x22FFFFFF))),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Color(0x66000000),
-                                blurRadius: 16,
-                                offset: Offset(0, -4),
-                              ),
-                            ],
-                          ),
-                          child: ListView(
-                            controller: scrollController,
-                            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                            children: [
-                              Center(
-                                child: Container(
-                                  width: 40,
-                                  height: 5,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white24,
-                                    borderRadius: BorderRadius.circular(3),
+                    Expanded(
+                      flex: 2,
+                      child: Material(
+                        color: Colors.black,
+                        child: SafeArea(
+                          top: false,
+                          child: SingleChildScrollView(
+                            padding:
+                                const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                color: Colors.black,
+                                borderRadius: BorderRadius.vertical(
+                                    top: Radius.circular(20)),
+                                border: Border(
+                                    top: BorderSide(color: Color(0x22FFFFFF))),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Color(0x66000000),
+                                    blurRadius: 16,
+                                    offset: Offset(0, -4),
                                   ),
-                                ),
+                                ],
                               ),
-                              const SizedBox(height: 8),
-                              if (FirebaseAuth.instance.currentUser?.uid !=
-                                  null)
-                                ColaSiguienteViajeBannerTaxista(
-                                  uidTaxista:
-                                      FirebaseAuth.instance.currentUser!.uid,
-                                ),
-                              if (FirebaseAuth.instance.currentUser?.uid !=
-                                  null)
-                                const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[900],
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(color: Colors.white12),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
+                              padding:
+                                  const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.stretch,
+                                children: [
+                                  Center(
+                                    child: Container(
+                                      width: 40,
+                                      height: 5,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white24,
+                                        borderRadius:
+                                            BorderRadius.circular(3),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  if (FirebaseAuth.instance.currentUser?.uid !=
+                                      null)
+                                    ColaSiguienteViajeBannerTaxista(
+                                      uidTaxista: FirebaseAuth
+                                          .instance.currentUser!.uid,
+                                    ),
+                                  if (FirebaseAuth.instance.currentUser?.uid !=
+                                      null)
+                                    const SizedBox(height: 12),
+                                  if (v.uidCliente.isNotEmpty &&
+                                      FirebaseAuth.instance.currentUser?.uid !=
+                                          null) ...[
+                                    ViajeChatMensajesEnVivo(
+                                      viajeId: v.id,
+                                      miUid: FirebaseAuth
+                                          .instance.currentUser!.uid,
+                                      otroUid: v.uidCliente,
+                                      otroNombre: 'Cliente',
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  Container(
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[900],
+                                      borderRadius:
+                                          BorderRadius.circular(14),
+                                      border: Border.all(
+                                          color: Colors.white12),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        Expanded(
-                                          child: Text(
-                                            '🧭 ${v.origen} → ${v.destino}',
-                                            style: const TextStyle(
-                                              fontSize: 18,
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w600,
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                '🧭 ${v.origen} → ${v.destino}',
+                                                style: const TextStyle(
+                                                  fontSize: 18,
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
                                             ),
-                                          ),
+                                            _servicioBadge(v),
+                                          ],
                                         ),
-                                        _servicioBadge(v),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          '🕓 Fecha: $fecha',
+                                          style: const TextStyle(
+                                              fontSize: 16,
+                                              color: Colors.white70),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          '💰 Total: $total',
+                                          style: const TextStyle(
+                                              fontSize: 18,
+                                              color: Colors.greenAccent),
+                                        ),
+                                        _DesgloseComisionNeto(
+                                            precio: v.precio),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          '📍 Estado: ${_labelEstado(estadoBase)}',
+                                          style: const TextStyle(
+                                              fontSize: 16,
+                                              color: Colors.white70),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        _progresoOperativoViaje(estadoBase),
+                                        _buildDuracionEnRuta(
+                                            v, estadoBase),
+                                        _buildWaypoints(v,
+                                            enRuta: EstadosViaje.esEnCurso(
+                                                estadoBase)),
+                                        _buildExtras(v),
                                       ],
                                     ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      '🕓 Fecha: $fecha',
-                                      style: const TextStyle(
-                                          fontSize: 16, color: Colors.white70),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      '💰 Total: $total',
-                                      style: const TextStyle(
-                                          fontSize: 18,
-                                          color: Colors.greenAccent),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      '📍 Estado: ${_labelEstado(estadoBase)}',
-                                      style: const TextStyle(
-                                          fontSize: 16, color: Colors.white70),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    _progresoOperativoViaje(estadoBase),
-                                    _buildDuracionEnRuta(v, estadoBase),
-                                    _buildWaypoints(v,
-                                        enRuta:
-                                            EstadosViaje.esEnCurso(estadoBase)),
-                                    _buildExtras(v),
-                                  ],
-                                ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _tarjetaVehiculoVisibleAlCliente(v),
+                                  const SizedBox(height: 16),
+                                  _actionBar(v, estadoBase),
+                                  const SizedBox(height: 8),
+                                  _botonRescate(v.id),
+                                ],
                               ),
-                              const SizedBox(height: 12),
-                              _tarjetaVehiculoVisibleAlCliente(v),
-                              const SizedBox(height: 16),
-                              _actionBar(v, estadoBase),
-                              const SizedBox(height: 8),
-                              _botonRescate(v.id),
-                            ],
+                            ),
                           ),
-                        );
-                      },
+                        ),
                       ),
                     ),
                   ],
@@ -3377,6 +3869,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
+        const SizedBox(height: 8),
+        Text(
+          _coordsDestinoParaFinalizar(v) == null
+              ? 'No hay coordenadas de destino en el viaje: pedí ayuda a soporte para cerrar.'
+              : _distanciaMetrosAlDestino == null
+                  ? 'Calculando distancia al destino (GPS). El botón Finalizar aparece al estar a menos de ${kFinalizarRadioMetros.toStringAsFixed(0)} m.'
+                  : 'Distancia al pin de destino: ${_textoDistanciaAlPin(_distanciaMetrosAlDestino!)}. '
+                      'Finalizar se habilita si estás a ≤ ${kFinalizarRadioMetros.toStringAsFixed(0)} m.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.62),
+            fontSize: 12.5,
+            height: 1.35,
+          ),
+        ),
         const SizedBox(height: 16),
         _btnPrimario(
           icon: const Icon(Icons.navigation, size: 24),
@@ -3411,13 +3917,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         const SizedBox(height: 12),
         Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
         const SizedBox(height: 12),
-        _btnPrimario(
-          icon: const Icon(Icons.check_circle, size: 24),
-          label: const Text('FINALIZAR VIAJE',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          onPressed: () => _finalizarViaje(v),
-          backgroundColor: Colors.blueAccent,
+        // Botón opcional para que el taxista confirme la transferencia él mismo
+        // (sin esperar al admin). Solo visible si el método es transferencia y
+        // el cliente ya subió el comprobante. No reemplaza al admin: la
+        // validación admin sigue funcionando como respaldo.
+        _ConfirmarTransferenciaTaxistaButton(
+          viajeId: v.id,
+          metodoPagoFallback: v.metodoPago,
         ),
+        if (_puedeMostrarBotonFinalizar(v))
+          _btnPrimario(
+            icon: const Icon(Icons.check_circle, size: 24),
+            label: const Text('FINALIZAR VIAJE',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            onPressed: _actionBusy ? null : () => _finalizarViaje(v),
+            backgroundColor: Colors.blueAccent,
+          ),
       ];
     }
 
@@ -3536,6 +4051,192 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       icon: const Icon(Icons.exit_to_app, color: Colors.white70),
       label: const Text('Salir a disponibles (rescate)',
           style: TextStyle(color: Colors.white70)),
+    );
+  }
+}
+
+/// Botón "Confirmar pago recibido" que aparece SOLO cuando:
+///   * el método de pago del viaje es transferencia,
+///   * el cliente ya subió el comprobante (`comprobanteTransferenciaUrl`),
+///   * la transferencia aún no fue confirmada (`transferenciaConfirmada != true`).
+///
+/// El botón llama a la callable [ViajesRepo.confirmarTransferenciaPorTaxista]
+/// (Cloud Function `confirmarTransferenciaTaxistaSeguro`). El admin sigue
+/// pudiendo validar como respaldo; este botón es el "atajo" del taxista.
+class _ConfirmarTransferenciaTaxistaButton extends StatefulWidget {
+  const _ConfirmarTransferenciaTaxistaButton({
+    required this.viajeId,
+    required this.metodoPagoFallback,
+  });
+
+  final String viajeId;
+  final String metodoPagoFallback;
+
+  @override
+  State<_ConfirmarTransferenciaTaxistaButton> createState() =>
+      _ConfirmarTransferenciaTaxistaButtonState();
+}
+
+class _ConfirmarTransferenciaTaxistaButtonState
+    extends State<_ConfirmarTransferenciaTaxistaButton> {
+  bool _enviando = false;
+
+  Future<void> _confirmar() async {
+    if (_enviando) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _enviando = true);
+    try {
+      await ViajesRepo.confirmarTransferenciaPorTaxista(
+          viajeId: widget.viajeId);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Pago confirmado.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('No se pudo confirmar el pago: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _enviando = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(widget.viajeId)
+          .snapshots(),
+      builder: (context, snap) {
+        if (!snap.hasData || !snap.data!.exists) {
+          return const SizedBox.shrink();
+        }
+        final data = snap.data!.data() ?? const <String, dynamic>{};
+        final String metodo = (data['metodoPago']?.toString().isNotEmpty == true
+                ? data['metodoPago'].toString()
+                : widget.metodoPagoFallback)
+            .toString();
+        if (!MetodoPagoViaje.esTransferencia(metodo)) {
+          return const SizedBox.shrink();
+        }
+        final String comprobante =
+            (data['comprobanteTransferenciaUrl'] ?? '').toString().trim();
+        if (comprobante.isEmpty) return const SizedBox.shrink();
+        if (data['transferenciaConfirmada'] == true) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green.shade400),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.verified, color: Colors.greenAccent, size: 18),
+                  SizedBox(width: 8),
+                  Text('Pago confirmado',
+                      style: TextStyle(
+                          color: Colors.greenAccent,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _enviando ? null : _confirmar,
+              icon: _enviando
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.check_circle_outline),
+              label: Text(_enviando
+                  ? 'Confirmando...'
+                  : 'Confirmar pago recibido'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green.shade700,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Línea informativa que muestra al taxista la comisión RAI y el neto a
+/// recibir sobre el total del viaje.
+///
+/// IMPORTANTE: este widget es de SOLO LECTURA. No persiste ni recalcula
+/// nada en Firestore: simplemente reformatea localmente lo que ya calculan
+/// `PlataformaEconomia` (cliente) y la Cloud Function `finalizarViajeSeguro`
+/// (backend). Si en el futuro se cambia el % nominal en
+/// [PlataformaEconomia.comisionViajePorcentaje] (sincronizado desde `config/comision`), la etiqueta se actualiza sola.
+class _DesgloseComisionNeto extends StatelessWidget {
+  const _DesgloseComisionNeto({required this.precio});
+
+  final double precio;
+
+  @override
+  Widget build(BuildContext context) {
+    if (precio <= 0) return const SizedBox.shrink();
+
+    final double pct = PlataformaEconomia.comisionViajePorcentaje;
+    final String pctLabel =
+        (pct - pct.round()).abs() < 1e-9 ? pct.round().toString() : pct.toStringAsFixed(1);
+    final double comision = PlataformaEconomia.comisionRdDesdeTotal(precio);
+    final double neto = PlataformaEconomia.gananciaTaxistaRdDesdeTotal(precio);
+
+    final String comisionTxt = FormatosMoneda.rd(comision);
+    final String netoTxt = FormatosMoneda.rd(neto);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '📊 Comisión RAI ($pctLabel%): $comisionTxt',
+            style: const TextStyle(
+              fontSize: 13.5,
+              color: Colors.white60,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '💵 Neto a recibir: $netoTxt',
+            style: const TextStyle(
+              fontSize: 14,
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

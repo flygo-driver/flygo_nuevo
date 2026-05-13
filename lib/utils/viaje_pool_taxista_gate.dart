@@ -139,4 +139,23 @@ class ViajePoolTaxistaGate {
         (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
     return pid.isNotEmpty;
   }
+
+  /// Mientras el espejo está en pool **sin aceptar**, el taxista sigue el flujo Bola Pueblo.
+  /// Con `aceptado` o estados de ejecución, aplica el mismo flujo que un viaje pool ([ViajeEnCursoTaxista]).
+  static bool debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
+      Map<String, dynamic> data) {
+    if (!esViajeEspejoBolaParaFlujo(data)) return false;
+    final estadoNorm =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    final bool aceptado = (data['aceptado'] ?? false) == true;
+    if (aceptado ||
+        estadoNorm == EstadosViaje.aceptado ||
+        estadoNorm == EstadosViaje.enCaminoPickup ||
+        estadoNorm == EstadosViaje.aBordo ||
+        estadoNorm == EstadosViaje.enCurso ||
+        estadoNorm == EstadosViaje.completado) {
+      return false;
+    }
+    return true;
+  }
 }

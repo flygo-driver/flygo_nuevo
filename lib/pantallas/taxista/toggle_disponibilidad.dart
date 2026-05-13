@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
@@ -77,9 +78,9 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
                 action: SnackBarAction(
                   label: 'Mis pagos',
                   onPressed: () {
-                    Navigator.push<void>(
-                      context,
-                      MaterialPageRoute<void>(builder: (_) => const MisPagos()),
+                    Navigator.of(context, rootNavigator: true).push<void>(
+                      MaterialPageRoute<void>(
+                          builder: (_) => const MisPagos()),
                     );
                   },
                 ),
@@ -87,6 +88,30 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
             );
           }
           return;
+        }
+
+        if (!mounted) return;
+        final ready = await LocationPermissionService.ensureLocationReady(
+          context: context,
+        );
+        if (!ready.isUsable) {
+          if (mounted) {
+            if (ready.staleOrInvalid) {
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text(LocationReadiness.kMsgEsperandoUbicacion),
+                  duration: Duration(seconds: 6),
+                ),
+              );
+            }
+          }
+          return;
+        }
+        if (mounted) {
+          await LocationPermissionService.maybePromptAlwaysForCriticalFlow(
+            context,
+            isTaxista: true,
+          );
         }
       }
       await RolesService.setDisponibilidad(u.uid, v);

@@ -26,6 +26,7 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 import 'package:flygo_nuevo/keys.dart' as app_keys;
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
+import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
 
@@ -703,16 +704,13 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
       _snack('✅ Viaje creado — #${id.substring(0, 6)}');
 
-      if (tipoSrv != 'turismo') {
-        if (viajeInmediato) {
-          await NavigationService.clearAndGo(const ViajeEnCursoCliente());
-        } else {
-          await NavigationService.clearAndGo(
-            ViajeProgramadoPendiente(viajeId: id),
-          );
-        }
-      } else if (Navigator.canPop(context)) {
-        Navigator.pop(context, id);
+      // Misma navegación que [ProgramarViajePage] / motor: turismo incluido.
+      if (viajeInmediato) {
+        await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+      } else {
+        await NavigationService.clearAndGo(
+          ViajeProgramadoPendiente(viajeId: id),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -1503,158 +1501,173 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   child: Column(
                     children: <Widget>[
                       Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: <Widget>[
-                          Text(
-                            'Tipo:',
-                            style: TextStyle(
-                              color: rutaMockup ? textPrimary : textSecondary,
-                              fontWeight: rutaMockup
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
+                          Expanded(
+                            flex: 4,
+                            child: Text(
+                              'Tipo:',
+                              maxLines: 2,
+                              softWrap: true,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: rutaMockup ? textPrimary : textSecondary,
+                                fontWeight: rutaMockup
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
+                              ),
                             ),
                           ),
-                          SizedBox(width: rutaMockup ? 6 : 10),
-                          const Spacer(),
-                          DropdownButton<String>(
-                            value: _tipoServicio,
-                            dropdownColor: ddBg,
-                            underline: rutaMockup
-                                ? Container(
-                                    height: 1,
-                                    margin: const EdgeInsets.only(top: 2),
-                                    color: isDark
-                                        ? Colors.white54
-                                        : const Color(0xFF98A2B3),
-                                  )
-                                : const SizedBox(),
-                            style: TextStyle(color: textPrimary, fontSize: 16),
-                            items: <DropdownMenuItem<String>>[
-                              DropdownMenuItem<String>(
-                                  value: 'normal',
-                                  child: Text('Normal',
-                                      style: TextStyle(color: textPrimary))),
-                              DropdownMenuItem<String>(
-                                  value: 'motor',
-                                  child: Text('Motor',
-                                      style: TextStyle(color: textPrimary))),
-                              DropdownMenuItem<String>(
-                                  value: 'turismo',
-                                  child: Text('Turismo',
-                                      style: TextStyle(color: textPrimary))),
-                            ],
-                            onChanged: (String? v) {
-                              setState(() {
-                                _tipoServicio = v ?? 'normal';
-                                _esAhora =
-                                    true; // Múltiples paradas solo en modo ahora.
-                                if (_tipoServicio == 'normal') {
-                                  _tipoVehiculo = 'Carro';
-                                } else if (_tipoServicio == 'turismo') {
-                                  _tipoVehiculoTurismo = 'carro';
-                                }
-                              });
-                              _programarCalculoAutomatico();
-                            },
+                          Expanded(
+                            flex: 6,
+                            child: Align(
+                              alignment: AlignmentDirectional.centerEnd,
+                              child: DropdownButton<String>(
+                                isExpanded: true,
+                                value: _tipoServicio,
+                                dropdownColor: ddBg,
+                                underline: rutaMockup
+                                    ? Container(
+                                        height: 1,
+                                        margin: const EdgeInsets.only(top: 2),
+                                        color: isDark
+                                            ? Colors.white54
+                                            : const Color(0xFF98A2B3),
+                                      )
+                                    : const SizedBox(),
+                                style: TextStyle(
+                                    color: textPrimary, fontSize: 16),
+                                items: <DropdownMenuItem<String>>[
+                                  DropdownMenuItem<String>(
+                                      value: 'normal',
+                                      child: Text('Normal',
+                                          style: TextStyle(
+                                              color: textPrimary))),
+                                  DropdownMenuItem<String>(
+                                      value: 'motor',
+                                      child: Text('Motor',
+                                          style: TextStyle(
+                                              color: textPrimary))),
+                                  DropdownMenuItem<String>(
+                                      value: 'turismo',
+                                      child: Text('Turismo',
+                                          style: TextStyle(
+                                              color: textPrimary))),
+                                ],
+                                onChanged: (String? v) {
+                                  setState(() {
+                                    _tipoServicio = v ?? 'normal';
+                                    _esAhora =
+                                        true; // Múltiples paradas solo en modo ahora.
+                                    if (_tipoServicio == 'normal') {
+                                      _tipoVehiculo = 'Carro';
+                                    } else if (_tipoServicio == 'turismo') {
+                                      _tipoVehiculoTurismo = 'carro';
+                                    }
+                                  });
+                                  _programarCalculoAutomatico();
+                                },
+                              ),
+                            ),
                           ),
                         ],
                       ),
                       if (_tipoServicio != 'motor') ...[
                         const SizedBox(height: 8),
                         if (_tipoServicio == 'normal')
-                          Row(
-                            children: [
-                              Icon(Icons.directions_car,
-                                  color: textSecondary, size: 20),
-                              const SizedBox(width: 10),
-                              Text('Vehículo:',
-                                  style: TextStyle(color: textSecondary)),
-                              const Spacer(),
-                              DropdownButton<String>(
-                                value: _tipoVehiculo,
-                                dropdownColor: ddBg,
-                                underline: rutaMockup
-                                    ? Container(
-                                        height: 1,
-                                        margin: const EdgeInsets.only(top: 2),
-                                        color: isDark
-                                            ? Colors.white54
-                                            : const Color(0xFF98A2B3),
-                                      )
-                                    : const SizedBox(),
-                                style:
-                                    TextStyle(color: textPrimary, fontSize: 16),
-                                items: [
-                                  'Carro',
-                                  'Jeepeta',
-                                  'Minibús',
-                                  'Minivan',
-                                  'AutobusGuagua'
-                                ]
-                                    .map((e) => DropdownMenuItem(
-                                          value: e,
-                                          child: Text(e,
-                                              style: TextStyle(
-                                                  color: textPrimary)),
-                                        ))
-                                    .toList(),
-                                onChanged: (v) {
-                                  setState(() => _tipoVehiculo = v ?? 'Carro');
-                                  _programarCalculoAutomatico();
-                                },
-                              ),
-                            ],
+                          OverflowSafeLabeledDropdown(
+                            leading: Icon(Icons.directions_car,
+                                color: textSecondary, size: 20),
+                            label: 'Vehículo',
+                            labelStyle: TextStyle(color: textSecondary),
+                            gapAfterLeading: 10,
+                            dropdown: DropdownButton<String>(
+                              isExpanded: true,
+                              value: _tipoVehiculo,
+                              dropdownColor: ddBg,
+                              underline: rutaMockup
+                                  ? Container(
+                                      height: 1,
+                                      margin: const EdgeInsets.only(top: 2),
+                                      color: isDark
+                                          ? Colors.white54
+                                          : const Color(0xFF98A2B3),
+                                    )
+                                  : const SizedBox(),
+                              style: TextStyle(
+                                  color: textPrimary, fontSize: 16),
+                              items: [
+                                'Carro',
+                                'Jeepeta',
+                                'Minibús',
+                                'Minivan',
+                                'AutobusGuagua'
+                              ]
+                                  .map((e) => DropdownMenuItem(
+                                        value: e,
+                                        child: Text(
+                                          e,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(color: textPrimary),
+                                        ),
+                                      ))
+                                  .toList(),
+                              onChanged: (v) {
+                                setState(() => _tipoVehiculo = v ?? 'Carro');
+                                _programarCalculoAutomatico();
+                              },
+                            ),
                           ),
                         if (_tipoServicio == 'turismo')
-                          Row(
-                            children: [
-                              Icon(Icons.beach_access,
-                                  color: textSecondary, size: 20),
-                              const SizedBox(width: 10),
-                              Text('Vehículo turismo:',
-                                  style: TextStyle(color: textSecondary)),
-                              const Spacer(),
-                              DropdownButton<String>(
-                                value: _tipoVehiculoTurismo,
-                                dropdownColor: ddBg,
-                                underline: rutaMockup
-                                    ? Container(
-                                        height: 1,
-                                        margin: const EdgeInsets.only(top: 2),
-                                        color: isDark
-                                            ? Colors.white54
-                                            : const Color(0xFF98A2B3),
-                                      )
-                                    : const SizedBox(),
-                                style:
-                                    TextStyle(color: textPrimary, fontSize: 16),
-                                items: [
-                                  DropdownMenuItem(
-                                      value: 'carro',
-                                      child: Text('Carro',
-                                          style:
-                                              TextStyle(color: textPrimary))),
-                                  DropdownMenuItem(
-                                      value: 'jeepeta',
-                                      child: Text('Jeepeta',
-                                          style:
-                                              TextStyle(color: textPrimary))),
-                                  DropdownMenuItem(
-                                      value: 'minivan',
-                                      child: Text('Minivan',
-                                          style:
-                                              TextStyle(color: textPrimary))),
-                                  DropdownMenuItem(
-                                      value: 'bus',
-                                      child: Text('Bus',
-                                          style:
-                                              TextStyle(color: textPrimary))),
-                                ],
-                                onChanged: (v) {
-                                  setState(() => _tipoVehiculoTurismo = v);
-                                  _programarCalculoAutomatico();
-                                },
-                              ),
-                            ],
+                          OverflowSafeLabeledDropdown(
+                            leading: Icon(Icons.beach_access,
+                                color: textSecondary, size: 20),
+                            label: 'Vehículo turismo',
+                            labelStyle: TextStyle(color: textSecondary),
+                            gapAfterLeading: 10,
+                            dropdown: DropdownButton<String>(
+                              isExpanded: true,
+                              value: _tipoVehiculoTurismo,
+                              dropdownColor: ddBg,
+                              underline: rutaMockup
+                                  ? Container(
+                                      height: 1,
+                                      margin: const EdgeInsets.only(top: 2),
+                                      color: isDark
+                                          ? Colors.white54
+                                          : const Color(0xFF98A2B3),
+                                    )
+                                  : const SizedBox(),
+                              style: TextStyle(
+                                  color: textPrimary, fontSize: 16),
+                              items: [
+                                DropdownMenuItem(
+                                    value: 'carro',
+                                    child: Text('Carro',
+                                        style:
+                                            TextStyle(color: textPrimary))),
+                                DropdownMenuItem(
+                                    value: 'jeepeta',
+                                    child: Text('Jeepeta',
+                                        style:
+                                            TextStyle(color: textPrimary))),
+                                DropdownMenuItem(
+                                    value: 'minivan',
+                                    child: Text('Minivan',
+                                        style:
+                                            TextStyle(color: textPrimary))),
+                                DropdownMenuItem(
+                                    value: 'bus',
+                                    child: Text('Bus',
+                                        style:
+                                            TextStyle(color: textPrimary))),
+                              ],
+                              onChanged: (v) {
+                                setState(() => _tipoVehiculoTurismo = v);
+                                _programarCalculoAutomatico();
+                              },
+                            ),
                           ),
                       ],
                       if (!_esAhora) ...<Widget>[
@@ -1662,21 +1675,28 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                         TextButton.icon(
                           onPressed: _seleccionarFechaHora,
                           icon: Icon(Icons.calendar_today, color: payLinkColor),
-                          label: Text(f.format(_fechaHora),
-                              style: TextStyle(
-                                  color: payLinkColor,
-                                  fontWeight: FontWeight.w600)),
+                          label: Text(
+                            f.format(_fechaHora),
+                            maxLines: 2,
+                            softWrap: true,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                color: payLinkColor,
+                                fontWeight: FontWeight.w600),
+                          ),
                         ),
                       ],
                       const SizedBox(height: 12),
                       _card(
                         mockupSurface: rutaMockup,
                         child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             Icon(Icons.credit_card_outlined,
                                 color: textSecondary),
                             const SizedBox(width: 10),
                             Expanded(
+                              flex: 3,
                               child: TextButton.icon(
                                 onPressed: _elegirMetodoPago,
                                 icon: Icon(
@@ -1684,25 +1704,36 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                                     color: payLinkColor),
                                 label: Text(
                                   'Elegir método de pago',
+                                  maxLines: 2,
+                                  softWrap: true,
+                                  overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                       color: payLinkColor,
                                       fontWeight: FontWeight.w700),
                                 ),
                               ),
                             ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: metodoPagoChipBg,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: metodoPagoChipBorder),
-                              ),
-                              child: Text(
-                                _metodoPago,
-                                style: TextStyle(
-                                    color: textSecondary,
-                                    fontWeight: FontWeight.w700),
+                            Flexible(
+                              flex: 2,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: metodoPagoChipBg,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border:
+                                      Border.all(color: metodoPagoChipBorder),
+                                ),
+                                child: Text(
+                                  _metodoPago,
+                                  maxLines: 2,
+                                  softWrap: true,
+                                  textAlign: TextAlign.end,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: textSecondary,
+                                      fontWeight: FontWeight.w700),
+                                ),
                               ),
                             ),
                           ],

@@ -106,6 +106,14 @@ service firebase.storage {
                       );
     }
 
+    /* ========= REPORTES ADMIN EXPORTABLES =========
+       Ruta: admin_reports/{adminUid}/{fileName}
+       Acceso directo desde cliente: bloqueado (descarga via URL firmada temporal de Cloud Functions).
+    */
+    match /admin_reports/{adminUid}/{fileName} {
+      allow read, write: if false;
+    }
+
     /* ========= Bloqueo por defecto ========= */
     match /{path=**} {
       allow read, write: if false;

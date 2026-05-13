@@ -1,10 +1,11 @@
-﻿// Acciones y diálogos de Bola Ahorro (reutilizable en pantalla completa y pestaña taxista).
+// Acciones y diálogos de Bola Ahorro (reutilizable en pantalla completa y pestaña taxista).
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_crear_publicacion_flow.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1908,12 +1909,35 @@ class BolaPuebloDialogs {
         uidActor: uidActor,
       );
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        BolaPuebloTheme.snack(
+
+      final snap = await FirebaseFirestore.instance
+          .collection('bolas_pueblo')
+          .doc(bolaId.trim())
+          .get();
+      final d = snap.data();
+      final bool finalizada =
+          (d?['estado'] ?? '').toString().trim().toLowerCase() == 'finalizada';
+
+      if (finalizada && context.mounted) {
+        final uidTx = (d!['uidTaxista'] ?? '').toString().trim();
+        final role =
+            uidActor.trim() == uidTx ? 'taxista' : 'cliente';
+        await FacturaBolaPueblo.mostrar(
           context,
-          'Confirmación registrada. Cuando cliente y taxista confirmen llegada, el viaje queda finalizado y se aplica la comisión RAI al conductor.',
-        ),
-      );
+          bolaId: bolaId.trim(),
+          role: role,
+        );
+      }
+
+      if (!context.mounted) return;
+      if (!finalizada) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(
+            context,
+            'Confirmación registrada. Cuando cliente y taxista confirmen llegada, el viaje queda finalizado y se aplica la comisión RAI al conductor.',
+          ),
+        );
+      }
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)

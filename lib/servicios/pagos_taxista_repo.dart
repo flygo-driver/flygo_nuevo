@@ -1,10 +1,14 @@
 // lib/servicios/pagos_taxista_repo.dart
+// ignore_for_file: avoid_print -- logs depuración taxistaEnviarRecargaComisionEfectivo
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import '../modelo/pago_taxista.dart';
 import '../modelo/recarga_comision_taxista.dart';
 import 'pool_repo.dart';
+import 'taxista_billetera_gira_prepago.dart';
 import 'taxista_prepago_ledger.dart';
 
 class PagosTaxistaRepo {
@@ -34,6 +38,30 @@ class PagosTaxistaRepo {
     return double.tryParse(v.toString()) ?? 0;
   }
 
+  /// Monto de prepago **reservado** para giras por cupos en curso (no disponible hasta devolución/cierre).
+  static double saldoReservadoParaGirasDesdeBilletera(Map<String, dynamic>? data) =>
+      TaxistaBilleteraGiraPrepago.saldoReservadoParaGiras(data);
+
+  /// Comisión de giras ya descontada del prepago (acumulado contable).
+  static double comisionesDescontadasDesdeBilletera(Map<String, dynamic>? data) =>
+      TaxistaBilleteraGiraPrepago.comisionesDescontadas(data);
+
+  /// Prepago libre para crear una nueva gira (prepago − reservado en giras).
+  static double saldoDisponibleParaReservarGiraDesdeBilletera(
+          Map<String, dynamic>? data) =>
+      TaxistaBilleteraGiraPrepago.saldoDisponibleParaReservarGira(data);
+
+  /// Saldo prepago **disponible** para operar (viajes en efectivo + nuevas giras).
+  static double saldoDisponiblePrepagoComisionDesdeBilletera(
+          Map<String, dynamic>? data) =>
+      TaxistaBilleteraGiraPrepago.saldoDisponiblePrepagoComisionRd(data);
+
+  /// Ratio máximo cancelaciones/creadas en el mes antes de bloquear nuevas giras.
+  static const double giraAbusoRatioCancelacionesMax = 0.30;
+
+  /// Mínimo de giras creadas en el mes para evaluar el ratio (evita bloqueo con 1–2 datos).
+  static const int giraAbusoMinCreadasParaEvaluar = 3;
+
   static bool primerViajeComisionGratisConsumido(Map<String, dynamic>? data) {
     return data?['primerViajeComisionGratisConsumido'] == true;
   }
@@ -41,7 +69,7 @@ class PagosTaxistaRepo {
   /// Deuda legacy en billetera (ya no sube con viajes nuevos): mismo tope que Cloud Functions.
   static const double umbralComisionLegacyBloqueoRd = 500;
 
-  /// Tras el primer viaje en efectivo gratis, saldo prepago mínimo para pool / tomar viajes.
+  /// Monto sugerido de recarga para operar con holgura.
   static const double minSaldoPrepagoComisionRd = 200;
 
   /// Alias histórico (UI que hablaba de “tope 500”): hoy es el tope solo de `comisionPendiente` legacy.
@@ -64,8 +92,9 @@ class PagosTaxistaRepo {
       'No hay viajes disponibles hasta que regularices tu saldo prepago (comisión efectivo).';
 
   static String get mensajeRecargaAccesoPantallaCompleta =>
-      'Tu acceso queda suspendido: necesitas al menos RD\$${minSaldoPrepagoComisionRd.toStringAsFixed(0)} '
-      'de saldo prepago tras tu primer viaje en efectivo (el 20% de cada efectivo se descuenta del saldo), '
+      'Tu acceso queda suspendido: agotaste tu saldo prepago de comisión en efectivo. '
+      'Recarga (sugerido RD\$${minSaldoPrepagoComisionRd.toStringAsFixed(0)} o más) '
+      'para seguir operando; el 20% de cada viaje en efectivo se descuenta del saldo, '
       'o regularizar comisión legacy ≥ RD\$${umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}. '
       'Recarga desde Mis pagos; al verificar el admin, el servicio vuelve.';
 
@@ -76,8 +105,7 @@ class PagosTaxistaRepo {
     if (pend >= umbralComisionLegacyBloqueoRd - 1e-6) return true;
     if (pend > 1e-6) return false;
     if (!primerViajeComisionGratisConsumido(billeData)) return false;
-    return saldoPrepagoComisionDesdeBilletera(billeData) <
-        minSaldoPrepagoComisionRd - 1e-6;
+    return saldoDisponiblePrepagoComisionDesdeBilletera(billeData) <= 1e-6;
   }
 
   /// Una sola fuente para pool, reclamar viaje, encadenar siguiente y asignación turismo:
@@ -135,25 +163,6 @@ class PagosTaxistaRepo {
           double.parse(liquidar.toStringAsFixed(2)),
       if (referenciaBanco != null && referenciaBanco.trim().isNotEmpty)
         'ultimaLiquidacionComisionRef': referenciaBanco.trim(),
-    };
-  }
-
-  static Map<String, dynamic> _payloadAcreditarSaldoPrepagoComision({
-    required Map<String, dynamic>? billeData,
-    required double montoAcreditarRd,
-    String? referenciaBanco,
-  }) {
-    if (montoAcreditarRd <= 0) throw Exception('El monto debe ser mayor que 0');
-    final actual = saldoPrepagoComisionDesdeBilletera(billeData);
-    final nuevo = actual + montoAcreditarRd;
-    return <String, dynamic>{
-      'saldoPrepagoComisionRd': double.parse(nuevo.toStringAsFixed(2)),
-      'updatedAt': FieldValue.serverTimestamp(),
-      'ultimaRecargaPrepagoComisionEn': FieldValue.serverTimestamp(),
-      'ultimaRecargaPrepagoComisionMonto':
-          double.parse(montoAcreditarRd.toStringAsFixed(2)),
-      if (referenciaBanco != null && referenciaBanco.trim().isNotEmpty)
-        'ultimaRecargaPrepagoComisionRef': referenciaBanco.trim(),
     };
   }
 
@@ -276,9 +285,13 @@ class PagosTaxistaRepo {
     required String nombreTaxista,
     required double montoDeclaradoRd,
     required String comprobanteUrl,
+    double? montoElegidoRd,
+    String? paqueteRecarga,
     String metodoPago = 'transferencia',
   }) async {
     final uid = uidTaxista.trim();
+    print(
+        '[PagosTaxistaRepo] taxistaEnviarRecargaComisionEfectivo start uid=$uid montoDeclarado=$montoDeclaradoRd montoElegido=$montoElegidoRd paquete=$paqueteRecarga');
     if (uid.isEmpty) throw Exception('Sesión inválida');
     final url = comprobanteUrl.trim();
     if (url.isEmpty) throw Exception('Debes subir el comprobante');
@@ -291,6 +304,8 @@ class PagosTaxistaRepo {
         .limit(1)
         .get();
     if (abierta.docs.isNotEmpty) {
+      print(
+          '[PagosTaxistaRepo] taxistaEnviarRecargaComisionEfectivo rechazado: ya hay recarga pendiente_verificacion');
       throw Exception(
           'Ya tienes una recarga en revisión. Espera a que el administrador la verifique.');
     }
@@ -298,6 +313,13 @@ class PagosTaxistaRepo {
     final bill = b.data();
     final pend = comisionPendienteDesdeBilletera(bill);
     final saldo = saldoPrepagoComisionDesdeBilletera(bill);
+    final resG = saldoReservadoParaGirasDesdeBilletera(bill);
+    final disp = saldoDisponiblePrepagoComisionDesdeBilletera(bill);
+    print(
+      '[PRE_TEST] recarga solicitud uid=$uid saldoPrepagoBruto=$saldo '
+      'reservadoGiras=$resG disponibleOperar=$disp comisionPendiente=$pend '
+      'montoDeclaradoRd=$montoDeclaradoRd',
+    );
     await _recargasCol.add({
       'uidTaxista': uid,
       'nombreTaxista':
@@ -305,6 +327,10 @@ class PagosTaxistaRepo {
       'comisionPendienteAlEnviar': double.parse(pend.toStringAsFixed(2)),
       'saldoPrepagoAlEnviar': double.parse(saldo.toStringAsFixed(2)),
       'montoDeclaradoRd': double.parse(montoDeclaradoRd.toStringAsFixed(2)),
+      if (montoElegidoRd != null && montoElegidoRd > 0)
+        'montoElegidoRd': double.parse(montoElegidoRd.toStringAsFixed(2)),
+      if ((paqueteRecarga ?? '').trim().isNotEmpty)
+        'paqueteRecarga': paqueteRecarga!.trim(),
       'comprobanteUrl': url,
       'metodoPago':
           metodoPago.trim().isEmpty ? 'transferencia' : metodoPago.trim(),
@@ -312,6 +338,10 @@ class PagosTaxistaRepo {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    print(
+        '[PRE_TEST] recarga documento creado uid=$uid (saldo sin cambio hasta aprobación admin; snapshot prepago=$saldo)');
+    print(
+        '[PagosTaxistaRepo] taxistaEnviarRecargaComisionEfectivo documento creado en recargas_comision_taxista');
   }
 
   static Future<void> adminVerificarRecargaComisionEfectivo({
@@ -319,81 +349,20 @@ class PagosTaxistaRepo {
     required bool aprobado,
     String? notaAdmin,
   }) async {
-    final ref = _recargasCol.doc(recargaId.trim());
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
     if (aprobado) {
-      /// Cobro + cierre de solicitud en **una** transacción: no puede quedar pagado en billetera
-      /// y la recarga aún en revisión (evita doble aprobación y estados incoherentes).
-      var uidParaSync = '';
-      await _db.runTransaction((tx) async {
-        final recSnap = await tx.get(ref);
-        if (!recSnap.exists) throw Exception('Recarga no encontrada');
-        final m = recSnap.data() ?? {};
-        if ((m['estado'] ?? '').toString() != 'pendiente_verificacion') {
-          throw Exception('Esta solicitud ya fue procesada');
-        }
-        final uid = (m['uidTaxista'] ?? '').toString();
-        if (uid.isEmpty) throw Exception('Recarga sin taxista');
-        final montoRaw = m['montoDeclaradoRd'];
-        final monto = montoRaw is num
-            ? montoRaw.toDouble()
-            : double.tryParse('$montoRaw') ?? 0.0;
-        if (monto <= 0) throw Exception('Monto inválido en la solicitud');
-        uidParaSync = uid;
-        final bRef = _db.collection('billeteras_taxista').doc(uid);
-        final bSnap = await tx.get(bRef);
-        final saldoAntes = saldoPrepagoComisionDesdeBilletera(bSnap.data());
-        final pendAntes = comisionPendienteDesdeBilletera(bSnap.data());
-        final payloadBille = _payloadAcreditarSaldoPrepagoComision(
-          billeData: bSnap.data(),
-          montoAcreditarRd: monto,
-          referenciaBanco: 'recarga:${recargaId.trim()}',
-        );
-        final saldoDespuesRaw = payloadBille['saldoPrepagoComisionRd'];
-        final saldoDespues = saldoDespuesRaw is num
-            ? saldoDespuesRaw.toDouble()
-            : double.tryParse('$saldoDespuesRaw') ?? saldoAntes;
-        await TaxistaPrepagoLedger.appendRecargaPrepagoVerificada(
-          tx: tx,
-          uidTaxista: uid,
-          recargaId: recargaId.trim(),
-          saldoPrepagoAntes: saldoAntes,
-          saldoPrepagoDespues: saldoDespues,
-          comisionPendienteAntes: pendAntes,
-          comisionPendienteDespues: pendAntes,
-          montoAcreditadoRd: monto,
-          referencia: 'recarga:${recargaId.trim()}',
-        );
-        if (bSnap.exists) {
-          tx.update(bRef, payloadBille);
-        } else {
-          tx.set(bRef, payloadBille, SetOptions(merge: true));
-        }
-        tx.update(ref, {
-          'estado': 'pagado',
-          'notaAdmin': notaAdmin,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'verificadoEn': FieldValue.serverTimestamp(),
-        });
+      final callable = fx.httpsCallable('approveRecargaComision');
+      await callable.call(<String, dynamic>{
+        'recargaId': recargaId.trim(),
+        'notaAdmin': (notaAdmin ?? '').trim(),
       });
-      if (uidParaSync.isNotEmpty) {
-        await sincronizarBloqueoOperativo(uidParaSync);
-      }
     } else {
       final motivo = (notaAdmin ?? '').trim();
       if (motivo.isEmpty) throw Exception('Indica el motivo del rechazo');
-      await _db.runTransaction((tx) async {
-        final recSnap = await tx.get(ref);
-        if (!recSnap.exists) throw Exception('Recarga no encontrada');
-        final m = recSnap.data() ?? {};
-        if ((m['estado'] ?? '').toString() != 'pendiente_verificacion') {
-          throw Exception('Esta solicitud ya fue procesada');
-        }
-        tx.update(ref, {
-          'estado': 'rechazado',
-          'notaAdmin': motivo,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'verificadoEn': FieldValue.serverTimestamp(),
-        });
+      final callable = fx.httpsCallable('rejectRecargaComision');
+      await callable.call(<String, dynamic>{
+        'recargaId': recargaId.trim(),
+        'notaAdmin': motivo,
       });
     }
   }

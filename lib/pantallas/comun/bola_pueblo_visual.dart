@@ -5,70 +5,95 @@ import 'package:flutter/material.dart';
 
 /// Colores de la sección Bola según tema claro/oscuro (marca: [BolaPuebloTheme.accent] fijo).
 ///
-/// Contraste tipo mapa/claro (Uber): en **oscuro** el texto principal es blanco puro
-/// [`0xFFFFFFFF`]; en **claro** casi negro para máxima lectura. No altera lógica ni datos.
+/// Antes este sistema se anclaba a `scheme.surface` y por eso toda la familia
+/// Bola Ahorro aparecía como una "isla blanca/oscura" sin importar el color
+/// de fondo personalizado que el cliente hubiera elegido (CustomThemeService).
+/// Ahora `bgDeep`, `surface` y `surfaceRaised` se derivan del
+/// `scaffoldBackgroundColor` real para mantener coherencia visual con el resto
+/// de la app, y los textos se calculan por contraste WCAG sobre ese fondo.
+/// La identidad de marca (acento verde, botones primarios) NO cambia.
 @immutable
 class BolaPuebloColors {
   const BolaPuebloColors._({
     required this.brightness,
     required this.scheme,
+    required this.scaffoldBg,
   });
 
   final Brightness brightness;
   final ColorScheme scheme;
+  final Color scaffoldBg;
 
   factory BolaPuebloColors.of(BuildContext context) {
     final t = Theme.of(context);
-    return BolaPuebloColors._(brightness: t.brightness, scheme: t.colorScheme);
+    return BolaPuebloColors._(
+      brightness: t.brightness,
+      scheme: t.colorScheme,
+      scaffoldBg: t.scaffoldBackgroundColor,
+    );
   }
 
   bool get isDark => brightness == Brightness.dark;
 
-  /// Fondo raíz del panel Bola (negro material / blanco según tema).
-  Color get bgDeep =>
-      isDark ? const Color(0xFF121212) : scheme.surface;
+  /// `true` si el fondo elegido por el usuario es percibido como oscuro
+  /// (negro, morado oscuro, azul marino…). Útil para decidir tonos derivados.
+  bool get _bgIsDark =>
+      ThemeData.estimateBrightnessForColor(scaffoldBg) == Brightness.dark;
 
-  Color get surface =>
-      isDark ? const Color(0xFF1C1C1E) : scheme.surfaceContainerHighest;
+  /// Fondo raíz del panel Bola: deriva del color elegido por el cliente.
+  /// Antes era siempre `0xFF121212` (oscuro) o `scheme.surface` (claro), y
+  /// rompía la coherencia cuando el usuario elegía cualquier otro color.
+  Color get bgDeep => scaffoldBg;
 
-  Color get surfaceRaised =>
-      isDark ? const Color(0xFF2C2C2E) : scheme.surfaceContainerHigh;
+  /// Superficie tipo "card sheet": ligeramente elevada sobre `bgDeep`,
+  /// usando overlay translúcido (claro u oscuro según luminancia del fondo).
+  Color get surface {
+    final Color overlay = _bgIsDark
+        ? Colors.white.withValues(alpha: 0.06)
+        : Colors.black.withValues(alpha: 0.04);
+    return Color.alphaBlend(overlay, scaffoldBg);
+  }
 
-  /// Texto principal: blanco **puro** en oscuro; casi negro en claro (legibilidad máxima).
+  /// Superficie aún más elevada (chips, botones segmentados).
+  Color get surfaceRaised {
+    final Color overlay = _bgIsDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : Colors.black.withValues(alpha: 0.07);
+    return Color.alphaBlend(overlay, scaffoldBg);
+  }
+
+  /// Texto principal: blanco/casi-negro elegido por contraste WCAG sobre el
+  /// fondo elegido por el usuario.
   Color get onSurface =>
-      isDark ? const Color(0xFFFFFFFF) : const Color(0xFF1D1D1F);
+      _bgIsDark ? const Color(0xFFFFFFFF) : const Color(0xFF1D1D1F);
 
-  /// Secundario / etiquetas: gris claro legible en oscuro; gris medio en claro.
-  Color get onMuted => isDark
+  /// Secundario / etiquetas: tono medio legible sobre el fondo elegido.
+  Color get onMuted => _bgIsDark
       ? const Color(0xFFEBEBF5).withValues(alpha: 0.72)
       : const Color(0xFF636366);
 
-  Color get outlineSoft =>
-      isDark ? const Color(0xFF48484A) : scheme.outlineVariant;
+  Color get outlineSoft => _bgIsDark
+      ? Colors.white.withValues(alpha: 0.18)
+      : Colors.black.withValues(alpha: 0.10);
 
-  Color get appBarScrim => isDark
-      ? const Color(0xFF121212).withValues(alpha: 0.92)
-      : scheme.surface.withValues(alpha: 0.94);
+  Color get appBarScrim => scaffoldBg.withValues(alpha: 0.94);
 
-  Color get dragHandle =>
-      isDark
-          ? const Color(0xFFFFFFFF).withValues(alpha: 0.28)
-          : scheme.onSurface.withValues(alpha: 0.22);
+  Color get dragHandle => _bgIsDark
+      ? const Color(0xFFFFFFFF).withValues(alpha: 0.28)
+      : Colors.black.withValues(alpha: 0.22);
 
-  Color get snackNeutralBg =>
-      isDark ? const Color(0xFF2C2C2E) : scheme.surfaceContainerHighest;
+  Color get snackNeutralBg => surfaceRaised;
 
   Color get cardShadow => isDark
       ? Colors.black.withValues(alpha: 0.45)
       : Colors.black.withValues(alpha: 0.10);
 
-  Color get outlineOnCard =>
-      isDark
-          ? const Color(0xFFFFFFFF).withValues(alpha: 0.14)
-          : scheme.onSurface.withValues(alpha: 0.12);
+  Color get outlineOnCard => _bgIsDark
+      ? const Color(0xFFFFFFFF).withValues(alpha: 0.14)
+      : Colors.black.withValues(alpha: 0.12);
 
   /// Enlace / botón outline secundario (p. ej. «Ver ruta»).
-  Color get linkBlue => isDark ? const Color(0xFF64B5FF) : scheme.primary;
+  Color get linkBlue => _bgIsDark ? const Color(0xFF64B5FF) : scheme.primary;
 }
 
 /// Estilo visual tipo inDrive (solo UI; no afecta lógica ni datos).

@@ -64,7 +64,7 @@ class ViajeDisponible extends StatefulWidget {
 }
 
 class _ViajeDisponibleState extends State<ViajeDisponible>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   static const TextStyle _kPoolClienteNombreStyle = TextStyle(
     color: Colors.white70,
     fontSize: 13,
@@ -85,6 +85,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreAhora;
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreProg;
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreBola;
+
+  /// Pestañas BOLA / AHORA / PROGRAMADOS (índices 0 / 1 / 2).
+  late TabController _tabPool;
+
+  /// Último snapshot de las queries de timbre (para sonar al cambiar de pestaña).
+  fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreAhora;
+  fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreProg;
+  fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreBola;
 
   // Listener estable para viaje activo (evita parpadeos por queries amplias).
   StreamSubscription<fs.DocumentSnapshot<Map<String, dynamic>>>?
@@ -123,11 +131,16 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _tabPool = TabController(length: 3, vsync: this);
+    _tabPool.addListener(_onPoolTabChanged);
 
     FirebaseAuth.instance.currentUser?.getIdToken(true);
 
     // 🔥 NUEVO: Escuchar si ya tiene un viaje activo
     _checkExistingActiveTrip();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_bootstrapViajeActivoDesdeRepo());
+    });
 
     Future.microtask(() => NotificationService.I.ensureInited());
     Future.microtask(() async {
@@ -145,6 +158,29 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         await DisponibilidadService.verificar(uid);
       }
     });
+  }
+
+  Future<void> _bootstrapViajeActivoDesdeRepo() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || !mounted || _navegandoAViajeActivo) return;
+    print('[VIAJE_ACTIVO] viaje_disponible bootstrap ViajesRepo');
+    try {
+      final snap = await ViajesRepo.getViajeActivoParaUsuario(uid);
+      if (snap == null || !snap.exists || !mounted) return;
+      final d = snap.data() ?? <String, dynamic>{};
+      if (!_esViajeActivoReal(d, uid)) return;
+      if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(d)) return;
+      _navegandoAViajeActivo = true;
+      await Future<void>.delayed(const Duration(milliseconds: 320));
+      if (!mounted) {
+        _navegandoAViajeActivo = false;
+        return;
+      }
+      await _redirectToActiveTrip();
+    } catch (e) {
+      print('[VIAJE_ACTIVO] viaje_disponible bootstrap error: $e');
+      if (mounted) _navegandoAViajeActivo = false;
+    }
   }
 
   bool _esViajeActivoReal(Map<String, dynamic> data, String uid) {
@@ -214,7 +250,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         final data = vSnap.data() ?? <String, dynamic>{};
         if (!_esViajeActivoReal(data, uid)) return;
         // Bola espejo: mismo viaje que acordás en bolas_pueblo — no sustituir por ViajeEnCursoTaxista.
-        if (ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(data)) return;
+        if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(data)) return;
         if (_navegandoAViajeActivo) return;
         _diag('active trip confirmed id=$viajeActivoId -> redirect en_curso');
         _navegandoAViajeActivo = true;
@@ -226,6 +262,33 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   }
 
   /// No redirige a ViajeEnCurso si el activo es espejo Bola ([bolas_pueblo] manda el flujo).
+  /// Al volver de Waze/Maps u otra app: reevaluar `viajeActivoId` y volver al flujo en curso.
+  Future<void> _reconciliarViajeActivoAlResume() async {
+    print('[VIAJE_ACTIVO] viaje_disponible resumed → reconciliar viaje activo');
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || !mounted) return;
+    try {
+      final uDoc = await fs.FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get();
+      final vid = (uDoc.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isEmpty) return;
+      final vSnap = await fs.FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(vid)
+          .get();
+      if (!vSnap.exists || !mounted) return;
+      final data = vSnap.data() ?? <String, dynamic>{};
+      if (!_esViajeActivoReal(data, uid)) return;
+      if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(data)) return;
+      _navegandoAViajeActivo = false;
+      await _redirectToActiveTrip();
+    } catch (e, st) {
+      print('[VIAJE_ACTIVO] viaje_disponible resume reconcile error $e $st');
+    }
+  }
+
   Future<void> _redirectToActiveTrip() async {
     if (!mounted) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -242,7 +305,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               .doc(vid)
               .get();
           final d = vs.data();
-          if (d != null && ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(d)) {
+          if (d != null &&
+              ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(d)) {
             return;
           }
         }
@@ -258,6 +322,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   void dispose() {
     _activeUserListener?.cancel();
     _activeTripListener?.cancel();
+    _tabPool.removeListener(_onPoolTabChanged);
+    _tabPool.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _subTimbreAhora?.cancel();
     _subTimbreProg?.cancel();
@@ -269,12 +335,138 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _appEnForeground = state == AppLifecycleState.resumed;
+    // `inactive` sigue siendo app visible (p. ej. panel de notificaciones); no cortar timbre ahí.
+    _appEnForeground = state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
     if (state == AppLifecycleState.resumed) {
       _arrancarTimbres();
+      unawaited(_reconciliarViajeActivoAlResume());
       if (mounted) setState(() {});
-    } else {
-      NotificationService.I.stopTimbre();
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      unawaited(NotificationService.I.stopTimbre());
+    }
+  }
+
+  void _onPoolTabChanged() {
+    if (_tabPool.indexIsChanging || !mounted) return;
+    unawaited(_flushTimbreOfertasParaTab(_tabPool.index));
+  }
+
+  /// Al entrar a una pestaña: hasta [max] timbres por ofertas que llegaron mientras estabas en otra.
+  Future<void> _flushTimbreOfertasParaTab(int tabIndex,
+      {int max = 2}) async {
+    if (!_appEnForeground) return;
+    switch (tabIndex) {
+      case 1:
+        await _flushTimbreAhoraDesdeSnap(max);
+        return;
+      case 2:
+        await _flushTimbreProgDesdeSnap(max);
+        return;
+      case 0:
+        await _flushTimbreBolaDesdeSnap(max);
+        return;
+      default:
+        return;
+    }
+  }
+
+  Future<void> _flushTimbreAhoraDesdeSnap(int maxDings) async {
+    final snap = _snapTimbreAhora;
+    if (snap == null) return;
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    int n = 0;
+    for (final d in snap.docs) {
+      if (n >= maxDings) return;
+      final data = d.data();
+      if (_usarFallbackSinIndiceAhora && !_pasaFiltroAhoraLocal(data)) {
+        continue;
+      }
+      if (!_timbreMeInteresaViaje(data, myUid)) continue;
+      if (!_esAhoraDesdeData(data)) continue;
+      final id = _timbreClaveViaje(d.id, data, myUid);
+      if (_vistosParaTimbre.contains(id)) continue;
+      _vistosParaTimbre.add(id);
+      await NotificationService.I.playPoolOfferSoundInApp();
+      if (_viajeTienePrecioReal(data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: id,
+          titulo: 'Nuevo viaje disponible',
+          cuerpo:
+              '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+          skipSound: true,
+        );
+      }
+      n++;
+      if (n < maxDings) {
+        await Future<void>.delayed(const Duration(milliseconds: 380));
+      }
+    }
+  }
+
+  Future<void> _flushTimbreProgDesdeSnap(int maxDings) async {
+    final snap = _snapTimbreProg;
+    if (snap == null) return;
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    int n = 0;
+    for (final d in snap.docs) {
+      if (n >= maxDings) return;
+      final data = d.data();
+      if (_usarFallbackSinIndiceProg && !_pasaFiltroProgLocal(data)) {
+        continue;
+      }
+      if (!_timbreMeInteresaViaje(data, myUid)) continue;
+      if (_esAhoraDesdeData(data)) continue;
+      final id = _timbreClaveViaje(d.id, data, myUid);
+      if (_vistosParaTimbre.contains(id)) continue;
+      _vistosParaTimbre.add(id);
+      await NotificationService.I.playPoolOfferSoundInApp();
+      if (_viajeTienePrecioReal(data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: id,
+          titulo: 'Viaje programado disponible',
+          cuerpo:
+              '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+          skipSound: true,
+        );
+      }
+      n++;
+      if (n < maxDings) {
+        await Future<void>.delayed(const Duration(milliseconds: 380));
+      }
+    }
+  }
+
+  Future<void> _flushTimbreBolaDesdeSnap(int maxDings) async {
+    final snap = _snapTimbreBola;
+    if (snap == null) return;
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (myUid.isEmpty) return;
+    int n = 0;
+    for (final d in snap.docs) {
+      if (n >= maxDings) return;
+      final m = d.data();
+      if (!_bolaDisparaTimbre(m, myUid)) continue;
+      final key = 'bola_${d.id}';
+      if (_vistosParaTimbre.contains(key)) continue;
+      if (!await RolesService.getDisponibilidad(myUid)) return;
+      _vistosParaTimbre.add(key);
+      await NotificationService.I.playPoolOfferSoundInApp();
+      final origen = (m['origen'] ?? '').toString();
+      final destino = (m['destino'] ?? '').toString();
+      await NotificationService.I.notifyNuevoViaje(
+        viajeId: key,
+        titulo: 'Nueva Bola Ahorro',
+        cuerpo: '$origen → $destino',
+        skipSound: true,
+      );
+      n++;
+      if (n < maxDings) {
+        await Future<void>.delayed(const Duration(milliseconds: 380));
+      }
     }
   }
 
@@ -376,6 +568,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     // Con 60/80 el timbre no veía viajes que sí aparecían en pantalla.
     _subTimbreAhora = qA.limit(120).snapshots().listen((snap) async {
       if (!_appEnForeground) return;
+      _snapTimbreAhora = snap;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
       // Primera emisión: solo marcamos como "vistos" para que nuevos viajes
@@ -389,10 +582,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           }
           if (!_timbreMeInteresaViaje(data, myUid)) continue;
           if (!_esAhoraDesdeData(data)) continue;
-          _vistosParaTimbre.add(_timbreClaveViaje(d.id, data, myUid));
+          if (_tabPool.index == 1) {
+            _vistosParaTimbre.add(_timbreClaveViaje(d.id, data, myUid));
+          }
         }
         return;
       }
+
+      if (_tabPool.index != 1) return;
 
       for (final d in snap.docs) {
         final data = d.data();
@@ -422,6 +619,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     _subTimbreProg = qP.limit(200).snapshots().listen((snap) async {
       if (!_appEnForeground) return;
+      _snapTimbreProg = snap;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
       // Primera emisión: marcar como "vistos" para que solo nuevos viajes
@@ -435,10 +633,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           }
           if (!_timbreMeInteresaViaje(data, myUid)) continue;
           if (_esAhoraDesdeData(data)) continue;
-          _vistosParaTimbre.add(_timbreClaveViaje(d.id, data, myUid));
+          if (_tabPool.index == 2) {
+            _vistosParaTimbre.add(_timbreClaveViaje(d.id, data, myUid));
+          }
         }
         return;
       }
+
+      if (_tabPool.index != 2) return;
 
       for (final d in snap.docs) {
         final data = d.data();
@@ -467,6 +669,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     _subTimbreBola = BolaPuebloRepo.streamTablero().listen((snap) async {
       if (!_appEnForeground) return;
+      _snapTimbreBola = snap;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
       if (myUid.isEmpty) return;
 
@@ -475,10 +678,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         for (final d in snap.docs) {
           final m = d.data();
           if (!_bolaDisparaTimbre(m, myUid)) continue;
-          _vistosParaTimbre.add('bola_${d.id}');
+          if (_tabPool.index == 0) {
+            _vistosParaTimbre.add('bola_${d.id}');
+          }
         }
         return;
       }
+
+      if (_tabPool.index != 0) return;
 
       for (final d in snap.docs) {
         final m = d.data();
@@ -1246,6 +1453,73 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     );
   }
 
+  /// Saldo prepago en tiempo real para que el taxista sepa cuánto le queda.
+  Widget _bannerSaldoRecargaTiempoReal(String uidTaxista) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
+    return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
+      stream: fs.FirebaseFirestore.instance
+          .collection('billeteras_taxista')
+          .doc(uidTaxista)
+          .snapshots(),
+      builder: (context, snap) {
+        final data = snap.data?.data();
+        final saldo = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(data);
+        final pendLegacy = PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
+        final bloqueado =
+            PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(data);
+        final ultimaComisionCents = data?['ultimaComisionCents'];
+        final ultimaComisionRd = (ultimaComisionCents is num)
+            ? (ultimaComisionCents.toDouble() / 100.0)
+            : 0.0;
+        final viajesEstimados = ultimaComisionRd > 0
+            ? (saldo / ultimaComisionRd).floor().clamp(0, 9999)
+            : null;
+        final faltante = (minSaldo - saldo).clamp(0.0, double.infinity);
+
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: bloqueado
+                ? const Color.fromRGBO(244, 67, 54, 0.14)
+                : const Color.fromRGBO(33, 150, 243, 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: bloqueado
+                  ? const Color.fromRGBO(244, 67, 54, 0.65)
+                  : const Color.fromRGBO(33, 150, 243, 0.55),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                bloqueado ? Icons.warning_amber_rounded : Icons.account_balance_wallet_outlined,
+                color: bloqueado ? Colors.redAccent : Colors.lightBlueAccent,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  bloqueado
+                      ? 'Recarga BLOQUEADA. Saldo actual ${FormatosMoneda.rd(saldo)} (mínimo RD\$${minSaldo.toStringAsFixed(0)}). Te faltan ${FormatosMoneda.rd(faltante)} para volver a operar.'
+                      : 'Saldo recarga en tiempo real: ${FormatosMoneda.rd(saldo)}. ${viajesEstimados == null ? '' : 'Estimado: ~$viajesEstimados viajes como el último antes de llegar al mínimo. '}'
+                          'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.',
+                  style: TextStyle(
+                    color: isDark ? Colors.white70 : const Color(0xFF374151),
+                    fontSize: 12.2,
+                    height: 1.35,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   /// Cuando hay bloqueo operativo, la lista queda vacía: mostramos siempre las mismas
   /// rutas que en [BloqueadoPorPagos] (Mis pagos + guía con banco) para que sea coherente
   /// con lo que el admin desbloquea al aprobar.
@@ -1690,21 +1964,32 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             final String servicioLabel =
                 _getLabelForTipoServicio(v.tipoServicio);
 
+            final bool destacarCercano = index == 0 &&
+                distanciaKmPickup != null &&
+                distanciaKmPickup <= 40.0;
+            final Color bordeCard = v.waypoints != null && v.waypoints!.isNotEmpty
+                ? Colors.red.withValues(alpha: 0.7)
+                : destacarCercano
+                    ? Colors.greenAccent.withValues(alpha: 0.95)
+                    : v.tipoServicio == 'motor'
+                        ? Colors.orange.withValues(alpha: 0.5)
+                        : Colors.white.withValues(alpha: 0.3);
+            final double anchoBordeCard =
+                v.waypoints != null && v.waypoints!.isNotEmpty
+                    ? 3
+                    : (destacarCercano ? 3 : 2);
+
             return Card(
               color: const Color(0xFF121826),
               margin: const EdgeInsets.symmetric(vertical: 8),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
                 side: BorderSide(
-                  color: v.waypoints != null && v.waypoints!.isNotEmpty
-                      ? Colors.red.withValues(alpha: 0.7)
-                      : v.tipoServicio == 'motor'
-                          ? Colors.orange.withValues(alpha: 0.5)
-                          : Colors.white.withValues(alpha: 0.3),
-                  width: v.waypoints != null && v.waypoints!.isNotEmpty ? 3 : 2,
+                  color: bordeCard,
+                  width: anchoBordeCard,
                 ),
               ),
-              elevation: 4,
+              elevation: destacarCercano ? 10 : 4,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -1738,6 +2023,26 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                     spacing: 6,
                                     runSpacing: 6,
                                     children: [
+                                      if (destacarCercano)
+                                        Chip(
+                                          visualDensity: VisualDensity.compact,
+                                          padding: EdgeInsets.zero,
+                                          labelPadding:
+                                              const EdgeInsets.symmetric(
+                                                  horizontal: 8),
+                                          backgroundColor: Colors.greenAccent
+                                              .withValues(alpha: 0.18),
+                                          side: const BorderSide(
+                                              color: Colors.greenAccent),
+                                          label: const Text(
+                                            '📍 Más cercano',
+                                            style: TextStyle(
+                                              color: Colors.greenAccent,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
                                       _badgeModo(
                                         esAhora: esAhora,
                                         fecha: fecha,
@@ -1790,17 +2095,21 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                             border: Border.all(color: servicioColor),
                           ),
                           child: Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(servicioIcon,
                                   size: 14, color: servicioColor),
                               const SizedBox(width: 6),
-                              Text(
-                                servicioLabel,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: servicioColor,
-                                  fontWeight: FontWeight.bold,
+                              Expanded(
+                                child: Text(
+                                  servicioLabel,
+                                  maxLines: 3,
+                                  softWrap: true,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: servicioColor,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ),
                             ],
@@ -2111,35 +2420,34 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     return MediaQuery(
       data: media.copyWith(textScaler: accesibilidad),
-      child: DefaultTabController(
-        length: 3,
-        child: Scaffold(
-          backgroundColor: pageBg,
-          appBar: AppBar(
-            backgroundColor: appBarBg,
-            automaticallyImplyLeading: false,
-            leading: const SizedBox(width: 48),
-            title: const Text(
-              'Viajes Disponibles',
-              style: TextStyle(
-                fontSize: 24,
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            centerTitle: true,
-            iconTheme: const IconThemeData(color: Colors.white),
-            actions: const [SaldoGananciasChip()],
-            bottom: const TabBar(
-              indicatorColor: Colors.greenAccent,
-              tabs: [
-                Tab(text: 'BOLA'),
-                Tab(text: 'AHORA'),
-                Tab(text: 'PROGRAMADOS'),
-              ],
+      child: Scaffold(
+        backgroundColor: pageBg,
+        appBar: AppBar(
+          backgroundColor: appBarBg,
+          automaticallyImplyLeading: false,
+          leading: const SizedBox(width: 48),
+          title: const Text(
+            'Viajes Disponibles',
+            style: TextStyle(
+              fontSize: 24,
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          body: StreamBuilder<bool>(
+          centerTitle: true,
+          iconTheme: const IconThemeData(color: Colors.white),
+          actions: const [SaldoGananciasChip()],
+          bottom: TabBar(
+            controller: _tabPool,
+            indicatorColor: Colors.greenAccent,
+            tabs: const [
+              Tab(text: 'BOLA'),
+              Tab(text: 'AHORA'),
+              Tab(text: 'PROGRAMADOS'),
+            ],
+          ),
+        ),
+        body: StreamBuilder<bool>(
             stream: RolesService.streamDisponibilidad(u.uid),
             builder: (context, dispSnap) {
               final disponibilidadCargando =
@@ -2180,6 +2488,20 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                       }
                       return Column(
                         children: [
+                          _bannerSaldoRecargaTiempoReal(u.uid),
+                          const Padding(
+                            padding: EdgeInsets.fromLTRB(12, 4, 12, 4),
+                            child: Text(
+                              'Tu próximo viaje se asignará automáticamente al cerrar el actual. '
+                              'Si falla la asignación, volverás a disponible y deberás aceptar otro desde el mapa.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
                           if (bloqueadoPago)
                             _bannerBloqueoSemanal()
                           else if (deudaSemanal)
@@ -2202,6 +2524,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                     deudaComision: deudaComision,
                                   )
                                 : TabBarView(
+                                    controller: _tabPool,
                                     children: [
                                       BolaPuebloDisponibleTab(
                                         user: u,
@@ -2251,7 +2574,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             },
           ),
         ),
-      ),
     );
   }
 }

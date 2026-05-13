@@ -4,6 +4,7 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -24,11 +25,12 @@ import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 // Tus servicios/componentes
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
-import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
-import 'package:flygo_nuevo/servicios/permisos_service.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/programar_viaje_futuro_animation.dart';
@@ -36,6 +38,7 @@ import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
@@ -61,6 +64,70 @@ const String kMsgMaxFuture =
     'Solo puedes programar hasta 90 días en el futuro.';
 const String kMsgPickupPasado =
     'La hora de recogida no puede quedar en el pasado. Elige la hora actual o una próxima.';
+
+/// Sombras discretas para leer texto sobre mapa o fondos translúcidos (solo UI).
+List<Shadow> _legibilityShadowsForChrome(Color toneRef) {
+  final bool darkTone =
+      ThemeData.estimateBrightnessForColor(toneRef) == Brightness.dark;
+  if (darkTone) {
+    return <Shadow>[
+      Shadow(
+        offset: const Offset(0, 1.2),
+        blurRadius: 4.5,
+        color: Colors.black.withValues(alpha: 0.78),
+      ),
+      Shadow(
+        offset: Offset.zero,
+        blurRadius: 14,
+        color: Colors.black.withValues(alpha: 0.40),
+      ),
+    ];
+  }
+  return <Shadow>[
+    Shadow(
+      offset: const Offset(0, 1),
+      blurRadius: 3.5,
+      color: Colors.white.withValues(alpha: 0.88),
+    ),
+    Shadow(
+      offset: Offset.zero,
+      blurRadius: 12,
+      color: Colors.white.withValues(alpha: 0.46),
+    ),
+  ];
+}
+
+/// Sombras para la etiqueta del botón CONFIRMAR sobre mapa (contraste en ambos tonos).
+List<Shadow> _ctaLabelShadows(Color labelColor) {
+  final bool darkLabel =
+      ThemeData.estimateBrightnessForColor(labelColor) == Brightness.dark;
+  if (darkLabel) {
+    return <Shadow>[
+      Shadow(
+        offset: const Offset(0, 1.2),
+        blurRadius: 4,
+        color: Colors.black.withValues(alpha: 0.48),
+      ),
+      Shadow(
+        offset: Offset.zero,
+        blurRadius: 12,
+        color: Colors.black.withValues(alpha: 0.30),
+      ),
+    ];
+  }
+  return <Shadow>[
+    Shadow(
+      offset: const Offset(0, 1),
+      blurRadius: 3,
+      color: Colors.white.withValues(alpha: 0.92),
+    ),
+    Shadow(
+      offset: Offset.zero,
+      blurRadius: 10,
+      color: Colors.black.withValues(alpha: 0.28),
+    ),
+  ];
+}
 
 class ProgramarViaje extends StatefulWidget {
   final bool modoAhora;
@@ -392,6 +459,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     _peajeCtrl.dispose();
     _calculoDebounce?.cancel();
     _programarMapGestureEndDebounce?.cancel();
+    LocationPermissionService.stopGentleRetry();
     super.dispose();
   }
 
@@ -465,17 +533,38 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   // ====== UBICACIÓN/MAPA ======
   Future<void> _initUbicacionParaMapa() async {
     setState(() => _cargandoUbicacion = true);
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
+    final basic = await LocationPermissionService.checkAndRequestBasicPermission();
+    if (!basic.serviceEnabled) {
+      if (mounted) {
+        setState(() => _cargandoUbicacion = false);
+        LocationPermissionService.startGentleRetry(() {
+          if (!mounted) return;
+          unawaited(_initUbicacionParaMapa());
+        });
+      }
+      return;
     }
-    if (perm == LocationPermission.deniedForever) {
+    if (basic.deniedForever) {
       setState(() {
         _locPermDeniedForever = true;
         _cargandoUbicacion = false;
       });
+      LocationPermissionService.startGentleRetry(() {
+        if (!mounted) return;
+        unawaited(_initUbicacionParaMapa());
+      });
       return;
     }
+    if (!basic.canUseLocation) {
+      setState(() => _cargandoUbicacion = false);
+      LocationPermissionService.startGentleRetry(() {
+        if (!mounted) return;
+        unawaited(_initUbicacionParaMapa());
+      });
+      return;
+    }
+
+    LocationPermissionService.stopGentleRetry();
 
     try {
       final pos = await Geolocator.getCurrentPosition(
@@ -847,6 +936,34 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     setState(() => _cargando = true);
     final int runId = _cotizacionSeq;
     try {
+      if (widget.modoAhora) {
+        final ready = await LocationPermissionService.ensureLocationReady(
+          context: context,
+        );
+        if (!ready.isUsable) {
+          if (!automatico) {
+            _snack(LocationReadiness.kMsgEsperandoUbicacion);
+          }
+          _setCargaFalseSiCorre(runId);
+          return;
+        }
+        if (ready.position != null) {
+          final ll = LatLng(
+            ready.position!.latitude,
+            ready.position!.longitude,
+          );
+          _origenMap = ll;
+          _updateOrigenMarker(ll);
+          if (mounted) setState(() {});
+        }
+        if (!automatico && mounted) {
+          await LocationPermissionService.maybePromptAlwaysForCriticalFlow(
+            context,
+            isTaxista: false,
+          );
+        }
+      }
+
       double origenLat = 0, origenLon = 0;
       String origenLegible = '';
       String destinoLegible = '';
@@ -879,17 +996,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             ? _direccionBonitaRD(placemarks.first)
             : "Ubicación actual";
       } else {
-        final ok = await PermisosService.ensureUbicacion(context);
-        if (!ok) {
+        if (!mounted) return;
+        final ready = await LocationPermissionService.ensureLocationReady(
+          context: context,
+        );
+        if (!ready.isUsable) {
+          if (!automatico) {
+            _snack(LocationReadiness.kMsgEsperandoUbicacion);
+          }
           _setCargaFalseSiCorre(runId);
           return;
         }
-        final posicion = await GpsService.obtenerUbicacionActual();
-        if (posicion == null) {
-          if (!automatico) _snack("❌ No se pudo obtener ubicación GPS.");
-          _setCargaFalseSiCorre(runId);
-          return;
-        }
+        final posicion = ready.position!;
         origenLat = posicion.latitude;
         origenLon = posicion.longitude;
         final placemarks = await _safePlacemark(origenLat, origenLon);
@@ -955,7 +1073,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       final double precioDouble =
           await _calcularPrecioPorTipo(dist, idaYVuelta, peaje: _peaje);
       final int precioCents = (precioDouble * 100).round();
-      final int comisionCents = ((precioCents * 20) + 50) ~/ 100;
+      final int comisionCents =
+          PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
       final int gananciaCents = precioCents - comisionCents;
 
       if (!mounted || runId != _cotizacionSeq) return;
@@ -1385,6 +1504,23 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
     setState(() => _cargando = true);
     try {
+      if (widget.modoAhora) {
+        if (!mounted) return;
+        final ready = await LocationPermissionService.ensureLocationReady(
+          context: context,
+        );
+        if (!ready.isUsable) {
+          messenger.showSnackBar(
+            SnackBar(content: Text(LocationReadiness.kMsgEsperandoUbicacion)),
+          );
+          if (mounted) setState(() => _cargando = false);
+          return;
+        }
+        if (ready.position != null) {
+          latCliente = ready.position!.latitude;
+          lonCliente = ready.position!.longitude;
+        }
+      }
       await u.getIdToken(true);
 
       final origenLegible = (origenTexto.isNotEmpty)
@@ -1676,27 +1812,62 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     String? ayudaHeader,
     Color? ayudaColor,
     Color? lineaTimeline,
+    bool mapFloating = false,
   }) {
+    // En modo flotante sobre el mapa, los rellenos del mockup quedan como
+    // manchones que no destacan. Forzamos panel GRIS OSCURO casi negro
+    // (#0F172A 0.92) con sombra negra para que parezca una card flotante
+    // sólida sobre el mapa CLARO de Google Maps. Texto en blanco, borde
+    // de acento brillante para resaltar contra el fondo oscuro y al mismo
+    // tiempo contra el mapa claro.
+    final Color floatingFill =
+        const Color(0xFF0F172A).withValues(alpha: 0.92);
+    // Si el accent que viene del call site es muy oscuro (modo claro),
+    // lo "subimos" a un tono brillante para que se vea sobre el card oscuro.
+    final Color floatingAccent =
+        ThemeData.estimateBrightnessForColor(accent) == Brightness.dark
+            ? Color.alphaBlend(
+                Colors.white.withValues(alpha: 0.55),
+                accent,
+              )
+            : accent;
+    final List<BoxShadow>? floatingShadow = mapFloating
+        ? <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.32),
+              blurRadius: 16,
+              offset: const Offset(0, 5),
+            ),
+          ]
+        : null;
+
     if (!mockupRuta) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
         decoration: BoxDecoration(
-          color: fill,
+          color: mapFloating ? floatingFill : fill,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: accent.withValues(alpha: 0.55), width: 1.5),
+          border: Border.all(
+            color: mapFloating
+                ? floatingAccent.withValues(alpha: 0.85)
+                : accent.withValues(alpha: 0.55),
+            width: mapFloating ? 1.6 : 1.5,
+          ),
+          boxShadow: floatingShadow,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                Icon(icono, color: accent, size: 22),
+                Icon(icono,
+                    color: mapFloating ? floatingAccent : accent, size: 22),
                 const SizedBox(width: 8),
                 Text(
                   titulo,
                   style: TextStyle(
-                    color: tituloColor,
+                    color: mapFloating ? Colors.white : tituloColor,
                     fontWeight: FontWeight.w800,
                     fontSize: 13,
                     letterSpacing: 0.65,
@@ -1711,18 +1882,25 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       );
     }
 
-    final Color ayudaCol =
-        ayudaColor ?? (isDark ? Colors.white60 : const Color(0xFF667085));
+    final Color ayudaCol = mapFloating
+        ? Colors.white.withValues(alpha: 0.78)
+        : (ayudaColor ?? (isDark ? Colors.white60 : const Color(0xFF667085)));
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+        color: mapFloating
+            ? floatingFill
+            : (isDark ? const Color(0xFF1C1C1E) : Colors.white),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFD0D5DD),
+          color: mapFloating
+              ? floatingAccent.withValues(alpha: 0.85)
+              : (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFD0D5DD)),
+          width: mapFloating ? 1.6 : 1.0,
         ),
+        boxShadow: floatingShadow,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1733,11 +1911,16 @@ class _ProgramarViajeState extends State<ProgramarViaje>
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.16),
+                  color: (mapFloating ? floatingAccent : accent)
+                      .withValues(alpha: mapFloating ? 0.22 : 0.16),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: accent.withValues(alpha: 0.58)),
+                  border: Border.all(
+                    color: (mapFloating ? floatingAccent : accent)
+                        .withValues(alpha: mapFloating ? 0.78 : 0.58),
+                  ),
                 ),
-                child: Icon(icono, color: accent, size: 22),
+                child: Icon(icono,
+                    color: mapFloating ? floatingAccent : accent, size: 22),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1747,7 +1930,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     Text(
                       titulo,
                       style: TextStyle(
-                        color: tituloColor,
+                        color: mapFloating ? Colors.white : tituloColor,
                         fontWeight: FontWeight.w800,
                         fontSize: 15,
                         letterSpacing: 0.2,
@@ -1794,14 +1977,43 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     required Color destinoFill,
     required Color textPrimary,
     required Color textSecondary,
+    bool mapFloating = false,
   }) {
+    // En modo "Flotante sobre mapa" el morado oscuro de [destinoFill] queda
+    // como una mancha opaca sobre el mapa de Google. Forzamos panel GRIS
+    // OSCURO casi negro con texto blanco + borde de acento (púrpura claro)
+    // + sombra negra para que la tarjeta destaque sobre el mapa siempre
+    // claro de Google Maps, en cualquier modo de la app.
+    final Color panelBg = mapFloating
+        ? const Color(0xFF0F172A).withValues(alpha: 0.92)
+        : destinoFill;
+    final Color titleColor = mapFloating ? Colors.white : textPrimary;
+    final Color bodyColor = mapFloating
+        ? Colors.white.withValues(alpha: 0.82)
+        : textSecondary;
+    // Acento púrpura más brillante para resaltar contra la card oscura.
+    final Color borderAccent = mapFloating
+        ? const Color(0xFFD8B4FE)
+        : destinoAccent;
+    final Color borderCol = borderAccent.withValues(
+      alpha: mapFloating ? 0.85 : 0.5,
+    );
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: destinoFill,
+        color: panelBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: destinoAccent.withValues(alpha: 0.5)),
+        border: Border.all(color: borderCol, width: mapFloating ? 1.6 : 1.0),
+        boxShadow: mapFloating
+            ? <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.30),
+                  blurRadius: 16,
+                  offset: const Offset(0, 5),
+                ),
+              ]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1809,13 +2021,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.info_outline_rounded, color: destinoAccent, size: 22),
+              Icon(Icons.info_outline_rounded,
+                  color: borderAccent, size: 22),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   'Falta la llegada',
                   style: TextStyle(
-                    color: textPrimary,
+                    color: titleColor,
                     fontWeight: FontWeight.w800,
                     fontSize: 15,
                     height: 1.2,
@@ -1828,7 +2041,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           Text(
             'Escribí o elegí el destino en el buscador de abajo. El precio aparece cuando salida y llegada están listas.',
             style: TextStyle(
-              color: textSecondary,
+              color: bodyColor,
               fontSize: 13,
               height: 1.35,
             ),
@@ -1857,6 +2070,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             children: [
               Text(
                 etiqueta,
+                maxLines: 2,
+                softWrap: true,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: textMuted,
                   fontSize: 11,
@@ -1867,6 +2083,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
               const SizedBox(height: 2),
               Text(
                 valor,
+                maxLines: 4,
+                softWrap: true,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: textPrimary,
                   fontSize: 15,
@@ -1884,16 +2103,36 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   /// Panel compacto: origen, destino, precio grande, confirmar y acceso al buscador / formulario completo.
   Widget _tarjetaResumenCotizacion() {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textSecondary =
-        isDark ? Colors.white70 : const Color(0xFF475467);
-    final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
-    final Color dividerSoft = isDark ? Colors.white24 : const Color(0xFFE4E7EC);
-    final Color metodoPagoChipBg =
-        isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5);
-    final Color metodoPagoChipBorder =
-        isDark ? Colors.white24 : const Color(0xFFD0D5DD);
+    final bool mapFloating = CustomThemeService.mapFloatingChrome.value;
+    // En modo flotante: panel OSCURO sólido + texto blanco + borde de
+    // acento brillante + sombra negra para destacar sobre el mapa claro
+    // de Google. Funciona idéntico en modo claro y oscuro de la app.
+    final Color textPrimary = mapFloating
+        ? Colors.white
+        : (isDark ? Colors.white : const Color(0xFF101828));
+    final Color textSecondary = mapFloating
+        ? Colors.white.withValues(alpha: 0.85)
+        : (isDark ? Colors.white70 : const Color(0xFF475467));
+    final Color textMuted = mapFloating
+        ? Colors.white.withValues(alpha: 0.70)
+        : (isDark ? Colors.white60 : const Color(0xFF667085));
+    final Color dividerSoft = mapFloating
+        ? Colors.white.withValues(alpha: 0.22)
+        : (isDark ? Colors.white24 : const Color(0xFFE4E7EC));
+    final Color metodoPagoChipBg = mapFloating
+        ? Colors.white.withValues(alpha: 0.12)
+        : (isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5));
+    final Color metodoPagoChipBorder = mapFloating
+        ? Colors.white.withValues(alpha: 0.42)
+        : (isDark ? Colors.white24 : const Color(0xFFD0D5DD));
     final Color c = _colorServicio;
+    // En flotante "subimos" el acento del servicio a un tono brillante para
+    // que destaque sobre la card oscura. Si ya es brillante, lo dejamos.
+    final Color cBright =
+        ThemeData.estimateBrightnessForColor(c) == Brightness.dark
+            ? Color.alphaBlend(Colors.white.withValues(alpha: 0.55), c)
+            : c;
+    final Color accent = mapFloating ? cBright : c;
     final pRes = _paletasOrigenDestino(isDark, tipoServicio);
 
     return Padding(
@@ -1904,23 +2143,41 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           Container(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  c.withValues(alpha: isDark ? 0.22 : 0.12),
-                  c.withValues(alpha: isDark ? 0.08 : 0.04),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+              color: mapFloating
+                  ? const Color(0xFF0F172A).withValues(alpha: 0.93)
+                  : null,
+              gradient: mapFloating
+                  ? null
+                  : LinearGradient(
+                      colors: [
+                        c.withValues(alpha: isDark ? 0.22 : 0.12),
+                        c.withValues(alpha: isDark ? 0.08 : 0.04),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: c, width: 2),
+              border: Border.all(
+                color: mapFloating ? accent.withValues(alpha: 0.85) : c,
+                width: 2,
+              ),
+              boxShadow: mapFloating
+                  ? <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.32),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6),
+                      ),
+                    ]
+                  : null,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
                   children: [
-                    Icon(Icons.check_circle_rounded, color: c, size: 26),
+                    Icon(Icons.check_circle_rounded,
+                        color: accent, size: 26),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
@@ -1974,13 +2231,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: c.withValues(alpha: 0.15),
+                            color: accent.withValues(alpha: 0.18),
                             borderRadius: BorderRadius.circular(20),
+                            border: mapFloating
+                                ? Border.all(
+                                    color:
+                                        accent.withValues(alpha: 0.6))
+                                : null,
                           ),
                           child: Text(
                             'Ida y vuelta',
                             style: TextStyle(
-                                color: c,
+                                color: accent,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w700),
                           ),
@@ -1993,6 +2255,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   Text(
                     'Peaje incluido: ${FormatosMoneda.rd(_peaje)}',
                     textAlign: TextAlign.center,
+                    maxLines: 3,
+                    softWrap: true,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: textMuted, fontSize: 12),
                   ),
                 ],
@@ -2001,6 +2266,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   Text(
                     'Vehículo: ${_mapTipoVehiculoTurismo(_tipoVehiculoTurismo)}',
                     textAlign: TextAlign.center,
+                    maxLines: 3,
+                    softWrap: true,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: textMuted, fontSize: 12),
                   ),
                 ],
@@ -2009,6 +2277,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   Text(
                     'Vehículo: $tipoVehiculo',
                     textAlign: TextAlign.center,
+                    maxLines: 3,
+                    softWrap: true,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: textMuted, fontSize: 12),
                   ),
                 ],
@@ -2033,7 +2304,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                       FormatosMoneda.rd(precioCalculado),
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: c,
+                        color: accent,
                         fontSize: 52,
                         fontWeight: FontWeight.w900,
                         height: 1.05,
@@ -2102,20 +2373,32 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                       Navigator.of(context),
                     ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: c,
+                      backgroundColor: mapFloating
+                          ? Color.alphaBlend(
+                              Colors.black.withValues(alpha: 0.26), c)
+                          : c,
                       foregroundColor: Colors.black,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
+                        side: mapFloating
+                            ? BorderSide(
+                                color: Colors.white
+                                    .withValues(alpha: 0.55),
+                                width: 1.4,
+                              )
+                            : BorderSide.none,
                       ),
-                      elevation: 2,
+                      elevation: mapFloating ? 0 : 2,
                     ),
                     child: Text(
                       widget.modoAhora
                           ? 'Confirmar viaje'
                           : 'Confirmar programación',
-                      style: const TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.w800),
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: mapFloating ? Colors.white : Colors.black),
                     ),
                   ),
                 ),
@@ -2124,7 +2407,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           ),
           const SizedBox(height: 12),
           Material(
-            color: isDark ? const Color(0xFF1A1A1A) : Colors.white,
+            color: mapFloating
+                ? const Color(0xFF0F172A).withValues(alpha: 0.92)
+                : (isDark ? const Color(0xFF1A1A1A) : Colors.white),
             borderRadius: BorderRadius.circular(14),
             child: InkWell(
               onTap: _abrirFormularioCompletoDesdeResumen,
@@ -2139,7 +2424,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.search_rounded, color: c, size: 26),
+                    Icon(Icons.search_rounded, color: accent, size: 26),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -2180,9 +2465,16 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   Widget _selectorTipoServicio() {
     if (widget.tipoServicio != null) {
       final bool isDark = Theme.of(context).brightness == Brightness.dark;
-      final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-      final Color textSecondary =
-          isDark ? Colors.white70 : const Color(0xFF475467);
+      final bool mapFloating = CustomThemeService.mapFloatingChrome.value;
+      // En modo flotante el fondo real es el mapa CLARO de Google → cards
+      // oscuras + texto blanco para máxima legibilidad sin importar si la
+      // app está en modo claro u oscuro.
+      final Color textPrimary = mapFloating
+          ? Colors.white
+          : (isDark ? Colors.white : const Color(0xFF101828));
+      final Color textSecondary = mapFloating
+          ? Colors.white.withValues(alpha: 0.85)
+          : (isDark ? Colors.white70 : const Color(0xFF475467));
       final Color color;
       final IconData icono;
       final String titulo;
@@ -2205,26 +2497,53 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       final bool esMotorSvc = widget.tipoServicio == 'motor';
       final double iconPad = esMotorSvc ? 14 : 10;
       final double iconSize = esMotorSvc ? 36 : 24;
+      // Acento brillante en flotante para que destaque sobre la card oscura.
+      final Color displayColor = mapFloating
+          ? (widget.tipoServicio == 'turismo'
+              ? const Color(0xFFD8B4FE)
+              : widget.tipoServicio == 'motor'
+                  ? const Color(0xFFFFB74D)
+                  : const Color(0xFF49F18B))
+          : color;
       final Widget iconoServicio = Container(
         padding: EdgeInsets.all(iconPad),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.2),
+          color: displayColor.withValues(alpha: mapFloating ? 0.28 : 0.2),
           shape: BoxShape.circle,
         ),
-        child: Icon(icono, color: color, size: iconSize),
+        child: Icon(icono, color: displayColor, size: iconSize),
       );
 
       return Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [color.withValues(alpha: 0.2), Colors.transparent],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+          color: mapFloating
+              ? const Color(0xFF0F172A).withValues(alpha: 0.92)
+              : null,
+          gradient: mapFloating
+              ? null
+              : LinearGradient(
+                  colors: [color.withValues(alpha: 0.2), Colors.transparent],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color, width: 1),
+          border: Border.all(
+            color: mapFloating
+                ? displayColor.withValues(alpha: 0.85)
+                : color,
+            width: mapFloating ? 1.6 : 1,
+          ),
+          boxShadow: mapFloating
+              ? <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.30),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
         ),
         child: Row(
           mainAxisAlignment:
@@ -2246,6 +2565,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     if (titulo.isNotEmpty)
                       Text(
                         titulo,
+                        maxLines: 2,
+                        softWrap: true,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                             color: textPrimary, fontWeight: FontWeight.bold),
                       ),
@@ -2253,11 +2575,17 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                         _destinoTurismoSeleccionado != null)
                       Text(
                         'Destino: ${_destinoTurismoSeleccionado!.nombre}',
-                        style: TextStyle(color: color, fontSize: 12),
+                        maxLines: 3,
+                        softWrap: true,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: displayColor, fontSize: 12),
                       ),
                     if (widget.tipoServicio == 'turismo')
                       Text(
                         'Vehículo: ${_tipoVehiculoTurismo == 'carro' ? 'Carro' : _tipoVehiculoTurismo == 'jeepeta' ? 'Jeepeta' : _tipoVehiculoTurismo == 'minivan' ? 'Minivan' : 'Bus'}',
+                        maxLines: 2,
+                        softWrap: true,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: textSecondary, fontSize: 12),
                       ),
                   ],
@@ -2272,76 +2600,178 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     return const SizedBox.shrink();
   }
 
-  // 🔥 Selector de tipo de vehículo para turismo con valores únicos
-  Widget _buildTurismoVehiculoSelector() {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color labelColor = isDark ? Colors.white70 : const Color(0xFF475467);
-    final Color ddColor = isDark ? Colors.white : const Color(0xFF101828);
-    final Color ddBg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
+  // 🔥 Selector de tipo de vehículo para turismo con valores únicos.
+  // Los colores del label, dropdown y panel desplegable se derivan del
+  // color de fondo personalizado para que las opciones siempre sean
+  // legibles sobre cualquier fondo (blanco, agua, amarillo, morado…).
+  Widget _buildTurismoVehiculoSelector({
+    required bool mapFloating,
+    required Color chromeToneRef,
+    required bool strongChrome,
+  }) {
+    // En flotante el menú desplegable abre OSCURO sólido (#0F172A) con
+    // texto BLANCO bold para que las 4 opciones se lean perfecto. El
+    // label del botón cerrado también va blanco bold sobre la _Caja
+    // oscura.
+    final Color fillSurface = mapFloating
+        ? const Color(0xFF0F172A)
+        : CustomThemeService.cardOn(chromeToneRef);
+    final Color labelColor = mapFloating
+        ? Colors.white
+        : CustomThemeService.textMutedOn(chromeToneRef);
+    final Color ddColor = mapFloating
+        ? Colors.white
+        : CustomThemeService.textOn(chromeToneRef);
+    final FontWeight ddWeight =
+        mapFloating ? FontWeight.w800 : FontWeight.w600;
     return _Caja(
-      child: Row(
-        children: [
-          Icon(Icons.directions_car_filled_outlined, color: labelColor),
-          const SizedBox(width: 10),
-          Text('Tipo de Vehículo', style: TextStyle(color: labelColor)),
-          const Spacer(),
-          DropdownButton<String>(
-            value: _tipoVehiculoTurismo,
-            dropdownColor: ddBg,
-            underline: const SizedBox(),
-            style: TextStyle(color: ddColor, fontSize: 16),
-            items: [
-              DropdownMenuItem(
-                  value: 'carro',
-                  child: Text('Carro', style: TextStyle(color: ddColor))),
-              DropdownMenuItem(
-                  value: 'jeepeta',
-                  child: Text('Jeepeta', style: TextStyle(color: ddColor))),
-              DropdownMenuItem(
-                  value: 'minivan',
-                  child: Text('Minivan', style: TextStyle(color: ddColor))),
-              DropdownMenuItem(
-                  value: 'bus',
-                  child: Text('Bus', style: TextStyle(color: ddColor))),
-            ],
-            onChanged: (v) {
-              setState(() {
-                _tipoVehiculoTurismo = v ?? 'carro';
-              });
-              _programarCalculoAutomatico();
-            },
-          ),
-        ],
+      mapFloating: mapFloating,
+      strongChrome: strongChrome,
+      child: OverflowSafeLabeledDropdown(
+        leading: Icon(Icons.directions_car_filled_outlined, color: labelColor),
+        label: 'Tipo de Vehículo',
+        labelStyle: TextStyle(
+          color: labelColor,
+          fontWeight: mapFloating ? FontWeight.w700 : FontWeight.w500,
+        ),
+        dropdown: DropdownButton<String>(
+          isExpanded: true,
+          value: _tipoVehiculoTurismo,
+          dropdownColor: fillSurface,
+          underline: const SizedBox(),
+          iconEnabledColor: ddColor,
+          style: TextStyle(color: ddColor, fontSize: 16, fontWeight: ddWeight),
+          items: [
+            DropdownMenuItem(
+                value: 'carro',
+                child: Text('Carro',
+                    style: TextStyle(color: ddColor, fontWeight: ddWeight))),
+            DropdownMenuItem(
+                value: 'jeepeta',
+                child: Text('Jeepeta',
+                    style: TextStyle(color: ddColor, fontWeight: ddWeight))),
+            DropdownMenuItem(
+                value: 'minivan',
+                child: Text('Minivan',
+                    style: TextStyle(color: ddColor, fontWeight: ddWeight))),
+            DropdownMenuItem(
+                value: 'bus',
+                child: Text('Bus',
+                    style: TextStyle(color: ddColor, fontWeight: ddWeight))),
+          ],
+          onChanged: (v) {
+            setState(() {
+              _tipoVehiculoTurismo = v ?? 'carro';
+            });
+            _programarCalculoAutomatico();
+          },
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textSecondary =
-        isDark ? Colors.white70 : const Color(0xFF475467);
-    final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
-    final Color switchCardBorder =
-        isDark ? Colors.white24 : const Color(0xFFD0D5DD);
-    final Color switchAccent =
-        isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
-    final Color sheetBg = isDark ? Colors.black : const Color(0xFFF8FAFC);
-    final Color sheetHandle = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
-    final Color payLinkColor =
-        isDark ? Colors.green.shade300 : const Color(0xFF0F9D58);
-    final Color metodoPagoChipBg =
-        isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5);
-    final Color metodoPagoChipBorder =
-        isDark ? Colors.white24 : const Color(0xFFD0D5DD);
-    final Color dividerSoft = isDark ? Colors.white24 : const Color(0xFFE4E7EC);
-    final pRuta = _paletasOrigenDestino(isDark, tipoServicio);
-    final bool uiRutaMockup = tipoServicio != 'turismo';
+    return ValueListenableBuilder<bool>(
+      valueListenable: CustomThemeService.mapFloatingChrome,
+      builder: (context, mapFloating, _) {
+        final bool isDark = Theme.of(context).brightness == Brightness.dark;
+        // Fondo personalizable por el usuario (servicio CustomThemeService).
+        //
+        // === Modo [mapFloating] ===
+        // El mapa de Google Maps siempre es predominantemente CLARO (calles
+        // blancas, terreno claro), incluso si la app está en modo oscuro
+        // (no aplicamos map style oscuro). Para que la UI flotante destaque
+        // SIEMPRE contra ese mapa claro, usamos cards GRIS OSCURO casi negro
+        // con borde claro y texto blanco. Funciona idéntico en modo claro
+        // y modo oscuro de la app, porque el mapa de fondo no cambia.
+        final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
+        // Tono de referencia OSCURO en flotante => textOn devuelve BLANCO,
+        // borderOn devuelve claro, y _legibilityShadowsForChrome añade halo
+        // NEGRO grueso para los textos sueltos sobre el mapa claro.
+        const Color kChromeFloatingRef = Color(0xFF0F172A);
+        final Color chromeToneRef =
+            mapFloating ? kChromeFloatingRef : themedBg;
+        final Color textPrimary = CustomThemeService.textOn(chromeToneRef);
+        final Color textSecondary =
+            CustomThemeService.textMutedOn(chromeToneRef);
+        final Color textMuted = CustomThemeService.textSubtleOn(chromeToneRef);
+        final Color switchCardBorder =
+            CustomThemeService.borderOn(chromeToneRef);
+        final Color switchAccent =
+            isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
+        final double userBgAlpha = themedBg.a;
+        final double sheetAlpha = userBgAlpha < 0.85 ? userBgAlpha : 0.85;
+        final Color sheetBg = mapFloating
+            ? Colors.transparent
+            : themedBg.withValues(alpha: sheetAlpha);
+        // Mapa a la vista (flotante o color translúcido): UI más marcada.
+        final bool sheetStrongChrome = mapFloating || themedBg.a < 0.92;
+        final List<Shadow>? chromeLegibilityShadows = sheetStrongChrome
+            ? _legibilityShadowsForChrome(chromeToneRef)
+            : null;
 
-    return FlygoSalidaSegura(
+        final Color sheetHandle = mapFloating
+            ? const Color(0xFF000000).withValues(alpha: 0.85)
+            : sheetStrongChrome
+                ? Colors.white.withValues(alpha: isDark ? 0.42 : 0.74)
+                : (isDark ? Colors.white24 : const Color(0xFFD0D5DD));
+
+        // Helpers para textos SUELTOS sobre el mapa (no dentro de cards
+        // oscuras): negro intenso con halo BLANCO grueso. Así destacan
+        // sobre el mapa claro de Google sin verse "borrosos" como sucedía
+        // con texto blanco + halo negro.
+        final Color freeTextColor =
+            mapFloating ? const Color(0xFF000000) : textPrimary;
+        final Color freeTextMutedColor =
+            mapFloating ? const Color(0xFF1F2937) : textMuted;
+        final List<Shadow>? freeTextHaloShadows = mapFloating
+            ? <Shadow>[
+                Shadow(
+                  blurRadius: 8,
+                  color: Colors.white.withValues(alpha: 0.95),
+                  offset: const Offset(0, 0),
+                ),
+                Shadow(
+                  blurRadius: 14,
+                  color: Colors.white.withValues(alpha: 0.85),
+                  offset: const Offset(0, 0),
+                ),
+                Shadow(
+                  blurRadius: 2,
+                  color: Colors.white,
+                  offset: const Offset(0, 1),
+                ),
+              ]
+            : null;
+        final Color payLinkColor = mapFloating
+            ? const Color(0xFF49F18B) // verde brillante: visible sobre oscuro
+            : sheetStrongChrome
+                ? const Color(0xFF065F46)
+                : (isDark ? Colors.green.shade300 : const Color(0xFF0F9D58));
+        final Color metodoPagoChipBg = mapFloating
+            ? const Color(0xFF111827).withValues(alpha: 0.92)
+            : sheetStrongChrome
+                ? (isDark
+                    ? const Color(0xFF252830)
+                    : Colors.white.withValues(alpha: 0.94))
+                : (isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5));
+        final Color metodoPagoChipBorder = mapFloating
+            ? Colors.white.withValues(alpha: 0.45)
+            : sheetStrongChrome
+                ? Colors.white.withValues(alpha: isDark ? 0.42 : 0.58)
+                : (isDark ? Colors.white24 : const Color(0xFFD0D5DD));
+        final Color dividerSoft = mapFloating
+            ? Colors.white.withValues(alpha: 0.28)
+            : sheetStrongChrome
+                ? Colors.white.withValues(alpha: isDark ? 0.32 : 0.42)
+                : (isDark ? Colors.white24 : const Color(0xFFE4E7EC));
+        final pRuta = _paletasOrigenDestino(isDark, tipoServicio);
+        final bool uiRutaMockup = tipoServicio != 'turismo';
+
+        return FlygoSalidaSegura(
       child: Scaffold(
-        backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
+        backgroundColor: mapFloating ? Colors.transparent : themedBg,
         appBar: RaiAppBar(
           title: 'Programar Viaje',
           backWhenCanPop: true,
@@ -2350,7 +2780,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             child: IconButton(
               icon: Icon(
                 Icons.arrow_back_rounded,
-                color: isDark ? Colors.white : const Color(0xFF101828),
+                color: textPrimary,
               ),
               tooltip: 'Volver',
               onPressed: () => intentarSalirAlGate(context),
@@ -2397,7 +2827,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
               top: MediaQuery.of(context).padding.top + 8,
               left: 16,
               right: 16,
-              child: const _Banner(
+              child: _Banner(
+                  mapFloating: mapFloating,
                   text: 'Ubicando…', icon: Icons.location_searching),
             )
           else if (_locPermDeniedForever)
@@ -2405,20 +2836,25 @@ class _ProgramarViajeState extends State<ProgramarViaje>
               top: MediaQuery.of(context).padding.top + 8,
               left: 16,
               right: 16,
-              child: const _Banner(
-                text: 'Activa la ubicación en Ajustes del sistema.',
-                icon: Icons.location_off,
-              ),
+              child: _Banner(
+                  mapFloating: mapFloating,
+                  text: 'Activa la ubicación en Ajustes del sistema.',
+                  icon: Icons.location_off,
+                ),
             ),
           Positioned(
             right: 16,
             bottom: 220,
             child: FloatingActionButton(
               mini: true,
-              backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+              backgroundColor: mapFloating
+                  ? const Color(0xFF0F172A).withValues(alpha: 0.93)
+                  : (isDark ? const Color(0xFF1E1E1E) : Colors.white),
               onPressed: _centrarEnMiUbicacion,
               child: Icon(Icons.my_location,
-                  color: isDark ? Colors.white : const Color(0xFF0F9D58)),
+                  color: mapFloating
+                      ? const Color(0xFF49F18B)
+                      : (isDark ? Colors.white : const Color(0xFF0F9D58))),
             ),
           ),
           DraggableScrollableSheet(
@@ -2430,37 +2866,110 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             snapSizes: const [_sheetMinFracProgramar, 0.72, 0.88],
             builder: (context, controller) {
               final double safeBottom = MediaQuery.of(context).padding.bottom;
-              return Container(
+              const BorderRadius sheetTopRadius =
+                  BorderRadius.vertical(top: Radius.circular(24));
+              // En modo flotante:
+              //   - sin sombras (no asoma nada por arriba)
+              //   - sin blur (sigma 0 → no hay vidrio esmerilado)
+              //   - sin borde superior
+              //   - color del Container 100% transparente
+              // → El sheet desaparece totalmente y SOLO se ven los textos,
+              //   campos y botones flotando sobre el mapa real.
+              return DecoratedBox(
                 decoration: BoxDecoration(
-                  color: sheetBg,
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(18)),
-                  boxShadow: [
-                    BoxShadow(
-                      color:
-                          Colors.black.withValues(alpha: isDark ? 0.45 : 0.12),
-                      blurRadius: 16,
-                    ),
-                    BoxShadow(
-                      color: _colorServicio.withValues(alpha: 0.1),
-                      blurRadius: 20,
-                      spreadRadius: 2,
-                    ),
-                  ],
+                  borderRadius: sheetTopRadius,
+                  boxShadow: mapFloating
+                      ? const <BoxShadow>[]
+                      : <BoxShadow>[
+                          BoxShadow(
+                            color:
+                                Colors.black.withValues(alpha: isDark ? 0.38 : 0.10),
+                            blurRadius: 22,
+                            offset: const Offset(0, -4),
+                          ),
+                          BoxShadow(
+                            color: _colorServicio.withValues(alpha: 0.08),
+                            blurRadius: 24,
+                            spreadRadius: 1,
+                          ),
+                        ],
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
+                child: ClipRRect(
+                  borderRadius: sheetTopRadius,
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(
+                      sigmaX: mapFloating ? 0.0 : 12,
+                      sigmaY: mapFloating ? 0.0 : 12,
+                    ),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: sheetBg,
+                        borderRadius: sheetTopRadius,
+                        border: mapFloating
+                            ? null
+                            : Border(
+                                top: BorderSide(
+                                  color: sheetStrongChrome
+                                      ? Colors.white.withValues(
+                                          alpha: isDark ? 0.26 : 0.62)
+                                      : Colors.white.withValues(
+                                          alpha: isDark ? 0.06 : 0.55),
+                                  width: sheetStrongChrome ? 1.15 : 0.8,
+                                ),
+                              ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
                     if (_cargando)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                        child: CotizacionPrecioLoadingStrip(
-                          accentColor: _colorServicio,
-                          isDark: isDark,
-                          message: (ubicacionObtenida && precioCalculado > 0)
-                              ? 'Guardando viaje…'
-                              : 'Calculando precio…',
-                        ),
+                        child: mapFloating
+                            ? Container(
+                                padding: const EdgeInsets.fromLTRB(
+                                    14, 14, 14, 14),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F172A)
+                                      .withValues(alpha: 0.92),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: Colors.white
+                                        .withValues(alpha: 0.55),
+                                    width: 1.6,
+                                  ),
+                                  boxShadow: <BoxShadow>[
+                                    BoxShadow(
+                                      color: Colors.black
+                                          .withValues(alpha: 0.30),
+                                      blurRadius: 14,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Theme(
+                                  data: Theme.of(context).copyWith(
+                                    colorScheme: Theme.of(context)
+                                        .colorScheme
+                                        .copyWith(onSurface: Colors.white),
+                                  ),
+                                  child: CotizacionPrecioLoadingStrip(
+                                    accentColor: const Color(0xFF49F18B),
+                                    isDark: true,
+                                    message: (ubicacionObtenida &&
+                                            precioCalculado > 0)
+                                        ? 'Guardando viaje…'
+                                        : 'Calculando precio…',
+                                  ),
+                                ),
+                              )
+                            : CotizacionPrecioLoadingStrip(
+                                accentColor: _colorServicio,
+                                isDark: isDark,
+                                message:
+                                    (ubicacionObtenida && precioCalculado > 0)
+                                        ? 'Guardando viaje…'
+                                        : 'Calculando precio…',
+                              ),
                       ),
                     Expanded(
                       child: Padding(
@@ -2472,7 +2981,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                         ),
                         child: Form(
                           key: _formKey,
-                          child: ListView(
+                          child: DefaultTextStyle.merge(
+                            style: TextStyle(shadows: chromeLegibilityShadows),
+                            child: ListView(
                             controller: controller,
                             children: [
                               GestureDetector(
@@ -2495,7 +3006,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                             MainAxisAlignment.center,
                                         children: [
                                           Icon(Icons.keyboard_double_arrow_up,
-                                              size: 18, color: textMuted),
+                                              size: 18,
+                                              color: mapFloating
+                                                  ? const Color(0xFF000000)
+                                                  : textMuted,
+                                              shadows: freeTextHaloShadows),
                                           const SizedBox(width: 6),
                                           Text(
                                             _mostrarResumenCotizacion
@@ -2503,9 +3018,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 : 'Desliza o toca para ver todo',
                                             textAlign: TextAlign.center,
                                             style: TextStyle(
-                                                color: textMuted,
+                                                color: freeTextMutedColor,
                                                 fontSize: 12,
-                                                fontWeight: FontWeight.w600),
+                                                fontWeight: FontWeight.w800,
+                                                shadows: freeTextHaloShadows),
                                           ),
                                         ],
                                       ),
@@ -2537,10 +3053,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 Text(
                                                   'Tu recorrido',
                                                   style: TextStyle(
-                                                    color: textPrimary,
+                                                    color: freeTextColor,
                                                     fontWeight: FontWeight.w900,
                                                     fontSize: 18,
                                                     letterSpacing: -0.2,
+                                                    shadows:
+                                                        freeTextHaloShadows,
                                                   ),
                                                 ),
                                                 Text(
@@ -2548,9 +3066,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                       ? 'Salida: tu ubicación (GPS) · llegada: escribila abajo'
                                                       : 'Completá salida y llegada',
                                                   style: TextStyle(
-                                                    color: textMuted,
+                                                    color: freeTextMutedColor,
                                                     fontSize: 12.5,
                                                     height: 1.35,
+                                                    fontWeight:
+                                                        FontWeight.w700,
+                                                    shadows:
+                                                        freeTextHaloShadows,
                                                   ),
                                                 ),
                                               ],
@@ -2558,10 +3080,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                           : Text(
                                               'Origen y destino',
                                               style: TextStyle(
-                                                color: textSecondary,
+                                                color: freeTextColor,
                                                 fontSize: 12,
-                                                fontWeight: FontWeight.w700,
+                                                fontWeight: FontWeight.w800,
                                                 letterSpacing: 0.4,
+                                                shadows: freeTextHaloShadows,
                                               ),
                                             ),
                                     ),
@@ -2580,15 +3103,40 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 borderRadius:
                                                     BorderRadius.circular(10),
                                                 border: Border.all(
-                                                  color: pRuta.origenBorde
-                                                      .withValues(alpha: 0.65),
+                                                  color: mapFloating
+                                                      ? const Color(0xFF000000)
+                                                          .withValues(
+                                                              alpha: 0.92)
+                                                      : pRuta.origenBorde
+                                                          .withValues(
+                                                              alpha: 0.65),
+                                                  width:
+                                                      mapFloating ? 1.4 : 1.0,
                                                 ),
-                                                color: pRuta.origenAccent
-                                                    .withValues(alpha: 0.12),
+                                                color: mapFloating
+                                                    ? Colors.white.withValues(
+                                                        alpha: 0.95)
+                                                    : pRuta.origenAccent
+                                                        .withValues(
+                                                            alpha: 0.12),
+                                                boxShadow: mapFloating
+                                                    ? <BoxShadow>[
+                                                        BoxShadow(
+                                                          color: Colors.black
+                                                              .withValues(
+                                                                  alpha: 0.18),
+                                                          blurRadius: 6,
+                                                          offset: const Offset(
+                                                              0, 2),
+                                                        ),
+                                                      ]
+                                                    : null,
                                               ),
                                               child: Icon(
                                                 Icons.gps_fixed_rounded,
-                                                color: pRuta.origenAccent,
+                                                color: mapFloating
+                                                    ? const Color(0xFFD97706)
+                                                    : pRuta.origenAccent,
                                                 size: 20,
                                               ),
                                             ),
@@ -2601,19 +3149,31 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                   Text(
                                                     'Salida',
                                                     style: TextStyle(
-                                                      color: pRuta.origenAccent,
+                                                      color: mapFloating
+                                                          ? const Color(
+                                                              0xFF000000)
+                                                          : pRuta
+                                                              .origenAccent,
                                                       fontWeight:
-                                                          FontWeight.w800,
+                                                          FontWeight.w900,
                                                       fontSize: 13,
+                                                      shadows:
+                                                          freeTextHaloShadows,
                                                     ),
                                                   ),
                                                   const SizedBox(height: 2),
                                                   Text(
                                                     'Tu ubicación en el mapa. Mové el pin si hace falta.',
                                                     style: TextStyle(
-                                                      color: textMuted,
+                                                      color:
+                                                          freeTextMutedColor,
                                                       fontSize: 12,
                                                       height: 1.3,
+                                                      fontWeight: mapFloating
+                                                          ? FontWeight.w700
+                                                          : FontWeight.w400,
+                                                      shadows:
+                                                          freeTextHaloShadows,
                                                     ),
                                                   ),
                                                 ],
@@ -2639,6 +3199,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               : textPrimary,
                                           mockupRuta: uiRutaMockup,
                                           isDark: isDark,
+                                          mapFloating: mapFloating,
                                           ayudaHeader:
                                               uiRutaMockup ? 'Salida' : null,
                                           ayudaColor: textMuted,
@@ -2803,15 +3364,24 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                           showQuickSuggestions:
                                                               false,
                                                           showCategories: false,
-                                                          fieldAccent: pRuta
-                                                              .origenAccent,
-                                                          fieldFill: isDark
-                                                              ? (uiRutaMockup
-                                                                  ? const Color(
-                                                                      0xFF1A1208)
-                                                                  : const Color(
-                                                                      0xFF1C1508))
-                                                              : Colors.white,
+                                                          fieldAccent: mapFloating
+                                                              ? const Color(
+                                                                  0xFFFCD34D)
+                                                              : pRuta
+                                                                  .origenAccent,
+                                                          fieldFill: mapFloating
+                                                              ? const Color(
+                                                                      0xFF111827)
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          0.92)
+                                                              : (isDark
+                                                                  ? (uiRutaMockup
+                                                                      ? const Color(
+                                                                          0xFF1A1208)
+                                                                      : const Color(
+                                                                          0xFF1C1508))
+                                                                  : Colors.white),
                                                           onPlaceSelected:
                                                               (det) async {
                                                             _origenDetManual =
@@ -3110,6 +3680,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                         destinoFill: pRuta.destinoFill,
                                         textPrimary: textPrimary,
                                         textSecondary: textSecondary,
+                                        mapFloating: mapFloating,
                                       ),
                                       const SizedBox(height: 12),
                                     ],
@@ -3131,6 +3702,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               : textPrimary,
                                           mockupRuta: uiRutaMockup,
                                           isDark: isDark,
+                                          mapFloating: mapFloating,
                                           ayudaHeader:
                                               uiRutaMockup ? 'Llegada' : null,
                                           ayudaColor: textMuted,
@@ -3148,18 +3720,27 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                     hint: uiRutaMockup
                                                         ? 'Dirección, barrio, hotel o lugar en RD…'
                                                         : '¿A dónde vas?',
-                                                    fieldAccent: uiRutaMockup &&
-                                                            isDark
+                                                    fieldAccent: mapFloating
                                                         ? const Color(
                                                             0xFFD8B4FE)
-                                                        : pRuta.destinoAccent,
-                                                    fieldFill: isDark
-                                                        ? (uiRutaMockup
+                                                        : (uiRutaMockup &&
+                                                                isDark
                                                             ? const Color(
-                                                                0xFF1E0B36)
-                                                            : const Color(
-                                                                0xFF1A0F2E))
-                                                        : Colors.white,
+                                                                0xFFD8B4FE)
+                                                            : pRuta
+                                                                .destinoAccent),
+                                                    fieldFill: mapFloating
+                                                        ? const Color(
+                                                                0xFF111827)
+                                                            .withValues(
+                                                                alpha: 0.92)
+                                                        : (isDark
+                                                            ? (uiRutaMockup
+                                                                ? const Color(
+                                                                    0xFF1E0B36)
+                                                                : const Color(
+                                                                    0xFF1A0F2E))
+                                                            : Colors.white),
                                                     onPlaceSelected:
                                                         (det) async {
                                                       _destinoDet = det;
@@ -3259,6 +3840,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                           accent: pRuta.destinoAccent,
                                           fill: pRuta.destinoFill,
                                           tituloColor: textPrimary,
+                                          mapFloating: mapFloating,
                                           child: Column(
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.stretch,
@@ -3292,17 +3874,31 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                   padding:
                                                       const EdgeInsets.all(12),
                                                   decoration: BoxDecoration(
-                                                    color: isDark
-                                                        ? const Color(
-                                                            0xFF0F172A)
-                                                        : Colors.white,
+                                                    // En flotante el padre
+                                                    // (_seccionRutaCard) ya es
+                                                    // oscuro: usamos blanco
+                                                    // semitransparente para
+                                                    // separarse sin tapar.
+                                                    color: mapFloating
+                                                        ? Colors.white
+                                                            .withValues(
+                                                                alpha: 0.10)
+                                                        : (isDark
+                                                            ? const Color(
+                                                                0xFF0F172A)
+                                                            : Colors.white),
                                                     borderRadius:
                                                         BorderRadius.circular(
                                                             12),
                                                     border: Border.all(
-                                                      color: pRuta.destinoAccent
-                                                          .withValues(
-                                                              alpha: 0.55),
+                                                      color: mapFloating
+                                                          ? const Color(
+                                                                  0xFFD8B4FE)
+                                                              .withValues(
+                                                                  alpha: 0.65)
+                                                          : pRuta.destinoAccent
+                                                              .withValues(
+                                                                  alpha: 0.55),
                                                     ),
                                                   ),
                                                   child: Column(
@@ -3315,8 +3911,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                           Icon(
                                                               Icons
                                                                   .check_circle,
-                                                              color: pRuta
-                                                                  .destinoAccent,
+                                                              color: mapFloating
+                                                                  ? const Color(
+                                                                      0xFFD8B4FE)
+                                                                  : pRuta
+                                                                      .destinoAccent,
                                                               size: 20),
                                                           const SizedBox(
                                                               width: 8),
@@ -3468,15 +4067,34 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                         icon: const Icon(Icons.calendar_today),
                                         label: const Text(
                                             'Seleccionar Fecha y Hora'),
-                                        style: _botonEstilo(context),
+                                        style: _botonEstilo(context,
+                                            sheetStrongChrome: sheetStrongChrome),
                                       ),
                                       Text(
                                         'Programado para: ${DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora)}',
                                         style: TextStyle(
-                                          color: isDark
-                                              ? Colors.greenAccent
-                                              : const Color(0xFF0F9D58),
-                                          fontWeight: FontWeight.w600,
+                                          color: sheetStrongChrome
+                                              ? const Color(0xFF065F46)
+                                              : (isDark
+                                                  ? Colors.greenAccent
+                                                  : const Color(0xFF0F9D58)),
+                                          fontWeight: FontWeight.w800,
+                                          shadows: sheetStrongChrome
+                                              ? <Shadow>[
+                                                  Shadow(
+                                                    offset: const Offset(0, 1),
+                                                    blurRadius: 3.5,
+                                                    color: Colors.white
+                                                        .withValues(alpha: 0.95),
+                                                  ),
+                                                  Shadow(
+                                                    offset: Offset.zero,
+                                                    blurRadius: 14,
+                                                    color: Colors.white
+                                                        .withValues(alpha: 0.55),
+                                                  ),
+                                                ]
+                                              : null,
                                         ),
                                       ),
                                       const SizedBox(height: 8),
@@ -3497,6 +4115,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                     ),
                                     const SizedBox(height: 8),
                                     _Caja(
+                                      mapFloating: mapFloating,
+                                      strongChrome: sheetStrongChrome,
                                       child: Row(
                                         children: [
                                           Icon(Icons.swap_horiz,
@@ -3515,12 +4135,19 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                             value: idaYVuelta,
                                             activeColor: Colors.white,
                                             activeTrackColor: switchAccent,
-                                            inactiveThumbColor: isDark
-                                                ? Colors.white70
-                                                : const Color(0xFF98A2B3),
-                                            inactiveTrackColor: isDark
-                                                ? Colors.white24
-                                                : const Color(0xFFD0D5DD),
+                                            // Thumb/track del estado OFF
+                                            // calculados por contraste sobre
+                                            // el fondo del cliente para que
+                                            // el switch sea visible aunque
+                                            // el fondo sea amarillo, blanco
+                                            // o agua (donde el gris claro
+                                            // del default desaparecía).
+                                            inactiveThumbColor:
+                                                CustomThemeService.textMutedOn(
+                                                    chromeToneRef),
+                                            inactiveTrackColor:
+                                                CustomThemeService.borderOn(
+                                                    chromeToneRef),
                                             onChanged: (v) {
                                               setState(() {
                                                 idaYVuelta = v;
@@ -3535,63 +4162,91 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                     if (tipoServicio != 'motor') ...[
                                       if (tipoServicio == 'normal')
                                         _Caja(
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                  Icons
-                                                      .directions_car_filled_outlined,
-                                                  color: textSecondary),
-                                              const SizedBox(width: 10),
-                                              Text('Tipo de Vehículo',
-                                                  style: TextStyle(
-                                                      color: textSecondary)),
-                                              const Spacer(),
-                                              DropdownButton<String>(
-                                                value: tipoVehiculo,
-                                                dropdownColor: isDark
-                                                    ? const Color(0xFF1A1A1A)
-                                                    : Colors.white,
-                                                underline: const SizedBox(),
-                                                style: TextStyle(
-                                                    color: textPrimary,
-                                                    fontSize: 16),
-                                                items: [
-                                                  'Carro',
-                                                  'Jeepeta',
-                                                  'Minibús',
-                                                  'Minivan',
-                                                  'AutobusGuagua'
-                                                ]
-                                                    .map(
-                                                        (e) => DropdownMenuItem(
-                                                              value: e,
-                                                              child: Text(e,
-                                                                  style: TextStyle(
-                                                                      color:
-                                                                          textPrimary)),
-                                                            ))
-                                                    .toList(),
-                                                onChanged: (v) {
-                                                  setState(() {
-                                                    tipoVehiculo = v ?? 'Carro';
-                                                  });
-                                                  _programarCalculoAutomatico();
-                                                },
+                                          mapFloating: mapFloating,
+                                          strongChrome: sheetStrongChrome,
+                                          child: OverflowSafeLabeledDropdown(
+                                            leading: Icon(
+                                              Icons
+                                                  .directions_car_filled_outlined,
+                                              color: textSecondary,
+                                            ),
+                                            label: 'Tipo de Vehículo',
+                                            labelStyle: TextStyle(
+                                              color: textSecondary,
+                                              fontWeight: mapFloating
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                            ),
+                                            dropdown: DropdownButton<String>(
+                                              isExpanded: true,
+                                              value: tipoVehiculo,
+                                              dropdownColor: mapFloating
+                                                  ? const Color(0xFF0F172A)
+                                                  : CustomThemeService.cardOn(
+                                                      chromeToneRef),
+                                              underline: const SizedBox(),
+                                              iconEnabledColor: textPrimary,
+                                              style: TextStyle(
+                                                color: textPrimary,
+                                                fontSize: 16,
+                                                fontWeight: mapFloating
+                                                    ? FontWeight.w800
+                                                    : FontWeight.w600,
                                               ),
-                                            ],
+                                              items: [
+                                                'Carro',
+                                                'Jeepeta',
+                                                'Minibús',
+                                                'Minivan',
+                                                'AutobusGuagua'
+                                              ]
+                                                  .map(
+                                                    (e) => DropdownMenuItem(
+                                                      value: e,
+                                                      child: Text(
+                                                        e,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                          color: textPrimary,
+                                                          fontWeight: mapFloating
+                                                              ? FontWeight.w800
+                                                              : FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  )
+                                                  .toList(),
+                                              onChanged: (v) {
+                                                setState(() {
+                                                  tipoVehiculo = v ?? 'Carro';
+                                                });
+                                                _programarCalculoAutomatico();
+                                              },
+                                            ),
                                           ),
                                         ),
                                       if (tipoServicio == 'turismo')
-                                        _buildTurismoVehiculoSelector(),
+                                        _buildTurismoVehiculoSelector(
+                                          mapFloating: mapFloating,
+                                          chromeToneRef: chromeToneRef,
+                                          strongChrome: sheetStrongChrome,
+                                        ),
                                       const SizedBox(height: 10),
                                     ],
                                     _Caja(
+                                      mapFloating: mapFloating,
+                                      strongChrome: sheetStrongChrome,
                                       child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
                                         children: [
                                           Icon(Icons.credit_card_outlined,
                                               color: textSecondary),
                                           const SizedBox(width: 10),
                                           Expanded(
+                                            flex: 3,
                                             child: TextButton.icon(
                                               onPressed: _elegirMetodoPago,
                                               icon: Icon(
@@ -3600,6 +4255,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                   color: payLinkColor),
                                               label: Text(
                                                 'Elegir método de pago',
+                                                maxLines: 2,
+                                                softWrap: true,
+                                                overflow: TextOverflow.ellipsis,
                                                 style: TextStyle(
                                                     color: payLinkColor,
                                                     fontWeight:
@@ -3607,21 +4265,39 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               ),
                                             ),
                                           ),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 12, vertical: 10),
-                                            decoration: BoxDecoration(
-                                              color: metodoPagoChipBg,
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              border: Border.all(
-                                                  color: metodoPagoChipBorder),
-                                            ),
-                                            child: Text(metodoPago,
+                                          Flexible(
+                                            flex: 2,
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 12,
+                                                vertical: 10,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: metodoPagoChipBg,
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                border: Border.all(
+                                                  color: metodoPagoChipBorder,
+                                                  width: sheetStrongChrome
+                                                      ? 1.4
+                                                      : 1.0,
+                                                ),
+                                              ),
+                                              child: Text(
+                                                metodoPago,
+                                                maxLines: 2,
+                                                softWrap: true,
+                                                textAlign: TextAlign.end,
+                                                overflow: TextOverflow.ellipsis,
                                                 style: TextStyle(
-                                                    color: textSecondary,
-                                                    fontWeight:
-                                                        FontWeight.w700)),
+                                                  color: sheetStrongChrome
+                                                      ? Colors.white
+                                                      : textSecondary,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                            ),
                                           ),
                                         ],
                                       ),
@@ -3759,51 +4435,202 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 ),
                                               ),
                                             const SizedBox(height: 20),
-                                            SizedBox(
-                                              width: double.infinity,
-                                              child: ElevatedButton(
-                                                onPressed: (ubicacionObtenida &&
-                                                        precioCalculado > 0)
-                                                    ? () => _programarViaje(
-                                                        ScaffoldMessenger.of(
-                                                            context),
-                                                        Navigator.of(context))
-                                                    : null,
-                                                style: ElevatedButton.styleFrom(
-                                                  backgroundColor:
-                                                      _colorServicio,
-                                                  foregroundColor: Colors.black,
-                                                  padding: const EdgeInsets
-                                                      .symmetric(vertical: 16),
-                                                  shape: RoundedRectangleBorder(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            12),
+                                            Builder(
+                                              builder: (context) {
+                                                final Color ctaFill =
+                                                    sheetStrongChrome
+                                                        ? Color.alphaBlend(
+                                                            Colors.black
+                                                                .withValues(
+                                                                    alpha:
+                                                                        0.26),
+                                                            _colorServicio,
+                                                          )
+                                                        : _colorServicio;
+                                                final Color ctaFg =
+                                                    CustomThemeService.textOn(
+                                                        ctaFill);
+                                                return SizedBox(
+                                                  width: double.infinity,
+                                                  child: DecoratedBox(
+                                                    decoration: BoxDecoration(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              12),
+                                                      boxShadow:
+                                                          sheetStrongChrome
+                                                              ? <BoxShadow>[
+                                                                  BoxShadow(
+                                                                    color: Colors
+                                                                        .black
+                                                                        .withValues(
+                                                                            alpha:
+                                                                                0.58),
+                                                                    blurRadius:
+                                                                        30,
+                                                                    spreadRadius:
+                                                                        -1,
+                                                                    offset:
+                                                                        const Offset(
+                                                                            0,
+                                                                            12),
+                                                                  ),
+                                                                  BoxShadow(
+                                                                    color: _colorServicio
+                                                                        .withValues(
+                                                                            alpha:
+                                                                                0.50),
+                                                                    blurRadius:
+                                                                        24,
+                                                                    spreadRadius:
+                                                                        0.5,
+                                                                    offset:
+                                                                        const Offset(
+                                                                            0,
+                                                                            6),
+                                                                  ),
+                                                                ]
+                                                              : const <BoxShadow>[],
+                                                    ),
+                                                    child: ElevatedButton(
+                                                      onPressed: (ubicacionObtenida &&
+                                                              precioCalculado >
+                                                                  0)
+                                                          ? () => _programarViaje(
+                                                              ScaffoldMessenger
+                                                                  .of(
+                                                                      context),
+                                                              Navigator.of(
+                                                                  context))
+                                                          : null,
+                                                      style: ElevatedButton
+                                                          .styleFrom(
+                                                        backgroundColor:
+                                                            ctaFill,
+                                                        foregroundColor: ctaFg,
+                                                        disabledBackgroundColor:
+                                                            sheetStrongChrome
+                                                                ? Colors.grey
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.42)
+                                                                : null,
+                                                        disabledForegroundColor:
+                                                            sheetStrongChrome
+                                                                ? Colors.white
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.65)
+                                                                : null,
+                                                        elevation:
+                                                            sheetStrongChrome
+                                                                ? 0
+                                                                : 2,
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                    vertical:
+                                                                        16),
+                                                        shape:
+                                                            RoundedRectangleBorder(
+                                                          borderRadius:
+                                                              BorderRadius
+                                                                  .circular(
+                                                                      12),
+                                                          side:
+                                                              sheetStrongChrome
+                                                                  ? BorderSide(
+                                                                      color: Colors
+                                                                          .white
+                                                                          .withValues(alpha: 0.55),
+                                                                      width: 1.4,
+                                                                    )
+                                                                  : BorderSide
+                                                                      .none,
+                                                        ),
+                                                      ),
+                                                      child: Text(
+                                                        widget.modoAhora
+                                                            ? '✅ CONFIRMAR VIAJE'
+                                                            : '✅ CONFIRMAR PROGRAMACIÓN',
+                                                        style: TextStyle(
+                                                          fontSize: 18,
+                                                          fontWeight:
+                                                              FontWeight.w800,
+                                                          letterSpacing: 0.25,
+                                                          shadows:
+                                                              sheetStrongChrome
+                                                                  ? _ctaLabelShadows(
+                                                                      ctaFg)
+                                                                  : null,
+                                                        ),
+                                                      ),
+                                                    ),
                                                   ),
-                                                ),
-                                                child: Text(
-                                                  widget.modoAhora
-                                                      ? '✅ CONFIRMAR VIAJE'
-                                                      : '✅ CONFIRMAR PROGRAMACIÓN',
-                                                  style: const TextStyle(
-                                                    fontSize: 18,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
+                                                );
+                                              },
                                             ),
                                           ],
                                         ),
                                       )
                                     else if (_cargando)
-                                      CotizacionPrecioLoadingPlaceholder(
-                                        accentColor: _colorServicio,
-                                        isDark: isDark,
-                                        message: (ubicacionObtenida &&
-                                                precioCalculado > 0)
-                                            ? 'Guardando viaje…'
-                                            : 'Calculando precio…',
-                                      ),
+                                      mapFloating
+                                          ? Container(
+                                              margin: const EdgeInsets
+                                                  .symmetric(vertical: 8),
+                                              padding: const EdgeInsets
+                                                  .fromLTRB(18, 18, 18, 20),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF0F172A)
+                                                    .withValues(alpha: 0.93),
+                                                borderRadius:
+                                                    BorderRadius.circular(18),
+                                                border: Border.all(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.55),
+                                                  width: 1.6,
+                                                ),
+                                                boxShadow: <BoxShadow>[
+                                                  BoxShadow(
+                                                    color: Colors.black
+                                                        .withValues(
+                                                            alpha: 0.32),
+                                                    blurRadius: 18,
+                                                    offset:
+                                                        const Offset(0, 6),
+                                                  ),
+                                                ],
+                                              ),
+                                              child: Theme(
+                                                data: Theme.of(context)
+                                                    .copyWith(
+                                                  colorScheme: Theme.of(
+                                                          context)
+                                                      .colorScheme
+                                                      .copyWith(
+                                                          onSurface:
+                                                              Colors.white),
+                                                ),
+                                                child:
+                                                    CotizacionPrecioLoadingStrip(
+                                                  accentColor: const Color(
+                                                      0xFF49F18B),
+                                                  isDark: true,
+                                                  message: (ubicacionObtenida &&
+                                                          precioCalculado > 0)
+                                                      ? 'Guardando viaje…'
+                                                      : 'Calculando precio…',
+                                                ),
+                                              ),
+                                            )
+                                          : CotizacionPrecioLoadingPlaceholder(
+                                              accentColor: _colorServicio,
+                                              isDark: isDark,
+                                              message: (ubicacionObtenida &&
+                                                      precioCalculado > 0)
+                                                  ? 'Guardando viaje…'
+                                                  : 'Calculando precio…',
+                                            ),
                                   ],
                                 ),
                               if (latCliente != null &&
@@ -3812,10 +4639,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                 const SizedBox(height: 12),
                             ],
                           ),
+                          ),
                         ),
                       ),
                     ),
                   ],
+                ),
+                    ),
+                  ),
                 ),
               );
             },
@@ -3824,34 +4655,111 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       ),
       ),
     );
+      },
+    );
   }
 
-  ButtonStyle _botonEstilo(BuildContext context) {
+  ButtonStyle _botonEstilo(BuildContext context,
+      {required bool sheetStrongChrome}) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    // Botón secundario "Seleccionar Fecha y Hora". En modo flotante el sheet
+    // tiene cards oscuras sobre mapa claro: el botón se oscurece para igualar
+    // el lenguaje visual y el borde es BLANCO semitransparente para destacar
+    // tanto contra el botón oscuro como contra el mapa claro de fondo.
+    final Color baseFill =
+        isDark ? Colors.white : const Color(0xFF0F9D58);
+    final Color fill = sheetStrongChrome
+        ? Color.alphaBlend(Colors.black.withValues(alpha: 0.22), baseFill)
+        : baseFill;
+    final Color fg = sheetStrongChrome
+        ? CustomThemeService.textOn(fill)
+        : (isDark ? Colors.green : Colors.white);
     return ElevatedButton.styleFrom(
-      backgroundColor: isDark ? Colors.white : const Color(0xFF0F9D58),
-      foregroundColor: isDark ? Colors.green : Colors.white,
+      backgroundColor: fill,
+      foregroundColor: fg,
       minimumSize: const Size(double.infinity, 50),
-      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: sheetStrongChrome ? 4 : 2,
+      shadowColor: sheetStrongChrome
+          ? Colors.black.withValues(alpha: 0.55)
+          : null,
+      textStyle: const TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 0.2,
+      ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: sheetStrongChrome
+            ? BorderSide(
+                color: Colors.white.withValues(alpha: 0.55),
+                width: 1.4,
+              )
+            : BorderSide.none,
+      ),
     );
   }
 }
 
 class _Caja extends StatelessWidget {
   final Widget child;
-  const _Caja({required this.child});
+  final bool mapFloating;
+  final bool strongChrome;
+
+  const _Caja({
+    required this.child,
+    this.mapFloating = false,
+    this.strongChrome = false,
+  });
+
   @override
   Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
+    // En modo flotante el sheet no tiene fondo: pintamos un panel
+    // GRIS MUY OSCURO (#0F172A 0.92) detrás de cada caja, con borde
+    // BLANCO semitransparente (0.55) y sombra negra. El mapa de
+    // Google Maps siempre es claro, así que cards oscuras = contraste
+    // garantizado sin importar si la app está en claro u oscuro.
+    final Color cardBg = mapFloating
+        ? const Color(0xFF0F172A).withValues(alpha: 0.92)
+        : CustomThemeService.cardOn(themedBg);
+    final Color cardBorder = mapFloating
+        ? Colors.white.withValues(alpha: 0.55)
+        : strongChrome
+            ? Color.alphaBlend(
+                Colors.black.withValues(
+                  alpha: ThemeData.estimateBrightnessForColor(themedBg) ==
+                          Brightness.dark
+                      ? 0.38
+                      : 0.16,
+                ),
+                CustomThemeService.borderOn(themedBg),
+              )
+            : CustomThemeService.borderOn(themedBg);
+    final double borderW =
+        mapFloating ? 1.6 : (strongChrome ? 1.45 : 1.0);
+    final List<BoxShadow>? floatingShadow = mapFloating
+        ? <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.32),
+              blurRadius: 16,
+              offset: const Offset(0, 5),
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.14),
+              blurRadius: 4,
+              offset: const Offset(0, 1),
+            ),
+          ]
+        : null;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF121212) : const Color(0xFFFFFFFF),
+        color: cardBg,
         borderRadius: const BorderRadius.all(Radius.circular(12)),
         border: Border.fromBorderSide(
-          BorderSide(color: isDark ? Colors.white24 : const Color(0xFFD0D5DD)),
+          BorderSide(color: cardBorder, width: borderW),
         ),
+        boxShadow: floatingShadow,
       ),
       child: child,
     );
@@ -3861,21 +4769,49 @@ class _Caja extends StatelessWidget {
 class _Banner extends StatelessWidget {
   final String text;
   final IconData icon;
-  const _Banner({required this.text, required this.icon});
+  final bool mapFloating;
+
+  const _Banner({
+    required this.text,
+    required this.icon,
+    this.mapFloating = false,
+  });
+
   @override
   Widget build(BuildContext context) {
+    final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
+    final Color cardBg = mapFloating
+        ? const Color(0xFF0F172A).withValues(alpha: 0.92)
+        : CustomThemeService.cardOn(themedBg);
+    final Color textColor = mapFloating
+        ? Colors.white
+        : CustomThemeService.textOn(cardBg);
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color accent =
         isDark ? const Color(0xFF49F18B) : const Color(0xFF0F9D58);
-    final Color bg = isDark ? const Color(0xFF1C1F23) : const Color(0xFFE8F7EE);
-    final Color textColor = isDark ? Colors.white : const Color(0xFF0F172A);
+    // En flotante usamos verde brillante para que el borde resalte sobre
+    // la card oscura y al mismo tiempo sobre el mapa claro de Google.
+    final Color borderAccent = mapFloating
+        ? const Color(0xFF49F18B)
+        : accent;
+    final List<BoxShadow>? floatingShadow = mapFloating
+        ? <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.30),
+              blurRadius: 12,
+              offset: const Offset(0, 3),
+            ),
+          ]
+        : null;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: bg,
+        color: cardBg,
         borderRadius: const BorderRadius.all(Radius.circular(10)),
-        border: Border.fromBorderSide(
-            BorderSide(color: accent.withValues(alpha: 0.45))),
+        border: Border.fromBorderSide(BorderSide(
+            color: borderAccent.withValues(alpha: mapFloating ? 0.85 : 0.55),
+            width: mapFloating ? 1.6 : 1.0)),
+        boxShadow: floatingShadow,
       ),
       child: Row(
         children: [
@@ -3884,7 +4820,7 @@ class _Banner extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: TextStyle(color: textColor, fontWeight: FontWeight.w700),
+              style: TextStyle(color: textColor, fontWeight: FontWeight.w800),
             ),
           ),
         ],

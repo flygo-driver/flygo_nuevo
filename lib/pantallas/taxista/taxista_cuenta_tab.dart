@@ -1,8 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
@@ -12,9 +15,26 @@ import 'package:flygo_nuevo/pantallas/taxista/ganancia_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/historial_viajes_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
 import 'package:flygo_nuevo/servicios/auth_service.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
+import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/configuracion_bancaria.dart';
+
+String _pctLabel(double p) =>
+    p == p.roundToDouble() ? p.round().toString() : p.toStringAsFixed(1);
+
+String _subtituloBilleteraComision() {
+  final c = PlataformaEconomia.comisionViajePorcentaje;
+  final t = 100.0 - c;
+  return 'Saldo ${_pctLabel(t)} %, comisión ${_pctLabel(c)} %';
+}
+
+String _subtituloGananciasResumen() {
+  final c = PlataformaEconomia.comisionViajePorcentaje;
+  final t = 100.0 - c;
+  return 'Totales y reparto ${_pctLabel(t)}/${_pctLabel(c)}';
+}
 
 /// Finanzas, documentos y ajustes de cuenta.
 class TaxistaCuentaTab extends StatelessWidget {
@@ -116,18 +136,237 @@ class TaxistaCuentaTab extends StatelessWidget {
               },
             ),
           const Divider(height: 1),
+          if (uid != null)
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(uid)
+                  .snapshots(),
+              builder: (context, snap) {
+                final data = snap.data?.data() ?? const <String, dynamic>{};
+                final bloqueado = data['tienePagoPendiente'] == true;
+                return ListTile(
+                  leading: Icon(
+                    bloqueado
+                        ? Icons.lock_clock_outlined
+                        : Icons.lock_open_outlined,
+                    color: bloqueado ? Colors.red : Colors.green,
+                  ),
+                  title: const Text('Estado de recarga y bloqueo'),
+                  subtitle: Text(
+                    bloqueado
+                        ? 'BLOQUEADO: recarga y sube bauche para habilitar viajes/pool.'
+                        : 'ACTIVO: abrí Mis pagos y seguí los pasos (banco → monto → foto).',
+                  ),
+                  trailing: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.of(context, rootNavigator: true).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              const MisPagos(scrollToRecargaSection: true),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.payment_outlined, size: 18),
+                    label: const Text('Mis pagos'),
+                  ),
+                );
+              },
+            ),
+          if (uid != null)
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('billeteras_taxista')
+                  .doc(uid)
+                  .snapshots(),
+              builder: (context, snap) {
+                final data = snap.data?.data() ?? const <String, dynamic>{};
+                final saldo =
+                    PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(data);
+                final legacyPendiente =
+                    PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
+                final bloqueado =
+                    PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(data);
+                const minimo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
+                const metaVisual = 500.0;
+                final progreso = (saldo / metaVisual).clamp(0.0, 1.0);
+                final faltante = (minimo - saldo).clamp(0.0, double.infinity);
+
+                return Container(
+                  margin: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: bloqueado
+                          ? Colors.red.withValues(alpha: 0.6)
+                          : cs.outlineVariant.withValues(alpha: 0.7),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            bloqueado
+                                ? Icons.warning_amber_rounded
+                                : Icons.account_balance_wallet_outlined,
+                            color: bloqueado ? Colors.red : cs.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Crédito de recarga (tiempo real)',
+                              style: TextStyle(
+                                color: cs.onSurface,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            bloqueado ? 'BLOQUEADO' : 'ACTIVO',
+                            style: TextStyle(
+                              color: bloqueado ? Colors.red : Colors.green,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Saldo actual: ${FormatosMoneda.rd(saldo)}',
+                        style: TextStyle(
+                          color: cs.onSurface,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: LinearProgressIndicator(
+                          minHeight: 10,
+                          value: progreso,
+                          backgroundColor: cs.surfaceContainerHighest,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            bloqueado ? Colors.red : Colors.green,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('0', style: TextStyle(fontSize: 11)),
+                          Text('200', style: TextStyle(fontSize: 11)),
+                          Text('500+', style: TextStyle(fontSize: 11)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        bloqueado
+                            ? 'Te faltan ${FormatosMoneda.rd(faltante)} para recuperar mínimo RD\$200.'
+                            : 'Mantén el saldo por encima de RD\$200 para no bloquear viajes/pool.',
+                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                      ),
+                      if (legacyPendiente > 0.01) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Legacy pendiente: ${FormatosMoneda.rd(legacyPendiente)}',
+                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11.5),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: cs.outlineVariant.withValues(alpha: 0.7),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.account_balance, color: cs.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Cuenta para depositar recarga',
+                          style: TextStyle(
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Titular: ${RecargaBancariaConfig.titular}'),
+                  const Text('RNC: ${RecargaBancariaConfig.rnc}'),
+                  const Text('Banco: ${RecargaBancariaConfig.banco}'),
+                  const Text('Tipo: ${RecargaBancariaConfig.tipoCuenta}'),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'No. cuenta: ${RecargaBancariaConfig.numeroCuenta}',
+                          style: TextStyle(
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Copiar cuenta',
+                        onPressed: () async {
+                          await Clipboard.setData(
+                            const ClipboardData(
+                                text: RecargaBancariaConfig.numeroCuenta),
+                          );
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Número de cuenta copiado'),
+                            ),
+                          );
+                        },
+                        icon: Icon(Icons.copy, color: cs.primary),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
           _tile(
             context,
             icon: Icons.account_balance_wallet_outlined,
             title: 'Billetera',
-            subtitle: 'Saldo 80 %, comisión 20 %',
+            subtitle: _subtituloBilleteraComision(),
             page: const BilleteraTaxista(),
           ),
           _tile(
             context,
             icon: Icons.payment,
-            title: 'Mis pagos',
-            subtitle: 'Historial de comisiones',
+            title: 'Recargas y comprobantes',
+            subtitle:
+                'Cuenta bancaria, foto del bauche y historial de recargas/pagos',
             page: const MisPagos(),
           ),
           _tile(
@@ -148,7 +387,7 @@ class TaxistaCuentaTab extends StatelessWidget {
             context,
             icon: Icons.monetization_on_outlined,
             title: 'Ganancias',
-            subtitle: 'Totales y cálculo 80/20',
+            subtitle: _subtituloGananciasResumen(),
             page: const GananciaTaxista(),
           ),
           _tile(
@@ -229,8 +468,7 @@ class TaxistaCuentaTab extends StatelessWidget {
       subtitle: subtitle != null ? Text(subtitle) : null,
       trailing: Icon(Icons.chevron_right, color: cs.outline),
       onTap: () {
-        Navigator.push(
-          context,
+        Navigator.of(context, rootNavigator: true).push(
           MaterialPageRoute(builder: (_) => page),
         );
       },

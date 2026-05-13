@@ -1,4 +1,4 @@
-﻿{
+{
   "apiVersion": 2,
   "indexes": [
     {
@@ -269,6 +269,107 @@
       "fields": [
         { "fieldPath": "uidChofer", "order": "ASCENDING" },
         { "fieldPath": "estado", "order": "ASCENDING" }
+      ]
+    },
+
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tipoServicio", "order": "ASCENDING" },
+        { "fieldPath": "canalAsignacion", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "fechaHora", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "metodoPago", "order": "ASCENDING" },
+        { "fieldPath": "estadoPago", "order": "ASCENDING" },
+        { "fieldPath": "transferenciaConfirmada", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadoEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadoEn", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "programado", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "publishAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "publishAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "reservadoHasta", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadoEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clienteId", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadoEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "pagoRegistrado", "order": "ASCENDING" },
+        { "fieldPath": "liquidado", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "billeteras_taxista",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "comisionPendiente", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" }
       ]
     }
   ],

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../data/viaje_data.dart';
+import '../../servicios/analytics_rai.dart';
 import '../../servicios/distancia_service.dart';
 import '../../utils/formatos_moneda.dart';
 
@@ -50,6 +51,8 @@ Future<void> guardarViajeCliente({
       precio: precio,
       metodoPago: metodoPago,
     );
+
+    await AnalyticsRai.logTripRequested();
 
     // Si la vista fue desmontada mientras esperábamos, salimos
     if (!context.mounted) return;

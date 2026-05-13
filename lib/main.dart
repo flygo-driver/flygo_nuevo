@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
@@ -7,6 +8,9 @@ import 'package:intl/date_symbol_data_local.dart' as intl;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+
+import 'package:flygo_nuevo/servicios/fcm_service.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker_android/image_picker_android.dart';
@@ -24,9 +28,15 @@ import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
+import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
+import 'package:flygo_nuevo/servicios/text_scale_service.dart';
+import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
+import 'package:flygo_nuevo/servicios/analytics_rai.dart';
+import 'package:flygo_nuevo/app_flavor.dart';
 
 // 🔐 Auth / Gates
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
+import 'package:flygo_nuevo/auth/login_admin.dart';
 import 'package:flygo_nuevo/widgets/verify_email_gate.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
@@ -81,12 +91,6 @@ Future<void> _conectarEmuladores() async {
   FirebaseStorage.instance.useStorageEmulator(kHost, 9199);
 }
 
-// ================== FCM BACKGROUND ==================
-@pragma('vm:entry-point')
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await FirebaseBootstrap.ensureInitialized();
-}
-
 // ================== SPLASH EN FLUTTER (tras el nativo) ==================
 /// Splash unificado: barra lineal de borde a borde + logo. [subtitle] solo si hace falta copy explícito.
 Widget _raiSplashScaffold({String? subtitle}) {
@@ -134,6 +138,58 @@ Widget _raiSplashScaffold({String? subtitle}) {
       ],
     ),
   );
+}
+
+/// En escritorio (Windows/macOS) solo permitimos cuentas de administración.
+class _DesktopNonAdminWall extends StatelessWidget {
+  const _DesktopNonAdminWall();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(Icons.desktop_windows_outlined,
+                  size: 56, color: Colors.white54),
+              const SizedBox(height: 24),
+              Text(
+                'RAI en escritorio: solo administración',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Pasajero y conductor deben usar teléfono o tablet.\n'
+                'Cierra sesión e inicia con una cuenta de admin.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.72),
+                  height: 1.45,
+                  fontSize: 15,
+                ),
+              ),
+              const Spacer(),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  await FirebaseAuth.instance.signOut();
+                },
+                icon: const Icon(Icons.logout),
+                label: const Text('Cerrar sesión'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 void _installErrorHandlers() {
@@ -210,13 +266,45 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
   Future<void> _init() async {
     try {
       await FirebaseBootstrap.ensureInitialized();
-      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+      // En Windows evitamos FCM (MissingPluginException en métodos de firebase_messaging).
+      if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
+        FirebaseMessaging.onBackgroundMessage(
+            fcmFirebaseMessagingBackgroundHandler);
+      }
       await _conectarEmuladores();
+      // Detección AUTOMÁTICA del flavor desde el applicationId del paquete
+      // (com.flygo.rd2 → cliente, com.flygo.rd2.conductor → conductor).
+      // Es a prueba de errores humanos: si el dev olvida --dart-define al
+      // construir, el applicationId sigue siendo distinto y el flavor real
+      // se detecta correctamente.
+      await AppFlavor.init();
       await NotificationService.I.ensureInited();
+      FcmService.registerForegroundHandlers();
+      if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
+        unawaited(LocationPermissionService.checkAndRequestBasicPermission());
+      }
       await ThemeModeService.init();
+      // Color de fondo personalizable por el usuario (cliente). Si nunca lo
+      // ha cambiado, mantiene el aspecto previo (gris claro / negro).
+      await CustomThemeService.init();
+      // Tamaño de texto personalizable (tipo inDrive). Si nunca lo cambia,
+      // queda en 1.0 (tamaño normal de Flutter).
+      await TextScaleService.init();
+
+      await AnalyticsRai.init();
 
       Intl.defaultLocale = 'es';
       await intl.initializeDateFormatting('es');
+
+      unawaited(ComisionViajePctService.refresh(force: true));
+      ComisionViajePctService.startPeriodicRefresh();
+
+      unawaited(
+        AnalyticsRai.logFunnel(
+          'rai_bootstrap_ok',
+          params: <String, Object>{'flavor': AppFlavor.current},
+        ),
+      );
 
       _installErrorHandlers();
 
@@ -291,11 +379,13 @@ void _configureGlobalSystemUi() {
 }
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  _configureGlobalSystemUi();
-  _configureAndroidPhotoPicker();
   runZonedGuarded(
-    () => runApp(const RaiBootstrap()),
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+      _configureGlobalSystemUi();
+      _configureAndroidPhotoPicker();
+      runApp(const RaiBootstrap());
+    },
     (error, stack) {
       ErrorReporting.reportError(
         error,
@@ -321,60 +411,92 @@ class _RaiAppState extends State<RaiApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       PushService.registerNotificationOpenHandlers();
       PushService.consumeInitialNotificationIfAny();
-      PoolDeepLink.install();
+      final bool isDesktop =
+          defaultTargetPlatform == TargetPlatform.windows ||
+              defaultTargetPlatform == TargetPlatform.macOS;
+      if (!isDesktop) {
+        PoolDeepLink.install();
+      }
     });
   }
 
   @override
   void dispose() {
-    PoolDeepLink.dispose();
+    final bool isDesktop =
+        defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.macOS;
+    if (!isDesktop) {
+      PoolDeepLink.dispose();
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final baseDark = ThemeData.dark(useMaterial3: false);
-    final baseLight = ThemeData.light(useMaterial3: false);
-
-    final darkTheme = baseDark.copyWith(
-      scaffoldBackgroundColor: Colors.black,
-      colorScheme: baseDark.colorScheme.copyWith(
-        primary: Colors.greenAccent,
-        secondary: Colors.greenAccent,
-      ),
-      appBarTheme: const AppBarTheme(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        titleTextStyle: TextStyle(
-          color: Colors.white,
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
+    // Construye los ThemeData en función del color custom elegido por el usuario.
+    // Si el color es `null` (nunca cambió), se usan los defaults históricos
+    // (gris claro / negro), por lo que la app se ve igual que antes.
+    ThemeData buildLight() {
+      final baseLight = ThemeData.light(useMaterial3: false);
+      final Color bg = CustomThemeService.resolveScaffoldBg(Brightness.light);
+      // Texto óptimo (negro o blanco) calculado por contraste WCAG sobre `bg`.
+      final Color onBg = CustomThemeService.textOn(bg);
+      return baseLight.copyWith(
+        scaffoldBackgroundColor: bg,
+        colorScheme: baseLight.colorScheme.copyWith(
+          primary: const Color(0xFF16A34A),
+          secondary: const Color(0xFF16A34A),
         ),
-      ),
-    );
-
-    final lightTheme = baseLight.copyWith(
-      scaffoldBackgroundColor: const Color(0xFFF4F7FB),
-      colorScheme: baseLight.colorScheme.copyWith(
-        primary: const Color(0xFF16A34A),
-        secondary: const Color(0xFF16A34A),
-      ),
-      appBarTheme: const AppBarTheme(
-        backgroundColor: Colors.white,
-        foregroundColor: Color(0xFF111827),
-        elevation: 0,
-        titleTextStyle: TextStyle(
-          color: Color(0xFF111827),
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
+        appBarTheme: AppBarTheme(
+          backgroundColor: bg,
+          foregroundColor: onBg,
+          elevation: 0,
+          titleTextStyle: TextStyle(
+            color: onBg,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
         ),
-      ),
-    );
+      );
+    }
 
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: ThemeModeService.mode,
-      builder: (context, mode, _) => MaterialApp(
+    ThemeData buildDark() {
+      final baseDark = ThemeData.dark(useMaterial3: false);
+      final Color bg = CustomThemeService.resolveScaffoldBg(Brightness.dark);
+      final Color onBg = CustomThemeService.textOn(bg);
+      return baseDark.copyWith(
+        scaffoldBackgroundColor: bg,
+        colorScheme: baseDark.colorScheme.copyWith(
+          primary: Colors.greenAccent,
+          secondary: Colors.greenAccent,
+        ),
+        appBarTheme: AppBarTheme(
+          backgroundColor: bg,
+          foregroundColor: onBg,
+          elevation: 0,
+          titleTextStyle: TextStyle(
+            color: onBg,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      );
+    }
+
+    // Combinamos ambos notifiers para reconstruir el MaterialApp cuando cambie
+    // el modo (light/dark/system) o el color custom elegido por el usuario.
+    return ListenableBuilder(
+      listenable: Listenable.merge(<Listenable>[
+        ThemeModeService.mode,
+        CustomThemeService.color,
+        CustomThemeService.mapFloatingChrome,
+        TextScaleService.factor,
+      ]),
+      builder: (context, _) {
+        final ThemeMode mode = ThemeModeService.mode.value;
+        final ThemeData lightTheme = buildLight();
+        final ThemeData darkTheme = buildDark();
+        return MaterialApp(
         title: kAppDisplayName,
         debugShowCheckedModeBanner: false,
         navigatorKey: NavigationService.navigatorKey,
@@ -402,10 +524,25 @@ class _RaiAppState extends State<RaiApp> {
                 isDark ? Brightness.light : Brightness.dark,
             systemNavigationBarContrastEnforced: true,
           );
+          // Aplica el factor de escala global de texto (tipo inDrive).
+          // Si el usuario nunca tocó nada, el factor es 1.0 y todo queda
+          // exactamente igual que antes. El clamp evita overflow en cards
+          // y botones existentes.
+          final MediaQueryData mq = MediaQuery.of(ctx);
+          final double userFactor = TextScaleService.factor.value;
+          final scaledMq = mq.copyWith(
+            textScaler: TextScaler.linear(userFactor).clamp(
+              minScaleFactor: TextScaleService.minFactor,
+              maxScaleFactor: TextScaleService.maxFactor,
+            ),
+          );
           return AnnotatedRegion<SystemUiOverlayStyle>(
             value: overlay,
             sized: false,
-            child: child ?? const SizedBox.shrink(),
+            child: MediaQuery(
+              data: scaledMq,
+              child: child ?? const SizedBox.shrink(),
+            ),
           );
         },
         localizationsDelegates: const [
@@ -470,7 +607,8 @@ class _RaiAppState extends State<RaiApp> {
           );
         },
         home: const AuthGatePublic(),
-      ),
+      );
+      },
     );
   }
 }
@@ -550,7 +688,10 @@ class _AuthGate extends StatelessWidget {
           return _raiSplashScaffold();
         }
         if (user == null) {
-          return const SeleccionUsuario();
+          final bool isDesktop =
+              defaultTargetPlatform == TargetPlatform.windows ||
+                  defaultTargetPlatform == TargetPlatform.macOS;
+          return isDesktop ? const LoginAdmin() : const SeleccionUsuario();
         }
 
         PushService.ensureInitedAndSaved();
@@ -621,6 +762,10 @@ Widget _buildGateForUsuarioData(
     rol = 'cliente';
   }
 
+  final bool isDesktop =
+      defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS;
+
   return FutureBuilder<bool>(
     future: LegalAcceptanceService.hasAccepted(user.uid),
     builder: (context, legalSnap) {
@@ -639,7 +784,12 @@ Widget _buildGateForUsuarioData(
         );
       }
 
-      if (rol == 'admin' || rol == 'administrador') {
+      final bool esAdmin = rol == 'admin' || rol == 'administrador';
+      if (isDesktop && !esAdmin) {
+        return const _DesktopNonAdminWall();
+      }
+
+      if (esAdmin) {
         return const AdminGate();
       }
 

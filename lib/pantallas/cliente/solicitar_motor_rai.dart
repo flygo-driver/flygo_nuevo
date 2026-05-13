@@ -18,8 +18,7 @@ import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
-import 'package:flygo_nuevo/servicios/gps_service.dart';
-import 'package:flygo_nuevo/servicios/permisos_service.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service.dart';
@@ -186,6 +185,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     _nudgeTimer?.cancel();
     _nudgeCtrl.dispose();
     _motorMapGestureEndDebounce?.cancel();
+    LocationPermissionService.stopGentleRetry();
     super.dispose();
   }
 
@@ -239,17 +239,38 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   Future<void> _initUbicacionParaMapa() async {
     setState(() => _cargandoUbicacion = true);
 
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
+    final basic = await LocationPermissionService.checkAndRequestBasicPermission();
+    if (!basic.serviceEnabled) {
+      if (mounted) {
+        setState(() => _cargandoUbicacion = false);
+        LocationPermissionService.startGentleRetry(() {
+          if (!mounted) return;
+          unawaited(_initUbicacionParaMapa());
+        });
+      }
+      return;
     }
-    if (perm == LocationPermission.deniedForever) {
+    if (basic.deniedForever) {
       setState(() {
         _locPermDeniedForever = true;
         _cargandoUbicacion = false;
       });
+      LocationPermissionService.startGentleRetry(() {
+        if (!mounted) return;
+        unawaited(_initUbicacionParaMapa());
+      });
       return;
     }
+    if (!basic.canUseLocation) {
+      setState(() => _cargandoUbicacion = false);
+      LocationPermissionService.startGentleRetry(() {
+        if (!mounted) return;
+        unawaited(_initUbicacionParaMapa());
+      });
+      return;
+    }
+
+    LocationPermissionService.stopGentleRetry();
 
     try {
       final pos = await Geolocator.getCurrentPosition(
@@ -566,16 +587,22 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     setState(() => _cargando = true);
     final int runId = _cotizacionSeq;
     try {
-      // ORIGEN: GPS
-      final ok = await PermisosService.ensureUbicacion(context);
-      if (!ok) return;
-
-      final posicion = await GpsService.obtenerUbicacionActual();
-      if (posicion == null) {
-        _snack("❌ No se pudo obtener ubicación GPS.");
+      final ready = await LocationPermissionService.ensureLocationReady(
+        context: context,
+      );
+      if (!ready.isUsable) {
+        _snack(LocationReadiness.kMsgEsperandoUbicacion);
+        setState(() => _cargando = false);
         return;
       }
+      if (mounted) {
+        await LocationPermissionService.maybePromptAlwaysForCriticalFlow(
+          context,
+          isTaxista: false,
+        );
+      }
 
+      final posicion = ready.position!;
       final origenLat = posicion.latitude;
       final origenLon = posicion.longitude;
 
@@ -1636,6 +1663,8 @@ class _MotoUberHeader extends StatelessWidget {
                 children: [
                   Text(
                     'Moto',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: on,
                       fontSize: 18,
@@ -1647,6 +1676,9 @@ class _MotoUberHeader extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     'Te recogen donde estás. En el mapa: pulsación larga para marcar destino.',
+                    maxLines: 5,
+                    softWrap: true,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: on.withValues(alpha: 0.52),
                       fontSize: 12,

@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 
 /// Muestra origen, destino, ventana y ganancia del viaje reservado / encolado (mismos campos existentes).
@@ -10,76 +11,130 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
 
   final String uidTaxista;
 
+  static int _slotOf(Map<String, dynamic> m) {
+    final s = m['slot'];
+    if (s is int) return s;
+    if (s is num) return s.toInt();
+    return 1;
+  }
+
+  static int _createdMs(Map<String, dynamic> m) {
+    final c = m['createdAt'];
+    if (c is Timestamp) return c.millisecondsSinceEpoch;
+    return 0;
+  }
+
+  static QueryDocumentSnapshot<Map<String, dynamic>>? _primerPendienteCola(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    if (docs.isEmpty) return null;
+    final copy = [...docs];
+    copy.sort((a, b) {
+      final ma = a.data();
+      final mb = b.data();
+      final sa = _slotOf(ma);
+      final sb = _slotOf(mb);
+      if (sa != sb) return sa.compareTo(sb);
+      return _createdMs(ma).compareTo(_createdMs(mb));
+    });
+    return copy.first;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (uidTaxista.isEmpty) return const SizedBox.shrink();
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('usuarios')
           .doc(uidTaxista)
+          .collection('cola_viajes')
+          .where('estado', isEqualTo: 'pendiente')
+          .limit(24)
           .snapshots(),
-      builder: (context, uSnap) {
-        if (!uSnap.hasData || !uSnap.data!.exists) {
-          return const SizedBox.shrink();
-        }
-        final ud = uSnap.data!.data() ?? {};
-        final sig = (ud['siguienteViajeId'] ?? '').toString();
-        final enc = (ud['viajeEncoladoId'] ?? '').toString();
-        final nextId = sig.isNotEmpty ? sig : enc;
-        if (nextId.isEmpty) return const SizedBox.shrink();
-
-        final bool reservaFormal = sig.isNotEmpty;
-
+      builder: (context, colaSnap) {
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('viajes')
-              .doc(nextId)
+              .collection('usuarios')
+              .doc(uidTaxista)
               .snapshots(),
-          builder: (context, vSnap) {
-            if (!vSnap.hasData || !vSnap.data!.exists) {
-              return _shell(
-                reservaFormal,
-                'Cargando próximo viaje…',
-                '',
-                '',
-                '',
-                '',
-              );
+          builder: (context, uSnap) {
+            if (!uSnap.hasData || !uSnap.data!.exists) {
+              return const SizedBox.shrink();
             }
-            final m = vSnap.data!.data() ?? {};
-            final origen = (m['origen'] ?? 'Origen').toString();
-            final destino = (m['destino'] ?? 'Destino').toString();
-            final g = m['gananciaTaxista'];
-            final p = m['precio'];
-            double ganancia = g is num ? g.toDouble() : 0.0;
-            final precio = p is num ? p.toDouble() : 0.0;
-            if (ganancia <= 0 && precio > 0) {
-              ganancia = precio * 0.80;
-            }
-            final ganTxt = FormatosMoneda.rd(ganancia > 0 ? ganancia : precio);
+            final ud = uSnap.data!.data() ?? {};
+            final sig = (ud['siguienteViajeId'] ?? '').toString();
+            final enc = (ud['viajeEncoladoId'] ?? '').toString();
 
-            DateTime? fh;
-            final ts = m['fechaHora'];
-            if (ts is Timestamp) fh = ts.toDate();
-            final sw = m['startWindowAt'];
-            if (fh == null && sw is Timestamp) fh = sw.toDate();
-            String ventana = '';
-            if (fh != null) {
-              ventana = DateFormat('dd/MM/yyyy · HH:mm').format(fh);
+            final pendCola = colaSnap.hasData
+                ? _primerPendienteCola(colaSnap.data!.docs)
+                : null;
+
+            final String nextId;
+            final bool reservaFormal;
+            if (pendCola != null) {
+              nextId = pendCola.id;
+              reservaFormal = _slotOf(pendCola.data()) == 0;
+            } else {
+              nextId = sig.isNotEmpty ? sig : enc;
+              reservaFormal = sig.isNotEmpty;
             }
 
-            final titulo = reservaFormal
-                ? 'Al terminar este viaje, tu siguiente recogida es:'
-                : 'Próximo en cola (se activa al finalizar el actual):';
+            if (nextId.isEmpty) return const SizedBox.shrink();
 
-            return _shell(
-              reservaFormal,
-              titulo,
-              origen,
-              destino,
-              ventana.isEmpty ? '' : 'Ventana: $ventana',
-              'Ganancia estimada: $ganTxt',
+            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('viajes')
+                  .doc(nextId)
+                  .snapshots(),
+              builder: (context, vSnap) {
+                if (!vSnap.hasData || !vSnap.data!.exists) {
+                  return _shell(
+                    reservaFormal,
+                    'Cargando próximo viaje…',
+                    '',
+                    '',
+                    '',
+                    '',
+                  );
+                }
+                final m = vSnap.data!.data() ?? {};
+                final origen = (m['origen'] ?? 'Origen').toString();
+                final destino = (m['destino'] ?? 'Destino').toString();
+                final g = m['gananciaTaxista'];
+                final p = m['precio'];
+                double ganancia = g is num ? g.toDouble() : 0.0;
+                final precio = p is num ? p.toDouble() : 0.0;
+                if (ganancia <= 0 && precio > 0) {
+                  ganancia =
+                      precio * (1.0 - PlataformaEconomia.factorComision);
+                }
+                final ganTxt =
+                    FormatosMoneda.rd(ganancia > 0 ? ganancia : precio);
+
+                DateTime? fh;
+                final ts = m['fechaHora'];
+                if (ts is Timestamp) fh = ts.toDate();
+                final sw = m['startWindowAt'];
+                if (fh == null && sw is Timestamp) fh = sw.toDate();
+                String ventana = '';
+                if (fh != null) {
+                  ventana = DateFormat('dd/MM/yyyy · HH:mm').format(fh);
+                }
+
+                final titulo = reservaFormal
+                    ? 'Al terminar este viaje, tu siguiente recogida es:'
+                    : 'Próximo en cola (se activa al finalizar el actual):';
+
+                return _shell(
+                  reservaFormal,
+                  titulo,
+                  origen,
+                  destino,
+                  ventana.isEmpty ? '' : 'Ventana: $ventana',
+                  'Ganancia estimada: $ganTxt',
+                );
+              },
             );
           },
         );

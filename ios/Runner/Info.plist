@@ -62,9 +62,14 @@
 		<key>NSPhotoLibraryAddUsageDescription</key>
 		<string>Usaremos la galería para guardar imágenes si lo autorizas.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
-		<string>Necesitamos tu ubicación para mostrar el mapa y calcular rutas.</string>
+		<string>RAI necesita tu ubicación para calcular tarifas y mostrarte vehículos cercanos.</string>
 		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-		<string>Necesitamos tu ubicación para mostrar el mapa y calcular rutas.</string>
+		<string>RAI necesita acceso a tu ubicación incluso en segundo plano para que el conductor te encuentre y la tarifa sea precisa.</string>
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>fetch</string>
+			<string>remote-notification</string>
+		</array>
 		<!-- Reemplaza con tu clave real de Maps SDK para iOS -->
 		<key>GMSApiKey</key>
 		<string>TU_API_KEY_DE_GOOGLE_MAPS</string>

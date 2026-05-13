@@ -1,8 +1,8 @@
 // lib/pantallas/admin/admin_tarifas.dart
 
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
+import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 
 import 'admin_ui_theme.dart';
 
@@ -14,7 +14,6 @@ class AdminTarifas extends StatefulWidget {
 }
 
 class _AdminTarifasState extends State<AdminTarifas> {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
   final _formKey = GlobalKey<FormState>();
 
   // Controladores para tarifas de vehículos normales
@@ -320,67 +319,48 @@ class _AdminTarifasState extends State<AdminTarifas> {
         },
       };
 
-      await _db
-          .collection('tarifas')
-          .doc('general')
-          .set(tarifasNormales, SetOptions(merge: true));
+      final motivo = await _pedirMotivo();
+      if (motivo == null) {
+        if (mounted) setState(() => _guardando = false);
+        return;
+      }
 
-      // ✅ Guardar tarifas de turismo en documentos separados (como espera el servicio)
-      final batch = _db.batch();
-
-      // Carro turismo
-      batch.set(
-        _db.collection('tarifa_turismo').doc('carro'),
-        {
+      final turismo = <String, dynamic>{
+        'carro': {
           'tarifaBase': double.parse(_turismoCarroBaseCtrl.text),
           'tarifaKm': double.parse(_turismoCarroPorKmCtrl.text),
           'precioMinimo': double.parse(_turismoCarroMinimoCtrl.text),
           'activo': true,
           'cobraPeaje': true,
         },
-        SetOptions(merge: true),
-      );
-
-      // Jeepeta turismo
-      batch.set(
-        _db.collection('tarifa_turismo').doc('jeepeta'),
-        {
+        'jeepeta': {
           'tarifaBase': double.parse(_turismoJeepetaBaseCtrl.text),
           'tarifaKm': double.parse(_turismoJeepetaPorKmCtrl.text),
           'precioMinimo': double.parse(_turismoJeepetaMinimoCtrl.text),
           'activo': true,
           'cobraPeaje': true,
         },
-        SetOptions(merge: true),
-      );
-
-      // Minivan turismo
-      batch.set(
-        _db.collection('tarifa_turismo').doc('minivan'),
-        {
+        'minivan': {
           'tarifaBase': double.parse(_turismoMinivanBaseCtrl.text),
           'tarifaKm': double.parse(_turismoMinivanPorKmCtrl.text),
           'precioMinimo': double.parse(_turismoMinivanMinimoCtrl.text),
           'activo': true,
           'cobraPeaje': true,
         },
-        SetOptions(merge: true),
-      );
-
-      // Bus turismo
-      batch.set(
-        _db.collection('tarifa_turismo').doc('bus'),
-        {
+        'bus': {
           'tarifaBase': double.parse(_turismoBusBaseCtrl.text),
           'tarifaKm': double.parse(_turismoBusPorKmCtrl.text),
           'precioMinimo': double.parse(_turismoBusMinimoCtrl.text),
           'activo': true,
           'cobraPeaje': true,
         },
-        SetOptions(merge: true),
-      );
+      };
 
-      await batch.commit();
+      await AdminConfigService.updateTarifasCriticas(
+        tarifasGeneral: tarifasNormales,
+        tarifaTurismo: turismo,
+        motivo: motivo,
+      );
 
       // Limpiar caché del servicio
       await TarifaServiceUnificado().recargar();
@@ -402,6 +382,36 @@ class _AdminTarifasState extends State<AdminTarifas> {
       );
     } finally {
       if (mounted) setState(() => _guardando = false);
+    }
+  }
+
+  Future<String?> _pedirMotivo() async {
+    final ctrl = TextEditingController();
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text('Motivo del cambio', style: TextStyle(color: AdminUi.onCard(ctx))),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: 'Ej: Ajuste por inflación / corrección de mínimo',
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Guardar')),
+          ],
+        ),
+      );
+      if (ok != true) return null;
+      final m = ctrl.text.trim();
+      if (m.length < 6) return null;
+      return m;
+    } finally {
+      ctrl.dispose();
     }
   }
 

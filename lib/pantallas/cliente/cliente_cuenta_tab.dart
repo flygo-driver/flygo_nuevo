@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
+import 'package:flygo_nuevo/pantallas/cliente/apariencia.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
 import 'package:flygo_nuevo/servicios/logout.dart';
@@ -165,6 +166,18 @@ class ClienteCuentaTab extends StatelessWidget {
                 onChanged: (v) => ThemeModeService.setMode(
                   v ? ThemeMode.light : ThemeMode.dark,
                 ),
+              );
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.color_lens_outlined, color: cs.primary),
+            title: const Text('Apariencia'),
+            subtitle: const Text('Color de fondo personalizado'),
+            trailing: Icon(Icons.chevron_right, color: cs.outline),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AparienciaScreen()),
               );
             },
           ),

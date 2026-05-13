@@ -1,9 +1,14 @@
 // lib/pantallas/chat/chat_screen.dart
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/utils/ux_log.dart';
 import '../../servicios/chat_repo.dart';
+import '../../servicios/mensajeria_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String otroUid;
@@ -17,6 +22,8 @@ class ChatScreen extends StatefulWidget {
     this.viajeId,
   });
 
+  static const int kMaxMensajeLen = 800;
+
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
@@ -24,14 +31,20 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   late final String miUid;
   late String chatId;
-  final _ctrl = TextEditingController();
+  final TextEditingController _ctrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
   bool _chatReady = false;
+  bool _sending = false;
+  int _lastDocCount = 0;
+
+  void _onCtrlChanged() => setState(() {});
 
   @override
   void initState() {
     super.initState();
     final curr = FirebaseAuth.instance.currentUser;
     miUid = curr?.uid ?? '';
+    _ctrl.addListener(_onCtrlChanged);
     _prepare();
   }
 
@@ -47,7 +60,11 @@ class _ChatScreenState extends State<ChatScreen> {
         chatId = cid;
         _chatReady = true;
       });
-    } catch (e) {
+    } catch (e, st) {
+      uxLog('CHAT', 'prepare falló', e);
+      if (kDebugMode) {
+        debugPrintStack(stackTrace: st);
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo preparar el chat: $e')),
@@ -58,12 +75,31 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _ctrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _send() async {
+    if (_sending) return;
     final t = _ctrl.text.trim();
-    if (t.isEmpty) return;
+    if (t.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Escribe un mensaje antes de enviar')),
+      );
+      return;
+    }
+    if (t.length > ChatScreen.kMaxMensajeLen) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Mensaje demasiado largo (máx. 800 caracteres).',
+          ),
+        ),
+      );
+      return;
+    }
     if (!_chatReady) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -71,15 +107,34 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       return;
     }
+    setState(() => _sending = true);
     _ctrl.clear();
     try {
-      await ChatRepo.enviar(chatId: chatId, deUid: miUid, texto: t);
-    } catch (e) {
+      await MensajeriaService.enviarMensajeViaje(
+        viajeId: chatId,
+        deUid: miUid,
+        texto: t,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Mensaje enviado'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e, st) {
+      uxLog('CHAT', 'enviar falló', e);
+      if (kDebugMode) {
+        debugPrintStack(stackTrace: st);
+      }
       if (!mounted) return;
       _ctrl.text = t;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo enviar: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _sending = false);
     }
   }
 
@@ -160,6 +215,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       }
                       if (snap.hasError) {
                         final msg = snap.error.toString();
+                        uxLog('CHAT', 'stream mensajes error', snap.error);
                         return Center(
                           child: Padding(
                             padding: const EdgeInsets.all(16),
@@ -175,6 +231,23 @@ class _ChatScreenState extends State<ChatScreen> {
                         return const SizedBox.shrink();
                       }
                       final docs = snap.data!.docs;
+                      final int n = docs.length;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (!mounted) return;
+                        if (n > _lastDocCount &&
+                            _lastDocCount > 0 &&
+                            _scrollCtrl.hasClients &&
+                            _scrollCtrl.offset < 120) {
+                          unawaited(
+                            _scrollCtrl.animateTo(
+                              0,
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOut,
+                            ),
+                          );
+                        }
+                        _lastDocCount = n;
+                      });
                       if (docs.isEmpty) {
                         return Center(
                           child: Text(
@@ -184,6 +257,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         );
                       }
                       return ListView.builder(
+                        controller: _scrollCtrl,
                         reverse: true,
                         itemCount: docs.length,
                         itemBuilder: (_, i) {
@@ -203,6 +277,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _ctrl,
+                      enabled: !_sending,
+                      maxLength: ChatScreen.kMaxMensajeLen,
+                      buildCounter: (
+                        context, {
+                        required int currentLength,
+                        required bool isFocused,
+                        required int? maxLength,
+                      }) =>
+                          const SizedBox.shrink(),
                       style: TextStyle(color: cs.onSurface),
                       decoration: InputDecoration(
                         hintText: 'Escribe un mensaje…',
@@ -224,15 +307,34 @@ class _ChatScreenState extends State<ChatScreen> {
                           borderSide: BorderSide(color: cs.primary, width: 2),
                         ),
                       ),
-                      onSubmitted: (_) => _send(),
+                      onSubmitted: (_) {
+                        if (!_sending &&
+                            _ctrl.text.trim().isNotEmpty) {
+                          unawaited(_send());
+                        }
+                      },
                       textInputAction: TextInputAction.send,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton.filledTonal(
-                    onPressed: _send,
-                    icon: Icon(Icons.send, color: cs.primary),
-                  ),
+                  _sending
+                      ? Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: cs.primary,
+                            ),
+                          ),
+                        )
+                      : IconButton.filledTonal(
+                          onPressed: (_sending || _ctrl.text.trim().isEmpty)
+                              ? null
+                              : () => unawaited(_send()),
+                          icon: Icon(Icons.send, color: cs.primary),
+                        ),
                 ],
               ),
             ),

@@ -19,6 +19,9 @@ class NotificationService {
   NotificationService._();
   static final NotificationService I = NotificationService._();
 
+  /// Tap en notificación local (p. ej. chat FCM en foreground). La asigna [FcmService].
+  static void Function(String? payload)? notificationTapPayloadHandler;
+
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   bool _inited = false;
@@ -53,6 +56,9 @@ class NotificationService {
 
       await _plugin.initialize(
         const InitializationSettings(android: initAndroid, iOS: initDarwin),
+        onDidReceiveNotificationResponse: (NotificationResponse response) {
+          notificationTapPayloadHandler?.call(response.payload);
+        },
       );
 
       // Canal Android 8+ (con sonido personalizado) - ACTUALIZADO
@@ -121,6 +127,53 @@ class NotificationService {
     try {
       await _timbrePlayer?.stop();
     } catch (_) {}
+  }
+
+  /// Notificación local para mensajes / avisos de contacto del viaje (FCM data).
+  Future<void> showTripCommsLocal({
+    required String title,
+    required String body,
+    required String payload,
+  }) async {
+    await ensureInited();
+    try {
+      const darwinDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+      final androidDetailsBody = AndroidNotificationDetails(
+        'rai_driver_notifications',
+        'RAI Driver',
+        channelDescription: 'Mensajes y avisos del viaje en curso',
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        sound: const RawResourceAndroidNotificationSound(_rawSound),
+        enableVibration: true,
+        styleInformation: BigTextStyleInformation(
+          body,
+          contentTitle: title,
+          summaryText: 'RAI',
+        ),
+      );
+      final details = NotificationDetails(
+        android: androidDetailsBody,
+        iOS: darwinDetails,
+      );
+      final int notifId = payload.hashCode & 0x3fffffff;
+      debugPrint('[FCM] showTripCommsLocal id=$notifId');
+      await _plugin.show(
+        notifId,
+        title,
+        body,
+        details,
+        payload: payload,
+      );
+    } catch (e, st) {
+      debugPrint('showTripCommsLocal: $e');
+      debugPrint(st.toString());
+    }
   }
 
   /// Timbre inmediato para el pool con la pantalla abierta: **no** usa el dedupe

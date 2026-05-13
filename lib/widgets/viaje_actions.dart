@@ -182,10 +182,12 @@ class ViajeActionBarTaxista extends StatelessWidget {
       acciones.add(
         _ActionButton(
           loading: _loading,
-          run: () => ViajesRepo.completarViajePorTaxista(
-            viajeId: viajeId,
-            uidTaxista: uidTaxista,
-          ),
+          run: () async {
+            await ViajesRepo.completarViajePorTaxista(
+              viajeId,
+              uidTaxista: uidTaxista,
+            );
+          },
           okMsg: 'Viaje completado',
           failMsg: 'No se pudo completar',
           child: const Text('Completar viaje'),

@@ -29,8 +29,10 @@ service cloud.firestore {
         : "";
     }
 
+    /// Transitorio: acepta "administrador" hasta migrar datos a canon "admin".
     function isAdmin() {
-      return isAuth() && (myRole() == "admin");
+      return isAuth() &&
+        (myRole() == "admin" || myRole() == "administrador");
     }
 
     function isTaxista() {
@@ -73,6 +75,70 @@ service cloud.firestore {
 
     function changedOnly(allowed) {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly(allowed);
+    }
+
+    // Campos de cierre financiero / pago que no deben ser mutables por cliente-taxista.
+    function viajeCamposFinancierosProtegidos() {
+      return [
+        "payment",
+        "pagoRegistrado",
+        "transferenciaConfirmada",
+        "pagoATaxistaPendiente",
+        "pagoTaxistaPendiente",
+        "liquidado",
+        "pagoDetalle",
+        "settlement",
+        "precio_cents",
+        "comision_cents",
+        "ganancia_cents",
+        "precio",
+        "total",
+        "comision",
+        "comisionFlygo",
+        "gananciaTaxista",
+        "comisionCalculada",
+        "comisionCalculadaEn",
+        "estadoPago",
+        "confirmacionTransferencia"
+      ];
+    }
+
+    // En CREATE cliente permitimos tarifa base (precio/precio_cents) y flags iniciales
+    // de pago acordes con ViajesRepo.crearViajePendiente (estadoPago=pendiente, etc.).
+    // No se permiten liquidación, comisión calculada ni objetos payment/settlement.
+    function viajeCamposFinancierosProtegidosEnCreateCliente() {
+      return [
+        "payment",
+        "pagoRegistrado",
+        "liquidado",
+        "pagoDetalle",
+        "settlement",
+        "comision_cents",
+        "ganancia_cents",
+        "comision",
+        "comisionFlygo",
+        "gananciaTaxista",
+        "comisionCalculada",
+        "comisionCalculadaEn",
+        "confirmacionTransferencia"
+      ];
+    }
+
+    /// Solo valores iniciales benignos; el backend/callables mutan estadoPago y transferencias.
+    function viajeCreateClienteFlagsPagoInicialesOk() {
+      return (!request.resource.data.keys().hasAny(["estadoPago"]) ||
+          request.resource.data.estadoPago == "pendiente") &&
+        (!request.resource.data.keys().hasAny(["transferenciaConfirmada"]) ||
+          request.resource.data.transferenciaConfirmada == false) &&
+        (!request.resource.data.keys().hasAny(["pagoATaxistaPendiente"]) ||
+          request.resource.data.pagoATaxistaPendiente == false) &&
+        (!request.resource.data.keys().hasAny(["pagoTaxistaPendiente"]) ||
+          request.resource.data.pagoTaxistaPendiente == false);
+    }
+
+    function viajeNoTocaCamposFinancierosProtegidos() {
+      return !request.resource.data.diff(resource.data).changedKeys()
+        .hasAny(viajeCamposFinancierosProtegidos());
     }
 
     // Bola pueblo: cierre y comisión solo tras en_curso + código verificado (anti-fraude).
@@ -213,7 +279,8 @@ service cloud.firestore {
           "updatedAt", "actualizadoEn",
           "pushToken", "notificaciones",
           "aceptacionTerminos",
-          "phoneVerified", "lastPhoneReauthAt"
+          "phoneVerified", "lastPhoneReauthAt",
+          "girasCreadasUltimoMes", "girasCanceladasAntesDeIniciar", "ultimoReinicioContadorGiras"
         ]);
       // Completar rol vacío al primer login (p. ej. Google); no permite cambiar a admin.
       allow update: if isOwner(uid) &&
@@ -234,6 +301,12 @@ service cloud.firestore {
         ]);
       allow update: if isAdmin();
       allow delete: if isAdmin();
+
+      /// Cola de promoción del taxista: solo lectura en cliente; escritura vía Admin SDK (callable).
+      match /cola_viajes/{cid} {
+        allow read: if isAuth() && (request.auth.uid == uid || isAdmin());
+        allow create, update, delete: if false;
+      }
     }
 
     match /viajes/{viajeId} {
@@ -274,9 +347,16 @@ service cloud.firestore {
         request.resource.data.uidCliente == request.auth.uid &&
         request.resource.data.clienteId == request.auth.uid &&
         request.resource.data.uidTaxista == "" &&
-        request.resource.data.taxistaId == "";
+        request.resource.data.taxistaId == "" &&
+        viajeCreateClienteFlagsPagoInicialesOk() &&
+        // Creación cliente: sin cerrar finanzas ni validar pagos.
+        !request.resource.data.keys().hasAny(viajeCamposFinancierosProtegidosEnCreateCliente()) &&
+        !request.resource.data.keys().hasAny([
+          "settlement",
+          "pagoDetalle"
+        ]);
 
-      allow update: if isAdmin() ||
+      allow update: if (isAdmin() && viajeNoTocaCamposFinancierosProtegidos()) ||
         (
           // CLAIM explícito y tolerante para viajes legacy del pool
           isTaxista() &&
@@ -291,13 +371,19 @@ service cloud.firestore {
         ) ||
         (
           esDuenoClienteDelViaje() &&
+          viajeNoTocaCamposFinancierosProtegidos() &&
           changedOnly([
             "estado", "aceptado", "rechazado", "activo",
             "uidTaxista", "taxistaId", "nombreTaxista",
             "telefono", "placa", "marca", "modelo", "color",
+            "comprobanteTransferenciaUrl",
+            "transferenciaReportadaEn",
+            "motivoRechazoTransferencia",
             "canceladoPor", "motivoCancelacion", "canceladoClienteEn",
             "updatedAt", "actualizadoEn"
           ]) &&
+          // Cliente no puede forzar en_curso ni cerrar viaje desde app.
+          !(request.resource.data.estado in ["en_curso", "encurso", "completado"]) &&
           !(clienteIntentaMarcarCancelado() && viajeTrasAbordarOEnRuta())
         ) ||
         (
@@ -326,25 +412,26 @@ service cloud.firestore {
             (
               (resource.data.uidTaxista == request.auth.uid || resource.data.taxistaId == request.auth.uid)
               &&
+              viajeNoTocaCamposFinancierosProtegidos() &&
               changedOnly([
                 "estado", "aceptado", "rechazado", "activo",
                 "updatedAt", "actualizadoEn",
                 "latTaxista", "lonTaxista", "driverLat", "driverLon",
                 "pickupConfirmadoEn", "inicioEnRutaEn", "viajeIniciadoEn", "finalizadoEn",
-                "codigoVerificado",
                 "clienteAbordo", "clienteAbordoEn",
                 "canceladoPor", "canceladoTaxistaEn", "motivoCancelacion",
                 "uidTaxista", "taxistaId", "nombreTaxista",
                 "telefono", "placa", "marca", "modelo", "color",
                 "reservadoPor", "reservadoHasta", "ignoradosPor",
-                "republicado", "completado",
-                "metodoPago", "payment", "pagoRegistrado",
-                "transferenciaConfirmada", "pagoATaxistaPendiente", "liquidado",
-                "pagoDetalle", "settlement",
-                "precio_cents", "comision_cents", "ganancia_cents",
-                "precio", "total", "comision", "comisionFlygo", "gananciaTaxista",
-                "comisionCalculada", "comisionCalculadaEn"
+                "republicado", "completado"
               ])
+              &&
+              // En curso solo si ya estaba verificado por backend (callable).
+              (!(request.resource.data.estado in ["en_curso", "encurso"]) ||
+                resource.data.codigoVerificado == true)
+              &&
+              request.resource.data.estado != "completado" &&
+              request.resource.data.completado != true
               &&
               !(viajeTrasAbordarOEnRuta() && taxistaIntentaRepublicarPendiente())
             )
@@ -389,6 +476,8 @@ service cloud.firestore {
         isOwner(uidTaxista) && isTaxista() &&
         changedOnly([
           "comisionPendiente", "saldoPrepagoComisionRd", "primerViajeComisionGratisConsumido",
+          "saldoReservadoParaGiras", "comisionesDescontadas",
+          "ultimaComisionGiraPoolId", "ultimaComisionGiraRd",
           "saldoAcumulado",
           "ultimoViajeId", "ultimaComisionCents", "ultimaGananciaCents",
           "ultimaBolaFinalizadaId", "ultimaComisionBolaRd",
@@ -475,18 +564,49 @@ service cloud.firestore {
     match /config/{docId} {
       // Clientes/taxistas/admin deben poder leer promociones activas
       allow read: if isAuth();
-      // Solo admin puede crear/editar configuración
-      allow create, update, delete: if isAdmin();
+      // Solo admin puede crear/editar configuración (por defecto).
+      // Para configuraciones críticas, preferimos actualización vía Cloud Functions + historial.
+      allow create, update, delete: if isAdmin() &&
+        docId != "comision_prepago" &&
+        docId != "comision" &&
+        docId != "promo_3x1" &&
+        docId != "promociones";
+    }
+
+    // Porcentaje global de comisión viaje efectivo (solo callable admin + Admin SDK).
+    match /config/comision {
+      allow read: if isAuth();
+      allow create, update, delete: if false;
+    }
+
+    // Configuración crítica: comisiones prepago (solo vía Cloud Functions; el cliente solo lee).
+    match /config/comision_prepago {
+      allow read: if isAuth();
+      allow create, update, delete: if false;
     }
 
     // Tarifas generales (usadas por cálculo de precio en app)
     match /tarifas/{docId} {
       allow read: if isAuth();
-      allow create, update, delete: if isAdmin();
+      // Crítico: evitar cambios directos desde cliente; usar callable admin con historial.
+      allow create, update, delete: if false;
     }
 
     // Tarifario de turismo por tipo de vehículo
     match /tarifa_turismo/{docId} {
+      allow read: if isAuth();
+      // Crítico: evitar cambios directos desde cliente; usar callable admin con historial.
+      allow create, update, delete: if false;
+    }
+
+    // Historial inmutable de cambios críticos (solo lectura admin).
+    match /configuraciones_historial/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Parámetros globales (ej. comisión gira); solo admin escribe.
+    match /configuracion_globals/{docId} {
       allow read: if isAuth();
       allow create, update, delete: if isAdmin();
     }
@@ -513,7 +633,16 @@ service cloud.firestore {
           "depositPct", "feePct", "estado", "taxistaNombre",
           "asientosReservados", "asientosPagados",
           "montoReservado", "montoPagado",
-          "updatedAt", "confirmadoAt", "canceladoAt"
+          "updatedAt", "confirmadoAt", "canceladoAt",
+          "canceladoPorPagoSemanal", "estadoPrevioPorPagoSemanal", "canceladoPorPagoSemanalEn",
+          "motivoCancelacion",
+          "comisionGiraEstimadaRd", "comisionGiraPctUsado", "prepagoComisionEtapa",
+          "comisionGiraRealRd", "comisionGiraExcesoDevueltoRd", "asientosRealesComision",
+          "asientosConfirmadosPorDueno", "asientosFirmesSalida",
+          "iniciadoAt", "finalizadoAt", "totalGira",
+          "montoComision", "montoComisionTotal", "montoComisionCobradaPrepago",
+          "montoComisionPendienteAdmin", "montoNetoTaxista", "liquidado",
+          "comisionPendientePagoAdmin", "comisionEstado", "comisionMetodoPago", "comisionPctAplicada"
         ])
       );
 
@@ -540,6 +669,13 @@ service cloud.firestore {
 
         allow delete: if isAdmin();
       }
+    }
+
+    // Ledger comisiones giras: solo Cloud Functions / admin (evita manipulación desde cliente).
+    match /ledger_giras/{entryId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidTaxista == request.auth.uid);
+      allow create, update, delete: if false;
     }
 
     // Chat del viaje: doc id == viajeId (ViajesRepo / ChatRepo)
@@ -736,6 +872,17 @@ service cloud.firestore {
         allow create: if bolaPuedeChatMensajes(bolaId) && bolaMensajeCreateOk();
         allow update, delete: if false;
       }
+    }
+
+    // Gestión de incidencias (soporte): solo administración.
+    match /incidencias/{incidenciaId} {
+      allow read, create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Auditoría administrativa: solo Cloud Functions (Admin SDK). Clientes nunca leen/escriben.
+    match /admin_audit/{docId} {
+      allow read, write: if false;
     }
 
     match /{document=**} {

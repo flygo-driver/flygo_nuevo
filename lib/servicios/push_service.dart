@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/servicios/fcm_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
 class PushService {
@@ -18,16 +19,26 @@ class PushService {
 
   static bool _openHandlersBound = false;
 
+  /// En Windows, `firebase_messaging` puede venir sin implementación completa
+  /// (MissingPluginException en métodos como `getInitialMessage`).
+  /// Para administración desde PC, evitamos llamadas a FCM y nos mantenemos en
+  /// Firestore/Auth.
+  static bool get _messagingSupported {
+    if (kIsWeb) return false;
+    if (Platform.isWindows) return false;
+    return true;
+  }
+
   /// Abre [ViajeEnCursoCliente] al tocar la push de viaje programado en pool.
   static void registerNotificationOpenHandlers() {
-    if (kIsWeb || _openHandlersBound) return;
+    if (!_messagingSupported || _openHandlersBound) return;
     _openHandlersBound = true;
     FirebaseMessaging.onMessageOpenedApp.listen(_handleOpenedRemoteMessage);
   }
 
   /// Arranque en frío: notificación que abrió la app.
   static Future<void> consumeInitialNotificationIfAny() async {
-    if (kIsWeb) return;
+    if (!_messagingSupported) return;
     final RemoteMessage? initial = await _fm.getInitialMessage();
     if (initial != null) {
       await _handleOpenedRemoteMessage(initial);
@@ -37,6 +48,11 @@ class PushService {
   static Future<void> _handleOpenedRemoteMessage(RemoteMessage message) async {
     final data = message.data;
     final String type = (data['type'] ?? '').toString();
+    if (type == 'trip_chat_message' || type == 'trip_call_attempt') {
+      debugPrint('[FCM] opened app: trip comms type=$type');
+      await FcmService.handleRemoteOpen(message);
+      return;
+    }
     if (type != 'scheduled_trip_pool_open') return;
 
     final String viajeId = (data['viajeId'] ?? '').toString().trim();
@@ -82,6 +98,7 @@ class PushService {
 
   /// Llamar al arrancar (si hay sesión) y justo después de iniciar sesión.
   static Future<void> initAndRegisterToken() async {
+    if (!_messagingSupported) return;
     // Permisos/presentación (Android/iOS)
     if (!kIsWeb) {
       await _requestPermissionsMobile();
@@ -112,6 +129,7 @@ class PushService {
 
   /// Quita el token actual del usuario (logout).
   static Future<void> removeCurrentToken() async {
+    if (!_messagingSupported) return;
     final u = _auth.currentUser;
     if (u == null) return;
     final t = await _fm.getToken();
@@ -147,5 +165,17 @@ class PushService {
       'platform': kIsWeb ? 'web' : Platform.operatingSystem,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    try {
+      await _db.collection('usuarios').doc(uid).set(
+        {
+          'pushToken': token,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      debugPrint('[FCM] pushToken guardado en usuarios/$uid (merge)');
+    } catch (e) {
+      debugPrint('[FCM] usuarios pushToken skip: $e');
+    }
   }
 }

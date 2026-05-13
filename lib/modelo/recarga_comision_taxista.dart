@@ -8,6 +8,8 @@ class RecargaComisionTaxista {
   final double comisionPendienteAlEnviar;
   final double saldoPrepagoAlEnviar;
   final double montoDeclaradoRd;
+  final double? montoElegidoRd;
+  final String? paqueteRecarga;
   final String comprobanteUrl;
   final String metodoPago;
   final String estado;
@@ -21,6 +23,8 @@ class RecargaComisionTaxista {
     required this.comisionPendienteAlEnviar,
     required this.saldoPrepagoAlEnviar,
     required this.montoDeclaradoRd,
+    this.montoElegidoRd,
+    this.paqueteRecarga,
     required this.comprobanteUrl,
     required this.metodoPago,
     required this.estado,
@@ -39,6 +43,9 @@ class RecargaComisionTaxista {
       comisionPendienteAlEnviar: _asDouble(m['comisionPendienteAlEnviar']),
       saldoPrepagoAlEnviar: _asDouble(m['saldoPrepagoAlEnviar']),
       montoDeclaradoRd: _asDouble(m['montoDeclaradoRd']),
+      montoElegidoRd:
+          m['montoElegidoRd'] == null ? null : _asDouble(m['montoElegidoRd']),
+      paqueteRecarga: m['paqueteRecarga']?.toString(),
       comprobanteUrl: (m['comprobanteUrl'] ?? '').toString(),
       metodoPago: (m['metodoPago'] ?? 'transferencia').toString(),
       estado: (m['estado'] ?? '').toString(),

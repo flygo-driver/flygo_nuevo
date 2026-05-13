@@ -8,6 +8,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/widgets/auto_trip_router.dart';
 
 class TurismoRaiPage extends StatefulWidget {
@@ -90,12 +91,25 @@ class _TurismoRaiPageState extends State<TurismoRaiPage> {
       _permisoNegadoForever = false;
     });
 
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
+    final ({bool serviceEnabled, LocationPermission permission}) snap =
+        await GpsService.checkServiceThenRequestPermissionIfNeeded();
+    if (!mounted) return;
+
+    if (!snap.serviceEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Activa la ubicación del teléfono (GPS).'),
+          action: SnackBarAction(
+            label: 'Ubicación',
+            onPressed: () => unawaited(GpsService.openLocationSettings()),
+          ),
+        ),
+      );
+      setState(() => _cargandoUbicacion = false);
+      return;
     }
 
-    if (!mounted) return;
+    final LocationPermission perm = snap.permission;
 
     if (perm == LocationPermission.deniedForever) {
       setState(() {

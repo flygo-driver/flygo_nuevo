@@ -112,7 +112,7 @@ class _TaxistaTripRouterState extends State<TaxistaTripRouter> {
       if (!mounted || _navegando) return;
       if (snap.docs.isEmpty) return;
       final v = snap.docs.first.data();
-      if (ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(v)) return;
+      if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(v)) return;
       _goOnce(() async {
         await Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
@@ -200,7 +200,7 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
         if (!vsnap.exists) return;
 
         final v = vsnap.data() as Map<String, dynamic>;
-        if (ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(v)) return;
+        if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(v)) return;
         if (_clienteDebeEntrarViajeEnCurso(v)) {
           _goOnce(() async {
             await Navigator.of(context, rootNavigator: true)
@@ -245,7 +245,7 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
       if (!mounted || _navegando) return;
       if (snap.docs.isEmpty) return;
       final v = snap.docs.first.data();
-      if (ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(v)) return;
+      if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(v)) return;
       if (!_clienteDebeEntrarViajeEnCurso(v)) return;
       _goOnce(() async {
         await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(

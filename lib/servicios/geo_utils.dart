@@ -1,17 +1,15 @@
 import 'dart:math' as math;
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 
 Future<Position> getPositionConPermiso() async {
-  final enabled = await Geolocator.isLocationServiceEnabled();
-  if (!enabled) {
+  final snap = await GpsService.checkServiceThenRequestPermissionIfNeeded();
+  if (!snap.serviceEnabled) {
     throw Exception('Activa el GPS.');
   }
 
-  var perm = await Geolocator.checkPermission();
-  if (perm == LocationPermission.denied) {
-    perm = await Geolocator.requestPermission();
-  }
+  final perm = snap.permission;
   if (perm == LocationPermission.denied ||
       perm == LocationPermission.deniedForever) {
     throw Exception('Permiso de ubicación denegado.');

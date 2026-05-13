@@ -37,7 +37,7 @@ class TaxistaTrabajoHub extends StatelessWidget {
     Map<String, dynamic>? datosViaje,
   }) {
     if (datosViaje != null &&
-        ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(datosViaje)) {
+        ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(datosViaje)) {
       final bid = (datosViaje['bolaPuebloId'] ?? datosViaje['bolaId'] ?? '')
           .toString()
           .trim();

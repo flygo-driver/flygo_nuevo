@@ -22,6 +22,8 @@ import 'package:flygo_nuevo/pantallas/admin/revision_documentos_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/gestionar_usuarios_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/reportes_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_tarifas.dart';
+import 'package:flygo_nuevo/pantallas/admin/configuracion_viaje_comision_admin.dart';
+import 'package:flygo_nuevo/pantallas/admin/incidencias_admin.dart';
 
 class AdminDrawer extends StatelessWidget {
   const AdminDrawer({super.key});
@@ -109,6 +111,13 @@ class AdminDrawer extends StatelessWidget {
               onTap: () => _push(context, const VerificarPagos()),
             ),
             ListTile(
+              leading: Icon(Icons.percent, color: iconNeutral),
+              title: Text('Comisión viaje (efectivo)',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('% global Firestore', style: subtleStyle),
+              onTap: () => _push(context, const ConfiguracionViajeComisionAdmin()),
+            ),
+            ListTile(
               leading: Icon(Icons.attach_money, color: iconNeutral),
               title: Text('Tarifas',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
@@ -137,6 +146,13 @@ class AdminDrawer extends StatelessWidget {
               title: Text('Reportes y Estadísticas',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const ReportesAdmin()),
+            ),
+            ListTile(
+              leading: Icon(Icons.support_agent, color: iconNeutral),
+              title: Text('Gestión de incidencias',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Soporte operativo', style: subtleStyle),
+              onTap: () => _push(context, const IncidenciasAdminPage()),
             ),
             ListTile(
               leading: Icon(Icons.history,

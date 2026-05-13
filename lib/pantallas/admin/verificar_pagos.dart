@@ -896,6 +896,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
                             const SizedBox(height: 6),
                             Text(
                               'Declarado: ${formatter.format(r.montoDeclaradoRd)} · '
+                              '${r.montoElegidoRd != null ? 'Elegido: ${formatter.format(r.montoElegidoRd)} · ' : ''}'
                               'Saldo prepago al enviar: ${formatter.format(r.saldoPrepagoAlEnviar)} · '
                               'Legacy pend. al enviar: ${formatter.format(r.comisionPendienteAlEnviar)}',
                               style: TextStyle(
@@ -1491,7 +1492,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
     final stream = fs.FirebaseFirestore.instance
         .collection('viajes')
         .where('metodoPago', isEqualTo: 'Transferencia')
-        .where('estado', isEqualTo: 'pendiente_confirmacion')
+        .where('estadoPago', isEqualTo: 'pagado')
         .where('transferenciaConfirmada', isEqualTo: false)
         .snapshots();
 
@@ -1701,7 +1702,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
     final stream = fs.FirebaseFirestore.instance
         .collection('viajes')
         .where('metodoPago', isEqualTo: 'Transferencia')
-        .where('transferenciaConfirmada', isEqualTo: true)
+        .where('estadoPago', isEqualTo: 'verificado')
         .snapshots();
 
     return StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(

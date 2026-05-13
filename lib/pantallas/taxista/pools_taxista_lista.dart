@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:share_plus/share_plus.dart';
@@ -237,18 +240,43 @@ Contactanos por esta via para mas informacion y confirmacion.
     final messenger = ScaffoldMessenger.of(context);
     try {
       if (action == 'iniciar') {
-        await PoolRepo.iniciarViajePoolSeguro(poolId: poolId);
+        final r = await PoolRepo.iniciarViajePoolSeguro(poolId: poolId);
+        if (r['legacy'] != true) {
+          final cr = (r['comisionReal'] as num?)?.toDouble();
+          final ar = (r['asientosReales'] as num?)?.toInt() ?? 0;
+          if (cr != null) {
+            unawaited(AnalyticsRai.logGiraStarted(
+              asientosReales: ar,
+              comisionReal: cr,
+            ));
+          }
+        }
         messenger.showSnackBar(
           const SnackBar(content: Text('Viaje iniciado')),
         );
       } else if (action == 'finalizar') {
-        await PoolRepo.finalizarViajePoolSeguro(poolId: poolId);
+        final r = await PoolRepo.finalizarViajePoolSeguro(poolId: poolId);
+        if (r['refundedAsCancel'] == true) {
+          final dev = (r['comisionDevuelta'] as num?)?.toDouble() ?? 0;
+          unawaited(AnalyticsRai.logGiraCanceled(
+            motivo: 'finalize_sin_inicio',
+            comisionDevuelta: dev,
+          ));
+        } else {
+          unawaited(AnalyticsRai.logGiraCompleted());
+        }
         messenger.showSnackBar(
           const SnackBar(content: Text('Viaje finalizado')),
         );
       } else if (action == 'cancelar') {
-        await PoolRepo.cancelarViajePoolSeguro(
-            poolId: poolId, motivo: 'Cancelado por chofer');
+        const motivo = 'Cancelado por chofer';
+        final r = await PoolRepo.cancelarViajePoolSeguro(
+            poolId: poolId, motivo: motivo);
+        final dev = (r['comisionDevuelta'] as num?)?.toDouble() ?? 0;
+        unawaited(AnalyticsRai.logGiraCanceled(
+          motivo: motivo,
+          comisionDevuelta: dev,
+        ));
         messenger.showSnackBar(
           const SnackBar(content: Text('Viaje cancelado')),
         );

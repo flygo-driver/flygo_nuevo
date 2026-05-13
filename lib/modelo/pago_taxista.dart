@@ -21,6 +21,7 @@ class PagoTaxista {
   final DateTime? verificadoEn;
   final String? notaAdmin;
   final int viajesSemana; // Cantidad de viajes en la semana
+  final List<String> viajesLiquidados; // IDs de viajes incluidos en la liquidación
 
   PagoTaxista({
     required this.id,
@@ -40,6 +41,7 @@ class PagoTaxista {
     this.verificadoEn,
     this.notaAdmin,
     required this.viajesSemana,
+    this.viajesLiquidados = const <String>[],
   });
 
   factory PagoTaxista.fromMap(String id, Map<String, dynamic> map) {
@@ -62,6 +64,10 @@ class PagoTaxista {
       verificadoEn: (map['verificadoEn'] as Timestamp?)?.toDate(),
       notaAdmin: map['notaAdmin'],
       viajesSemana: map['viajesSemana'] ?? 0,
+      viajesLiquidados: ((map['viajesLiquidados'] as List<dynamic>?) ?? const <dynamic>[])
+          .map((e) => e.toString())
+          .where((e) => e.trim().isNotEmpty)
+          .toList(growable: false),
     );
   }
 
@@ -84,6 +90,7 @@ class PagoTaxista {
           verificadoEn != null ? Timestamp.fromDate(verificadoEn!) : null,
       'notaAdmin': notaAdmin,
       'viajesSemana': viajesSemana,
+      'viajesLiquidados': viajesLiquidados,
       'updatedAt': FieldValue.serverTimestamp(),
     };
   }

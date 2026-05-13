@@ -293,6 +293,9 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                       children: [
                         Text(
                           esProgramado ? 'Programado para' : 'Para ahora',
+                          maxLines: 2,
+                          softWrap: true,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                               color: Colors.white70, fontSize: 12),
                         ),
@@ -300,15 +303,24 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                         Text(
                           DateFormat('EEE d MMM, HH:mm', 'es')
                               .format(_fechaHora),
+                          maxLines: 2,
+                          softWrap: true,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                               color: Colors.white, fontSize: 16),
                         ),
                       ],
                     ),
                   ),
-                  TextButton(
-                    onPressed: _elegirFechaHora,
-                    child: const Text('Cambiar'),
+                  Flexible(
+                    child: TextButton(
+                      onPressed: _elegirFechaHora,
+                      child: const Text(
+                        'Cambiar',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -348,6 +360,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                             labelStyle: TextStyle(color: Colors.white70),
                             border: InputBorder.none,
                           ),
+                          isExpanded: true,
                           style: const TextStyle(color: Colors.white),
                         ),
                       ),
@@ -376,6 +389,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                             labelStyle: TextStyle(color: Colors.white70),
                             border: InputBorder.none,
                           ),
+                          isExpanded: true,
                           style: const TextStyle(color: Colors.white),
                         ),
                       ),
@@ -385,8 +399,13 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                   SwitchListTile(
                     value: _idaYVuelta,
                     onChanged: (v) => setState(() => _idaYVuelta = v),
-                    title: const Text('Ida y vuelta',
-                        style: TextStyle(color: Colors.white)),
+                    title: const Text(
+                      'Ida y vuelta',
+                      maxLines: 2,
+                      softWrap: true,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.white),
+                    ),
                     activeColor: Colors.greenAccent,
                   ),
                 ],
@@ -404,17 +423,29 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const Expanded(
-                    child: Text('Total',
-                        style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    child: Text(
+                      'Total',
+                      maxLines: 2,
+                      softWrap: true,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
                   ),
-                  Text(
-                    FormatosMoneda.rd(widget.precioCalculado),
-                    style: const TextStyle(
-                      color: Colors.yellow,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 22,
+                  Flexible(
+                    child: Text(
+                      FormatosMoneda.rd(widget.precioCalculado),
+                      maxLines: 2,
+                      softWrap: true,
+                      textAlign: TextAlign.end,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.yellow,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 22,
+                      ),
                     ),
                   ),
                 ],
@@ -427,7 +458,6 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
           // Botón Confirmar
           SizedBox(
             width: double.infinity,
-            height: 52,
             child: ElevatedButton.icon(
               onPressed: _cargando ? null : _confirmar,
               icon: _cargando
@@ -438,6 +468,10 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                   : const Icon(Icons.check_circle, color: Colors.green),
               label: Text(
                 _cargando ? 'Confirmando...' : 'Confirmar viaje',
+                maxLines: 2,
+                softWrap: true,
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 16,
                   color: Colors.green,
@@ -445,6 +479,9 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                 ),
               ),
               style: ElevatedButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                minimumSize: const Size(0, 52),
                 backgroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),

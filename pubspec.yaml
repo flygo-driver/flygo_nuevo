@@ -16,12 +16,12 @@ dependencies:
   intl: ^0.20.2
 
   # Firebase
-  firebase_core: ^2.32.0
-  firebase_auth: ^4.20.0
-  cloud_firestore: ^4.17.5
-  firebase_storage: ^11.7.7
-  firebase_messaging: ^14.7.10
-  cloud_functions: ^4.7.6
+  firebase_core: ^4.7.0
+  firebase_auth: ^6.4.0
+  cloud_firestore: ^6.3.0
+  firebase_storage: ^13.3.0
+  firebase_messaging: ^16.2.0
+  cloud_functions: ^6.2.0
 
   # Geolocalización y Mapas
   geolocator: ^12.0.0
@@ -54,10 +54,12 @@ dependencies:
   # Timbre + info del paquete
   audioplayers: ^5.2.1
   package_info_plus: ^8.0.0
-  firebase_crashlytics: ^3.5.7
+  firebase_crashlytics: ^5.2.0
   share_plus: ^10.0.0
   video_player: ^2.9.2
   app_links: ^6.4.0
+  firebase_analytics: ^12.4.0
+  connectivity_plus: ^7.1.1
 
 dev_dependencies:
   flutter_test:
@@ -65,6 +67,10 @@ dev_dependencies:
   flutter_lints: ^2.0.3
   flutter_launcher_icons: ^0.13.1
   flutter_native_splash: ^2.4.1
+
+dependency_overrides:
+  flutter_google_places_sdk_web:
+    path: packages/flutter_google_places_sdk_web_stub
 
 flutter:
   uses-material-design: true

@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
+import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 
 /// Panel de Promociones M×K (oculto para cliente)
 /// Doc: /config/promo_3x1  {activa:bool, porcentaje:int, modo:String "MxK", m:int, k:int}
@@ -12,8 +13,6 @@ class AdminPromosPage extends StatefulWidget {
 }
 
 class _AdminPromosPageState extends State<AdminPromosPage> {
-  final _db = FirebaseFirestore.instance;
-
   bool _cargando = true;
   bool _activa = false;
   int _porcentaje = 40;
@@ -50,7 +49,7 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
 
   Future<void> _cargar() async {
     try {
-      final snap = await _db.doc('config/promo_3x1').get();
+      final snap = await FirebaseFirestore.instance.doc('config/promo_3x1').get();
       final data = snap.data();
 
       final bool activa = (data?['activa'] ?? false) == true;
@@ -110,27 +109,64 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
     final porc = int.tryParse(_porcCtrl.text.trim()) ?? 40;
     final m = int.tryParse(_mCtrl.text.trim()) ?? 3;
     final k = int.tryParse(_kCtrl.text.trim()) ?? 1;
-    final modo = '${m}x$k';
+
+    final motivo = await _pedirMotivo();
+    if (motivo == null) return;
 
     try {
-      await _db.doc('config/promo_3x1').set({
-        'activa': _activa,
-        'porcentaje': porc,
-        'modo': modo, // compat
-        'm': m, // preferido por ViajesRepo
-        'k': k, // preferido por ViajesRepo
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await AdminConfigService.updatePromo3x1Config(
+        activa: _activa,
+        porcentaje: porc,
+        m: m,
+        k: k,
+        motivo: motivo,
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ Configuración guardada')),
+        const SnackBar(content: Text('✅ Configuración guardada vía admin callable')),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('❌ Error al guardar: $e')),
       );
+    }
+  }
+
+  Future<String?> _pedirMotivo() async {
+    final ctrl = TextEditingController();
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Colors.black,
+          title: const Text('Motivo del cambio', style: TextStyle(color: Colors.white)),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: 'Ej: corrección operativa / ajustes de política',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return null;
+      final m = ctrl.text.trim();
+      if (m.length < 6) return null;
+      return m;
+    } finally {
+      ctrl.dispose();
     }
   }
 

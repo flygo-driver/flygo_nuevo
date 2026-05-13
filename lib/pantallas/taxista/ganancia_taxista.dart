@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 
 class GananciaTaxista extends StatefulWidget {
   const GananciaTaxista({super.key});
@@ -173,8 +174,8 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                 // Turismo: 15% comisión
                 comisionC = ((precioC * 15) + 50) ~/ 100;
               } else {
-                // Normal/Motor: 20% comisión
-                comisionC = ((precioC * 20) + 50) ~/ 100;
+                // Normal/Motor: comisión global plataforma
+                comisionC = PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioC);
               }
             }
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'admin_ui_theme.dart';
+import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 
 class AdminPromosMxK extends StatefulWidget {
   const AdminPromosMxK({super.key});
@@ -108,8 +109,6 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
     });
   }
 
-  String get _modo => '${_m}x$_k'; // ✅ CORREGIDO: Quitar llaves innecesarias
-
   bool get _valoresValidos {
     final int m = int.tryParse(_mCtrl.text.trim()) ?? _m;
     final int k = int.tryParse(_kCtrl.text.trim()) ?? _k;
@@ -135,26 +134,21 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
     });
 
     try {
-      final Map<String, dynamic> data = {
-        'activa': _activa,
-        'tipo': 'mxk',
-        'm': _m,
-        'k': _k,
-        'modo': _modo,
-        'porcentaje': _porcentaje,
-        'viajesRequeridos': _m,
-        'viajesGratis': _k,
-        // ✅ CORREGIDO: Quitar llaves innecesarias en interpolación
-        'descripcion': '${_m}x$_k - $_porcentaje% descuento',
-        'updatedAt': FieldValue.serverTimestamp(),
-      };
+      final motivo = await _pedirMotivo();
+      if (motivo == null) return;
 
-      await _ref.set(data, SetOptions(merge: true));
+      await AdminConfigService.updatePromocionesMxKConfig(
+        activa: _activa,
+        m: _m,
+        k: _k,
+        porcentaje: _porcentaje,
+        motivo: motivo,
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Promoción guardada correctamente'),
+          content: Text('✅ Promoción guardada vía admin callable'),
           backgroundColor: Colors.green,
         ),
       );
@@ -168,6 +162,36 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
       );
     } finally {
       if (mounted) setState(() => _guardando = false);
+    }
+  }
+
+  Future<String?> _pedirMotivo() async {
+    final ctrl = TextEditingController();
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text('Motivo del cambio', style: TextStyle(color: AdminUi.onCard(ctx))),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: 'Ej: corrección operativa / ajuste de política',
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Guardar')),
+          ],
+        ),
+      );
+      if (ok != true) return null;
+      final m = ctrl.text.trim();
+      if (m.length < 6) return null;
+      return m;
+    } finally {
+      ctrl.dispose();
     }
   }
 

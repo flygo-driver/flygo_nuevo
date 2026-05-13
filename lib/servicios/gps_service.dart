@@ -3,6 +3,10 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 
 class GpsService {
+  /// Evita llamadas repetidas a [Geolocator.requestPermission] (p. ej. cada
+  /// rebuild del viaje o al volver de segundo plano con el mismo `denied`).
+  static DateTime? _lastGeolocatorRequestPermissionAt;
+
   static Future<bool> isServiceEnabled() =>
       Geolocator.isLocationServiceEnabled();
 
@@ -11,6 +15,46 @@ class GpsService {
 
   static Future<LocationPermission> requestPermission() =>
       Geolocator.requestPermission();
+
+  /// Solo si el estado es exactamente [LocationPermission.denied]; no llama
+  /// a [Geolocator.requestPermission] más de una vez por [minInterval].
+  static Future<LocationPermission> requestPermissionIfDeniedThrottled({
+    Duration minInterval = const Duration(seconds: 90),
+  }) async {
+    final LocationPermission current = await Geolocator.checkPermission();
+    if (current != LocationPermission.denied) {
+      return current;
+    }
+    final DateTime now = DateTime.now();
+    final DateTime? last = _lastGeolocatorRequestPermissionAt;
+    if (last != null && now.difference(last) < minInterval) {
+      return current;
+    }
+    _lastGeolocatorRequestPermissionAt = now;
+    return Geolocator.requestPermission();
+  }
+
+  static bool permissionUsable(LocationPermission p) =>
+      p == LocationPermission.whileInUse || p == LocationPermission.always;
+
+  /// Orden fijo para producción: **primero** GPS del sistema, **después** permiso
+  /// de la app. Si el GPS está apagado **no** se llama a [Geolocator.requestPermission]
+  /// (evita el diálogo de la app cuando solo hace falta encender ubicación).
+  static Future<({bool serviceEnabled, LocationPermission permission})>
+      checkServiceThenRequestPermissionIfNeeded({
+    Duration minInterval = const Duration(seconds: 90),
+  }) async {
+    final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      final LocationPermission p = await Geolocator.checkPermission();
+      return (serviceEnabled: false, permission: p);
+    }
+    LocationPermission p = await Geolocator.checkPermission();
+    if (p == LocationPermission.denied) {
+      p = await requestPermissionIfDeniedThrottled(minInterval: minInterval);
+    }
+    return (serviceEnabled: true, permission: p);
+  }
 
   static Future<bool> openLocationSettings() =>
       Geolocator.openLocationSettings();
@@ -22,15 +66,9 @@ class GpsService {
     Duration maxEdadUltima = const Duration(minutes: 2),
     LocationAccuracy accuracy = LocationAccuracy.high,
   }) async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return null;
-
-    var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-      if (perm == LocationPermission.denied) return null;
-    }
-    if (perm == LocationPermission.deniedForever) return null;
+    final snap = await checkServiceThenRequestPermissionIfNeeded();
+    if (!snap.serviceEnabled) return null;
+    if (!permissionUsable(snap.permission)) return null;
 
     try {
       return await Geolocator.getCurrentPosition(

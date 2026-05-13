@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 
 class MapaTiempoReal extends StatefulWidget {
   final LatLng? origen; // Ubicación del cliente/pickup
@@ -287,19 +288,17 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   Future<void> _iniciarUbicacion() async {
-    _serviceOn = await Geolocator.isLocationServiceEnabled();
+    final ({bool serviceEnabled, LocationPermission permission}) snap =
+        await GpsService.checkServiceThenRequestPermissionIfNeeded();
+    _serviceOn = snap.serviceEnabled;
     if (!_serviceOn && mounted) {
-      _snack('Activa la ubicación del dispositivo.');
-    }
-
-    var p = await Geolocator.checkPermission();
-    if (p == LocationPermission.denied) {
-      p = await Geolocator.requestPermission();
+      _snack('Activa la ubicación del dispositivo (GPS).');
     }
     if (!mounted) return;
 
-    final denied =
-        p == LocationPermission.denied || p == LocationPermission.deniedForever;
+    final denied = !snap.serviceEnabled ||
+        snap.permission == LocationPermission.denied ||
+        snap.permission == LocationPermission.deniedForever;
     setState(() => _myLocEnabled = !denied);
     if (denied) return;
 

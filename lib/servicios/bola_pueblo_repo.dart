@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
@@ -8,7 +11,6 @@ class BolaPuebloRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
   static CollectionReference<Map<String, dynamic>> get _col =>
       _db.collection('bolas_pueblo');
-  static const double comisionPct = 0.10; // 10% RAI por bola acordada.
   static const Duration vigenciaCodigoInicio = Duration(minutes: 20);
   static const double baseBolaFactor = 0.50; // 50% de tarifa normal estimada.
   static const double ofertaMinFactorSobreBase = 0.80; // 80% de la base bola.
@@ -131,6 +133,7 @@ class BolaPuebloRepo {
       'pasajeros': pax,
       'estado': 'abierta',
       'ofertaAceptadaId': '',
+      'comisionPorcentaje': PlataformaEconomia.comisionViajePorcentaje,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -149,28 +152,58 @@ class BolaPuebloRepo {
       doc['destinoLon'] = double.parse(destinoLon.toStringAsFixed(6));
     }
     final ref = await _col.add(doc);
-    // Viaje espejo en `viajes` (pool) para que el conductor abra detalle y oferte enlazado a esta bola.
     if (t == 'pedido' && coordsOk) {
-      try {
-        await ViajesRepo.crearViajePendiente(
-          uidCliente: uid.trim(),
-          origen: origen.trim(),
-          destino: destino.trim(),
-          latOrigen: origenLat,
-          lonOrigen: origenLon,
-          latDestino: destinoLat,
-          lonDestino: destinoLon,
-          fechaHora: fechaSalida,
-          precio: montoSugeridoRd,
-          metodoPago: 'Efectivo',
-          tipoVehiculo: 'Bola Ahorro',
-          idaYVuelta: false,
-          distanciaKm: distanciaKm,
-          tipoServicio: 'bola_ahorro',
-          bolaPuebloId: ref.id,
+      const int maxIntentos = 2;
+      Object? lastErr;
+      for (var intento = 1; intento <= maxIntentos; intento++) {
+        try {
+          debugPrint(
+            '[BOLA_AHORRO] crearViajeEspejo intento=$intento/$maxIntentos bolaId=${ref.id}',
+          );
+          final String viajeIdEspejo = await ViajesRepo.crearViajePendiente(
+            uidCliente: uid.trim(),
+            origen: origen.trim(),
+            destino: destino.trim(),
+            latOrigen: origenLat,
+            lonOrigen: origenLon,
+            latDestino: destinoLat,
+            lonDestino: destinoLon,
+            fechaHora: fechaSalida,
+            precio: montoSugeridoRd,
+            metodoPago: 'Efectivo',
+            tipoVehiculo: 'Bola Ahorro',
+            idaYVuelta: false,
+            distanciaKm: distanciaKm,
+            tipoServicio: 'bola_ahorro',
+            bolaPuebloId: ref.id,
+            comisionPorcentajeViaje: PlataformaEconomia.comisionViajePorcentaje,
+          );
+          debugPrint(
+            '[BOLA_AHORRO] crearViajeEspejo OK viajeId=$viajeIdEspejo bolaId=${ref.id}',
+          );
+          await ref.set(<String, dynamic>{
+            'viajeEspejoId': viajeIdEspejo,
+            'errorSync': false,
+            'errorSyncViajeEspejo': FieldValue.delete(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+          lastErr = null;
+          break;
+        } catch (e, st) {
+          lastErr = e;
+          debugPrint(
+            '[BOLA_AHORRO] crearViajeEspejo FAIL intento=$intento bolaId=${ref.id} err=$e\n$st',
+          );
+          if (intento < maxIntentos) {
+            await Future<void>.delayed(const Duration(milliseconds: 600));
+          }
+        }
+      }
+      if (lastErr != null) {
+        await BolaPuebloFirestoreSync.marcarErrorSyncViajeEspejo(
+          bolaId: ref.id,
+          error: lastErr,
         );
-      } catch (_) {
-        // La publicación en bolas_pueblo queda; el espejo es opcional si falla validación de viaje.
       }
     }
   }

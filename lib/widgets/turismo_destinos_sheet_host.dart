@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 
 /// Abre el selector de turismo de inmediato y completa origen en segundo plano
@@ -43,11 +44,13 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
 
   Future<void> _mejorarUbicacionSiHaceFalta() async {
     try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
+      final ({bool serviceEnabled, LocationPermission permission}) snap =
+          await GpsService.checkServiceThenRequestPermissionIfNeeded();
       if (!mounted) return;
+      if (!snap.serviceEnabled) {
+        return;
+      }
+      final LocationPermission perm = snap.permission;
       if (perm == LocationPermission.denied ||
           perm == LocationPermission.deniedForever) {
         setState(() => _permDenied = true);

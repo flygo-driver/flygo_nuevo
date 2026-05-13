@@ -6,8 +6,10 @@ import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.d
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
+import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
 import 'package:flygo_nuevo/widgets/turismo_destinos_sheet_host.dart';
 import 'package:flygo_nuevo/widgets/motor_servicio_animation.dart';
 import 'package:flygo_nuevo/widgets/giras_cupos_animation.dart';
@@ -22,10 +24,37 @@ class SeleccionServicio extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Gate de SOLO LECTURA: si `usuarios/{uid}.bloqueado == true`, muestra
+    // pantalla de "Cuenta bloqueada" en vez de permitir acceder a los flujos
+    // de pedir/programar viaje. No modifica navegación ni escribe en
+    // Firestore; el desbloqueo se hace desde el panel admin existente.
+    return ClienteBloqueoGate(
+      child: _buildContenido(context),
+    );
+  }
+
+  Widget _buildContenido(BuildContext context) {
+    // El fondo viene del Theme global (que el usuario puede personalizar
+    // desde Apariencia). Los textos se calculan automáticamente por contraste
+    // WCAG sobre ese fondo, así sea blanco, negro, rojo, amarillo, etc.
+    final Color bgScaffold = Theme.of(context).scaffoldBackgroundColor;
+    final Color appBarBg = bgScaffold;
+    final bool isDarkBg =
+        ThemeData.estimateBrightnessForColor(bgScaffold) == Brightness.dark;
+    final Color textPrimary = CustomThemeService.textOn(bgScaffold);
+    final Color textMuted = CustomThemeService.textMutedOn(bgScaffold);
+    final Color sectionLabel = CustomThemeService.textSubtleOn(bgScaffold);
+    final Color promoBorder = CustomThemeService.borderOn(bgScaffold);
+    final Color promoBg = CustomThemeService.cardOn(bgScaffold);
+    final Color verConductoresColor =
+        isDarkBg ? const Color(0xFFFFB74D) : const Color(0xFFE8590C);
+    final Color footerColor = CustomThemeService.textSubtleOn(bgScaffold);
+
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: bgScaffold,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: appBarBg,
+        surfaceTintColor: Colors.transparent,
         automaticallyImplyLeading: false,
         leading: const SizedBox(width: 48),
         title: Row(
@@ -63,31 +92,31 @@ class SeleccionServicio extends StatelessWidget {
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
                         20,
-                        bannerEncabezado != null ? 6 : 16,
+                        bannerEncabezado != null ? 8 : 20,
                         20,
-                        8,
+                        10,
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
+                          Text(
                             '¿A dónde quieres ir?',
                             style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.35,
-                              height: 1.2,
+                              color: textPrimary,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.6,
+                              height: 1.15,
                             ),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 6),
                           Text(
                             'Pide ahora, programados u otras formas de viajar',
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.5),
-                              fontSize: 13,
+                              color: textMuted,
+                              fontSize: 14,
                               fontWeight: FontWeight.w500,
-                              height: 1.25,
+                              height: 1.3,
                             ),
                           ),
                         ],
@@ -96,7 +125,7 @@ class SeleccionServicio extends StatelessWidget {
                   ),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                      padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
                       child: _HomeWhereToRow(
                         onPedirAhora: () {
                           Navigator.push(
@@ -130,20 +159,20 @@ class SeleccionServicio extends StatelessWidget {
                                 Navigator.of(context, rootNavigator: true)
                                     .pushNamed(rutaBolaPueblo),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 8),
                           TextButton(
                             style: TextButton.styleFrom(
-                              minimumSize: const Size.fromHeight(48),
+                              minimumSize: const Size.fromHeight(44),
                               tapTargetSize: MaterialTapTargetSize.padded,
                             ),
                             onPressed: () => NavigationService.push(
                               const BolaConductoresEnRutaClientePage(),
                             ),
-                            child: const Text(
+                            child: Text(
                               'Ver conductores en ruta (desde dónde van)',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                color: Color(0xFFFFB74D),
+                                color: verConductoresColor,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
                               ),
@@ -155,14 +184,14 @@ class SeleccionServicio extends StatelessWidget {
                   ),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                      padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
                       child: Text(
                         'Más formas de viajar',
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.45),
+                          color: sectionLabel,
                           fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.4,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
                         ),
                       ),
                     ),
@@ -359,17 +388,15 @@ class SeleccionServicio extends StatelessWidget {
                   ),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 22),
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: const Color(0xFF0A0A0A),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.07),
-                          ),
+                          color: promoBg,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: promoBorder),
                         ),
                         child: const ClipRRect(
-                          borderRadius: BorderRadius.all(Radius.circular(13)),
+                          borderRadius: BorderRadius.all(Radius.circular(15)),
                           child: PromoTaxiPistaAnimation(),
                         ),
                       ),
@@ -393,7 +420,7 @@ class SeleccionServicio extends StatelessWidget {
                     'by Rai Driver',
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.grey.shade400,
+                      color: footerColor,
                       letterSpacing: 1.35,
                       fontWeight: FontWeight.w400,
                     ),
@@ -455,6 +482,7 @@ class SeleccionServicio extends StatelessWidget {
   }) {
     final bool compact = cardWidth < 200;
     final double radius = compact ? 16.0 : 20.0;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -464,7 +492,8 @@ class SeleccionServicio extends StatelessWidget {
           borderRadius: BorderRadius.circular(radius),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.38),
+              color: Colors.black
+                  .withValues(alpha: isDark ? 0.32 : 0.16),
               blurRadius: compact ? 10 : 14,
               spreadRadius: 0,
               offset: Offset(0, compact ? 4 : 6),
@@ -636,7 +665,7 @@ class SeleccionServicio extends StatelessWidget {
   }
 }
 
-/// Pide ahora (gris) + Programados (azul). Mismas rutas: ahora / programar.
+/// Pide ahora + Programados — tarjetas horizontales iguales. Soportan tema.
 class _HomeWhereToRow extends StatelessWidget {
   const _HomeWhereToRow({
     required this.onPedirAhora,
@@ -646,102 +675,137 @@ class _HomeWhereToRow extends StatelessWidget {
   final VoidCallback onPedirAhora;
   final VoidCallback onProgramar;
 
-  static const Color _barBg = Color(0xFF1C1C1E);
-  static const Color _programadosBlue = Color(0xFF1565C0);
-
-  Widget _barPedirAhora() {
-    return Material(
-      color: _barBg,
-      borderRadius: BorderRadius.circular(26),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onPedirAhora,
-        borderRadius: BorderRadius.circular(26),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-          child: Row(
-            children: [
-              Icon(
-                Icons.local_taxi_rounded,
-                color: Colors.greenAccent.withValues(alpha: 0.85),
-                size: 22,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Pide ahora',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.92),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                    Text(
-                      'Llega en minutos',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.45),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.arrow_forward_ios_rounded,
-                size: 14,
-                color: Colors.white.withValues(alpha: 0.35),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _chipProgramados() {
-    return Material(
-      color: _programadosBlue,
-      borderRadius: BorderRadius.circular(26),
-      clipBehavior: Clip.antiAlias,
-      elevation: 0,
-      shadowColor: Colors.transparent,
-      child: InkWell(
-        onTap: onProgramar,
-        borderRadius: BorderRadius.circular(26),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.event_note_rounded,
-                color: Colors.white.withValues(alpha: 0.95),
-                size: 18,
-              ),
-              const SizedBox(width: 6),
-              const Text(
-                'Programados',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color titleColor = isDark ? Colors.white : const Color(0xFF101828);
+    final Color subtitleColor = isDark
+        ? Colors.white.withValues(alpha: 0.65)
+        : const Color(0xFF667085);
+
+    // Verde de marca para "Pide ahora" (acción primaria, debe destacar).
+    final Color greenSolid =
+        isDark ? const Color(0xFF22C55E) : const Color(0xFF10B981);
+    final Color greenCardBg =
+        isDark ? const Color(0xFF0F2117) : const Color(0xFFF0FDF4);
+    final Color greenCardBorder =
+        isDark ? const Color(0xFF22C55E) : const Color(0xFF34D399);
+
+    // Azul para "Programados" (acción secundaria con identidad propia).
+    final Color blueSolid =
+        isDark ? const Color(0xFF3B82F6) : const Color(0xFF2563EB);
+    final Color blueCardBg =
+        isDark ? const Color(0xFF0F1A2E) : const Color(0xFFEFF6FF);
+    final Color blueCardBorder =
+        isDark ? const Color(0xFF3B82F6) : const Color(0xFF60A5FA);
+
+    Widget card({
+      required VoidCallback onTap,
+      required IconData icon,
+      required Color iconSolidBg,
+      required Color cardBg,
+      required Color cardBorder,
+      required String title,
+      required String subtitle,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: Ink(
+          decoration: BoxDecoration(
+            color: cardBg,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: cardBorder, width: 1.4),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: iconSolidBg
+                    .withValues(alpha: isDark ? 0.18 : 0.14),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: iconSolidBg,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: Colors.white, size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: titleColor,
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: subtitleColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: iconSolidBg,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final Widget pideAhoraCard = card(
+      onTap: onPedirAhora,
+      icon: Icons.bolt_rounded,
+      iconSolidBg: greenSolid,
+      cardBg: greenCardBg,
+      cardBorder: greenCardBorder,
+      title: 'Pide ahora',
+      subtitle: 'Llega en minutos',
+    );
+
+    final Widget programadosCard = card(
+      onTap: onProgramar,
+      icon: Icons.event_rounded,
+      iconSolidBg: blueSolid,
+      cardBg: blueCardBg,
+      cardBorder: blueCardBorder,
+      title: 'Programados',
+      subtitle: 'Elige fecha y hora',
+    );
+
     return LayoutBuilder(
       builder: (context, c) {
         final bool narrow = c.maxWidth < 340;
@@ -749,21 +813,18 @@ class _HomeWhereToRow extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _barPedirAhora(),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: _chipProgramados(),
-              ),
+              pideAhoraCard,
+              const SizedBox(height: 10),
+              programadosCard,
             ],
           );
         }
         return Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Expanded(child: _barPedirAhora()),
-            const SizedBox(width: 10),
-            _chipProgramados(),
+            Expanded(child: pideAhoraCard),
+            const SizedBox(width: 12),
+            Expanded(child: programadosCard),
           ],
         );
       },
@@ -771,29 +832,30 @@ class _HomeWhereToRow extends StatelessWidget {
   }
 }
 
-/// Bola Ahorro: una sola franja compacta (sin duplicar el bloque gigante de antes).
+/// Bola Ahorro: tarjeta destacada con fondo de color suave (naranja) y soporte tema.
 class _FeaturedBolaAhorroCard extends StatelessWidget {
   const _FeaturedBolaAhorroCard({required this.onTap});
 
   final VoidCallback onTap;
 
-  static const TextStyle _titleWord = TextStyle(
-    color: Colors.white,
-    fontSize: 17,
-    fontWeight: FontWeight.w800,
-    letterSpacing: -0.2,
-    height: 1.05,
-  );
-
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          decoration: BoxDecoration(
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final TextStyle titleWord = TextStyle(
+      color: isDark ? Colors.white : const Color(0xFF7C2D12),
+      fontSize: 17,
+      fontWeight: FontWeight.w800,
+      letterSpacing: -0.2,
+      height: 1.05,
+    );
+    final Color subtitleColor = isDark
+        ? Colors.white.withValues(alpha: 0.94)
+        : const Color(0xFF9A3412);
+    final Color chevronColor = isDark
+        ? Colors.white.withValues(alpha: 0.9)
+        : const Color(0xFFEA580C);
+    final BoxDecoration deco = isDark
+        ? BoxDecoration(
             gradient: const LinearGradient(
               colors: [
                 Color(0xFFFF8C00),
@@ -806,14 +868,34 @@ class _FeaturedBolaAhorroCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.35),
-                blurRadius: 12,
-                offset: const Offset(0, 5),
+                color: Colors.black.withValues(alpha: 0.30),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
               ),
             ],
-          ),
+          )
+        : BoxDecoration(
+            color: const Color(0xFFFFF4E6),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFFDBA74)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFEA580C).withValues(alpha: 0.10),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          );
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          decoration: deco,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
             child: Row(
               children: [
                 Expanded(
@@ -826,14 +908,14 @@ class _FeaturedBolaAhorroCard extends StatelessWidget {
                         spacing: 4,
                         runSpacing: 2,
                         children: [
-                          const Text('Bola', style: _titleWord),
+                          Text('Bola', style: titleWord),
                           Image.asset(
                             'assets/icon/logo_rai_vertical.png',
                             height: 22,
                             fit: BoxFit.contain,
                             filterQuality: FilterQuality.high,
                           ),
-                          const Text('Ahorro', style: _titleWord),
+                          Text('Ahorro', style: titleWord),
                         ],
                       ),
                       const SizedBox(height: 4),
@@ -842,8 +924,8 @@ class _FeaturedBolaAhorroCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.94),
-                          fontSize: 12,
+                          color: subtitleColor,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.w500,
                           height: 1.3,
                         ),
@@ -853,7 +935,7 @@ class _FeaturedBolaAhorroCard extends StatelessWidget {
                 ),
                 Icon(
                   Icons.chevron_right_rounded,
-                  color: Colors.white.withValues(alpha: 0.9),
+                  color: chevronColor,
                   size: 26,
                 ),
               ],
