@@ -4,12 +4,27 @@ import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
 
 /// Publicación de ubicación del taxista. Lectura de permiso: **pasiva**
 /// ([readServiceAndPermissionStabilizedNoRequest] en obtenerUbicacionActual).
 class UbicacionTaxista {
   static StreamSubscription<Position>? _subscription;
   static bool _isActive = false;
+  static bool _syncUbicacionTurismo = false;
+  static String? _uidTurismoSync;
+
+  /// Activa publicación en `choferes_turismo` (auto-asignación turismo).
+  static Future<void> habilitarSyncChoferTurismo(String uid) async {
+    _uidTurismoSync = uid;
+    _syncUbicacionTurismo =
+        await SolicitudTurismoRepo.esChoferTurismoAprobado(uid);
+  }
+
+  static void deshabilitarSyncChoferTurismo() {
+    _syncUbicacionTurismo = false;
+    _uidTurismoSync = null;
+  }
 
   /// Inicia la escucha de la ubicación en tiempo real.
   /// Si `soloCuandoDisponible` es true (por defecto), solo publicará la ubicación
@@ -57,6 +72,16 @@ class UbicacionTaxista {
         'online': !tieneViajeActivo, // true si libre, false si ocupado
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      if (_syncUbicacionTurismo && _uidTurismoSync == user.uid) {
+        unawaited(
+          SolicitudTurismoRepo.sincronizarUbicacionChofer(
+            uid: user.uid,
+            lat: pos.latitude,
+            lon: pos.longitude,
+          ),
+        );
+      }
     });
 
     _isActive = true;

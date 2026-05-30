@@ -580,7 +580,7 @@ class _BolaPuebloCrearPublicacionFlowState
                 ),
               ),
               SafeArea(
-                minimum: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+                minimum: BolaPuebloUi.bottomBarSafePadding(context),
                 child: Material(
                   elevation: 8,
                   shadowColor:
@@ -589,7 +589,7 @@ class _BolaPuebloCrearPublicacionFlowState
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(20)),
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
                     child: SizedBox(
                       width: double.infinity,
                       height: 52,

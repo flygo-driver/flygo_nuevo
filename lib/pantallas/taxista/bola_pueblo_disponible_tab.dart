@@ -195,11 +195,11 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: BolaPuebloRepo.streamTablero(),
           builder: (context, snap) {
-            final safeBottom = MediaQuery.of(context).padding.bottom;
+            final bottomPad = BolaPuebloUi.safeBottomInset(context, base: 24);
             if (snap.connectionState == ConnectionState.waiting) {
               final cs = Theme.of(context).colorScheme;
               return ListView(
-                padding: const EdgeInsets.only(bottom: 24),
+                padding: EdgeInsets.only(bottom: bottomPad),
                 children: [
                   ...head,
                   const SizedBox(height: 4),
@@ -234,7 +234,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
 
             if (docs.isEmpty) {
               return ListView(
-                padding: EdgeInsets.only(bottom: 24 + safeBottom),
+                padding: EdgeInsets.only(bottom: bottomPad),
                 children: [
                   ...head,
                   BolaPuebloUi.emptyBoard(
@@ -248,11 +248,9 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
             }
 
             return ListView.builder(
-              padding: EdgeInsets.fromLTRB(
-                BolaPuebloUi.contentGutter,
-                0,
-                BolaPuebloUi.contentGutter,
-                24 + safeBottom,
+              padding: BolaPuebloUi.listScrollPadding(
+                context,
+                base: 24,
               ),
               itemCount: head.length + docs.length,
               itemBuilder: (context, i) {

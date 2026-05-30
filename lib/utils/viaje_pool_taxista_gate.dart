@@ -158,4 +158,68 @@ class ViajePoolTaxistaGate {
     }
     return true;
   }
+
+  static bool _usuarioEsClienteEnDoc(Map<String, dynamic> data, String uid) {
+    final String u = uid.trim();
+    return (data['uidCliente'] ?? '').toString().trim() == u ||
+        (data['clienteId'] ?? '').toString().trim() == u;
+  }
+
+  static bool _usuarioEsTaxistaEnDoc(Map<String, dynamic> data, String uid) {
+    final String u = uid.trim();
+    return (data['uidTaxista'] ?? '').toString().trim() == u ||
+        (data['taxistaId'] ?? '').toString().trim() == u;
+  }
+
+  /// ¿El shell debe cubrir pantalla completa con viaje en curso?
+  /// Excluye: Bola en negociación, programado lejano (pool aún cerrado).
+  static bool viajeDocDebeMostrarOverlayShell(
+    Map<String, dynamic> data,
+    String uid,
+  ) {
+    final String st =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    if (data['completado'] == true || EstadosViaje.esTerminal(st)) {
+      return false;
+    }
+
+    if (debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(data)) {
+      return false;
+    }
+
+    final bool esCliente = _usuarioEsClienteEnDoc(data, uid);
+    final bool esTaxista = _usuarioEsTaxistaEnDoc(data, uid);
+
+    if (esCliente &&
+        data['programado'] == true &&
+        data['activo'] != true &&
+        data['esAhora'] != true &&
+        !ventanaPublicacionYAceptacionOk(data)) {
+      return false;
+    }
+
+    if (EstadosViaje.activos.contains(st)) return true;
+
+    if (data['activo'] == true) return true;
+
+    if (esCliente &&
+        (data['tipoServicio'] ?? '').toString() == 'turismo' &&
+        st == 'pendiente_admin') {
+      return true;
+    }
+
+    if (st == EstadosViaje.pendiente ||
+        st == EstadosViaje.pendientePago ||
+        st == 'pendiente_admin') {
+      if (esCliente &&
+          (data['esAhora'] == true || ventanaPublicacionYAceptacionOk(data))) {
+        return true;
+      }
+      if (esTaxista && (data['uidTaxista'] ?? '').toString().trim() == uid) {
+        return true;
+      }
+    }
+
+    return false;
+  }
 }

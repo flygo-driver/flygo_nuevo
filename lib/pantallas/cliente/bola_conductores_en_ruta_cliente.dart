@@ -45,7 +45,6 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: BolaPuebloRepo.streamTablero(),
                   builder: (context, snap) {
-                    final safeBottom = MediaQuery.of(context).padding.bottom;
                     if (snap.connectionState == ConnectionState.waiting) {
                       return const Center(
                         child: CircularProgressIndicator(
@@ -76,7 +75,7 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                     }).toList();
 
                     return ListView(
-                      padding: EdgeInsets.fromLTRB(16, 8, 16, 28 + safeBottom),
+                      padding: BolaPuebloUi.listScrollPadding(context, top: 8),
                       children: [
                         BolaPuebloUi.actionPanel(
                           context,

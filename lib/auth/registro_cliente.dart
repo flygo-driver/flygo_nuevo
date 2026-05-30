@@ -138,6 +138,10 @@ class _RegistroClienteState extends State<RegistroCliente> {
         child: Form(
           key: _formKey,
           child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(context).bottom + 16,
+            ),
             children: [
               const SizedBox(height: 16),
               TextFormField(
@@ -180,19 +184,35 @@ class _RegistroClienteState extends State<RegistroCliente> {
                     (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
                 autofillHints: const [AutofillHints.newPassword],
               ),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _acceptedLegal,
-                activeColor: cs.primary,
-                checkColor: cs.onPrimary,
-                onChanged: (v) => setState(() => _acceptedLegal = v ?? false),
-                title: Text(
-                  'Acepto los Terminos y Condiciones y la Politica de Privacidad de RAI DRIVER, operado por Open ASK Service SRL (RNC: 1320-11767).',
-                  style: TextStyle(
-                    color: cs.onSurface.withValues(alpha: 0.85),
-                    fontSize: 12,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Checkbox(
+                    value: _acceptedLegal,
+                    activeColor: cs.primary,
+                    checkColor: cs.onPrimary,
+                    onChanged: (v) =>
+                        setState(() => _acceptedLegal = v ?? false),
                   ),
-                ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () =>
+                          setState(() => _acceptedLegal = !_acceptedLegal),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Text(
+                          'Acepto los Terminos y Condiciones y la Politica de Privacidad de RAI DRIVER, operado por Open ASK Service SRL (RNC: 1320-11767).',
+                          softWrap: true,
+                          style: TextStyle(
+                            color: cs.onSurface.withValues(alpha: 0.85),
+                            fontSize: 12,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               Align(
                 alignment: Alignment.centerLeft,

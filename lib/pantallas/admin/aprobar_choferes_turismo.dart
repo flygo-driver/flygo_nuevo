@@ -2,6 +2,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/modelo/vehiculo_turismo.dart';
+import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../widgets/admin_drawer.dart';
@@ -158,6 +161,14 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
       final batch = FirebaseFirestore.instance.batch();
       final user = FirebaseAuth.instance.currentUser;
 
+      final usuarioSnap = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uidChofer)
+          .get();
+      final bool dispUsuario = RolesService.leerDisponibleDesdeUsuarioDoc(
+        usuarioSnap.data(),
+      );
+
       final solicitudRef = FirebaseFirestore.instance
           .collection('solicitudes_turismo')
           .doc(docId);
@@ -179,16 +190,36 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
           'nombre': data['nombre'],
           'email': data['email'],
           'telefono': data['telefono'],
-          'vehiculos': vehiculos,
+          'vehiculos': SolicitudTurismoRepo.vehiculosParaFirestore(
+            vehiculos.map((Map<String, dynamic> v) {
+              return VehiculoTurismo.fromMap(v);
+            }).toList(),
+          ),
           'documentos': data['documentos'] ?? {},
           'estado': 'aprobado',
-          'disponible': true,
+          'disponible': dispUsuario,
           'calificacion': 0.0,
           'viajesCompletados': 0,
           'zonas': [],
+          'subtiposTurismo': vehiculos
+              .map((v) => (v['tipo'] ?? '').toString().toLowerCase())
+              .where((t) => t.isNotEmpty)
+              .toSet()
+              .toList(),
           'fechaRegistro': FieldValue.serverTimestamp(),
           'verificadoPor': user?.uid ?? '',
           'verificadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      batch.set(
+        FirebaseFirestore.instance.collection('usuarios').doc(uidChofer),
+        {
+          'choferTurismoAprobado': true,
+          'choferTurismoEstado': 'aprobado',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
         },
         SetOptions(merge: true),
       );

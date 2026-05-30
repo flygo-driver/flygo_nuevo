@@ -53,7 +53,9 @@ class BolaPuebloNav {
         final cc = BolaPuebloColors.of(ctx);
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            padding: EdgeInsets.fromLTRB(20, 8, 20, 12)
+                .add(BolaPuebloUi.bottomBarSafePadding(context)
+                    .copyWith(left: 0, right: 0, top: 0)),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -221,7 +223,9 @@ class BolaPuebloNav {
         final cc = BolaPuebloColors.of(ctx);
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            padding: EdgeInsets.fromLTRB(20, 8, 20, 12)
+                .add(BolaPuebloUi.bottomBarSafePadding(context)
+                    .copyWith(left: 0, right: 0, top: 0)),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -338,7 +342,9 @@ class BolaPuebloNav {
         final cc = BolaPuebloColors.of(ctx);
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            padding: EdgeInsets.fromLTRB(20, 8, 20, 12)
+                .add(BolaPuebloUi.bottomBarSafePadding(context)
+                    .copyWith(left: 0, right: 0, top: 0)),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1289,7 +1295,10 @@ class BolaPuebloDialogs {
                             );
                           }
                           return ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                            padding: BolaPuebloUi.listScrollPadding(
+                              sheetCtx,
+                              base: 16,
+                            ),
                             itemCount: docs.length,
                             itemBuilder: (_, i) {
                               final d = docs[i];
@@ -2654,6 +2663,7 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
                   ),
                 ),
               ],
+              SizedBox(height: BolaPuebloUi.bottomBarSafePadding(context).bottom),
             ],
           ),
         ),

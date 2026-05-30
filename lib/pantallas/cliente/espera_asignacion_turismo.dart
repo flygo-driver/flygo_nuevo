@@ -13,6 +13,9 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/modelo/chofer_turismo.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
+import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/choferes_turismo_repo.dart';
@@ -54,6 +57,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
   Timer? _navegarViajeActivoTimer;
   bool _reintentoAutoEnCurso = false;
   bool _navegacionViajeActivoProgramada = false;
+  bool _postCompletadoEnCurso = false;
   String _ultimoTaxistaAsignadoNotificado = '';
 
   List<ChoferTurismo> get _choferesDisponiblesEnMapa => _choferesRed
@@ -1184,7 +1188,10 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
           }
 
           if (EstadosViaje.esCompletado(estado)) {
-            return _buildCompletadoState();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) unawaited(_navegarFacturaPostCompletado());
+            });
+            return _buildCompletadoState(navegandoFactura: _postCompletadoEnCurso);
           }
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1275,7 +1282,33 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     );
   }
 
-  Widget _buildCompletadoState() {
+  Future<void> _navegarFacturaPostCompletado() async {
+    if (_postCompletadoEnCurso || !mounted) return;
+    _postCompletadoEnCurso = true;
+    if (mounted) setState(() {});
+
+    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
+
+    try {
+      await FacturaViaje.mostrar(
+        context,
+        viajeId: widget.viajeId,
+        role: 'cliente',
+      );
+    } catch (_) {
+      // Continuar al post-viaje aunque falle la presentación.
+    }
+    if (!mounted) return;
+
+    await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (_) => PostViajeClienteFlow(viajeId: widget.viajeId),
+      ),
+      (Route<dynamic> r) => r.isFirst,
+    );
+  }
+
+  Widget _buildCompletadoState({bool navegandoFactura = false}) {
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -1293,13 +1326,17 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
               const Icon(Icons.check_circle_outline,
                   color: Colors.greenAccent, size: 64),
               const SizedBox(height: 16),
-              const Text(
-                'Viaje finalizado',
-                style: TextStyle(
+              Text(
+                navegandoFactura ? 'Preparando comprobante…' : 'Viaje finalizado',
+                style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
                     fontWeight: FontWeight.bold),
               ),
+              if (navegandoFactura) ...[
+                const SizedBox(height: 20),
+                const CircularProgressIndicator(color: Colors.greenAccent),
+              ] else ...[
               const SizedBox(height: 8),
               const Text(
                 'Este viaje turístico ya se completó. Gracias por confiar en RAI.',
@@ -1320,6 +1357,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                 ),
                 child: const Text('Volver al inicio'),
               ),
+              ],
             ],
           ),
         ),

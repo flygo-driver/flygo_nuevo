@@ -293,8 +293,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                         stream: BolaPuebloRepo.streamTablero(),
                         builder: (context, snap) {
-                          final safeBottom =
-                              MediaQuery.of(context).padding.bottom;
+                          final bottomPad = BolaPuebloUi.safeBottomInset(context);
                           final docsAll = snap.data?.docs ?? const [];
                           final docs = docsAll.where((d) {
                             final m = d.data();
@@ -549,7 +548,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           if (snap.connectionState == ConnectionState.waiting) {
                             return ListView(
                               controller: scrollController,
-                              padding: EdgeInsets.only(bottom: 28 + safeBottom),
+                              padding: EdgeInsets.only(bottom: bottomPad),
                               children: [
                                 ...head,
                                 const SizedBox(height: 48),
@@ -568,7 +567,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                     'Usá «Pedir bola» arriba para publicar el tuyo.';
                             return ListView(
                               controller: scrollController,
-                              padding: EdgeInsets.only(bottom: 28 + safeBottom),
+                              padding: EdgeInsets.only(bottom: bottomPad),
                               children: [
                                 ...head,
                                 BolaPuebloUi.emptyBoard(
@@ -586,7 +585,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                             return ListView.builder(
                               controller: scrollController,
                               padding: EdgeInsets.fromLTRB(
-                                  16, 0, 16, 28 + safeBottom),
+                                  16, 0, 16, bottomPad),
                               itemCount: head.length + docs.length,
                               itemBuilder: (context, i) {
                                 if (i < head.length) return head[i];
@@ -627,7 +626,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           return ListView.builder(
                             controller: scrollController,
                             padding:
-                                EdgeInsets.fromLTRB(16, 0, 16, 28 + safeBottom),
+                                EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
                             itemCount: itemCount,
                             itemBuilder: (context, i) {
                               if (i < head.length) return head[i];
@@ -753,7 +752,13 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                   ),
                   body: SafeArea(
                     child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                      padding: BolaPuebloUi.listScrollPadding(
+                        context,
+                        left: 20,
+                        top: 12,
+                        right: 20,
+                        base: 24,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [

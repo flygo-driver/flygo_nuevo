@@ -1809,6 +1809,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (_pasajerosTurismo != null) {
         extras['pasajeros'] = _pasajerosTurismo;
       }
+      if (tipoServicio == 'turismo' &&
+          _destinoTurismoSeleccionado != null &&
+          _destinoTurismoSeleccionado!.subtipo.isNotEmpty) {
+        extras['categoriaDestinoTurismo'] =
+            _destinoTurismoSeleccionado!.subtipo;
+      }
       if (_promoSnapshotCotizacion != null) {
         extras['promoSnapshot'] = _promoSnapshotCotizacion;
       }

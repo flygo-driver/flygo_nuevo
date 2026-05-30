@@ -255,6 +255,10 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
         child: Form(
           key: _formKey,
           child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
+            ),
             children: [
               const Icon(Icons.local_taxi, size: 90, color: Colors.greenAccent),
               const SizedBox(height: 24),
@@ -372,11 +376,16 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
                   _tipoServicio == 'bola_ahorro') ...[
                 DropdownButtonFormField<String>(
                   value: _tipoVehiculo,
+                  isExpanded: true,
                   items: _tiposVehiculoNormal.map((tipo) {
                     return DropdownMenuItem(
                       value: tipo,
-                      child: Text(tipo,
-                          style: const TextStyle(color: Colors.white)),
+                      child: Text(
+                        tipo,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white),
+                      ),
                     );
                   }).toList(),
                   onChanged: (v) =>
@@ -391,11 +400,16 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
               if (_tipoServicio == 'turismo') ...[
                 DropdownButtonFormField<String>(
                   value: _subtipoTurismo ?? 'carro',
+                  isExpanded: true,
                   items: _subtiposTurismo.map((tipo) {
                     return DropdownMenuItem(
                       value: tipo['value'],
-                      child: Text(tipo['label']!,
-                          style: const TextStyle(color: Colors.white)),
+                      child: Text(
+                        tipo['label']!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white),
+                      ),
                     );
                   }).toList(),
                   onChanged: (v) => setState(() => _subtipoTurismo = v),
@@ -522,16 +536,35 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
                 ),
               ),
               const SizedBox(height: 24),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _acceptedLegal,
-                activeColor: Colors.greenAccent,
-                checkColor: Colors.black,
-                onChanged: (v) => setState(() => _acceptedLegal = v ?? false),
-                title: const Text(
-                  'Acepto los Terminos y Condiciones y la Politica de Privacidad de RAI DRIVER, operado por Open ASK Service SRL (RNC: 1320-11767).',
-                  style: TextStyle(color: Colors.white, fontSize: 12),
-                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Checkbox(
+                    value: _acceptedLegal,
+                    activeColor: Colors.greenAccent,
+                    checkColor: Colors.black,
+                    onChanged: (v) =>
+                        setState(() => _acceptedLegal = v ?? false),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () =>
+                          setState(() => _acceptedLegal = !_acceptedLegal),
+                      child: const Padding(
+                        padding: EdgeInsets.only(top: 10),
+                        child: Text(
+                          'Acepto los Terminos y Condiciones y la Politica de Privacidad de RAI DRIVER, operado por Open ASK Service SRL (RNC: 1320-11767).',
+                          softWrap: true,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               Align(
                 alignment: Alignment.centerLeft,
@@ -593,15 +626,21 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
     final bool isSelected = _tipoServicio == value;
 
     return RadioListTile<String>(
+      contentPadding: EdgeInsets.zero,
       title: Row(
         children: [
           Icon(icon, color: isSelected ? Colors.greenAccent : Colors.white54),
           const SizedBox(width: 12),
-          Text(
-            label,
-            style: TextStyle(
-              color: isSelected ? Colors.greenAccent : Colors.white,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 2,
+              softWrap: true,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: isSelected ? Colors.greenAccent : Colors.white,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
             ),
           ),
         ],

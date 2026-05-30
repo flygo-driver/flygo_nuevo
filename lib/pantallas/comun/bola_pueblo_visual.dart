@@ -174,7 +174,12 @@ abstract final class BolaPuebloTheme {
     final Color fg = error ? Colors.white : c.onSurface;
     return SnackBar(
       behavior: SnackBarBehavior.floating,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      margin: EdgeInsets.fromLTRB(
+        16,
+        0,
+        16,
+        16 + MediaQuery.viewPaddingOf(context).bottom,
+      ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       backgroundColor: bg,
       content: Text(message,
@@ -189,6 +194,47 @@ abstract final class BolaPuebloUi {
   static const double radiusCard = 22;
   static const double radiusButton = 16;
   static const double radiusSmall = 12;
+
+  /// Gestos / barra del sistema + aire extra para que los botones no queden pegados al borde.
+  static double safeBottomInset(BuildContext context, {double base = 28}) {
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double sys = mq.viewPadding.bottom > mq.padding.bottom
+        ? mq.viewPadding.bottom
+        : mq.padding.bottom;
+    return base + sys + 12;
+  }
+
+  /// Padding inferior estándar en listas del tablero y pantallas Bola.
+  static EdgeInsets listScrollPadding(
+    BuildContext context, {
+    double left = contentGutter,
+    double top = 0,
+    double right = contentGutter,
+    double base = 28,
+  }) {
+    return EdgeInsets.fromLTRB(
+      left,
+      top,
+      right,
+      safeBottomInset(context, base: base),
+    );
+  }
+
+  /// Padding inferior en listas ya dentro de [SafeArea] (no suma inset del sistema).
+  static EdgeInsets listScrollPaddingInsideSafeArea(
+    BuildContext context, {
+    double left = contentGutter,
+    double top = 0,
+    double right = contentGutter,
+    double base = 28,
+  }) {
+    return EdgeInsets.fromLTRB(left, top, right, base + 12);
+  }
+
+  /// Margen extra en barra fija inferior; usar dentro de [SafeArea].
+  static EdgeInsets bottomBarSafePadding(BuildContext context) {
+    return const EdgeInsets.fromLTRB(contentGutter, 0, contentGutter, 12);
+  }
 
   static ButtonStyle get filledPrimary => FilledButton.styleFrom(
         backgroundColor: BolaPuebloTheme.accent,

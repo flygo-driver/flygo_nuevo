@@ -7,6 +7,7 @@ import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_crear.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viajes_turismo_asignados.dart';
+import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart';
 
@@ -46,7 +47,7 @@ class TaxistaServiciosTab extends StatelessWidget {
                 'Ser chofer de turismo',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: const Text('Regístrate y espera aprobación'),
+              subtitle: const Text('Registro, documentos y aprobación ADM'),
               trailing: Icon(Icons.chevron_right, color: cs.outline),
               onTap: () {
                 Navigator.push(
@@ -56,6 +57,27 @@ class TaxistaServiciosTab extends StatelessWidget {
               },
             ),
           ),
+          if (user != null)
+            StreamBuilder<EstadoRegistroTurismo>(
+              stream: SolicitudTurismoRepo.streamEstadoRegistro(user.uid),
+              builder: (context, estadoSnap) {
+                final EstadoRegistroTurismo? reg = estadoSnap.data;
+                if (reg?.fase == 'pendiente_adm') {
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    color: cs.tertiaryContainer.withValues(alpha: 0.35),
+                    child: ListTile(
+                      leading: Icon(Icons.hourglass_top, color: cs.tertiary),
+                      title: const Text('Solicitud turismo en revisión'),
+                      subtitle: const Text(
+                        'Administración revisará tu vehículo y documentos.',
+                      ),
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
           if (user != null)
             StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
@@ -93,7 +115,7 @@ class TaxistaServiciosTab extends StatelessWidget {
                           style: TextStyle(fontWeight: FontWeight.w600),
                         ),
                         subtitle: const Text(
-                          'Turismo liberado por administración',
+                          'Viajes liberados por ADM · activa disponibilidad',
                         ),
                         trailing: Icon(Icons.chevron_right, color: cs.outline),
                         onTap: () {

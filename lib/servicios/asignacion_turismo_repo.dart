@@ -40,6 +40,12 @@ class ResultadoPrepClaimPoolTurismo {
 class AsignacionTurismoRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  /// Chofer aprobado por ADM y habilitado para pool / asignación.
+  static bool choferEstadoOperativo(Object? estadoRaw) {
+    final String e = estadoRaw?.toString().trim().toLowerCase() ?? '';
+    return e == 'aprobado' || e == 'activo';
+  }
+
   /// Alinea `subtipoTurismo` / `tipoVehiculo` del documento con `vehiculos[].tipo` en `choferes_turismo`.
   static String normalizarCodigoTipoTurismo(
       String? subtipo, String? tipoVehiculoDoc) {
@@ -123,7 +129,7 @@ class AsignacionTurismoRepo {
         if (!cSnap.exists) throw 'chofer-no-existe';
 
         final cData = cSnap.data()!;
-        if (cData['estado'] != 'aprobado') throw 'chofer-no-aprobado';
+        if (!choferEstadoOperativo(cData['estado'])) throw 'chofer-no-aprobado';
         if (cData['disponible'] != true) throw 'chofer-no-disponible';
 
         final uRef = _db.collection('usuarios').doc(uidChofer);
@@ -340,7 +346,7 @@ class AsignacionTurismoRepo {
     final choferData = choferSnap.data();
     if (!choferSnap.exists ||
         choferData == null ||
-        choferData['estado']?.toString() != 'aprobado') {
+        !choferEstadoOperativo(choferData['estado'])) {
       return ResultadoPrepClaimPoolTurismo.error();
     }
 
@@ -569,7 +575,7 @@ class AsignacionTurismoRepo {
         final DocumentSnapshot<Map<String, dynamic>> cSnap = await tx.get(cRef);
         if (!cSnap.exists) return;
         final Map<String, dynamic> cLive = cSnap.data()!;
-        if (cLive['estado'] != 'aprobado') return;
+        if (!choferEstadoOperativo(cLive['estado'])) return;
         if (cLive['disponible'] != true) return;
 
         final int pax = _pasajerosRequeridos(d);

@@ -276,7 +276,13 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                 (estado == 'acordada' || estado == 'en_curso');
             final bool mapaEstiloCalleBlanca =
                 soyClienteAsignado && mostrarTaxistaEnMapa;
-            final double safeBottom = MediaQuery.of(context).padding.bottom;
+            final double bottomPad =
+                BolaPuebloUi.listScrollPaddingInsideSafeArea(
+              context,
+              left: 18,
+              top: 16,
+              right: 18,
+            ).bottom;
 
             return Scaffold(
               backgroundColor: c.bgDeep,
@@ -402,7 +408,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                             Expanded(
                               child: ListView(
                                 padding:
-                                    EdgeInsets.fromLTRB(18, 16, 18, 28 + safeBottom),
+                                    EdgeInsets.fromLTRB(18, 16, 18, bottomPad),
                                 children: [
                                   BolaPuebloUi.routeBlock(context,
                                       origen: origen, destino: destino),

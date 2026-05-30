@@ -1165,7 +1165,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       gpsCoordinatesLine:
           'GPS: ${_fmtCoord(leg.lat)}, ${_fmtCoord(leg.lon)}',
       footerHint:
-          'Waze o Maps abren este punto exacto. Al salir, confirma «Llegué — siguiente destino».',
+          'Waze o Maps abren este punto exacto. El conductor confirma cada parada en su app.',
       onWaze: () => unawaited(_openWazeTo(leg.lat, leg.lon)),
       onMaps: () => unawaited(_openGoogleMapsTo(leg.lat, leg.lon, label: leg.label)),
     );

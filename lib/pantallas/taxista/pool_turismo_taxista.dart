@@ -17,7 +17,9 @@ import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
@@ -116,6 +118,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
   static const double _radioBusquedaKm = 50.0;
 
   Position? _ubicacionCache;
+  bool _navegandoAViajeActivo = false;
+  bool? _gpsServicioActivo;
 
   @override
   void initState() {
@@ -128,6 +132,97 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       if (mounted) setState(() {});
     });
     _cargarUbicacionCache();
+    unawaited(_refrescarEstadoGps());
+  }
+
+  Future<void> _refrescarEstadoGps() async {
+    final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest();
+    if (!mounted) return;
+    setState(() => _gpsServicioActivo = snap.serviceEnabled);
+  }
+
+  Future<void> _reconciliarViajeActivoAlResume() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || !mounted) return;
+    try {
+      final uDoc = await fs.FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get();
+      final vid = (uDoc.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isEmpty) return;
+      final vSnap = await fs.FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(vid)
+          .get();
+      if (!vSnap.exists || !mounted) return;
+      final data = vSnap.data() ?? <String, dynamic>{};
+      if (data['completado'] == true) return;
+      final estado = (data['estado'] ?? '').toString();
+      if (estado == 'cancelado' || estado == 'completado') return;
+      if ((data['uidTaxista'] ?? '').toString() != uid) return;
+      if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(data)) {
+        return;
+      }
+      _navegandoAViajeActivo = false;
+      _redirectToActiveTrip();
+    } catch (e, st) {
+      print('[TURISMO_POOL] resume reconcile error $e $st');
+    }
+  }
+
+  Widget _pantallaUbicacionRequerida() {
+    final p = context._poolTurismoPal;
+    return Scaffold(
+      backgroundColor: p.scaffoldBg,
+      appBar: _poolAppBar(context),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.location_off_rounded, size: 56, color: p.textSecondary),
+              const SizedBox(height: 16),
+              Text(
+                'Activa el GPS para ver viajes turísticos cerca de ti',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: p.textPrimary,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Sin ubicación real no podemos mostrar el pool con precisión. '
+                'Actívalo y vuelve a esta pantalla.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: p.textSecondary, height: 1.45),
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: () async {
+                  await Geolocator.openLocationSettings();
+                },
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Abrir ajustes de ubicación'),
+              ),
+              if (_ubicacionCache != null) ...[
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () {
+                    setState(() => _gpsServicioActivo = true);
+                  },
+                  child: const Text('Usar última ubicación conocida'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _checkExistingActiveTrip() async {
@@ -150,7 +245,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
   }
 
   void _redirectToActiveTrip() {
-    if (!mounted) return;
+    if (!mounted || _navegandoAViajeActivo) return;
+    _navegandoAViajeActivo = true;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(builder: (_) => const ViajeEnCursoTaxista()),
     );
@@ -165,7 +261,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && mounted) setState(() {});
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(_refrescarEstadoGps());
+      unawaited(_reconciliarViajeActivoAlResume());
+      setState(() {});
+    }
   }
 
   Future<void> _guardarUbicacionCache(Position pos) async {
@@ -1122,34 +1222,26 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
           .snapshots(),
       builder: (context, snap) {
         final d = snap.data?.data();
-        final aprobado = d != null && d['estado']?.toString() == 'aprobado';
+        final aprobado =
+            d != null && AsignacionTurismoRepo.choferEstadoOperativo(d['estado']);
         if (!aprobado) {
           return _pantallaNoAprobado();
         }
 
+        unawaited(UbicacionTaxista.habilitarSyncChoferTurismo(u.uid));
         UbicacionTaxista.iniciarActualizacion();
 
         return StreamBuilder<Position>(
           stream: UbicacionTaxista.obtenerStreamUbicacion().timeout(
             const Duration(seconds: 15),
-            onTimeout: (EventSink<Position> sink) {
-              sink.add(
-                Position(
-                  longitude: -69.9312,
-                  latitude: 18.4861,
-                  timestamp: DateTime.now(),
-                  accuracy: 0,
-                  altitude: 0,
-                  altitudeAccuracy: 0,
-                  heading: 0,
-                  headingAccuracy: 0,
-                  speed: 0,
-                  speedAccuracy: 0,
-                ),
-              );
-            },
           ),
           builder: (context, ubicacionSnapshot) {
+            if (_gpsServicioActivo == false &&
+                _ubicacionCache == null &&
+                ubicacionSnapshot.connectionState == ConnectionState.waiting) {
+              return _pantallaUbicacionRequerida();
+            }
+
             if (ubicacionSnapshot.connectionState == ConnectionState.waiting &&
                 _ubicacionCache != null) {
               return _buildContenidoPrincipal(context, _ubicacionCache!, u);
@@ -1166,8 +1258,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
               );
             }
 
-            if (ubicacionSnapshot.hasError && _ubicacionCache != null) {
-              return _buildContenidoPrincipal(context, _ubicacionCache!, u);
+            if (ubicacionSnapshot.hasError) {
+              if (_ubicacionCache != null) {
+                return _buildContenidoPrincipal(context, _ubicacionCache!, u);
+              }
+              return _pantallaUbicacionRequerida();
             }
 
             final pos = ubicacionSnapshot.data;
@@ -1175,22 +1270,13 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
               if (_ubicacionCache != null) {
                 return _buildContenidoPrincipal(context, _ubicacionCache!, u);
               }
-              final def = Position(
-                longitude: -69.9312,
-                latitude: 18.4861,
-                timestamp: DateTime.now(),
-                accuracy: 0,
-                altitude: 0,
-                altitudeAccuracy: 0,
-                heading: 0,
-                headingAccuracy: 0,
-                speed: 0,
-                speedAccuracy: 0,
-              );
-              return _buildContenidoPrincipal(context, def, u);
+              return _pantallaUbicacionRequerida();
             }
 
             _guardarUbicacionCache(pos);
+            if (mounted && _gpsServicioActivo != true) {
+              _gpsServicioActivo = true;
+            }
             return _buildContenidoPrincipal(context, pos, u);
           },
         );

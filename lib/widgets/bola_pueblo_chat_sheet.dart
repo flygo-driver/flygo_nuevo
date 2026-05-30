@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 
 /// Chat solo para la bola acordada/en curso (subcolección `mensajes_bola`, reglas en Firestore).
 class BolaPuebloChatSheet extends StatefulWidget {
@@ -161,7 +162,8 @@ class _BolaPuebloChatSheetState extends State<BolaPuebloChatSheet> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              padding: BolaPuebloUi.bottomBarSafePadding(context)
+                  .copyWith(top: 8, left: 12, right: 12),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [

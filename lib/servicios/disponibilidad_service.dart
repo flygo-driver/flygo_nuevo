@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
 
 class DisponibilidadService {
   static const Duration tiempoMaximo = Duration(hours: 12);
@@ -66,5 +67,9 @@ class DisponibilidadService {
         rethrow;
       }
     }
+    await SolicitudTurismoRepo.sincronizarDisponibilidadChofer(
+      uid: uid,
+      disponible: true,
+    );
   }
 }

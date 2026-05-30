@@ -34,9 +34,12 @@ bool viajeDocCompletado(Map<String, dynamic> data) {
 
 String etiquetaTipoServicioFactura(Map<String, dynamic> data) {
   final String cat = (data['categoria'] ?? '').toString().trim().toLowerCase();
-  if (cat == 'multi') return 'Multiparada';
-
   final String ts = (data['tipoServicio'] ?? '').toString().trim().toLowerCase();
+  if (cat == 'multi') {
+    if (ts == 'motor') return 'Motor RAI · Multiparada';
+    if (ts == 'turismo') return 'Turismo · Multiparada';
+    return 'Multiparada';
+  }
   switch (ts) {
     case 'motor':
       return 'Motor RAI';

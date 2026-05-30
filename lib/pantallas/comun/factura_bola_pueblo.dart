@@ -11,6 +11,7 @@ import 'package:intl/intl.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/comprobante_transferencia_service.dart';
+import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
@@ -149,7 +150,13 @@ class _FacturaBolaContent extends StatelessWidget {
     final bool esTaxista = role == 'taxista';
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      padding: BolaPuebloUi.listScrollPadding(
+        context,
+        left: 20,
+        top: 12,
+        right: 20,
+        base: 20,
+      ),
       children: [
         _DocBanner(cs: cs, tt: tt),
         const SizedBox(height: 16),
