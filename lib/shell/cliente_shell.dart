@@ -8,7 +8,7 @@ import 'package:flygo_nuevo/pantallas/cliente/cliente_cuenta_tab.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_experiencias_tab.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_mis_viajes_hub.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_fidelidad_milestone_listener.dart';
@@ -119,7 +119,9 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
           children: [
             RaiOfflineBanner(uid: uidOffline),
             Expanded(
-              child: ViajeEnCursoCliente(key: _viajeEnCursoShellKey),
+              child: ClientePantallaViajeActivo(
+                viajeEnCursoKey: _viajeEnCursoShellKey,
+              ),
             ),
           ],
         ),

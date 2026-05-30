@@ -239,6 +239,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   Future<void> _initUbicacionParaMapa() async {
     setState(() => _cargandoUbicacion = true);
 
+    // Flujo explícito (solicitar viaje): puede mostrar diálogo del SO si aún denied.
     final basic = await LocationPermissionService.checkAndRequestBasicPermission();
     if (!basic.serviceEnabled) {
       if (mounted) {

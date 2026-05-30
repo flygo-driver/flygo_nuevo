@@ -1,20 +1,14 @@
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+
+import { persistirCalificacionClienteEnViaje } from "./trip_feedback.js";
 
 const db = () => getFirestore();
 
 const MAX_COMENTARIO = 280;
 
-function esClienteDelViaje(data: Record<string, unknown>, uid: string): boolean {
-  const u = String(data.uidCliente ?? "").trim();
-  const c = String(data.clienteId ?? "").trim();
-  if (u && u === uid) return true;
-  if (c && c === uid) return true;
-  return false;
-}
-
 /**
- * Calificación del viaje (cliente → taxista). Admin SDK: no depende de reglas cliente en viajes/usuarios.
+ * Calificación del viaje (cliente → taxista). Admin SDK + colección `calificaciones`.
  */
 export const submitTripRating = onCall(async (request) => {
   const uid = request.auth?.uid;
@@ -50,56 +44,16 @@ export const submitTripRating = onCall(async (request) => {
     if (!snap.exists) {
       throw new HttpsError("not-found", "El viaje no existe.");
     }
-    const d = snap.data()!;
+    const d = snap.data()! as Record<string, unknown>;
 
-    if (!esClienteDelViaje(d, uid)) {
-      throw new HttpsError("permission-denied", "No puedes calificar este viaje.");
-    }
-
-    if (d.completado !== true) {
-      throw new HttpsError(
-        "failed-precondition",
-        "Solo puedes calificar viajes completados.",
-      );
-    }
-
-    if (d.calificado === true) {
-      return { ok: true as const, alreadyRated: true as const };
-    }
-
-    const uidTaxista = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
-    const taxRef = uidTaxista
-      ? db().collection("usuarios").doc(uidTaxista)
-      : null;
-    if (taxRef) {
-      await tx.get(taxRef);
-    }
-
-    const patch: Record<string, unknown> = {
-      calificado: true,
-      calificacion: cal,
-      calificadoEn: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      actualizadoEn: FieldValue.serverTimestamp(),
-    };
-    if (comentario) {
-      patch.comentario = comentario;
-    }
-
-    tx.update(tripRef, patch);
-
-    if (taxRef) {
-      tx.set(
-        taxRef,
-        {
-          ratingSuma: FieldValue.increment(cal),
-          ratingConteo: FieldValue.increment(1),
-        },
-        { merge: true },
-      );
-    }
-
-    return { ok: true as const, alreadyRated: false as const };
+    const inner = persistirCalificacionClienteEnViaje(tx, {
+      viajeId,
+      uidCliente: uid,
+      cal,
+      comentario,
+      tripData: d,
+    });
+    return { ok: true as const, alreadyRated: inner.alreadyRated };
   });
 
   return result;

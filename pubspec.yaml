@@ -1,6 +1,6 @@
 name: flygo_nuevo  # ← NO lo cambies
 description: RAI Driver — app de movilidad para clientes y taxistas.
-version: 1.0.4+14
+version: 2.0.0+150
 publish_to: "none"
 
 environment:
@@ -76,7 +76,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/sounds/notification.wav     # Timbre in-app (mismo tono que res/raw en Android)
-    - assets/icon/icono_app_R.png        # R sola (icono app y appbar)
+    - assets/icon/icono_app_R.png        # R sola (icono app y launcher)
+    - assets/icon/logo_rai_app.png       # R compacto (header dentro de la app)
     - assets/icon/paracaida_color.png    # Paracaídas (pantalla bienvenida)
     - assets/icon/splash_rai.png         # R + RAI + "Movilidad Inteligente" (splash)
     - assets/icon/logo_rai_vertical.png  # R arriba + RAI abajo (pantalla bienvenida)

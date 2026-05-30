@@ -76,6 +76,74 @@ class ChoferesTurismoRepo {
     });
   }
 
+  /// Red turística aprobada (disponibles y ocupados) para listado en espera del cliente.
+  static Stream<List<ChoferTurismo>> streamChoferesRedAprobados({
+    String? tipoVehiculo,
+    double? lat,
+    double? lon,
+    double radioKm = 60,
+  }) {
+    Query<Map<String, dynamic>> query =
+        _col.where('estado', isEqualTo: 'aprobado');
+
+    return query.snapshots().map((snapshot) {
+      var choferes = snapshot.docs
+          .map((doc) => ChoferTurismo.fromMap(doc.id, doc.data()))
+          .toList();
+
+      if (tipoVehiculo != null && tipoVehiculo.isNotEmpty) {
+        choferes = choferes
+            .where((c) =>
+                c.vehiculos.any((v) => v.tipo.toLowerCase() == tipoVehiculo))
+            .toList();
+      }
+
+      if (lat != null && lon != null) {
+        choferes = choferes.where((c) {
+          if (c.ultimaUbicacion == null) return true;
+          final distancia = Geolocator.distanceBetween(
+                lat,
+                lon,
+                c.ultimaUbicacion!.latitude,
+                c.ultimaUbicacion!.longitude,
+              ) /
+              1000;
+          return distancia <= radioKm;
+        }).toList();
+
+        choferes.sort((a, b) {
+          if (a.disponible != b.disponible) {
+            return a.disponible ? -1 : 1;
+          }
+          if (a.ultimaUbicacion == null) return 1;
+          if (b.ultimaUbicacion == null) return -1;
+          final da = Geolocator.distanceBetween(
+            lat,
+            lon,
+            a.ultimaUbicacion!.latitude,
+            a.ultimaUbicacion!.longitude,
+          );
+          final db = Geolocator.distanceBetween(
+            lat,
+            lon,
+            b.ultimaUbicacion!.latitude,
+            b.ultimaUbicacion!.longitude,
+          );
+          return da.compareTo(db);
+        });
+      } else {
+        choferes.sort((a, b) {
+          if (a.disponible != b.disponible) {
+            return a.disponible ? -1 : 1;
+          }
+          return a.nombre.compareTo(b.nombre);
+        });
+      }
+
+      return choferes;
+    });
+  }
+
   static Future<ChoferTurismo?> obtenerChofer(String uid) async {
     final doc = await _col.doc(uid).get();
     if (!doc.exists) return null;

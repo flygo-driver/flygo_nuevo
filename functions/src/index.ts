@@ -7,6 +7,7 @@ setGlobalOptions({ region: "us-central1", maxInstances: 10 });
 // Misma superficie que producción (flygo-rd): desplegar siempre desde flygo_nuevo/functions
 export * from "./wallet.js";
 export * from "./boarding.js";
+export * from "./multiparada.js";
 export * from "./publish.js";
 export * from "./finance.js";
 export * from "./pool_finance.js";
@@ -15,6 +16,7 @@ export * from "./scheduled_pool_notify.js";
 export * from "./scheduled_pool_departure_owner.js";
 export * from "./scheduled_pool_reservations_cleanup.js";
 export * from "./trip_rating.js";
+export * from "./trip_feedback.js";
 export * from "./cliente_fidelidad_stats.js";
 export * from "./bola_pueblo.js";
 export * from "./incidencias.js";

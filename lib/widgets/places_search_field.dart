@@ -1,6 +1,7 @@
 // lib/widgets/places_search_field.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/places_api.dart';
 import 'package:flygo_nuevo/servicios/places_service.dart';
 import 'package:uuid/uuid.dart';
@@ -69,7 +70,7 @@ class _PlacesSearchFieldState extends State<PlacesSearchField> {
   void _onChanged() {
     if (!_focus.hasFocus) return;
     _deb?.cancel();
-    _deb = Timer(const Duration(milliseconds: 260), () async {
+    _deb = Timer(const Duration(milliseconds: 110), () async {
       final q = _ctrl.text.trim();
       if (q.isEmpty) {
         if (mounted) setState(() => _items = const []);
@@ -83,9 +84,28 @@ class _PlacesSearchFieldState extends State<PlacesSearchField> {
           sessionToken: _sessionToken,
           biasLat: widget.biasLat,
           biasLon: widget.biasLon,
-          biasRadiusMeters: widget.biasRadiusMeters ?? 30000,
+          biasRadiusMeters: widget.biasRadiusMeters ?? 200000,
         );
-        if (mounted) setState(() => _items = r);
+        if (mounted) {
+          setState(() => _items = LugaresService.instance.rankearPredicciones(
+                r
+                    .map(
+                      (p) => PrediccionLugar(
+                        placeId: p.placeId,
+                        primary: p.primary,
+                        secondary: p.secondary,
+                      ),
+                    )
+                    .toList(),
+                q,
+              ).map(
+                (p) => PlacePrediction(
+                  placeId: p.placeId,
+                  primary: p.primary,
+                  secondary: p.secondary,
+                ),
+              ).toList());
+        }
       } catch (_) {
         if (mounted) setState(() => _items = const []);
       } finally {

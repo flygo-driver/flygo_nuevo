@@ -8,10 +8,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 
 import 'package:flygo_nuevo/utils/estilos.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/billetera_service.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/modelo/liquidacion.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
+import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
 
 class BilleteraTaxista extends StatefulWidget {
   const BilleteraTaxista({super.key});
@@ -50,7 +53,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Saldo disponible: ${FormatosMoneda.rd(saldoActual)}',
+            Text('Saldo para retiro: ${FormatosMoneda.rd(saldoActual)}',
                 style: const TextStyle(color: Colors.white70)),
             const SizedBox(height: 10),
             TextField(
@@ -88,7 +91,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
     if (monto > saldoActual) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('El monto excede el saldo disponible.')));
+          content: Text('El monto excede tu saldo para retiro.')));
       return;
     }
 
@@ -166,17 +169,18 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                       return Column(
                         children: [
                           _infoBox(
-                              "Saldo disponible",
+                              "Saldo para retiro",
                               FormatosMoneda.rd(r.saldoDisponible),
                               EstilosRai.textoVerde),
                           const SizedBox(height: 16),
-                          _infoBox("Ganancia Total",
+                          _infoBox(
+                              "Ganancia total (viajes completados)",
                               FormatosMoneda.rd(r.gananciaTotal), Colors.green),
                           const SizedBox(height: 16),
                           _infoBox(
-                              "Comisión acumulada (RAI)",
+                              "Comisión RAI en tus viajes (20 %, histórico)",
                               FormatosMoneda.rd(r.comisionTotal),
-                              Colors.redAccent),
+                              Colors.deepOrangeAccent),
                           const SizedBox(height: 16),
                           _infoBox("Viajes Completados",
                               "${r.viajesCompletados}", Colors.blueAccent),
@@ -210,6 +214,9 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                       );
                     },
                   ),
+
+                  const SizedBox(height: 24),
+                  _OperativaPrepagoCard(uid: u.uid),
 
                   const SizedBox(height: 24),
                   const _CuentaEmpresaCard(), // datos bancarios empresa
@@ -315,19 +322,40 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                         color: EstilosRai.textoBlanco,
                       )),
                   const SizedBox(height: 8),
-                  const Text(
-                    "• Recibes el 80% de cada viaje completado.\n"
-                    "• RAI retiene el 20% como comisión.\n"
-                    "• Las solicitudes de retiro descuentan tu saldo disponible.\n"
-                    "• Cuando una liquidación se aprueba, queda reflejada en el historial.\n"
-                    "• Próximamente podrás recibir transferencias automáticas.",
-                    style: TextStyle(
+                  Text(
+                    _textoComoFuncionaBilletera(),
+                    style: const TextStyle(
                         color: Colors.white70, fontSize: 16, height: 1.35),
                   ),
                 ],
               ),
             ),
     );
+  }
+
+  /// Etiqueta compacta de porcentaje (sync con `config/comision` → [PlataformaEconomia]).
+  static String _pctMostrar(double p) {
+    if (!p.isFinite || p < 0) return '?';
+    final r = p.roundToDouble();
+    if ((p - r).abs() < 1e-6) return r.toInt().toString();
+    return p.toStringAsFixed(1);
+  }
+
+  /// Título tarjeta naranja: montos = suma real en viajes; % global es referencia actual.
+  String _tituloComisionRaiHistorico() {
+    final rai = PlataformaEconomia.comisionViajePorcentaje;
+    return 'Comisión RAI en tus viajes (histórico; estándar hoy ${_pctMostrar(rai)}%)';
+  }
+
+  String _textoComoFuncionaBilletera() {
+    final rai = PlataformaEconomia.comisionViajePorcentaje;
+    final drv = (100.0 - rai).clamp(0.0, 100.0);
+    return '• En viajes estándar, la app usa hoy ${_pctMostrar(drv)}% para ti y ${_pctMostrar(rai)}% comisión RAI (sale de configuración; cambios futuros no reescriben viajes ya guardados).\n'
+        '• La tarjeta naranja suma lo que consta en tus viajes completados; turismo u otros servicios pueden tener otro reparto.\n'
+        '• Eso no es prepago en efectivo: recarga y bloqueos van en el recuadro verde y en Mis pagos.\n'
+        '• Las solicitudes de retiro descuentan tu saldo para retiro.\n'
+        '• Cuando una liquidación se aprueba, queda reflejada en el historial.\n'
+        '• Próximamente podrás recibir transferencias automáticas.';
   }
 
   Widget _infoBox(String titulo, String valor, Color color) {
@@ -350,6 +378,149 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
               style: const TextStyle(fontSize: 24, color: Colors.white)),
         ],
       ),
+    );
+  }
+}
+
+/// Solo lectura: mismos datos que Mis pagos / bloqueo operativo. No altera saldos ni retiros.
+class _OperativaPrepagoCard extends StatelessWidget {
+  final String uid;
+  const _OperativaPrepagoCard({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    final ref =
+        FirebaseFirestore.instance.collection('billeteras_taxista').doc(uid);
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: ref.snapshots(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.grey[900],
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: const Center(
+              child: SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: EstilosRai.textoVerde,
+                ),
+              ),
+            ),
+          );
+        }
+
+        final data = snap.data?.data();
+        final prep = PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(
+            data);
+        final legacy =
+            PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
+        final bloqueoLegacy = legacy + 1e-9 >=
+            PagosTaxistaRepo.umbralComisionLegacyBloqueoRd;
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.grey[900],
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+                color: bloqueoLegacy ? Colors.redAccent : EstilosRai.textoVerde,
+                width: 2),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Comisión en efectivo (operar)',
+                style: TextStyle(
+                  color: EstilosRai.textoVerde,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 17,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Distinto del saldo para retiro de arriba. Aquí va el prepago para viajes en efectivo y deudas históricas.',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.65), fontSize: 13, height: 1.35),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Saldo prepago disponible',
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.75), fontSize: 14)),
+              const SizedBox(height: 4),
+              Text(
+                FormatosMoneda.rd(prep),
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700),
+              ),
+              if (legacy > 1e-6) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Comisión pendiente (histórico / admin)',
+                  style: TextStyle(
+                      color: bloqueoLegacy ? Colors.redAccent : Colors.orangeAccent,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text(
+                  FormatosMoneda.rd(legacy),
+                  style: TextStyle(
+                    color: bloqueoLegacy ? Colors.redAccent : Colors.orangeAccent,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                if (bloqueoLegacy)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      '≥ RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)} en esta deuda puede bloquearte: regulariza en Mis pagos.',
+                      style: TextStyle(
+                        color: Colors.redAccent.withValues(alpha: 0.9),
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const MisPagos(
+                          scrollToRecargaSection: true,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.payments_outlined,
+                      color: EstilosRai.textoVerde),
+                  label: const Text(
+                    'Ir a Mis pagos (recarga y estado)',
+                    style: TextStyle(
+                        color: EstilosRai.textoVerde, fontWeight: FontWeight.w700),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: EstilosRai.textoVerde),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -420,12 +591,21 @@ class _CuentaEmpresaCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Datos para transferencia',
+          const Text('Cuenta para recargar prepago (transferencia a RAI)',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w700,
                 fontSize: 16,
               )),
+          const SizedBox(height: 6),
+          Text(
+            'No es tu cuenta personal para cobrar viajes; sirve para depositar y verificar recargas de comisión.',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.65),
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
           const SizedBox(height: 10),
           _kv('Titular', titular),
           _kv('Banco', banco),

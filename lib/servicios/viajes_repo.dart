@@ -311,6 +311,16 @@ class ViajesRepo {
     if (wps != null) {
       data['waypoints'] = wps;
       (extras ??= <String, dynamic>{})['paradas_count'] = wps.length;
+      // Plan multiparada fijado al crear (navegación lee waypoints + destino).
+      final bool destOk =
+          !_outOfRange(latDestino, lonDestino) && !(latDestino == 0 && lonDestino == 0);
+      final int legsTotal = wps.length + (destOk ? 1 : 0);
+      if (legsTotal > 0) {
+        data['multiparadaLegsTotal'] = legsTotal;
+        data['multiparadaLegCompletadas'] = 0;
+        data['multiparadaParadasVisitadas'] = <Map<String, dynamic>>[];
+        data['multiparadaCompleta'] = false;
+      }
     }
     if (extras != null && extras.isNotEmpty) data['extras'] = extras;
 
@@ -1213,6 +1223,14 @@ class ViajesRepo {
       });
     });
 
+    try {
+      final post = await ref.get();
+      final tipo = (post.data()?['tipoServicio'] ?? '').toString().trim();
+      if (tipo == 'bola_ahorro') {
+        unawaited(BolaPuebloFirestoreSync.syncBolaPickupConfirmadaDesdeViaje(viajeId));
+      }
+    } catch (_) {}
+
     await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
   }
 
@@ -1231,6 +1249,23 @@ class ViajesRepo {
 
     unawaited(AnalyticsRai.logTripStarted());
     await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+  }
+
+  /// Conductor: registra llegada a la parada/destino actual (viaje multiparada).
+  static Future<void> registrarLegMultiparadaCompletada({
+    required String viajeId,
+  }) async {
+    final id = viajeId.trim();
+    if (id.isEmpty) throw Exception('Viaje inválido');
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('registrarLegMultiparadaSeguro');
+      await callable.call(<String, dynamic>{'viajeId': id});
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) throw Exception(msg);
+      throw Exception(e.code);
+    }
   }
 
   static bool _usuarioParticipaViajeDoc(Map<String, dynamic>? d, String uid) {
@@ -1353,7 +1388,12 @@ class ViajesRepo {
 
     try {
       final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
-          .httpsCallable('completarViajePorTaxista');
+          .httpsCallable(
+        'completarViajePorTaxista',
+        options: HttpsCallableOptions(
+          timeout: const Duration(seconds: 120),
+        ),
+      );
 
       for (var fpPass = 0; fpPass < kFailedPreconditionPasses; fpPass++) {
         final idemKey =
@@ -1538,8 +1578,14 @@ class ViajesRepo {
         final bool esAhora =
             !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
 
-        tx.update(ref, {
-          'estado': forzar ? EstadosViaje.cancelado : EstadosViaje.pendiente,
+        final bool esTurismo =
+            (d['tipoServicio'] ?? '').toString() == 'turismo';
+        final String estadoTrasCancel = forzar
+            ? EstadosViaje.cancelado
+            : (esTurismo ? 'pendiente_admin' : EstadosViaje.pendiente);
+
+        final Map<String, dynamic> cancelPatch = <String, dynamic>{
+          'estado': estadoTrasCancel,
           'aceptado': false,
           'rechazado': false,
           'activo': false,
@@ -1563,7 +1609,16 @@ class ViajesRepo {
           'ignoradosPor': FieldValue.arrayUnion([uidTaxista]),
           'reservadoPor': '',
           'reservadoHasta': null,
-        });
+        };
+        if (esTurismo && !forzar) {
+          cancelPatch['codigoVerificado'] = false;
+          cancelPatch['codigoVerificadoEn'] = FieldValue.delete();
+          cancelPatch['asignacionAutomatica'] = FieldValue.delete();
+          cancelPatch['asignadoPor'] = FieldValue.delete();
+          cancelPatch['asignadoEn'] = FieldValue.delete();
+          cancelPatch['aceptadoEn'] = FieldValue.delete();
+        }
+        tx.update(ref, cancelPatch);
 
         tx.set(
             uRef,
@@ -1600,6 +1655,14 @@ class ViajesRepo {
           stack: st,
           context: 'liberarChofer(turismo) tras cancelar (taxista)',
         );
+      }
+      try {
+        await AsignacionTurismoRepo.intentarAsignacionAutomatica(
+          viajeId: viajeId,
+          radioKm: 55,
+        );
+      } catch (_) {
+        // Otro chofer o pool turístico / ADM pueden tomar el viaje.
       }
     }
   }

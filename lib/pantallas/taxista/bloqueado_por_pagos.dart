@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../modelo/pago_taxista.dart';
 import '../../widgets/rai_app_bar.dart';
+import '../../config/plataforma_economia.dart';
 
 /// Datos bancarios de la EMPRESA (Open ASK), iguales a los usados en billetera del taxista.
 const String _empresaBancoNombre = 'Banco Popular';
@@ -45,6 +46,8 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
   final formatter = NumberFormat.currency(locale: 'es', symbol: 'RD\$');
   PagoTaxista? _pagoPendiente;
   Map<String, dynamic>? _billeData;
+  Map<String, dynamic>? _usuarioData;
+  bool _deudaSemanalVencida = false;
   bool _cargando = true;
 
   @override
@@ -61,6 +64,12 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
           .collection('billeteras_taxista')
           .doc(user!.uid)
           .get();
+      final usr = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .get();
+      final deudaSemanal =
+          await PagosTaxistaRepo.tieneDeudaSemanalVencida(user!.uid);
       final pagos =
           await PagosTaxistaRepo.streamPagosPorTaxista(user!.uid).first;
 
@@ -77,6 +86,8 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
         setState(() {
           _pagoPendiente = pendiente;
           _billeData = bille.data();
+          _usuarioData = usr.data();
+          _deudaSemanalVencida = deudaSemanal;
           _cargando = false;
         });
       }
@@ -85,6 +96,14 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
         setState(() => _cargando = false);
       }
     }
+  }
+
+  String _textoBloqueoPrincipal() {
+    return PagosTaxistaRepo.mensajeCuentaBloqueadaOperativo(
+      deudaSemanalVencida: _deudaSemanalVencida,
+      billeData: _billeData,
+      usuarioData: _usuarioData,
+    );
   }
 
   @override
@@ -100,6 +119,11 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
         ),
       );
     }
+
+    final pctCom = PlataformaEconomia.comisionViajePorcentaje;
+    final pctComStr = pctCom == pctCom.roundToDouble()
+        ? pctCom.round().toString()
+        : pctCom.toStringAsFixed(1);
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -155,7 +179,7 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
                             color: Colors.redAccent.withValues(alpha: 0.3)),
                       ),
                       child: Text(
-                        PagosTaxistaRepo.mensajeRecargaAccesoPantallaCompleta,
+                        _textoBloqueoPrincipal(),
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white70,
@@ -217,9 +241,74 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
                                     fontSize: 14),
                               ),
                             ],
+                            if (PagosTaxistaRepo.bloqueoPorComisionLegacyTope(
+                                _billeData)) ...[
+                              const SizedBox(height: 10),
+                              Builder(
+                                builder: (context) {
+                                  final pend = PagosTaxistaRepo
+                                      .comisionPendienteDesdeBilletera(
+                                          _billeData);
+                                  final minSalir = PagosTaxistaRepo
+                                      .montoMinimoRecargaParaSalirBloqueoLegacyRd(
+                                          pend);
+                                  final minCero = PagosTaxistaRepo
+                                      .montoParaLiquidarLegacyCompletoRd(pend);
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Montos orientativos (recarga verificada; primero paga legacy):',
+                                        style: TextStyle(
+                                          color: Colors.amber.shade100,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '• Mínimo para bajar legacy debajo del tope (RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}) y poder operar: ${formatter.format(minSalir)}.',
+                                        style: TextStyle(
+                                          color: Colors.white.withValues(
+                                              alpha: 0.9),
+                                          fontSize: 13,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                      if (minCero > minSalir + 0.01)
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 6),
+                                          child: Text(
+                                            '• Para dejar legacy en cero: ${formatter.format(minCero)}.',
+                                            style: TextStyle(
+                                              color: Colors.white.withValues(
+                                                  alpha: 0.88),
+                                              fontSize: 13,
+                                              height: 1.4,
+                                            ),
+                                          ),
+                                        ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        'Pool/giras: si además tenés comisión de gira pendiente de admin, puede aplicarse otro tope; revisá Mis pagos.',
+                                        style: TextStyle(
+                                          color: Colors.white.withValues(
+                                              alpha: 0.72),
+                                          fontSize: 12,
+                                          height: 1.35,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ],
                             const SizedBox(height: 8),
                             Text(
-                              'Recarga desde Mis pagos: el admin acredita tu saldo; el 20% de cada viaje en efectivo se descuenta de ese saldo.',
+                              'Recarga desde Mis pagos: al aprobar el admin, el monto verificado paga primero '
+                              'la comisión legacy pendiente (si hay) y el resto suma a tu prepago; el $pctComStr% '
+                              'de cada viaje en efectivo se descuenta del prepago disponible.',
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.85),
                                   fontSize: 13,

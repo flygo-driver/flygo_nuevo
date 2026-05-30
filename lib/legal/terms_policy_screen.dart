@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class TermsPolicyScreen extends StatefulWidget {
   const TermsPolicyScreen({
@@ -56,12 +57,10 @@ class _TermsPolicyScreenState extends State<TermsPolicyScreen> {
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      backgroundColor: cs.surface,
-      appBar: AppBar(
-        title: const Text('Terminos y Politica de Privacidad'),
-        backgroundColor: cs.surface,
-        foregroundColor: cs.onSurface,
-        automaticallyImplyLeading: !widget.requireAcceptance,
+      appBar: RaiAppBar(
+        title: 'Términos y política',
+        centerTitle: true,
+        showBackWhenCanPop: !widget.requireAcceptance,
       ),
       body: SafeArea(
         child: Column(

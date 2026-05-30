@@ -181,6 +181,7 @@ service cloud.firestore {
     function bolaPickupSoloTaxistaAsignado() {
       return !bolaPickupCamposCambiados() ||
         resource.data.uidTaxista == request.auth.uid ||
+        resource.data.taxistaId == request.auth.uid ||
         (
           resource.data.createdByUid == request.auth.uid &&
           resource.data.estado == "abierta" &&
@@ -380,11 +381,43 @@ service cloud.firestore {
             "transferenciaReportadaEn",
             "motivoRechazoTransferencia",
             "canceladoPor", "motivoCancelacion", "canceladoClienteEn",
+            "reportado",
             "updatedAt", "actualizadoEn"
           ]) &&
           // Cliente no puede forzar en_curso ni cerrar viaje desde app.
           !(request.resource.data.estado in ["en_curso", "encurso", "completado"]) &&
           !(clienteIntentaMarcarCancelado() && viajeTrasAbordarOEnRuta())
+        ) ||
+        (
+          // Post-viaje (efectivo): el cliente marca que vio el resumen/recibo — solo estos campos.
+          esDuenoClienteDelViaje() &&
+          viajeNoTocaCamposFinancierosProtegidos() &&
+          (resource.data.completado == true ||
+            resource.data.estado == "completado" ||
+            resource.data.estado == "finalizado") &&
+          changedOnly([
+            "clienteFacturaEfectivoVistaEn",
+            "clienteFacturaEfectivoVistaPorUid"
+          ]) &&
+          request.resource.data.clienteFacturaEfectivoVistaPorUid == request.auth.uid
+        ) ||
+        (
+          // Post-viaje: marcar reportado (ReportesViajeData) en viaje ya cerrado.
+          // No encaja en el bloque anterior porque ese bloque exige campos de factura efectivo;
+          // el bloque de cliente "activo" niega request.resource.data.estado == "completado".
+          esDuenoClienteDelViaje() &&
+          viajeNoTocaCamposFinancierosProtegidos() &&
+          (
+            resource.data.completado == true ||
+            resource.data.estado == "completado" ||
+            resource.data.estado == "finalizado"
+          ) &&
+          changedOnly([
+            "reportado",
+            "updatedAt",
+            "actualizadoEn"
+          ]) &&
+          request.resource.data.reportado == true
         ) ||
         (
           isTaxista() &&
@@ -419,6 +452,7 @@ service cloud.firestore {
                 "latTaxista", "lonTaxista", "driverLat", "driverLon",
                 "pickupConfirmadoEn", "inicioEnRutaEn", "viajeIniciadoEn", "finalizadoEn",
                 "clienteAbordo", "clienteAbordoEn",
+                "codigoVerificacion", "codigoVerificado", "codigoVerificadoEn",
                 "canceladoPor", "canceladoTaxistaEn", "motivoCancelacion",
                 "uidTaxista", "taxistaId", "nombreTaxista",
                 "telefono", "placa", "marca", "modelo", "color",
@@ -552,10 +586,20 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // Calificaciones bidireccionales (solo Cloud Functions escriben).
+    match /calificaciones/{id} {
+      allow read: if isAdmin() ||
+        (isAuth() && (
+          resource.data.clienteId == request.auth.uid ||
+          resource.data.taxistaId == request.auth.uid
+        ));
+      allow create, update, delete: if false;
+    }
+
     match /reportes_viaje/{id} {
       allow read: if isAdmin();
-      allow create: if isCliente() &&
-        request.resource.data.uidCliente == request.auth.uid;
+      // Escritura solo vía callable [reportarProblema] (Admin SDK).
+      allow create: if false;
       allow update: if isAdmin();
       allow delete: if false;
     }
@@ -787,13 +831,14 @@ service cloud.firestore {
         (
           resource.data.createdByUid == request.auth.uid ||
           resource.data.uidTaxista == request.auth.uid ||
+          resource.data.taxistaId == request.auth.uid ||
           resource.data.uidCliente == request.auth.uid
         ) &&
         changedOnly([
           "estado", "ofertaAceptadaId", "nota", "updatedAt",
           "montoAcordadoRd", "comisionPct", "comisionRd",
           "gananciaNetaChoferRd", "acordadaEn",
-          "uidTaxista", "uidCliente", "estadoViajeBola",
+          "uidTaxista", "taxistaId", "uidCliente", "estadoViajeBola",
           "inicioEn", "finalizadaEn",
           "confirmacionTaxistaFinal", "confirmacionClienteFinal",
           "confirmacionTaxistaFinalEn", "confirmacionClienteFinalEn",
@@ -802,7 +847,10 @@ service cloud.firestore {
           "codigoVerificado", "codigoVerificadoEn",
           "pickupConfirmadoTaxista", "pickupConfirmadoTaxistaEn",
           "canceladaEn",
-          "metodoPago", "metodoPagoUpdatedBy", "metodoPagoUpdatedAt"
+          "canceladaPor",
+          "metodoPago", "metodoPagoUpdatedBy", "metodoPagoUpdatedAt",
+          // Espejo Bola Ahorro (cliente): ver bola_pueblo_firestore_sync.dart
+          "viajeEspejoId", "negociacionCerrada", "errorSync", "errorSyncViajeEspejo"
         ]) &&
         bolaFinalizacionPermitida() &&
         bolaComisionPermitida() &&

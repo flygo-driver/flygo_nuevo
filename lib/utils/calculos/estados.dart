@@ -128,6 +128,26 @@ class EstadosViaje {
   /// Callable de cierre contable: acepta `en_curso` o `a_bordo` (PIN verificado sin bug de transición).
   static bool taxistaPuedeInvocarFinalizar(String e) =>
       esEnCurso(e) || esAbordo(e);
+
+  /// Misma callable que [taxistaPuedeInvocarFinalizar], pero la UI solo ofrece
+  /// «Finalizar» en `a_bordo` cuando el PIN ya está verificado (motor/turismo/programado).
+  static bool taxistaMuestraPanelFinalizarViaje(
+    String estadoNorm, {
+    required bool codigoVerificado,
+  }) {
+    final String e = normalizar(estadoNorm);
+    if (esEnCurso(e)) return true;
+    if (esAbordo(e) && codigoVerificado) return true;
+    return false;
+  }
+
+  /// Tras volver de navegación externa: reanudar stream GPS si el taxista puede estar yendo al destino.
+  static bool taxistaReanudaGpsStreamTrasResume(
+    String estadoNorm, {
+    required bool codigoVerificado,
+  }) =>
+      taxistaMuestraPanelFinalizarViaje(estadoNorm,
+          codigoVerificado: codigoVerificado);
   static bool esCompletado(String e) => normalizar(e) == completado;
   static bool esCancelado(String e) => normalizar(e) == cancelado;
   static bool esRechazado(String e) => normalizar(e) == rechazado;
@@ -156,7 +176,8 @@ class EstadosViaje {
   static const Map<String, List<String>> _transiciones = {
     pendiente: [aceptado, enCaminoPickup, cancelado, pendientePago],
     pendientePago: [pendiente, cancelado],
-    aceptado: [enCaminoPickup, cancelado],
+    // Permite ir directo a abordo (p. ej. Bola Ahorro / espejo sin paso intermedio en UI).
+    aceptado: [enCaminoPickup, aBordo, cancelado],
     enCaminoPickup: [aBordo, cancelado],
     aBordo: [enCurso, cancelado],
     enCurso: [completado, cancelado],

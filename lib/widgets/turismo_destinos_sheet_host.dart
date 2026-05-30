@@ -3,11 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 
-/// Abre el selector de turismo de inmediato y completa origen en segundo plano
-/// (última posición conocida + GPS baja precisión con límite de tiempo).
+/// Abre el selector de turismo al instante; la ubicación se completa en segundo plano
+/// sin banners que bloqueen la UI (falsos «permiso denegado» en algunos Android).
 class TurismoDestinosSheetHost extends StatefulWidget {
   const TurismoDestinosSheetHost({
     super.key,
@@ -30,7 +31,6 @@ class TurismoDestinosSheetHost extends StatefulWidget {
 class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
   double? _lat;
   double? _lon;
-  bool _permDenied = false;
 
   @override
   void initState() {
@@ -39,55 +39,65 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
       _lat = widget.seedLat;
       _lon = widget.seedLon;
     }
-    unawaited(_mejorarUbicacionSiHaceFalta());
+    unawaited(_cargarUbicacionEnSegundoPlano());
   }
 
-  Future<void> _mejorarUbicacionSiHaceFalta() async {
+  void _aplicarCoords(double lat, double lon) {
+    if (!mounted) return;
+    if (_lat == lat && _lon == lon) return;
+    setState(() {
+      _lat = lat;
+      _lon = lon;
+    });
+  }
+
+  Future<void> _cargarUbicacionEnSegundoPlano() async {
+    if (_lat != null && _lon != null) return;
+
+    try {
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        _aplicarCoords(last.latitude, last.longitude);
+      }
+    } catch (_) {}
+
     try {
       final ({bool serviceEnabled, LocationPermission permission}) snap =
           await GpsService.checkServiceThenRequestPermissionIfNeeded();
       if (!mounted) return;
-      if (!snap.serviceEnabled) {
-        return;
-      }
-      final LocationPermission perm = snap.permission;
-      if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) {
-        setState(() => _permDenied = true);
+      if (!snap.serviceEnabled || !GpsService.permissionUsable(snap.permission)) {
         return;
       }
 
-      final last = await Geolocator.getLastKnownPosition();
-      if (last != null && mounted) {
-        setState(() {
-          _lat = last.latitude;
-          _lon = last.longitude;
-        });
-      }
-
-      try {
-        final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.low,
-          timeLimit: const Duration(seconds: 10),
-        );
-        if (mounted) {
-          setState(() {
-            _lat = position.latitude;
-            _lon = position.longitude;
-          });
-        }
-      } on TimeoutException {
-        // Mantener última conocida o semilla
+      final Position? pos = await GpsService.obtenerUbicacionActual(
+        timeout: const Duration(seconds: 12),
+        maxEdadUltima: const Duration(hours: 24),
+      );
+      if (pos != null) {
+        _aplicarCoords(pos.latitude, pos.longitude);
       }
     } catch (_) {
-      if (mounted && _lat == null && _lon == null && !_permDenied) {
-        setState(() {});
-      }
+      try {
+        final Position? last = await Geolocator.getLastKnownPosition();
+        if (last != null) {
+          _aplicarCoords(last.latitude, last.longitude);
+        }
+      } catch (_) {}
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
+    final Color sheetBg = CustomThemeService.cardOn(themedBg);
+    final Color fg = CustomThemeService.textOn(sheetBg);
+    final Color border = CustomThemeService.borderOn(sheetBg);
+    final bool sheetDark =
+        ThemeData.estimateBrightnessForColor(sheetBg) == Brightness.dark;
+    final Color btnBg = sheetDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : Colors.black.withValues(alpha: 0.07);
+
     return Stack(
       fit: StackFit.passthrough,
       children: [
@@ -99,50 +109,22 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
         ),
         Positioned(
           top: 10,
-          right: 12,
+          left: 12,
           child: SafeArea(
             bottom: false,
             child: Material(
-              color: Colors.black.withValues(alpha: 0.72),
-              shape: const CircleBorder(),
+              color: btnBg,
+              shape: CircleBorder(
+                side: BorderSide(color: border),
+              ),
               child: IconButton(
                 tooltip: 'Volver',
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                icon: Icon(Icons.arrow_back_rounded, color: fg),
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
             ),
           ),
         ),
-        if (_permDenied)
-          Positioned(
-            left: 12,
-            right: 12,
-            top: 10,
-            child: Material(
-              color: Colors.orange.shade900.withValues(alpha: 0.92),
-              borderRadius: BorderRadius.circular(10),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Text(
-                  'Ubicación desactivada: activala para ver distancia y precio al elegir destino.',
-                  style: TextStyle(color: Colors.white, fontSize: 12.5),
-                ),
-              ),
-            ),
-          )
-        else if (_lat == null || _lon == null)
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            child: IgnorePointer(
-              child: LinearProgressIndicator(
-                minHeight: 3,
-                color: Colors.purpleAccent,
-                backgroundColor: Colors.purple.withValues(alpha: 0.15),
-              ),
-            ),
-          ),
       ],
     );
   }

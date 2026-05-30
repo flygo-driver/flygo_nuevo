@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
+import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/pantallas/cliente/reportar_viaje.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
 class CalificarServicio extends StatefulWidget {
   final Viaje viaje;
@@ -38,9 +40,14 @@ class _CalificarServicioState extends State<CalificarServicio> {
     if (_cargando) return;
     FocusScope.of(context).unfocus();
 
-    final user = FirebaseAuth.instance.currentUser;
+    final user = FirebaseAuth.instance.currentUser ??
+        await resolveFirebaseUser();
     if (user == null) {
-      _msg('Debes iniciar sesión.');
+      if (!mounted) return;
+      _msg('Tu sesión expiró, inicia sesión nuevamente.');
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await NavigationService.clearToAuthGate();
+      });
       return;
     }
     if (widget.viaje.calificado == true) {
@@ -48,8 +55,9 @@ class _CalificarServicioState extends State<CalificarServicio> {
       return;
     }
 
-    setState(() => _cargando = true);
+    if (!mounted) return;
     final nav = Navigator.of(context);
+    setState(() => _cargando = true);
 
     try {
       await ViajeData.calificarViajeSeguro(
@@ -61,6 +69,14 @@ class _CalificarServicioState extends State<CalificarServicio> {
 
       _msg('¡Gracias por tu calificación!');
       if (mounted) nav.pop(true);
+    } on SessionExpiredForTrip catch (_) {
+      _msg('Tu sesión expiró, inicia sesión nuevamente.');
+      if (mounted) {
+        setState(() => _cargando = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          await NavigationService.clearToAuthGate();
+        });
+      }
     } catch (e) {
       _msg('Error al guardar calificación: $e');
       if (mounted) setState(() => _cargando = false);

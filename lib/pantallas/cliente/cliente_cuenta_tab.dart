@@ -3,13 +3,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
-import 'package:flygo_nuevo/pantallas/cliente/apariencia.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
-import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/cliente_pagos_sheet.dart';
+import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
 
 /// Perfil, pagos, soporte y ajustes (misma lógica que el drawer, sin duplicar rutas).
 class ClienteCuentaTab extends StatelessWidget {
@@ -169,30 +168,8 @@ class ClienteCuentaTab extends StatelessWidget {
               );
             },
           ),
-          ListTile(
-            leading: Icon(Icons.color_lens_outlined, color: cs.primary),
-            title: const Text('Apariencia'),
-            subtitle: const Text('Color de fondo personalizado'),
-            trailing: Icon(Icons.chevron_right, color: cs.outline),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AparienciaScreen()),
-              );
-            },
-          ),
-          if (uid != null)
-            ListTile(
-              leading: Icon(Icons.logout, color: cs.error),
-              title: Text(
-                'Cerrar sesión',
-                style: TextStyle(
-                  color: cs.error,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              onTap: () => cerrarSesion(context),
-            ),
+          const CuentaAparienciaTile(),
+          if (uid != null) const CuentaCerrarSesionTile(),
         ],
       ),
     );

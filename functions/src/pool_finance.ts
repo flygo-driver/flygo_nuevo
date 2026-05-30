@@ -1192,3 +1192,103 @@ export const reservePoolSeats = onCall(async (request) => {
   return result;
 });
 
+/** Cliente cancela su reserva (`estado: reservado`) antes de que la gira salga en ruta. */
+export const cancelPoolReservation = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidCliente = request.auth.uid;
+  const poolId = typeof request.data?.poolId === "string" ? request.data.poolId.trim() : "";
+  const reservaId = typeof request.data?.reservaId === "string" ? request.data.reservaId.trim() : "";
+  const idemKey = typeof request.data?.idempotencyKey === "string" ? request.data.idempotencyKey.trim() : "";
+  if (!poolId) throw new HttpsError("invalid-argument", "Falta poolId");
+  if (!reservaId) throw new HttpsError("invalid-argument", "Falta reservaId");
+  if (!idemKey) throw new HttpsError("invalid-argument", "Falta idempotencyKey");
+
+  const idem = await ensureIdempotencyStart(idemKey, "cancel_pool_reservation", uidCliente);
+  if (idem.done) return idem.result;
+
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const resRef = poolRef.collection("reservas").doc(reservaId);
+
+  const result = await db().runTransaction(async (tx) => {
+    const poolSnap = await tx.get(poolRef);
+    if (!poolSnap.exists) throw new HttpsError("not-found", "Viaje no existe");
+    const pool = (poolSnap.data() ?? {}) as AnyMap;
+
+    const estadoPool = String(pool.estado ?? "").trim().toLowerCase();
+    const poolCerrado = ["en_ruta", "finalizado", "cancelado", "cancelado_por_admin"];
+    if (poolCerrado.includes(estadoPool)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Este viaje ya no admite cancelar reservas (en curso, finalizado o cancelado).",
+      );
+    }
+
+    const resSnap = await tx.get(resRef);
+    if (!resSnap.exists) throw new HttpsError("not-found", "Reserva no encontrada");
+    const r = (resSnap.data() ?? {}) as AnyMap;
+
+    if (String(r.uidCliente ?? "").trim() !== uidCliente) {
+      throw new HttpsError("permission-denied", "No autorizado para esta reserva");
+    }
+
+    const estadoRes = String(r.estado ?? "").trim().toLowerCase();
+    if (estadoRes === "cancelado" || estadoRes === "cancelado_cliente") {
+      return { ok: true, poolId, reservaId, alreadyCanceled: true };
+    }
+    if (estadoRes === "pagado") {
+      throw new HttpsError(
+        "failed-precondition",
+        "No se puede cancelar una reserva ya pagada/confirmada. Contactá al operador.",
+      );
+    }
+    if (estadoRes !== "reservado") {
+      throw new HttpsError("failed-precondition", "Esta reserva no se puede cancelar ahora");
+    }
+
+    const seats = Math.max(0, Math.trunc(numOr0(r.seats)));
+    const total = Math.max(0, numOr0(r.total));
+    const metodo = String(r.metodoPago ?? "").trim().toLowerCase();
+
+    const occ = Math.max(0, Math.trunc(numOr0(pool.asientosReservados)));
+    const newOcc = Math.max(0, occ - seats);
+    const montoRes = Math.max(0, numOr0(pool.montoReservado));
+    const minConf = Math.max(0, Math.trunc(numOr0(pool.minParaConfirmar)));
+    const cap = Math.max(0, Math.trunc(numOr0(pool.capacidad)));
+
+    const poolPatch: AnyMap = {
+      asientosReservados: newOcc,
+      montoReservado: Math.max(0, Number((montoRes - total).toFixed(2))),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (metodo === "efectivo") {
+      const firm = Math.max(0, Math.trunc(numOr0(pool.asientosFirmesSalida)));
+      poolPatch.asientosFirmesSalida = Math.max(0, firm - seats);
+    }
+
+    if (estadoPool === "lleno" && newOcc < cap) {
+      poolPatch.estado = "abierto";
+    } else if (
+      estadoPool === "preconfirmado" &&
+      minConf > 0 &&
+      newOcc < minConf
+    ) {
+      poolPatch.estado = "abierto";
+    }
+
+    tx.update(poolRef, poolPatch);
+    tx.update(resRef, {
+      estado: "cancelado_cliente",
+      canceladoPor: "cliente",
+      canceladoEn: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return { ok: true, poolId, reservaId, alreadyCanceled: false, seatsReleased: seats };
+  });
+
+  await markIdempotencyDone(idem.ref, result as AnyMap);
+  logger.info("[PRE_TEST] cancelPoolReservation", { uidCliente, poolId, reservaId, result });
+  return result;
+});
+

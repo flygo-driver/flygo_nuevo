@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+
 class ConfiguracionBancaria extends StatefulWidget {
   const ConfiguracionBancaria({super.key});
 
@@ -16,6 +18,7 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
   final _bancoCtrl = TextEditingController();
   final _cuentaCtrl = TextEditingController();
   final _titularCtrl = TextEditingController();
+  final _cedulaCtrl = TextEditingController();
   bool _cargando = false;
 
   /// Tipo de cuenta seleccionado por el taxista. Se persiste en Firestore
@@ -38,6 +41,7 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
     _bancoCtrl.dispose();
     _cuentaCtrl.dispose();
     _titularCtrl.dispose();
+    _cedulaCtrl.dispose();
     super.dispose();
   }
 
@@ -56,6 +60,10 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
         _bancoCtrl.text = data['banco'] ?? '';
         _cuentaCtrl.text = data['numeroCuenta'] ?? '';
         _titularCtrl.text = data['titularCuenta'] ?? data['titular'] ?? '';
+        final String ced = (data['cedula'] ?? data['ciTaxista'] ?? '')
+            .toString()
+            .trim();
+        _cedulaCtrl.text = ced;
         // Solo aceptamos los valores de la lista para no romper el dropdown.
         _tipoCuenta =
             _tiposCuentaPermitidos.contains(tipoRaw) ? tipoRaw : null;
@@ -77,6 +85,8 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
         'numeroCuenta': _cuentaCtrl.text.trim(),
         'titularCuenta': _titularCtrl.text.trim(),
         if (_tipoCuenta != null) 'tipoCuenta': _tipoCuenta,
+        'cedula': _cedulaCtrl.text.trim(),
+        'ciTaxista': _cedulaCtrl.text.trim(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
@@ -119,14 +129,10 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
     final textStyle = TextStyle(color: cs.onSurface);
 
     return Scaffold(
-      backgroundColor: cs.surface,
-      appBar: AppBar(
-        title: const Text('Configuración bancaria'),
-        backgroundColor: cs.surface,
-        foregroundColor: cs.onSurface,
-        surfaceTintColor: cs.surfaceTint,
-        elevation: 0,
-        scrolledUnderElevation: 1,
+      appBar: const RaiAppBar(
+        title: 'Configuración bancaria',
+        centerTitle: true,
+        showBackWhenCanPop: true,
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -172,6 +178,18 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
                 ),
                 validator: (v) =>
                     v == null || v.trim().isEmpty ? 'Campo requerido' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _cedulaCtrl,
+                style: textStyle,
+                cursorColor: cs.primary,
+                keyboardType: TextInputType.text,
+                decoration: _fieldDecoration(
+                  context,
+                  'Cédula (C.I.)',
+                  'Opcional; aparece en comprobantes de viaje',
+                ),
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(

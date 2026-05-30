@@ -1,0 +1,72 @@
+// Enruta al shell del cliente: espera turismo (sin chofer) vs viaje en curso.
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/utils/calculos/estados.dart';
+
+/// Decide qué pantalla mostrar cuando [ClienteShell] detecta `viajeActivoId`.
+class ClientePantallaViajeActivo extends StatelessWidget {
+  const ClientePantallaViajeActivo({super.key, this.viajeEnCursoKey});
+
+  final Key? viajeEnCursoKey;
+
+  static bool debeMostrarEsperaTurismo(Map<String, dynamic> data) {
+    if ((data['tipoServicio'] ?? '').toString() != 'turismo') return false;
+    final String taxista =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
+    if (taxista.isNotEmpty) return false;
+    final String estadoRaw = (data['estado'] ?? '').toString();
+    final String estadoNorm = EstadosViaje.normalizar(estadoRaw);
+    if (data['completado'] == true || EstadosViaje.esTerminal(estadoNorm)) {
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      return ViajeEnCursoCliente(key: viajeEnCursoKey);
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> userSnap,
+      ) {
+        final String viajeId =
+            (userSnap.data?.data()?['viajeActivoId'] ?? '').toString().trim();
+        if (viajeId.isEmpty) {
+          return ViajeEnCursoCliente(key: viajeEnCursoKey);
+        }
+
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(viajeId)
+              .snapshots(),
+          builder: (
+            BuildContext context,
+            AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> viajeSnap,
+          ) {
+            if (!viajeSnap.hasData || !viajeSnap.data!.exists) {
+              return ViajeEnCursoCliente(key: viajeEnCursoKey);
+            }
+            final Map<String, dynamic> data = viajeSnap.data!.data()!;
+            if (debeMostrarEsperaTurismo(data)) {
+              return EsperaAsignacionTurismo(viajeId: viajeId);
+            }
+            return ViajeEnCursoCliente(key: viajeEnCursoKey);
+          },
+        );
+      },
+    );
+  }
+}

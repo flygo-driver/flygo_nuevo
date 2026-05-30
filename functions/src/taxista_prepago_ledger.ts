@@ -2,7 +2,7 @@
  * Libro auxiliar paralelo a `billeteras_taxista` (Cloud Functions). No cambia saldos ni bloqueos.
  */
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
-import type { Transaction } from "firebase-admin/firestore";
+import type { DocumentReference, DocumentSnapshot, Transaction } from "firebase-admin/firestore";
 
 const db = () => getFirestore();
 
@@ -12,6 +12,16 @@ function safeId(raw: string): string {
 
 function movColl(uid: string) {
   return db().collection("billeteras_taxista").doc(uid).collection("movimientos_prepago");
+}
+
+/** Ref del movimiento ledger de comisión por viaje en efectivo (misma ruta que [ledgerComisionViajeEfectivoCf]). */
+export function comisionViajeEfectivoLedgerRef(
+  uidTaxista: string,
+  viajeId: string,
+): DocumentReference {
+  const uid = uidTaxista.trim();
+  const vid = viajeId.trim();
+  return movColl(uid).doc(safeId(`comision_viaje_${vid}`));
 }
 
 export async function ledgerComisionViajeEfectivoCf(
@@ -26,6 +36,8 @@ export async function ledgerComisionViajeEfectivoCf(
     pendienteDespues: number;
     saldoPrepagoDespues: number;
     primerEfectivoSinDescuento: boolean;
+    /** Si ya leíste este doc en la misma transacción (antes de cualquier write), pasalo aquí. */
+    existingMovSnap?: DocumentSnapshot;
   },
 ): Promise<void> {
   const uid = params.uidTaxista.trim();
@@ -33,7 +45,7 @@ export async function ledgerComisionViajeEfectivoCf(
   if (!uid || !vid) return;
 
   const ref = movColl(uid).doc(safeId(`comision_viaje_${vid}`));
-  const snap = await tx.get(ref);
+  const snap = params.existingMovSnap ?? await tx.get(ref);
   if (snap.exists) return;
 
   const desdeLegacy = Math.max(0, params.pendienteAntes - params.pendienteDespues);

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
@@ -12,6 +13,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flygo_nuevo/servicios/fcm_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker_android/image_picker_android.dart';
 import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
@@ -84,11 +86,48 @@ const bool kUseEmus =
 const String kHost = String.fromEnvironment('HOST', defaultValue: 'localhost');
 
 // ================== EMULADORES ==================
+/// Host al que apuntan los emuladores.
+///
+/// - **AVD (emulador Android oficial):** `localhost` dentro del emulador no es tu PC;
+///   usa `--dart-define=FLYGO_ANDROID_EMULATOR=true` para mapear a `10.0.2.2`, o
+///   `--dart-define=HOST=<IP_LAN_del_PC>`.
+/// - **Móvil físico (USB o Wi‑Fi):** `10.0.2.2` **no** sirve; pasa siempre
+///   `--dart-define=HOST=<IP_LAN_del_PC>` con los emuladores levantados en esa máquina.
+String _emulatorHost() {
+  if (kHost != 'localhost' && kHost != '127.0.0.1') return kHost;
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    if (const bool.fromEnvironment('FLYGO_ANDROID_EMULATOR',
+        defaultValue: false)) {
+      return '10.0.2.2';
+    }
+  }
+  return kHost;
+}
+
 Future<void> _conectarEmuladores() async {
   if (!kUseEmus) return;
 
-  FirebaseFirestore.instance.useFirestoreEmulator(kHost, 8080);
-  FirebaseStorage.instance.useStorageEmulator(kHost, 9199);
+  final String host = _emulatorHost();
+  if (!kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.android &&
+      (kHost == 'localhost' || kHost == '127.0.0.1') &&
+      !const bool.fromEnvironment('FLYGO_ANDROID_EMULATOR',
+          defaultValue: false)) {
+    debugPrint(
+      '[EMU] En Android físico, HOST=localhost no alcanza el PC. Usa '
+      '--dart-define=HOST=<IP_LAN> o solo en AVD '
+      '--dart-define=FLYGO_ANDROID_EMULATOR=true.',
+    );
+  }
+  FirebaseFirestore.instance.useFirestoreEmulator(host, 8080);
+  FirebaseStorage.instance.useStorageEmulator(host, 9199);
+  // Sin esto, las HTTPS callables (p. ej. completarViajePorTaxista) van a **producción**
+  // mientras Firestore lee el emulador → errores raros / "internal".
+  FirebaseFunctions.instanceFor(region: 'us-central1')
+      .useFunctionsEmulator(host, 5001);
+  debugPrint(
+    '[EMU] Firestore $host:8080 | Storage $host:9199 | Functions us-central1 $host:5001',
+  );
 }
 
 // ================== SPLASH EN FLUTTER (tras el nativo) ==================
@@ -281,7 +320,12 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
       await NotificationService.I.ensureInited();
       FcmService.registerForegroundHandlers();
       if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
-        unawaited(LocationPermissionService.checkAndRequestBasicPermission());
+        // Pasivo: nunca Geolocator.requestPermission en cold start (Play policy / UX).
+        unawaited(
+          LocationPermissionService.checkAndRequestBasicPermission(
+            requestIfDenied: false,
+          ),
+        );
       }
       await ThemeModeService.init();
       // Color de fondo personalizable por el usuario (cliente). Si nunca lo
@@ -436,21 +480,56 @@ class _RaiAppState extends State<RaiApp> {
     // Construye los ThemeData en función del color custom elegido por el usuario.
     // Si el color es `null` (nunca cambió), se usan los defaults históricos
     // (gris claro / negro), por lo que la app se ve igual que antes.
-    ThemeData buildLight() {
-      final baseLight = ThemeData.light(useMaterial3: false);
-      final Color bg = CustomThemeService.resolveScaffoldBg(Brightness.light);
-      // Texto óptimo (negro o blanco) calculado por contraste WCAG sobre `bg`.
+    ThemeData themeForMode(Brightness mode) {
+      final Color bg = CustomThemeService.resolveScaffoldBg(mode);
       final Color onBg = CustomThemeService.textOn(bg);
-      return baseLight.copyWith(
+      final Color onBgMuted = CustomThemeService.textMutedOn(bg);
+      final Color border = CustomThemeService.borderOn(bg);
+      final Color card = CustomThemeService.cardOn(bg);
+      final bool bgIsDark =
+          ThemeData.estimateBrightnessForColor(bg) == Brightness.dark;
+      // Plantilla clara u oscura según luminancia REAL del fondo elegido
+      // (no solo el switch claro/oscuro), para que textos e iconos contrasten.
+      final ThemeData base = bgIsDark
+          ? ThemeData.dark(useMaterial3: false)
+          : ThemeData.light(useMaterial3: false);
+      final Color primary =
+          bgIsDark ? Colors.greenAccent : const Color(0xFF16A34A);
+      final Color error = CustomThemeService.destructiveOn(bg);
+
+      return base.copyWith(
+        brightness: bgIsDark ? Brightness.dark : Brightness.light,
         scaffoldBackgroundColor: bg,
-        colorScheme: baseLight.colorScheme.copyWith(
-          primary: const Color(0xFF16A34A),
-          secondary: const Color(0xFF16A34A),
+        colorScheme: base.colorScheme.copyWith(
+          primary: primary,
+          secondary: primary,
+          surface: card,
+          onSurface: onBg,
+          onSurfaceVariant: onBgMuted,
+          outline: border,
+          error: error,
+          onError: Colors.white,
+        ),
+        dividerColor: border,
+        textTheme: base.textTheme.apply(
+          bodyColor: onBg,
+          displayColor: onBg,
+        ),
+        iconTheme: IconThemeData(color: onBg),
+        iconButtonTheme: IconButtonThemeData(
+          style: IconButton.styleFrom(foregroundColor: onBg),
+        ),
+        listTileTheme: ListTileThemeData(
+          iconColor: primary,
+          textColor: onBg,
         ),
         appBarTheme: AppBarTheme(
           backgroundColor: bg,
           foregroundColor: onBg,
+          iconTheme: IconThemeData(color: onBg),
+          actionsIconTheme: IconThemeData(color: onBg),
           elevation: 0,
+          surfaceTintColor: Colors.transparent,
           titleTextStyle: TextStyle(
             color: onBg,
             fontSize: 20,
@@ -460,28 +539,9 @@ class _RaiAppState extends State<RaiApp> {
       );
     }
 
-    ThemeData buildDark() {
-      final baseDark = ThemeData.dark(useMaterial3: false);
-      final Color bg = CustomThemeService.resolveScaffoldBg(Brightness.dark);
-      final Color onBg = CustomThemeService.textOn(bg);
-      return baseDark.copyWith(
-        scaffoldBackgroundColor: bg,
-        colorScheme: baseDark.colorScheme.copyWith(
-          primary: Colors.greenAccent,
-          secondary: Colors.greenAccent,
-        ),
-        appBarTheme: AppBarTheme(
-          backgroundColor: bg,
-          foregroundColor: onBg,
-          elevation: 0,
-          titleTextStyle: TextStyle(
-            color: onBg,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      );
-    }
+    ThemeData buildLight() => themeForMode(Brightness.light);
+
+    ThemeData buildDark() => themeForMode(Brightness.dark);
 
     // Combinamos ambos notifiers para reconstruir el MaterialApp cuando cambie
     // el modo (light/dark/system) o el color custom elegido por el usuario.
@@ -567,6 +627,7 @@ class _RaiAppState extends State<RaiApp> {
           '/registro_taxista': (_) => const RegistroTaxista(),
 
           // Cliente
+          '/cliente_home': (_) => const ClienteShell(),
           '/solicitar_viaje_ahora': (_) =>
               const ProgramarViaje(modoAhora: true),
           '/programar_viaje': (_) => const ProgramarViaje(modoAhora: false),
@@ -574,8 +635,17 @@ class _RaiAppState extends State<RaiApp> {
           '/viaje_en_curso_cliente': (_) => const ViajeEnCursoCliente(),
           '/historial_viajes_cliente': (_) => const HistorialViajesCliente(),
           '/metodos_pago': (_) => const MetodosPago(),
-          '/espera_asignacion_turismo': (_) =>
-              const EsperaAsignacionTurismo(viajeId: ''),
+          '/espera_asignacion_turismo': (context) {
+            final Object? args =
+                ModalRoute.of(context)?.settings.arguments;
+            String viajeId = '';
+            if (args is String) {
+              viajeId = args.trim();
+            } else if (args is Map) {
+              viajeId = (args['viajeId'] ?? args['id'] ?? '').toString().trim();
+            }
+            return EsperaAsignacionTurismo(viajeId: viajeId);
+          },
           '/historial_pagos': (_) => const HistorialPagosCliente(),
           '/pago_metodo': (_) => const PagoMetodo(),
 
@@ -801,7 +871,9 @@ Widget _buildGateForUsuarioData(
               return _raiSplashScaffold();
             }
 
-            final puedeTrabajar = snapshot.data ?? true;
+            // Fail-closed: solo entra al pool si la verificación respondió true.
+            final bool puedeTrabajar =
+                !snapshot.hasError && snapshot.data == true;
 
             if (!puedeTrabajar) {
               return const BloqueadoPorPagos();

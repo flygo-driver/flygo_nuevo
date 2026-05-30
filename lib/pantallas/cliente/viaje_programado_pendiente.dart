@@ -3,7 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
@@ -28,7 +30,20 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
   bool _taxistaAsignado(Map<String, dynamic> data) {
     final String uidTaxista = (data['uidTaxista'] ?? '').toString().trim();
     final String taxistaId = (data['taxistaId'] ?? '').toString().trim();
-    return uidTaxista.isNotEmpty || taxistaId.isNotEmpty;
+    if (uidTaxista.isNotEmpty || taxistaId.isNotEmpty) return true;
+    final String extra = (data['conductorId'] ?? data['uidConductor'] ?? '')
+        .toString()
+        .trim();
+    return extra.isNotEmpty;
+  }
+
+  /// Aceptado / en ruta / abordo: mismo criterio que [EstadosViaje.activos].
+  /// Evita quedarse en pendiente si el estado ya avanzó y el taxista aún no
+  /// refleja en el doc (lag o multi-paradas).
+  bool _estadoRequiereSeguimientoEnMapa(Map<String, dynamic> data) {
+    final String est =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    return EstadosViaje.activos.contains(est);
   }
 
   /// Turismo solo ADM no sigue el pool público: hasta asignación no pasamos al mapa por ventana.
@@ -37,6 +52,13 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
     final String canal = (data['canalAsignacion'] ?? 'pool').toString();
     if (tipo == 'turismo' && canal == 'admin') return false;
     return true;
+  }
+
+  /// Turismo en cola administrativa (no pool público de conductores normales).
+  bool _esTurismoEsperaAdmin(Map<String, dynamic> data) {
+    final String tipo = (data['tipoServicio'] ?? 'normal').toString();
+    final String canal = (data['canalAsignacion'] ?? 'pool').toString();
+    return tipo == 'turismo' && canal == 'admin';
   }
 
   bool _poolYaVisibleParaConductores(Map<String, dynamic> data) {
@@ -80,8 +102,7 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
 
   Future<void> _volverInicio() async {
     if (!mounted) return;
-    Navigator.of(context, rootNavigator: true)
-        .pushNamedAndRemoveUntil('/auth_check', (route) => false);
+    await NavigationService.clearAndGo(const ClienteShell());
   }
 
   /// Misma condición que [ViajesRepo.cancelarPorCliente] (evita botón activo si Firestore rechazaría).
@@ -162,29 +183,49 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
           final bool estadoCancelable = _cancelablePorClienteSegunRepo(estado);
 
           final bool poolAbierto = _poolYaVisibleParaConductores(data);
-          final bool irAlMapa = asignado || poolAbierto;
+          final bool esTurismoAdmin = _esTurismoEsperaAdmin(data);
+          final bool seguimientoPorEstado = _estadoRequiereSeguimientoEnMapa(data);
+          final bool irAlMapa =
+              asignado || poolAbierto || seguimientoPorEstado;
+          final bool conductorEnCurso = asignado || seguimientoPorEstado;
 
           if (irAlMapa && !_navegando) {
             _navegando = true;
-            final bool avisarPool = poolAbierto && !asignado;
+            final bool avisarPool = poolAbierto && !asignado && !esTurismoAdmin;
             WidgetsBinding.instance.addPostFrameCallback((_) async {
               if (!mounted) return;
-              if (avisarPool) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Tu viaje ya está disponible para conductores cercanos.',
+              try {
+                if (avisarPool) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Tu viaje ya está disponible para conductores cercanos.',
+                      ),
+                      behavior: SnackBarBehavior.floating,
                     ),
-                    behavior: SnackBarBehavior.floating,
+                  );
+                } else if (asignado && esTurismoAdmin) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Chofer de turismo asignado. Abriendo tu viaje…',
+                      ),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+                await Navigator.of(context, rootNavigator: true)
+                    .pushAndRemoveUntil(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ViajeEnCursoCliente(),
                   ),
+                  (route) => false,
                 );
+              } catch (_) {
+                if (mounted) {
+                  setState(() => _navegando = false);
+                }
               }
-              await Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute<void>(
-                  builder: (_) => const ViajeEnCursoCliente(),
-                ),
-                (route) => false,
-              );
             });
           }
 
@@ -221,17 +262,23 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
                         onEnd: () {
                           if (mounted) setState(() {});
                         },
-                        child: const Icon(
-                          Icons.schedule_rounded,
+                        child: Icon(
+                          esTurismoAdmin
+                              ? Icons.admin_panel_settings_outlined
+                              : Icons.schedule_rounded,
                           size: 58,
-                          color: Colors.greenAccent,
+                          color: esTurismoAdmin
+                              ? Colors.purpleAccent
+                              : Colors.greenAccent,
                         ),
                       ),
                       const SizedBox(height: 14),
-                      const Text(
-                        'Viaje programado confirmado',
+                      Text(
+                        esTurismoAdmin
+                            ? 'Viaje turístico registrado'
+                            : 'Viaje programado confirmado',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
                           fontSize: 21,
@@ -239,9 +286,12 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        poolAbierto
-                            ? 'Redirigiendo al mapa: tu viaje ya está en la red de conductores.'
-                            : 'Tu reserva está guardada. Cuando llegue la hora de publicación, los conductores podrán verla y te avisamos aquí.',
+                        esTurismoAdmin
+                            ? '⏳ Tu viaje está en espera de confirmación por administración. '
+                                'Te notificaremos cuando se asigne un chofer.'
+                            : poolAbierto
+                                ? 'Redirigiendo al mapa: tu viaje ya está en la red de conductores.'
+                                : 'Tu reserva está guardada. Cuando llegue la hora de publicación, los conductores podrán verla y te avisamos aquí.',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white70,
@@ -277,9 +327,11 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        poolAbierto
-                            ? 'Buscando conductor cercano en el mapa…'
-                            : 'Te avisamos cuando tu viaje entre al pool y cuando un conductor lo acepte.',
+                        esTurismoAdmin
+                            ? 'Asignación administrativa en curso. No hace falta buscar conductores en el mapa.'
+                            : poolAbierto
+                                ? 'Buscando conductor cercano en el mapa…'
+                                : 'Te avisamos cuando tu viaje entre al pool y cuando un conductor lo acepte.',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white38,
@@ -307,7 +359,7 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
                         child: ElevatedButton.icon(
                           onPressed: (!estadoCancelable ||
                                   _cancelando ||
-                                  asignado)
+                                  conductorEnCurso)
                               ? null
                               : _cancelarViajeProgramado,
                           icon: _cancelando

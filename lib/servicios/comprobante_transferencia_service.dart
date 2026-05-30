@@ -20,6 +20,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 class ComprobanteTransferenciaService {
@@ -86,6 +87,68 @@ class ComprobanteTransferenciaService {
 
       await ViajesRepo.marcarTransferenciaReportadaCliente(
         viajeId: viajeId,
+        comprobanteUrl: url,
+      );
+
+      return ResultadoSubidaComprobante(ok: true, comprobanteUrl: url);
+    } on FirebaseException catch (e) {
+      return ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Error (${e.code}): ${e.message ?? 'No se pudo subir.'}',
+      );
+    } catch (e) {
+      return ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'No se pudo subir el comprobante: $e',
+      );
+    }
+  }
+
+  /// Igual que [subirYReportar] pero para Bola Ahorro (`bolas_pueblo/{id}`).
+  static Future<ResultadoSubidaComprobante> subirYReportarBola({
+    required String bolaId,
+  }) async {
+    final User? u = FirebaseAuth.instance.currentUser;
+    if (u == null) {
+      return const ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Debes iniciar sesión para subir el comprobante.',
+      );
+    }
+    if (bolaId.isEmpty) {
+      return const ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Identificador de Bola Ahorro inválido.',
+      );
+    }
+
+    try {
+      final XFile? file = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+      );
+      if (file == null) {
+        return _kResultCancelled;
+      }
+
+      final Uint8List bytes = await file.readAsBytes();
+      final String path =
+          'comprobantes/${u.uid}/bola_$bolaId/transfer_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final Reference ref = FirebaseStorage.instance.ref(path);
+      await ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+      final String url = await ref.getDownloadURL();
+      if (url.isEmpty) {
+        return const ResultadoSubidaComprobante(
+          ok: false,
+          mensaje: 'No se pudo obtener la URL del comprobante.',
+        );
+      }
+
+      await BolaPuebloRepo.reportarTransferenciaCliente(
+        bolaId: bolaId,
         comprobanteUrl: url,
       );
 

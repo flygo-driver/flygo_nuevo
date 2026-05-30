@@ -20,6 +20,7 @@ import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/configuracion_bancaria.dart';
+import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
 
 String _pctLabel(double p) =>
     p == p.roundToDouble() ? p.round().toString() : p.toStringAsFixed(1);
@@ -437,18 +438,8 @@ class TaxistaCuentaTab extends StatelessWidget {
               );
             },
           ),
-          if (uid != null)
-            ListTile(
-              leading: Icon(Icons.logout, color: cs.error),
-              title: Text(
-                'Cerrar sesión',
-                style: TextStyle(
-                  color: cs.error,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              onTap: () => _logout(context),
-            ),
+          const CuentaAparienciaTile(),
+          if (uid != null) CuentaCerrarSesionTile(onTap: () => _logout(context)),
         ],
       ),
     );

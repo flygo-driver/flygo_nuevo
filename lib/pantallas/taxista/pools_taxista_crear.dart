@@ -241,6 +241,15 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       return;
     }
 
+    if (_bannerUrl.trim().isEmpty && _bannerVideoUrl.trim().isEmpty) {
+      _snack('Sube al menos una imagen o video banner para publicar la gira.');
+      return;
+    }
+    if (_agenciaNombre.trim().isEmpty) {
+      _snack('Indica el nombre de la agencia o operador en el anuncio.');
+      return;
+    }
+
     // Validaciones rápidas previas a guardar
     if (!_form.currentState!.validate()) return;
     _form.currentState!.save();

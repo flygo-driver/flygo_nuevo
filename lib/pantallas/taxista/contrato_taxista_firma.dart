@@ -32,8 +32,24 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
     final email = (user?.email ?? '').trim();
     if (email.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Tu cuenta no tiene correo disponible.')),
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Copia por correo (opcional)'),
+          content: const Text(
+            'Tu cuenta no tiene un correo vinculado a Firebase, así que no se puede abrir el '
+            'cliente de correo con destinatario automático.\n\n'
+            'Eso no impide operar: la aceptación legal del contrato se registra en la plataforma '
+            'cuando marques «He leído y acepto…» y pulses «Firmar y continuar».\n\n'
+            'Podés usar «Ver PDF» para guardar o compartir el documento por tu cuenta.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
       );
       return;
     }
@@ -143,7 +159,18 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
               ),
               controlAffinity: ListTileControlAffinity.leading,
             ),
-            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8, left: 4, right: 4),
+              child: Text(
+                'Para salir de esta pantalla y operar: marca la casilla y pulsa «Firmar y continuar». '
+                'Ver PDF y enviar copia por correo son opcionales.',
+                style: TextStyle(
+                  color: Colors.greenAccent.shade100.withValues(alpha: 0.9),
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
             Row(
               children: [
                 Expanded(
@@ -163,14 +190,15 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
-              child: ElevatedButton.icon(
+              child: FilledButton.icon(
                 onPressed: (_acepta && !_guardando) ? _firmar : null,
                 icon: const Icon(Icons.draw),
                 label: Text(
-                    _guardando ? 'Guardando firma...' : 'Firmar y continuar'),
+                  _guardando ? 'Guardando firma...' : 'Firmar y continuar',
+                ),
               ),
             ),
           ],

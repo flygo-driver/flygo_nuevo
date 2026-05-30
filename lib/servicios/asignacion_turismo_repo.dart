@@ -301,6 +301,17 @@ class AsignacionTurismoRepo {
   static int pasajerosRequeridosDesdeViaje(Map<String, dynamic> vData) =>
       _pasajerosRequeridos(vData);
 
+  /// Auto-asignación ADM: estado inicial o republicado tras cancelación del chofer.
+  static bool estadoPermiteAutoAsignacionTurismo(Map<String, dynamic> vData) {
+    if ((vData['tipoServicio'] ?? '').toString() != 'turismo') return false;
+    if ((vData['uidTaxista'] ?? vData['taxistaId'] ?? '').toString().isNotEmpty) {
+      return false;
+    }
+    final String estado = (vData['estado'] ?? '').toString();
+    if (estado == 'pendiente_admin') return true;
+    return estado == EstadosViaje.pendiente && vData['republicado'] == true;
+  }
+
   /// Vehículo del chofer que cumple subtipo y capacidad para un viaje turístico.
   static Map<String, dynamic>? vehiculoTurismoCompatibleEnChofer({
     required Map<String, dynamic> choferData,
@@ -454,12 +465,7 @@ class AsignacionTurismoRepo {
     if (!vSnap.exists) return null;
     final Map<String, dynamic> v0 = vSnap.data()!;
 
-    if ((v0['tipoServicio'] ?? '').toString() != 'turismo') return null;
-    if ((v0['estado'] ?? '').toString() != 'pendiente_admin') return null;
-    if ((v0['uidTaxista'] ?? '').toString().isNotEmpty ||
-        (v0['taxistaId'] ?? '').toString().isNotEmpty) {
-      return null;
-    }
+    if (!estadoPermiteAutoAsignacionTurismo(v0)) return null;
 
     final DateTime now = DateTime.now();
     final dynamic tsAA = v0['acceptAfter'];
@@ -544,12 +550,7 @@ class AsignacionTurismoRepo {
         if (!vSnap.exists) return;
         final Map<String, dynamic> d = vSnap.data()!;
 
-        if ((d['tipoServicio'] ?? '').toString() != 'turismo') return;
-        if ((d['estado'] ?? '').toString() != 'pendiente_admin') return;
-        final bool yaAsignado =
-            ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
-                ((d['taxistaId'] ?? '') as String).isNotEmpty;
-        if (yaAsignado) return;
+        if (!estadoPermiteAutoAsignacionTurismo(d)) return;
 
         final DateTime now = DateTime.now();
         final dynamic tsAA = d['acceptAfter'];

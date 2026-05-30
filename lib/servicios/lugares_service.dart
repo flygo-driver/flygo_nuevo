@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:geocoding/geocoding.dart' as geocoding;
 import 'package:flygo_nuevo/keys.dart' as app_keys; // key centralizada
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 class PrediccionLugar {
   final String placeId;
@@ -38,6 +40,14 @@ class DetalleLugar {
     }
     return '$n, $a';
   }
+}
+
+/// Búsqueda reciente compartida en toda la app (mismo prefs que [CampoLugarAutocomplete]).
+class RecienteLugar {
+  const RecienteLugar({required this.label, required this.placeId});
+
+  final String label;
+  final String placeId;
 }
 
 // ---------------- POIs locales (RD) con aliases ----------------
@@ -257,9 +267,104 @@ class LugaresService {
   LugaresService._();
   static final LugaresService instance = LugaresService._();
 
+  static const String prefsRecientesGlobal = 'lugares_recientes_v2';
+  static const String prefsRecientesLegacy = 'lugares_recientes';
+  static const int maxRecientesGlobal = 12;
+
+  final Uuid _uuid = const Uuid();
+  String? _sessionToken;
+
   bool get _placesEnabled => app_keys.kGooglePlacesApiKey.trim().isNotEmpty;
 
   static List<PrediccionLugar> get sugerenciasRapidasDO => _quickChips();
+
+  void _ensureSessionToken() {
+    _sessionToken ??= _uuid.v4();
+  }
+
+  /// Cierra sesión de facturación Places tras elegir un lugar (Place Details).
+  void cerrarSesionPlaces() {
+    _sessionToken = null;
+  }
+
+  /// Recientes globales (Mis pagos, pool, paradas múltiples, programar viaje…).
+  Future<List<RecienteLugar>> cargarRecientes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawV2 = prefs.getString(prefsRecientesGlobal);
+    final list = <RecienteLugar>[];
+    if (rawV2 != null && rawV2.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawV2);
+        if (decoded is List) {
+          for (final e in decoded) {
+            if (e is! Map) continue;
+            final m = Map<String, dynamic>.from(e);
+            final l = (m['l'] ?? m['label'] ?? '').toString().trim();
+            if (l.isEmpty) continue;
+            final p = (m['p'] ?? m['placeId'] ?? '').toString().trim();
+            list.add(RecienteLugar(label: l, placeId: p));
+          }
+        }
+      } catch (_) {}
+    }
+    if (list.isEmpty) {
+      final legacy = prefs.getStringList(prefsRecientesLegacy) ?? [];
+      for (final l in legacy) {
+        final t = l.trim();
+        if (t.isNotEmpty) list.add(RecienteLugar(label: t, placeId: ''));
+      }
+    }
+    if (list.length > maxRecientesGlobal) {
+      return list.sublist(0, maxRecientesGlobal);
+    }
+    return list;
+  }
+
+  Future<void> guardarReciente(DetalleLugar det) async {
+    final prefs = await SharedPreferences.getInstance();
+    var list = await cargarRecientes();
+    list = List<RecienteLugar>.from(list);
+    list.removeWhere((e) {
+      if (det.placeId.isNotEmpty && e.placeId == det.placeId) return true;
+      return _norm(e.label) == _norm(det.displayLabel);
+    });
+    list.insert(
+      0,
+      RecienteLugar(label: det.displayLabel, placeId: det.placeId),
+    );
+    if (list.length > maxRecientesGlobal) {
+      list = list.sublist(0, maxRecientesGlobal);
+    }
+    final encoded = jsonEncode(
+      list.map((e) => {'l': e.label, 'p': e.placeId}).toList(),
+    );
+    await prefs.setString(prefsRecientesGlobal, encoded);
+    await prefs.remove(prefsRecientesLegacy);
+  }
+
+  /// Ordena sugerencias: prefijo > contiene > secundario (misma lógica en toda la app).
+  List<PrediccionLugar> rankearPredicciones(
+    List<PrediccionLugar> preds,
+    String query,
+  ) {
+    final nq = _norm(query.trim());
+    if (nq.isEmpty) return preds;
+
+    final scored = preds.map((p) {
+      final primary = _norm(p.primary);
+      final secondary = _norm(p.secondary ?? '');
+      int score = 0;
+      if (p.placeId.startsWith('local:poi:')) score += 8;
+      if (primary.startsWith(nq)) score += 120;
+      if (secondary.isNotEmpty && secondary.startsWith(nq)) score += 80;
+      if (secondary.contains(nq)) score += 40;
+      if (primary.contains(nq)) score += 20;
+      return MapEntry(p, score);
+    }).toList();
+
+    scored.sort((a, b) => b.value.compareTo(a.value));
+    return scored.map((e) => e.key).toList(growable: false);
+  }
 
   // Cuando el usuario escribe una dirección "larga" tipo:
   // "calle 15 sector villa maria numero 45 santo domingo..."
@@ -322,7 +427,46 @@ class LugaresService {
       seen.add(k);
       out.add(v);
     }
-    return out;
+
+    // Variantes por palabras (referencias parciales tipo Uber/InDrive).
+    final words = q
+        .split(RegExp(r'[\s,;]+'))
+        .map((w) => w.trim())
+        .where((w) => w.length >= 2)
+        .toList();
+    if (words.length >= 2) {
+      final tail2 = words.sublist(words.length - 2).join(' ');
+      if (tail2.length >= 3) out.add(tail2);
+      if (words.length >= 3) {
+        final tail3 = words.sublist(words.length - 3).join(' ');
+        if (tail3.length >= 4) out.add(tail3);
+      }
+      final first = words.first;
+      if (first.length >= 3 && first.toLowerCase() != q.toLowerCase()) {
+        out.add(first);
+      }
+    }
+    if (words.length == 1 && words.first.length >= 3) {
+      out.add(words.first);
+    }
+
+    // Partes separadas por coma (barrio, ciudad…).
+    for (final part in q.split(',')) {
+      final t = part.trim();
+      if (t.length >= 3 && t.toLowerCase() != q.toLowerCase()) {
+        out.add(t);
+      }
+    }
+
+    final seen2 = <String>{};
+    final deduped = <String>[];
+    for (final v in out) {
+      final k = v.toLowerCase();
+      if (seen2.contains(k)) continue;
+      seen2.add(k);
+      deduped.add(v);
+    }
+    return deduped;
   }
 
   Future<List<PrediccionLugar>> autocompletar(String query,
@@ -351,20 +495,22 @@ class LugaresService {
     }
 
     try {
-      // Sin `types`: cobertura tipo buscador de Google (sectores, barrios, villas,
-      // calles, puntos de interés), no solo direcciones con número.
+      _ensureSessionToken();
+      // Sin `types`: cobertura amplia (sectores, barrios, POI, calles), como buscador Google.
       final baseParams = <String, String>{
         'key': app_keys.kGooglePlacesApiKey,
         'language': 'es',
+        'sessiontoken': _sessionToken!,
       };
       if (country != null && country.trim().isNotEmpty) {
-        baseParams['components'] = 'country:${country.trim()}';
+        baseParams['components'] = 'country:${country.trim().toLowerCase()}';
       }
       if (biasLat != null && biasLon != null) {
         baseParams['location'] =
             '${biasLat.toStringAsFixed(6)},${biasLon.toStringAsFixed(6)}';
-        // Sesgo amplio (RD); no restringe fuera del radio, solo prioriza la zona.
-        baseParams['radius'] = '150000';
+        baseParams['radius'] = '200000';
+        baseParams['origin'] =
+            '${biasLat.toStringAsFixed(6)},${biasLon.toStringAsFixed(6)}';
       }
 
       final variants = _buildAddressVariants(q);
@@ -420,8 +566,8 @@ class LugaresService {
         }
       }
 
-      for (final v in expanded) {
-        if (v.trim().isEmpty) continue;
+      Future<void> fetchVariant(String v) async {
+        if (v.trim().isEmpty || remotes.length >= 20) return;
         final params = <String, String>{...baseParams, 'input': v.trim()};
         final uri = Uri.https(
           'maps.googleapis.com',
@@ -429,22 +575,35 @@ class LugaresService {
           params,
         );
         parseAndAdd(await _getJson(uri));
-        if (remotes.length >= 15) break;
       }
 
+      final variantList = expanded.toList();
+      // Consulta principal + variantes en paralelo (más resultados al escribir).
+      final batch1 = variantList.take(4).map(fetchVariant).toList();
+      await Future.wait(batch1);
+      if (remotes.length < 8 && variantList.length > 4) {
+        await Future.wait(variantList.skip(4).take(4).map(fetchVariant));
+      }
+      if (remotes.isEmpty && variantList.length > 8) {
+        for (final v in variantList.skip(8)) {
+          await fetchVariant(v);
+          if (remotes.length >= 12) break;
+        }
+      }
+
+      final mergedRemote = rankearPredicciones(remotes, cq);
       final out = <PrediccionLugar>[];
       final seenPrimary = <String>{};
-      for (final p in [...locals, ...remotes]) {
+      for (final p in [...locals, ...mergedRemote]) {
         final k = '${p.placeId}|${_norm(p.primary)}';
         if (seenPrimary.contains(k)) continue;
         seenPrimary.add(k);
         out.add(p);
       }
-      // Solo ofrecer texto libre si Google no devolvió sugerencias (evita duplicar la lista).
       if (remotes.isEmpty && cq.length >= 2) {
         out.add(PrediccionLugar(placeId: q, primary: q, secondary: country));
       }
-      return out;
+      return rankearPredicciones(out, cq);
     } catch (_) {
       return [
         ...locals,
@@ -535,6 +694,7 @@ class LugaresService {
       final formatted = (r['formatted_address'] ?? '').toString().trim();
       final name = (r['name'] ?? '').toString().trim();
 
+      cerrarSesionPlaces();
       return DetalleLugar(
         placeId: pid,
         name: name.isNotEmpty ? name : formatted,

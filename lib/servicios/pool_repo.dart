@@ -34,6 +34,33 @@ class PoolRepo {
   static double _round2(double v) =>
       double.parse(v.clamp(0, 1e12).toStringAsFixed(2));
 
+  /// Antes de `en_ruta`: chofer/admin pueden cancelar la gira (devuelve prepago reservado vía CF).
+  static bool giraPuedeCancelarseAntesDeIniciar(Map<String, dynamic> d) {
+    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
+    const bloqueados = <String>{
+      'en_ruta',
+      'finalizado',
+      'cancelado',
+      'cancelado_por_admin',
+    };
+    return !bloqueados.contains(estado);
+  }
+
+  /// Pool admite reservas / cancelación de cupos por clientes.
+  static bool giraAdmiteReservasCliente(Map<String, dynamic> d) {
+    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
+    const permitidos = <String>{
+      'abierto',
+      'preconfirmado',
+      'confirmado',
+      'activo',
+      'disponible',
+      'buscando',
+      'lleno',
+    };
+    return permitidos.contains(estado);
+  }
+
   static Future<String> crearPool({
     required String tipo,
     required String sentido,
@@ -77,8 +104,10 @@ class PoolRepo {
 
     final double pct = PlataformaEconomia.comisionGiraPorcentaje;
     final double factor = pct / 100.0;
+    final double mult =
+        sentido.trim().toLowerCase() == 'ida_y_vuelta' ? 2.0 : 1.0;
     final double comisionEstimada = _round2(
-      capacidad.toDouble() * precioPorAsiento * factor,
+      capacidad.toDouble() * precioPorAsiento * mult * factor,
     );
 
     print(
@@ -617,5 +646,31 @@ class PoolRepo {
       canceladas++;
     }
     return canceladas;
+  }
+
+  /// Cliente cancela su reserva activa (solo `reservado`, antes de salida en ruta).
+  static Future<Map<String, dynamic>> cancelarReservaClienteSeguro({
+    required String poolId,
+    required String reservaId,
+    String? idempotencyKey,
+  }) async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) throw 'Debes iniciar sesión';
+
+    final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+        ? idempotencyKey.trim()
+        : 'cancel_res_${poolId}_${reservaId}_${DateTime.now().millisecondsSinceEpoch}';
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    final callable = fx.httpsCallable('cancelPoolReservation');
+    final res = await callable.call(<String, dynamic>{
+      'poolId': poolId,
+      'reservaId': reservaId,
+      'idempotencyKey': key,
+    });
+    final raw = res.data;
+    if (raw == null) return <String, dynamic>{};
+    return raw is Map<String, dynamic>
+        ? raw
+        : Map<String, dynamic>.from(raw as Map);
   }
 }

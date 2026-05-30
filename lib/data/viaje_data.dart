@@ -9,10 +9,20 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+
+/// Sesión local nula o el callable no recibió identidad (p. ej. token caducado).
+class SessionExpiredForTrip implements Exception {
+  const SessionExpiredForTrip();
+
+  @override
+  String toString() =>
+      'Tu sesión expiró, inicia sesión nuevamente.';
+}
 
 class ViajeData {
   // ---------- Firestore ----------
@@ -605,17 +615,131 @@ class ViajeData {
     return list;
   }
 
-  static Future<List<Viaje>> obtenerHistorialTaxista(
-      String emailTaxista) async {
-    final QuerySnapshot<Map<String, dynamic>> snapshot = await _viajes
-        .where('nombreTaxista', isEqualTo: emailTaxista)
-        .where('completado', isEqualTo: true)
-        .get();
-    final List<Viaje> list = snapshot.docs
-        .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
-        .toList();
-    list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
+  /// Viajes completados del taxista: `uidTaxista` **o** `taxistaId` (legacy).
+  static Future<List<Viaje>> obtenerHistorialTaxista(String uid) async {
+    final String trimmed = uid.trim();
+    if (trimmed.isEmpty) return <Viaje>[];
+
+    final Map<String, Viaje> byId = <String, Viaje>{};
+
+    void merge(QuerySnapshot<Map<String, dynamic>> snap) {
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> d in snap.docs) {
+        byId[d.id] = Viaje.fromMap(d.id, _normalize(d.data()));
+      }
+    }
+
+    try {
+      merge(
+        await _viajes
+            .where('uidTaxista', isEqualTo: trimmed)
+            .where('completado', isEqualTo: true)
+            .get(const GetOptions(source: Source.serverAndCache)),
+      );
+    } catch (_) {}
+    try {
+      merge(
+        await _viajes
+            .where('taxistaId', isEqualTo: trimmed)
+            .where('completado', isEqualTo: true)
+            .get(const GetOptions(source: Source.serverAndCache)),
+      );
+    } catch (_) {}
+
+    final List<Viaje> list = byId.values.toList();
+    list.sort((Viaje a, Viaje b) => b.fechaHora.compareTo(a.fechaHora));
     return list;
+  }
+
+  /// Igual que [obtenerHistorialTaxista] en tiempo real (uid + taxistaId).
+  static Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      streamDocumentosViajesCompletadosTaxista(String uid) {
+    final String trimmed = uid.trim();
+    if (trimmed.isEmpty) {
+      return Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>.value(
+        <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+      );
+    }
+
+    QuerySnapshot<Map<String, dynamic>>? lastUid;
+    QuerySnapshot<Map<String, dynamic>>? lastTid;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? subUid;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? subTid;
+
+    late final StreamController<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+        controller;
+
+    int ordenMs(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+      final Map<String, dynamic> m = d.data();
+      final Object? fin = m['finalizadoEn'];
+      if (fin is Timestamp) return fin.millisecondsSinceEpoch;
+      final Object? fh = m['fechaHora'];
+      if (fh is Timestamp) return fh.millisecondsSinceEpoch;
+      return 0;
+    }
+
+    void emit() {
+      if (lastUid == null && lastTid == null) return;
+      final Map<String, QueryDocumentSnapshot<Map<String, dynamic>>> map = {};
+      final QuerySnapshot<Map<String, dynamic>>? u = lastUid;
+      final QuerySnapshot<Map<String, dynamic>>? t = lastTid;
+      if (u != null) {
+        for (final QueryDocumentSnapshot<Map<String, dynamic>> d in u.docs) {
+          map[d.id] = d;
+        }
+      }
+      if (t != null) {
+        for (final QueryDocumentSnapshot<Map<String, dynamic>> d in t.docs) {
+          map[d.id] = d;
+        }
+      }
+      final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+          map.values.toList();
+      docs.sort(
+        (QueryDocumentSnapshot<Map<String, dynamic>> a,
+                QueryDocumentSnapshot<Map<String, dynamic>> b) =>
+            ordenMs(b).compareTo(ordenMs(a)),
+      );
+      if (!controller.isClosed) {
+        controller.add(docs);
+      }
+    }
+
+    controller =
+        StreamController<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+      onListen: () {
+        subUid = _viajes
+            .where('uidTaxista', isEqualTo: trimmed)
+            .where('completado', isEqualTo: true)
+            .snapshots()
+            .listen(
+          (QuerySnapshot<Map<String, dynamic>> s) {
+            lastUid = s;
+            emit();
+        }, onError: (Object e, StackTrace st) {
+          if (!controller.isClosed) controller.addError(e, st);
+        });
+        subTid = _viajes
+            .where('taxistaId', isEqualTo: trimmed)
+            .where('completado', isEqualTo: true)
+            .snapshots()
+            .listen(
+          (QuerySnapshot<Map<String, dynamic>> s) {
+            lastTid = s;
+            emit();
+        }, onError: (Object e, StackTrace st) {
+          if (!controller.isClosed) controller.addError(e, st);
+        });
+      },
+      onCancel: () {
+        subUid?.cancel();
+        subTid?.cancel();
+        if (!controller.isClosed) {
+          controller.close();
+        }
+      },
+    );
+
+    return controller.stream;
   }
 
   // ===================================================================
@@ -1210,13 +1334,19 @@ class ViajeData {
     required num calificacion,
     String? comentario,
   }) async {
-    final User? user = FirebaseAuth.instance.currentUser;
+    final User? user =
+        FirebaseAuth.instance.currentUser ?? await resolveFirebaseUser();
     if (user == null) {
-      throw Exception('Debes iniciar sesión.');
+      throw const SessionExpiredForTrip();
     }
     if (user.uid != uidCliente) {
       throw Exception('Sesión no coincide con el usuario.');
     }
+    try {
+      await user.reload();
+    } catch (_) {}
+    // Callable envía el ID token; si expiró, el backend responde unauthenticated.
+    await user.getIdToken(true);
 
     final HttpsCallable callable = FirebaseFunctions.instanceFor(
       region: 'us-central1',
@@ -1244,13 +1374,84 @@ class ViajeData {
       final String msg = (e.message ?? '').trim();
       switch (e.code) {
         case 'unauthenticated':
-          throw Exception('Debes iniciar sesión.');
+          throw const SessionExpiredForTrip();
         case 'permission-denied':
           throw Exception(
               msg.isNotEmpty ? msg : 'No puedes calificar este viaje.');
         case 'failed-precondition':
           throw Exception(
             msg.isNotEmpty ? msg : 'Solo puedes calificar viajes completados.',
+          );
+        case 'not-found':
+          throw Exception(msg.isNotEmpty ? msg : 'El viaje no existe.');
+        case 'invalid-argument':
+          throw Exception(msg.isNotEmpty ? msg : 'Datos inválidos.');
+        default:
+          throw Exception(
+            msg.isNotEmpty ? msg : 'Error al guardar calificación (${e.code}).',
+          );
+      }
+    }
+  }
+
+  /// Taxista califica al cliente (callable [calificarCliente]).
+  static Future<void> calificarClienteSeguro({
+    required String viajeId,
+    required String uidTaxista,
+    required num calificacion,
+    String? comentario,
+  }) async {
+    final User? user =
+        FirebaseAuth.instance.currentUser ?? await resolveFirebaseUser();
+    if (user == null) {
+      throw const SessionExpiredForTrip();
+    }
+    if (user.uid != uidTaxista) {
+      throw Exception('Sesión no coincide con el conductor.');
+    }
+    try {
+      await user.reload();
+    } catch (_) {}
+    await user.getIdToken(true);
+
+    final HttpsCallable callable = FirebaseFunctions.instanceFor(
+      region: 'us-central1',
+    ).httpsCallable('calificarCliente');
+
+    try {
+      final HttpsCallableResult<dynamic> res = await callable.call(
+        <String, dynamic>{
+          'viajeId': viajeId,
+          'calificacion': calificacion,
+          if (comentario != null && comentario.isNotEmpty)
+            'comentario': comentario,
+        },
+      );
+      final Object? data = res.data;
+      if (data is Map) {
+        final Map<String, dynamic> map = Map<String, dynamic>.from(data);
+        if (map['ok'] != true) {
+          throw Exception(
+            map['error']?.toString() ?? 'No se pudo guardar la calificación.',
+          );
+        }
+      }
+    } on FirebaseFunctionsException catch (e) {
+      final String msg = (e.message ?? '').trim();
+      switch (e.code) {
+        case 'unauthenticated':
+          throw const SessionExpiredForTrip();
+        case 'permission-denied':
+          throw Exception(
+            msg.isNotEmpty
+                ? msg
+                : 'No puedes calificar al cliente de este viaje.',
+          );
+        case 'failed-precondition':
+          throw Exception(
+            msg.isNotEmpty
+                ? msg
+                : 'Solo puedes calificar viajes completados.',
           );
         case 'not-found':
           throw Exception(msg.isNotEmpty ? msg : 'El viaje no existe.');

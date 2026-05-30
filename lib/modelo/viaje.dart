@@ -86,6 +86,12 @@ class Viaje {
   // ✅ NUEVO: Waypoints para múltiples paradas
   final List<Map<String, dynamic>>? waypoints;
 
+  /// Progreso multiparada (servidor — `registrarLegMultiparadaSeguro`).
+  final int multiparadaLegsTotal;
+  final int multiparadaLegCompletadas;
+  final bool multiparadaCompleta;
+  final List<Map<String, dynamic>>? multiparadaParadasVisitadas;
+
   // 👇 NUEVO: Campo extras para información adicional (pasajeros, etc.)
   final Map<String, dynamic>? extras;
 
@@ -145,6 +151,10 @@ class Viaje {
     this.codigoVerificado = false,
     // ✅ NUEVO: Waypoints
     this.waypoints,
+    this.multiparadaLegsTotal = 0,
+    this.multiparadaLegCompletadas = 0,
+    this.multiparadaCompleta = false,
+    this.multiparadaParadasVisitadas,
     // 👇 NUEVO: extras
     this.extras,
     this.inicioEnRutaEn,
@@ -166,6 +176,9 @@ class Viaje {
   bool get esMotor => tipoServicio == 'motor';
   bool get esTurismo => tipoServicio == 'turismo';
   bool get esNormal => tipoServicio == 'normal';
+  bool get esMultiparada =>
+      (waypoints != null && waypoints!.isNotEmpty) ||
+      multiparadaLegsTotal > 0;
   bool get vaAlPool => canalAsignacion == 'pool';
   bool get vaAAdmin => canalAsignacion == 'admin';
 
@@ -359,6 +372,24 @@ class Viaje {
         ? List<Map<String, dynamic>>.from(data['waypoints'])
         : null;
 
+    final int multiLegsTotal = data['multiparadaLegsTotal'] is num
+        ? (data['multiparadaLegsTotal'] as num).toInt()
+        : 0;
+    final int multiLegCompletadas = data['multiparadaLegCompletadas'] is num
+        ? (data['multiparadaLegCompletadas'] as num).toInt()
+        : 0;
+    final bool multiCompleta = _asBool(data['multiparadaCompleta']);
+    final List<Map<String, dynamic>>? multiVisitadas =
+        data['multiparadaParadasVisitadas'] is List
+            ? List<Map<String, dynamic>>.from(
+                (data['multiparadaParadasVisitadas'] as List).map(
+                  (dynamic e) => e is Map
+                      ? Map<String, dynamic>.from(e)
+                      : <String, dynamic>{},
+                ),
+              )
+            : null;
+
     // 👇 NUEVO: extras
     final Map<String, dynamic>? extras = data['extras'] is Map
         ? Map<String, dynamic>.from(data['extras'])
@@ -422,6 +453,11 @@ class Viaje {
 
       // ✅ NUEVO: waypoints
       waypoints: waypoints,
+
+      multiparadaLegsTotal: multiLegsTotal,
+      multiparadaLegCompletadas: multiLegCompletadas,
+      multiparadaCompleta: multiCompleta,
+      multiparadaParadasVisitadas: multiVisitadas,
 
       // 👇 NUEVO: extras
       extras: extras,

@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 
+/// Publicación de ubicación del taxista. Lectura de permiso: **pasiva**
+/// ([readServiceAndPermissionStabilizedNoRequest] en obtenerUbicacionActual).
 class UbicacionTaxista {
   static StreamSubscription<Position>? _subscription;
   static bool _isActive = false;
@@ -113,7 +115,7 @@ class UbicacionTaxista {
 
   /// Obtiene la ubicación actual una sola vez.
   static Future<Position> obtenerUbicacionActual() async {
-    final snap = await GpsService.checkServiceThenRequestPermissionIfNeeded();
+    final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest();
     if (!snap.serviceEnabled) {
       throw Exception('Servicios de ubicación desactivados');
     }

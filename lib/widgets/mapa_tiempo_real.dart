@@ -9,6 +9,11 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 
+/// Mapa oscuro (Google Maps JSON) para resaltar la ruta blanca tipo Uber.
+const String _kMapStyleBolaRealtimeDark = r'''
+[{"elementType":"geometry","stylers":[{"color":"#242f3e"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#8d9aa8"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#242f3e"}]},{"featureType":"road","elementType":"geometry","stylers":[{"color":"#38414e"}]},{"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#212a37"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#9ca5b3"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#746855"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#17263c"}]}]
+''';
+
 class MapaTiempoReal extends StatefulWidget {
   final LatLng? origen; // Ubicación del cliente/pickup
   final String? origenNombre; // Nombre del origen
@@ -33,6 +38,9 @@ class MapaTiempoReal extends StatefulWidget {
   /// Cuando el usuario suelta el mapa (cámara en reposo) o tras un tap sin mover cámara.
   final VoidCallback? onUserMapGestureEnd;
 
+  /// Cuando es true: mapa oscuro + polyline ancho blanco (cliente viendo al taxi hacia el encuentro).
+  final bool estiloCalleAnchaBlanca;
+
   const MapaTiempoReal({
     super.key,
     this.origen,
@@ -49,6 +57,7 @@ class MapaTiempoReal extends StatefulWidget {
     this.overlayPolylines,
     this.onUserInteractWithMap,
     this.onUserMapGestureEnd,
+    this.estiloCalleAnchaBlanca = false,
   });
 
   @override
@@ -211,7 +220,11 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
         markerId: const MarkerId('taxista'),
         position: widget.ubicacionTaxista!,
         infoWindow: const InfoWindow(title: 'Tu taxista'),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+        icon: BitmapDescriptor.defaultMarkerWithHue(
+          widget.estiloCalleAnchaBlanca
+              ? BitmapDescriptor.hueAzure
+              : BitmapDescriptor.hueOrange,
+        ),
         zIndexInt: 2,
       ));
     }
@@ -272,15 +285,34 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       ));
     }
 
-    _polylines.removeWhere((p) => p.polylineId.value == 'preview_trip');
+    _polylines.removeWhere((p) =>
+        p.polylineId.value == 'preview_trip' ||
+        p.polylineId.value == 'preview_trip_glow');
     final pts = widget.polylinePreviewPoints;
     if (pts != null && pts.length >= 2) {
+      if (widget.estiloCalleAnchaBlanca) {
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('preview_trip_glow'),
+          points: pts,
+          width: 22,
+          color: const Color(0x66000000),
+          geodesic: true,
+          jointType: JointType.round,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+        ));
+      }
       _polylines.add(Polyline(
         polylineId: const PolylineId('preview_trip'),
         points: pts,
-        width: 5,
-        color: const Color(0xFF49F18B),
+        width: widget.estiloCalleAnchaBlanca ? 16 : 5,
+        color: widget.estiloCalleAnchaBlanca
+            ? const Color(0xFFFFFFFF)
+            : const Color(0xFF49F18B),
         geodesic: true,
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
       ));
     }
 
@@ -288,8 +320,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   Future<void> _iniciarUbicacion() async {
+    // Pasivo (widget de mapa): [GpsService] contrato — readNoRequest, nunca checkService aquí.
     final ({bool serviceEnabled, LocationPermission permission}) snap =
-        await GpsService.checkServiceThenRequestPermissionIfNeeded();
+        await GpsService.readServiceAndPermissionStabilizedNoRequest();
     _serviceOn = snap.serviceEnabled;
     if (!_serviceOn && mounted) {
       _snack('Activa la ubicación del dispositivo (GPS).');
@@ -466,9 +499,14 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       ..add(Polyline(
         polylineId: const PolylineId('preview'),
         points: [me, p],
-        width: 5,
-        color: const Color(0xFF49F18B),
+        width: widget.estiloCalleAnchaBlanca ? 14 : 5,
+        color: widget.estiloCalleAnchaBlanca
+            ? const Color(0xFFFFFFFF)
+            : const Color(0xFF49F18B),
         geodesic: true,
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
       ));
     setState(() {});
     await _fitTo(me, p);
@@ -506,7 +544,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
           child: GoogleMap(
             initialCameraPosition:
                 const CameraPosition(target: _fallback, zoom: 12),
-            onMapCreated: (ctrl) {
+            onMapCreated: (ctrl) async {
               _map = ctrl;
               _mapReady = true;
               // Centrar en el punto importante después de crear el mapa
@@ -514,6 +552,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
                 _centrarEnPuntoImportante();
               });
             },
+            style: widget.estiloCalleAnchaBlanca ? _kMapStyleBolaRealtimeDark : null,
             myLocationEnabled: _myLocEnabled,
             myLocationButtonEnabled: false,
             compassEnabled: true,

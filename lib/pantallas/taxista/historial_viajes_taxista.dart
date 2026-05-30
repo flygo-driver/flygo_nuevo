@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -73,31 +75,48 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
   }
 
   Future<void> _cargarHistorial() async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
-      final user = FirebaseAuth.instance.currentUser;
+      final User? user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        if (!mounted) return;
-        setState(() => cargando = false);
+        if (mounted) {
+          setState(() => historial = <Viaje>[]);
+        }
         return;
       }
 
-      final List<Viaje> datos = await ViajeData.obtenerHistorialTaxista(
-        user.email ?? "",
+      final List<Viaje> datos = await ViajeData.obtenerHistorialTaxista(user.uid)
+          .timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => throw TimeoutException(
+          'Tiempo de espera al cargar el historial. Revisá la conexión.',
+        ),
       );
 
       if (!mounted) return;
-      setState(() {
-        historial = datos;
-        cargando = false;
-      });
-    } catch (e) {
-      debugPrint('Error cargando historial: $e');
-      if (!mounted) return;
-      setState(() => cargando = false);
-      messenger.showSnackBar(
-        SnackBar(content: Text("Error al cargar historial: $e")),
-      );
+      setState(() => historial = datos);
+    } catch (e, st) {
+      debugPrint('Error cargando historial: $e\n$st');
+      if (mounted) {
+        setState(() => historial = <Viaje>[]);
+        final ScaffoldMessengerState? ms =
+            ScaffoldMessenger.maybeOf(context);
+        ms?.showSnackBar(
+          SnackBar(
+            content: Text('Error al cargar historial: $e'),
+            action: SnackBarAction(
+              label: 'Reintentar',
+              onPressed: () {
+                setState(() => cargando = true);
+                unawaited(_cargarHistorial());
+              },
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => cargando = false);
+      }
     }
   }
 
@@ -128,14 +147,44 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
           ? Center(
               child: CircularProgressIndicator(color: cs.primary),
             )
-          : (historial.isEmpty
-              ? Center(
-                  child: Text(
-                    'No hay viajes completados aún.',
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: cs.onSurfaceVariant,
-                    ),
+          : historial.isEmpty
+              ? RefreshIndicator(
+                  onRefresh: _cargarHistorial,
+                  color: cs.primary,
+                  backgroundColor: cs.surface,
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 32),
+                    children: [
+                      Icon(
+                        Icons.inbox_outlined,
+                        size: 56,
+                        color: cs.onSurfaceVariant,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No hay viajes completados',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'No encontramos viajes con tu cuenta como conductor '
+                        '(uidTaxista) y completado. Cuando finalices un viaje, '
+                        'aparecerá aquí.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 15,
+                          height: 1.4,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 )
               : RefreshIndicator(
@@ -343,7 +392,7 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                       );
                     },
                   ),
-                )),
+                ),
     );
   }
 }

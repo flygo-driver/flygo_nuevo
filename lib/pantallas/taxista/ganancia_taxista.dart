@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
@@ -14,6 +15,18 @@ class GananciaTaxista extends StatefulWidget {
 }
 
 class GananciaTaxistaState extends State<GananciaTaxista> {
+  /// Nueva suscripción al cambiar: fuerza reconexión en “pull to refresh”.
+  int _streamGen = 0;
+
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _viajesStream(
+      String uid) {
+    return ViajeData.streamDocumentosViajesCompletadosTaxista(uid);
+  }
+
+  Future<void> _refresh() async {
+    if (mounted) setState(() => _streamGen++);
+  }
+
   // ===== Helpers numéricos exactos (centavos) =====
   int _toCents(num v) => (v * 100).round();
   double _fromCents(int c) => c / 100.0;
@@ -33,15 +46,20 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
     return 0.0;
   }
 
-  Future<void> _fakeRefresh() async {
-    if (mounted) setState(() {});
-  }
-
   /// Color para montos / acentos tipo “ganancia” (legible en claro y oscuro).
   Color _gainColor(ColorScheme cs) {
     return cs.brightness == Brightness.dark
         ? const Color(0xFF69F0AE)
         : const Color(0xFF00796B);
+  }
+
+  /// Evita que el texto final quede bajo la barra de navegación del sistema.
+  EdgeInsets _bodyPadding(BuildContext context) {
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double sysBottom = mq.viewPadding.bottom > mq.padding.bottom
+        ? mq.viewPadding.bottom
+        : mq.padding.bottom;
+    return EdgeInsets.fromLTRB(20, 20, 20, 28 + sysBottom);
   }
 
   @override
@@ -59,13 +77,6 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
         ),
       );
     }
-
-    // Tiempo real: todos los viajes completados del taxista
-    final stream = FirebaseFirestore.instance
-        .collection('viajes')
-        .where('uidTaxista', isEqualTo: user.uid)
-        .where('completado', isEqualTo: true)
-        .snapshots();
 
     return Scaffold(
       backgroundColor: cs.surface,
@@ -87,12 +98,14 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
         iconTheme: IconThemeData(color: cs.onSurface),
         actions: const [SaldoGananciasChip()],
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: stream,
+      body: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+        key: ValueKey<int>(_streamGen),
+        stream: _viajesStream(user.uid),
         builder: (context, snap) {
           final cs = Theme.of(context).colorScheme;
           final gain = _gainColor(cs);
-          if (snap.connectionState == ConnectionState.waiting) {
+          if (snap.connectionState == ConnectionState.waiting &&
+              !snap.hasData) {
             return Center(
               child: CircularProgressIndicator(color: cs.primary),
             );
@@ -102,9 +115,9 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
             return RefreshIndicator(
               color: cs.primary,
               backgroundColor: cs.surface,
-              onRefresh: _fakeRefresh,
+              onRefresh: _refresh,
               child: ListView(
-                padding: const EdgeInsets.all(20),
+                padding: _bodyPadding(context),
                 children: [
                   _SummaryCard(
                     child: Column(
@@ -124,7 +137,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                   ),
                   const SizedBox(height: 14),
                   FilledButton.icon(
-                    onPressed: _fakeRefresh,
+                    onPressed: _refresh,
                     icon: const Icon(Icons.refresh),
                     label: const Text('Reintentar'),
                     style: FilledButton.styleFrom(
@@ -140,7 +153,8 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
             );
           }
 
-          final docs = snap.data?.docs ?? [];
+          final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+              snap.data ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
           // ===== Acumuladores exactos en centavos =====
           int totalComisionCents = 0;
@@ -155,10 +169,11 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
           int gananciaTurismoCents = 0;
 
           for (final d in docs) {
-            final m = d.data();
+            final Map<String, dynamic> m = d.data();
 
             // Determinar tipo de servicio
-            final String tipoServicio = m['tipoServicio'] ?? 'normal';
+            final String tipoServicio =
+                (m['tipoServicio'] ?? 'normal').toString();
 
             // Precio
             final int precioC = _asInt(m['precio_cents']) == 0
@@ -212,9 +227,9 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
             return RefreshIndicator(
               color: cs.primary,
               backgroundColor: cs.surface,
-              onRefresh: _fakeRefresh,
+              onRefresh: _refresh,
               child: ListView(
-                padding: const EdgeInsets.all(20),
+                padding: _bodyPadding(context),
                 children: [
                   _SummaryCard(
                     child: Column(
@@ -252,9 +267,9 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
           return RefreshIndicator(
             color: cs.primary,
             backgroundColor: cs.surface,
-            onRefresh: _fakeRefresh,
-            child: ListView(
-              padding: const EdgeInsets.all(20),
+            onRefresh: _refresh,
+              child: ListView(
+                padding: _bodyPadding(context),
               children: [
                 _SummaryCard(
                   child: Row(
@@ -435,8 +450,9 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                   '• Viajes normales/motor: 80% para taxista, 20% comisión\n'
                   '• Viajes turismo: 85% para taxista, 15% comisión',
                   style: TextStyle(
-                    color: cs.onSurfaceVariant.withValues(alpha: 0.75),
-                    fontSize: 10,
+                    color: cs.onSurfaceVariant.withValues(alpha: 0.85),
+                    fontSize: 12,
+                    height: 1.4,
                   ),
                 ),
               ],

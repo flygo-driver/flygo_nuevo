@@ -1,14 +1,31 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/modelo/chofer_turismo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/directions_service.dart';
+import 'package:flygo_nuevo/servicios/choferes_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/legal/terms_data.dart';
+import 'package:flygo_nuevo/utils/telefono_viaje.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+/// Contacto para asignación turismo (sin chofer disponible / urgencia ADM).
+const String _kTurismoSoporteEmail = kTermsContactEmail;
+const String _kTurismoSoporteTelDigitos = '18094201481';
+const String _kTurismoSoporteTelVisible = '809-420-1481';
 
 class EsperaAsignacionTurismo extends StatefulWidget {
   final String viajeId;
@@ -23,6 +40,25 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _pulseAnimation;
+  GoogleMapController? _map;
+  final Set<Polyline> _polylines = {};
+  String? _rutaViajeIdCargada;
+  String _ultimaFirmaBounds = '';
+  StreamSubscription<List<ChoferTurismo>>? _choferesSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _choferAsignadoSub;
+  List<ChoferTurismo> _choferesRed = <ChoferTurismo>[];
+  String _choferesStreamSig = '';
+  String _choferAsignadoStreamUid = '';
+  LatLng? _ubicacionChoferAsignado;
+  Timer? _reintentoAutoAsignacionTimer;
+  Timer? _navegarViajeActivoTimer;
+  bool _reintentoAutoEnCurso = false;
+  bool _navegacionViajeActivoProgramada = false;
+  String _ultimoTaxistaAsignadoNotificado = '';
+
+  List<ChoferTurismo> get _choferesDisponiblesEnMapa => _choferesRed
+      .where((ChoferTurismo c) => c.disponible && c.ultimaUbicacion != null)
+      .toList();
 
   @override
   void initState() {
@@ -40,8 +76,1042 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
   @override
   void dispose() {
+    _reintentoAutoAsignacionTimer?.cancel();
+    _navegarViajeActivoTimer?.cancel();
+    _stopChoferAsignadoStream(notificarUi: false);
+    _stopChoferesStream(notificarUi: false);
     _controller.dispose();
+    _map?.dispose();
     super.dispose();
+  }
+
+  void _stopChoferAsignadoStream({bool notificarUi = true}) {
+    _choferAsignadoSub?.cancel();
+    _choferAsignadoSub = null;
+    _choferAsignadoStreamUid = '';
+    if (_ubicacionChoferAsignado == null) return;
+    _ubicacionChoferAsignado = null;
+    if (notificarUi && mounted) setState(() {});
+  }
+
+  void _ensureChoferAsignadoUbicacionStream(String uidChofer) {
+    if (uidChofer.isEmpty) {
+      _stopChoferAsignadoStream();
+      return;
+    }
+    if (_choferAsignadoStreamUid == uidChofer && _choferAsignadoSub != null) {
+      return;
+    }
+    _choferAsignadoStreamUid = uidChofer;
+    _choferAsignadoSub?.cancel();
+    _choferAsignadoSub = FirebaseFirestore.instance
+        .collection('choferes_turismo')
+        .doc(uidChofer)
+        .snapshots()
+        .listen(
+      (DocumentSnapshot<Map<String, dynamic>> snap) {
+        if (!snap.exists) return;
+        final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+        final GeoPoint? u = d['ultimaUbicacion'] as GeoPoint?;
+        LatLng? nueva;
+        if (u != null && _coordOk(u.latitude, u.longitude)) {
+          nueva = LatLng(u.latitude, u.longitude);
+        } else {
+          final Map<String, dynamic>? ubic =
+              d['ubicacion'] as Map<String, dynamic>?;
+          final double? lat = _numCoord(ubic?['lat']);
+          final double? lon = _numCoord(ubic?['lon']);
+          if (_coordOk(lat, lon)) nueva = LatLng(lat!, lon!);
+        }
+        if (nueva == null) return;
+        if (!mounted) return;
+        if (_ubicacionChoferAsignado?.latitude == nueva.latitude &&
+            _ubicacionChoferAsignado?.longitude == nueva.longitude) {
+          return;
+        }
+        setState(() => _ubicacionChoferAsignado = nueva);
+        final Map<String, dynamic>? viaje = _ultimoDataViaje;
+        if (viaje != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) unawaited(_ajustarCamara(viaje));
+          });
+        }
+      },
+      onError: (_) {},
+    );
+  }
+
+  Map<String, dynamic>? _ultimoDataViaje;
+
+  void _ensureReintentoAutoAsignacion(Map<String, dynamic> data) {
+    final String taxistaId =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+    if (taxistaId.isNotEmpty) {
+      _reintentoAutoAsignacionTimer?.cancel();
+      _reintentoAutoAsignacionTimer = null;
+      return;
+    }
+    if (!AsignacionTurismoRepo.estadoPermiteAutoAsignacionTurismo(data)) return;
+    if (_reintentoAutoAsignacionTimer != null) return;
+
+    unawaited(_intentarAsignacionAutomaticaSilenciosa());
+
+    _reintentoAutoAsignacionTimer = Timer.periodic(
+      const Duration(seconds: 35),
+      (_) => unawaited(_intentarAsignacionAutomaticaSilenciosa()),
+    );
+  }
+
+  Future<void> _intentarAsignacionAutomaticaSilenciosa() async {
+    if (_reintentoAutoEnCurso || !mounted) return;
+    _reintentoAutoEnCurso = true;
+    try {
+      await AsignacionTurismoRepo.intentarAsignacionAutomatica(
+        viajeId: widget.viajeId,
+        radioKm: 55,
+      );
+    } catch (_) {
+      // Firestore stream reflejará asignación ADM o pool.
+    } finally {
+      _reintentoAutoEnCurso = false;
+    }
+  }
+
+  void _notificarAsignacionChofer(BuildContext context, Map<String, dynamic> data) {
+    final String taxistaId =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+    if (taxistaId.isEmpty || taxistaId == _ultimoTaxistaAsignadoNotificado) {
+      return;
+    }
+    _ultimoTaxistaAsignadoNotificado = taxistaId;
+    final String nombre =
+        (data['nombreTaxista'] ?? '').toString().trim();
+    final String titulo = nombre.isNotEmpty
+        ? '¡Chofer asignado: $nombre!'
+        : '¡Chofer asignado a tu viaje!';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(titulo),
+        backgroundColor: Colors.green.shade800,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _programarNavegacionViajeActivo(BuildContext context) {
+    if (_navegacionViajeActivoProgramada) return;
+    _navegacionViajeActivoProgramada = true;
+    _navegarViajeActivoTimer?.cancel();
+    _navegarViajeActivoTimer = Timer(const Duration(milliseconds: 2600), () {
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (BuildContext innerContext) => const ViajeEnCursoCliente(),
+        ),
+      );
+    });
+  }
+
+  void _procesarActualizacionViaje(
+    BuildContext context,
+    Map<String, dynamic> data,
+  ) {
+    _ultimoDataViaje = data;
+    final String taxistaId =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+    final String estado = (data['estado'] ?? '').toString();
+    final String estadoNorm = EstadosViaje.normalizar(estado);
+
+    if (taxistaId.isNotEmpty) {
+      _ensureChoferAsignadoUbicacionStream(taxistaId);
+      _notificarAsignacionChofer(context, data);
+      if (EstadosViaje.activos.contains(estadoNorm)) {
+        _programarNavegacionViajeActivo(context);
+      }
+    } else {
+      _stopChoferAsignadoStream();
+      _navegacionViajeActivoProgramada = false;
+      _navegarViajeActivoTimer?.cancel();
+      _ultimoTaxistaAsignadoNotificado = '';
+      _ensureReintentoAutoAsignacion(data);
+    }
+
+    _syncMapaConViaje(data);
+  }
+
+  String? _tipoVehiculoFiltro(Map<String, dynamic> data) {
+    final String t = (data['subtipoTurismo'] ?? '').toString().toLowerCase();
+    if (t == 'busqueda' || t.isEmpty) return null;
+    const validos = <String>{'carro', 'jeepeta', 'minivan', 'bus'};
+    return validos.contains(t) ? t : null;
+  }
+
+  int get _choferesConUbicacionEnMapa => _choferesDisponiblesEnMapa.length;
+
+  String _firmaChoferesMapa() {
+    return _choferesRed
+        .map((ChoferTurismo c) {
+          final GeoPoint? u = c.ultimaUbicacion;
+          if (u == null) return '${c.uid}:na';
+          return '${c.uid}:${u.latitude.toStringAsFixed(4)},${u.longitude.toStringAsFixed(4)}';
+        })
+        .join(';');
+  }
+
+  void _stopChoferesStream({bool notificarUi = true}) {
+    _choferesSub?.cancel();
+    _choferesSub = null;
+    _choferesStreamSig = '';
+    if (_choferesRed.isEmpty) return;
+    _choferesRed = <ChoferTurismo>[];
+    if (notificarUi && mounted) setState(() {});
+  }
+
+  void _ensureChoferesStream(Map<String, dynamic> data) {
+    final String taxistaId =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+    if (taxistaId.isNotEmpty) {
+      _stopChoferesStream();
+      return;
+    }
+
+    final LatLng? pickup = _pickupLatLng(data);
+    final String? tipo = _tipoVehiculoFiltro(data);
+    final String sig =
+        '${pickup?.latitude},${pickup?.longitude}|${tipo ?? 'todos'}';
+    if (_choferesStreamSig == sig && _choferesSub != null) return;
+    _choferesStreamSig = sig;
+    _choferesSub?.cancel();
+
+    _choferesSub = ChoferesTurismoRepo.streamChoferesRedAprobados(
+      tipoVehiculo: tipo,
+      lat: pickup?.latitude,
+      lon: pickup?.longitude,
+      radioKm: 60,
+    ).listen(
+      (List<ChoferTurismo> lista) {
+        if (!mounted) return;
+        setState(() => _choferesRed = lista);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_ajustarCamara(data));
+        });
+      },
+      onError: (_) {},
+    );
+  }
+
+  double? _numCoord(dynamic v) {
+    if (v is num) return v.toDouble();
+    return double.tryParse(v?.toString() ?? '');
+  }
+
+  bool _coordOk(double? lat, double? lon) {
+    if (lat == null || lon == null) return false;
+    if (!lat.isFinite || !lon.isFinite) return false;
+    if (lat == 0 && lon == 0) return false;
+    return lat.abs() <= 90 && lon.abs() <= 180;
+  }
+
+  LatLng? _pickupLatLng(Map<String, dynamic> data) {
+    final double? lat = _numCoord(data['latCliente'] ?? data['latOrigen']);
+    final double? lon = _numCoord(data['lonCliente'] ?? data['lonOrigen']);
+    if (!_coordOk(lat, lon)) return null;
+    return LatLng(lat!, lon!);
+  }
+
+  LatLng? _destinoLatLng(Map<String, dynamic> data) {
+    final double? lat = _numCoord(data['latDestino']);
+    final double? lon = _numCoord(data['lonDestino']);
+    if (!_coordOk(lat, lon)) return null;
+    return LatLng(lat!, lon!);
+  }
+
+  LatLng? _taxistaLatLng(Map<String, dynamic> data) {
+    final double? lat =
+        _numCoord(data['latTaxista'] ?? data['driverLat']);
+    final double? lon =
+        _numCoord(data['lonTaxista'] ?? data['driverLon']);
+    if (_coordOk(lat, lon)) return LatLng(lat!, lon!);
+    return _ubicacionChoferAsignado;
+  }
+
+  bool _viajeTieneChoferAsignado(Map<String, dynamic> data) {
+    return (data['uidTaxista'] ?? data['taxistaId'] ?? '')
+        .toString()
+        .isNotEmpty;
+  }
+
+  Set<Marker> _markersFor(Map<String, dynamic> data) {
+    final Set<Marker> markers = <Marker>{};
+    final LatLng? pickup = _pickupLatLng(data);
+    final LatLng? destino = _destinoLatLng(data);
+    final LatLng? taxista = _taxistaLatLng(data);
+    final String origenTxt = (data['origen'] ?? 'Recogida').toString();
+    final String destinoTxt = (data['destino'] ?? 'Destino').toString();
+
+    if (pickup != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('pickup'),
+          position: pickup,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueAzure,
+          ),
+          infoWindow: InfoWindow(title: 'Recogida: $origenTxt'),
+        ),
+      );
+    }
+    if (destino != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('destino'),
+          position: destino,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueViolet,
+          ),
+          infoWindow: InfoWindow(title: 'Destino: $destinoTxt'),
+        ),
+      );
+    }
+    if (taxista != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('chofer'),
+          position: taxista,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueGreen,
+          ),
+          infoWindow: const InfoWindow(title: 'Chofer asignado'),
+          zIndexInt: 3,
+        ),
+      );
+    } else {
+      final String? tipoFiltro = _tipoVehiculoFiltro(data);
+      for (final ChoferTurismo chofer in _choferesDisponiblesEnMapa) {
+        final GeoPoint? u = chofer.ultimaUbicacion;
+        if (u == null) continue;
+        if (!_coordOk(u.latitude, u.longitude)) continue;
+        final String vehiculo = chofer.vehiculos.isNotEmpty
+            ? chofer.vehiculos.first.tipo
+            : 'turismo';
+        if (tipoFiltro != null &&
+            !chofer.vehiculos.any((v) => v.tipo == tipoFiltro)) {
+          continue;
+        }
+        final double hue =
+            (35 + (chofer.uid.hashCode % 115).abs()).toDouble().clamp(15.0, 330.0);
+        markers.add(
+          Marker(
+            markerId: MarkerId('turismo_disp_${chofer.uid}'),
+            position: LatLng(u.latitude, u.longitude),
+            icon: BitmapDescriptor.defaultMarkerWithHue(hue),
+            infoWindow: InfoWindow(
+              title: chofer.nombre.isNotEmpty ? chofer.nombre : 'Chofer turismo',
+              snippet: 'Disponible · $vehiculo · esperando asignación',
+            ),
+            zIndexInt: 2,
+          ),
+        );
+      }
+    }
+    return markers;
+  }
+
+  Future<void> _cargarRutaPreview(Map<String, dynamic> data) async {
+    if (_rutaViajeIdCargada == widget.viajeId && _polylines.isNotEmpty) return;
+    final LatLng? pickup = _pickupLatLng(data);
+    final LatLng? destino = _destinoLatLng(data);
+    if (pickup == null || destino == null) return;
+
+    try {
+      final dir = await DirectionsService.drivingDistanceKm(
+        originLat: pickup.latitude,
+        originLon: pickup.longitude,
+        destLat: destino.latitude,
+        destLon: destino.longitude,
+        withTraffic: true,
+        region: 'do',
+      );
+      final List<LatLng> pts = dir?.path ?? <LatLng>[];
+      if (!mounted) return;
+      setState(() {
+        _rutaViajeIdCargada = widget.viajeId;
+        _polylines
+          ..clear()
+          ..add(
+            Polyline(
+              polylineId: const PolylineId('ruta_turismo_espera'),
+              points: pts.isNotEmpty
+                  ? pts
+                  : <LatLng>[pickup, destino],
+              width: 5,
+              color: const Color(0xFFBA68C8),
+              geodesic: true,
+            ),
+          );
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _rutaViajeIdCargada = widget.viajeId;
+        _polylines
+          ..clear()
+          ..add(
+            Polyline(
+              polylineId: const PolylineId('ruta_turismo_espera'),
+              points: <LatLng>[pickup, destino],
+              width: 4,
+              color: const Color(0xFFBA68C8),
+              geodesic: true,
+            ),
+          );
+      });
+    }
+  }
+
+  Future<void> _ajustarCamara(Map<String, dynamic> data) async {
+    final GoogleMapController? map = _map;
+    if (map == null) return;
+
+    final List<LatLng> puntos = <LatLng>[];
+    final LatLng? pickup = _pickupLatLng(data);
+    final LatLng? destino = _destinoLatLng(data);
+    final LatLng? taxista = _taxistaLatLng(data);
+    if (pickup != null) puntos.add(pickup);
+    if (destino != null) puntos.add(destino);
+    if (taxista != null) {
+      puntos.add(taxista);
+    } else {
+      for (final ChoferTurismo chofer in _choferesDisponiblesEnMapa) {
+        final GeoPoint? u = chofer.ultimaUbicacion;
+        if (u != null && _coordOk(u.latitude, u.longitude)) {
+          puntos.add(LatLng(u.latitude, u.longitude));
+        }
+      }
+    }
+
+    if (puntos.isEmpty) {
+      await map.animateCamera(
+        CameraUpdate.newCameraPosition(
+          const CameraPosition(
+            target: LatLng(18.4861, -69.9312),
+            zoom: 12,
+          ),
+        ),
+      );
+      return;
+    }
+    if (puntos.length == 1) {
+      await map.animateCamera(
+        CameraUpdate.newLatLngZoom(puntos.first, 14),
+      );
+      return;
+    }
+
+    double minLat = puntos.first.latitude;
+    double maxLat = puntos.first.latitude;
+    double minLon = puntos.first.longitude;
+    double maxLon = puntos.first.longitude;
+    for (final LatLng p in puntos) {
+      minLat = minLat < p.latitude ? minLat : p.latitude;
+      maxLat = maxLat > p.latitude ? maxLat : p.latitude;
+      minLon = minLon < p.longitude ? minLon : p.longitude;
+      maxLon = maxLon > p.longitude ? maxLon : p.longitude;
+    }
+    final LatLngBounds bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLon),
+      northeast: LatLng(maxLat, maxLon),
+    );
+    try {
+      await map.animateCamera(
+        CameraUpdate.newLatLngBounds(bounds, 56),
+      );
+    } catch (_) {
+      await map.animateCamera(
+        CameraUpdate.newLatLngZoom(puntos.first, 13),
+      );
+    }
+  }
+
+  void _syncMapaConViaje(Map<String, dynamic> data) {
+    _ensureChoferesStream(data);
+
+    final String firma =
+        '${_pickupLatLng(data)}|${_destinoLatLng(data)}|${_taxistaLatLng(data)}|$_firmaChoferesMapa()';
+    if (firma != _ultimaFirmaBounds) {
+      _ultimaFirmaBounds = firma;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_ajustarCamara(data));
+      });
+    }
+    if (_rutaViajeIdCargada != widget.viajeId) {
+      unawaited(_cargarRutaPreview(data));
+    }
+  }
+
+  Future<void> _launchUri(BuildContext context, Uri uri) async {
+    try {
+      if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
+      await launchUrl(uri, mode: LaunchMode.platformDefault);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir el enlace.')),
+      );
+    }
+  }
+
+  Future<void> _contactarWhatsAppAsignacion(BuildContext context) async {
+    final String ref = widget.viajeId.length > 8
+        ? widget.viajeId.substring(0, 8)
+        : widget.viajeId;
+    final String msg =
+        'Hola RAI, solicito asignación de chofer para mi viaje turístico #$ref.';
+    final Uri waApp = telefonoUriWhatsAppApp(_kTurismoSoporteTelDigitos, msg);
+    final Uri waWeb = telefonoUriWhatsAppWeb(_kTurismoSoporteTelDigitos, msg);
+    if (await canLaunchUrl(waApp)) {
+      if (!context.mounted) return;
+      await _launchUri(context, waApp);
+      return;
+    }
+    if (!context.mounted) return;
+    await _launchUri(context, waWeb);
+  }
+
+  Future<void> _contactarCorreoAsignacion(BuildContext context) async {
+    final String ref = widget.viajeId.length > 8
+        ? widget.viajeId.substring(0, 8)
+        : widget.viajeId;
+    final Uri mail = Uri.parse(
+      'mailto:$_kTurismoSoporteEmail?subject=${Uri.encodeComponent('Asignación turismo #$ref')}'
+      '&body=${Uri.encodeComponent('Hola, necesito asignar un chofer a mi viaje turístico #$ref.\n\nGracias.')}',
+    );
+    if (!context.mounted) return;
+    await _launchUri(context, mail);
+  }
+
+  Future<void> _llamarSoporteAsignacion(BuildContext context) async {
+    if (!context.mounted) return;
+    await _launchUri(
+      context,
+      telefonoUriLlamada(_kTurismoSoporteTelDigitos),
+    );
+  }
+
+  Widget _badgeEstadoChofer(ChoferTurismo c) {
+    final bool enMapa = c.disponible && c.ultimaUbicacion != null;
+    final String label;
+    final Color bg;
+    final Color fg;
+    if (enMapa) {
+      label = 'EN VIVO';
+      bg = Colors.greenAccent.withValues(alpha: 0.22);
+      fg = Colors.greenAccent;
+    } else if (c.disponible) {
+      label = 'DISPONIBLE';
+      bg = Colors.amber.withValues(alpha: 0.2);
+      fg = Colors.amberAccent;
+    } else {
+      label = 'OCUPADO';
+      bg = Colors.orange.withValues(alpha: 0.18);
+      fg = Colors.orangeAccent;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: fg.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: fg,
+          fontSize: 9,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _filaChoferRed(ChoferTurismo c) {
+    final String veh = c.vehiculos.isNotEmpty
+        ? _getTipoVehiculoLabel(c.vehiculos.first.tipo)
+        : 'Turismo';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            c.disponible ? Icons.local_taxi : Icons.local_taxi_outlined,
+            size: 20,
+            color: c.disponible ? Colors.greenAccent : Colors.white38,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  c.nombre.isNotEmpty ? c.nombre : 'Chofer turístico',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  veh,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          _badgeEstadoChofer(c),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChoferAsignadoHero(Map<String, dynamic> data) {
+    final String nombre =
+        (data['nombreTaxista'] ?? '').toString().trim();
+    final String placa = (data['placa'] ?? '').toString().trim();
+    final String telefono =
+        (data['telefonoTaxista'] ?? data['telefono'] ?? '').toString().trim();
+    final bool enMapa = _taxistaLatLng(data) != null;
+    final bool auto = data['asignacionAutomatica'] == true;
+    final String subtitulo = auto
+        ? 'Asignación automática · conectando seguimiento en vivo'
+        : 'Asignado por administración · en tiempo real';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.greenAccent.withValues(alpha: 0.22),
+            Colors.green.withValues(alpha: 0.08),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.55)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.greenAccent.withValues(alpha: 0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.check_circle, color: Colors.greenAccent, size: 28),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  nombre.isNotEmpty ? nombre : 'Tu chofer turístico',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.greenAccent.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'ASIGNADO',
+                  style: TextStyle(
+                    color: Colors.greenAccent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitulo,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.75),
+              fontSize: 12,
+            ),
+          ),
+          if (placa.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Placa: $placa',
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+          ],
+          if (telefono.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Tel: $telefono',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.7),
+                fontSize: 13,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Icon(
+                enMapa ? Icons.gps_fixed : Icons.gps_not_fixed,
+                size: 16,
+                color: enMapa ? Colors.greenAccent : Colors.amberAccent,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  enMapa
+                      ? 'Ubicación del chofer en el mapa · en vivo'
+                      : 'Esperando ubicación del chofer en el mapa…',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.8),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_navegacionViajeActivoProgramada) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(
+              color: Colors.greenAccent,
+              backgroundColor: Colors.white12,
+              minHeight: 4,
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Abriendo viaje en curso…',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChoferAsignadoAViajeCard(Map<String, dynamic> data) {
+    final String nombre =
+        (data['nombreTaxista'] ?? '').toString().trim();
+    final String placa = (data['placa'] ?? '').toString().trim();
+    if (nombre.isEmpty && placa.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.greenAccent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.verified, color: Colors.greenAccent, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Chofer asignado a tu viaje',
+                  style: TextStyle(
+                    color: Colors.greenAccent,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                  ),
+                ),
+                if (nombre.isNotEmpty)
+                  Text(
+                    nombre,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                if (placa.isNotEmpty)
+                  Text(
+                    'Placa: $placa',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.7),
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChoferesDisponiblesPanel(Map<String, dynamic> data) {
+    final String taxistaId =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+    final int enMapa = _choferesConUbicacionEnMapa;
+    final int total = _choferesRed.length;
+    final int disponibles =
+        _choferesRed.where((ChoferTurismo c) => c.disponible).length;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.amberAccent.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.groups, color: Colors.amberAccent, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Red de choferes turísticos',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+              if (total > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.purple.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '$total',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            taxistaId.isNotEmpty
+                ? 'Tu chofer ya fue asignado. Los demás conductores siguen en la red en vivo.'
+                : enMapa > 0
+                    ? '$enMapa en el mapa · $disponibles disponible${disponibles == 1 ? '' : 's'} · actualización en vivo'
+                    : total > 0
+                        ? '$total chofer${total == 1 ? '' : 'es'} en la red; ubicación en camino al mapa'
+                        : 'Aún no hay choferes en la red. Usa soporte abajo para pedir asignación.',
+            style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.35),
+          ),
+          if (taxistaId.isNotEmpty) _buildChoferAsignadoAViajeCard(data),
+          if (_choferesRed.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Divider(color: Colors.white12, height: 16),
+            const Text(
+              'Lista en vivo',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 4),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 220),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _choferesRed.length,
+                separatorBuilder: (_, __) =>
+                    Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
+                itemBuilder: (_, int i) => _filaChoferRed(_choferesRed[i]),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSoporteAsignacionesPanel(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            '¿Sin chofer disponible? Contacta asignaciones',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Soporte RAI para asignar tu viaje turístico:',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          _soporteTile(
+            icon: Icons.chat,
+            color: const Color(0xFF25D366),
+            label: 'WhatsApp',
+            value: _kTurismoSoporteTelVisible,
+            onTap: () => _contactarWhatsAppAsignacion(context),
+          ),
+          const SizedBox(height: 8),
+          _soporteTile(
+            icon: Icons.email_outlined,
+            color: Colors.lightBlueAccent,
+            label: 'Correo',
+            value: _kTurismoSoporteEmail,
+            onTap: () => _contactarCorreoAsignacion(context),
+          ),
+          const SizedBox(height: 8),
+          _soporteTile(
+            icon: Icons.phone_in_talk,
+            color: Colors.greenAccent,
+            label: 'Teléfono',
+            value: _kTurismoSoporteTelVisible,
+            onTap: () => _llamarSoporteAsignacion(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _soporteTile({
+    required IconData icon,
+    required Color color,
+    required String label,
+    required String value,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.25),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      value,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.open_in_new, color: Colors.white.withValues(alpha: 0.45), size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chipEstadoMapa(Map<String, dynamic> data) {
+    final String taxistaId =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+    final bool choferEnMapa = _taxistaLatLng(data) != null;
+    final int enMapa = _choferesConUbicacionEnMapa;
+    final int total = _choferesRed.length;
+    final String texto = choferEnMapa
+        ? 'Tu chofer en el mapa · seguimiento en vivo'
+        : taxistaId.isNotEmpty
+            ? 'Chofer asignado · ubicación en camino'
+            : enMapa > 0
+                ? '$enMapa chofer${enMapa == 1 ? '' : 'es'} turístico${enMapa == 1 ? '' : 's'} en el mapa · en vivo'
+                : total > 0
+                    ? '$total chofer${total == 1 ? '' : 'es'} en línea · ubicación en camino'
+                    : 'Ruta en vivo · esperando choferes turísticos disponibles';
+
+    return Material(
+      color: Colors.black.withValues(alpha: 0.72),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              choferEnMapa
+                  ? Icons.local_taxi
+                  : (enMapa > 0 ? Icons.groups : Icons.map_outlined),
+              color: choferEnMapa
+                  ? Colors.greenAccent
+                  : (enMapa > 0 ? Colors.amberAccent : Colors.purpleAccent),
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                texto,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String _getTipoVehiculoLabel(String tipo) {
@@ -67,6 +1137,21 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.viajeId.trim().isEmpty) {
+      return FlygoSalidaSegura(
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          appBar: const RaiAppBar(
+            title: '🏝️ Turismo RAI',
+            backWhenCanPop: true,
+          ),
+          body: _buildErrorState(
+            'No se recibió el identificador del viaje. Vuelve a solicitar turismo desde el inicio.',
+          ),
+        ),
+      );
+    }
+
     return FlygoSalidaSegura(
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -92,10 +1177,6 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
           final Map<String, dynamic> data =
               snapshot.data!.data() as Map<String, dynamic>;
           final String estado = (data['estado'] ?? '').toString();
-          final String taxistaId =
-              (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
-          final String estadoNorm = EstadosViaje.normalizar(estado);
-
           if (EstadosViaje.esCancelado(estado)) {
             return _buildErrorState(
               'Este viaje turístico fue cancelado. Puedes solicitar uno nuevo cuando quieras.',
@@ -106,21 +1187,10 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
             return _buildCompletadoState();
           }
 
-          // Chofer asignado por ADM: mismo flujo que viajes normales (aceptado → en curso)
-          if (taxistaId.isNotEmpty &&
-              EstadosViaje.activos.contains(estadoNorm)) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (BuildContext innerContext) =>
-                      const ViajeEnCursoCliente(),
-                ),
-              );
-            });
-            return const SizedBox.shrink();
-          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _procesarActualizacionViaje(context, data);
+          });
 
           return _buildWaitingScreen(data);
         },
@@ -279,6 +1349,10 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
   }
 
   Widget _buildWaitingScreen(Map<String, dynamic> data) {
+    final bool choferAsignado = _viajeTieneChoferAsignado(data);
+    final bool sinChoferesEnRed =
+        !choferAsignado && _choferesRed.isEmpty;
+
     final destino = data['destino'] ?? 'Destino no especificado';
     final origen = data['origen'] ?? 'Origen no especificado';
     final fechaHora = data['fechaHora'] as Timestamp?;
@@ -290,28 +1364,80 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     final String? pasajeros = _pasajerosDesdeExtras(data);
     final String metodoPago =
         _metodoPagoLabel((data['metodoPago'] ?? '').toString());
+    final LatLng? pickup = _pickupLatLng(data);
+    final CameraPosition camaraInicial = CameraPosition(
+      target: pickup ?? const LatLng(18.4861, -69.9312),
+      zoom: pickup != null ? 13 : 11,
+    );
 
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF2A1B3D), Color(0xFF1A0F2A), Colors.black],
-        ),
-      ),
-      child: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            const SliverToBoxAdapter(
-              child: SizedBox(height: 8), // Espacio después del AppBar
+    return Column(
+      children: [
+        Expanded(
+          flex: 11,
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(
+              bottom: Radius.circular(20),
             ),
-            SliverPadding(
-              padding: const EdgeInsets.all(20),
-              sliver: SliverList(
-                delegate: SliverChildListDelegate([
-                  // Ilustración animada
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                GoogleMap(
+                  initialCameraPosition: camaraInicial,
+                  myLocationEnabled: true,
+                  myLocationButtonEnabled: false,
+                  zoomControlsEnabled: false,
+                  compassEnabled: true,
+                  mapToolbarEnabled: false,
+                  markers: _markersFor(data),
+                  polylines: _polylines,
+                  onMapCreated: (GoogleMapController c) {
+                    _map = c;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) unawaited(_ajustarCamara(data));
+                    });
+                  },
+                ),
+                Positioned(
+                  top: 10,
+                  left: 12,
+                  right: 12,
+                  child: _chipEstadoMapa(data),
+                ),
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: FloatingActionButton.small(
+                    heroTag: 'turismo_espera_centrar',
+                    backgroundColor: Colors.black.withValues(alpha: 0.78),
+                    foregroundColor: Colors.purpleAccent,
+                    onPressed: () => unawaited(_ajustarCamara(data)),
+                    child: const Icon(Icons.my_location),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Expanded(
+          flex: 10,
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF2A1B3D), Color(0xFF1A0F2A), Colors.black],
+              ),
+            ),
+            child: SafeArea(
+              top: false,
+              child: CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
                   SizedBox(
-                    height: 160,
+                    height: 72,
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
@@ -319,8 +1445,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                           animation: _pulseAnimation,
                           builder: (BuildContext context, Widget? child) {
                             return Container(
-                              width: 120,
-                              height: 120,
+                              width: 64,
+                              height: 64,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: Colors.purple.withValues(
@@ -329,83 +1455,73 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                             );
                           },
                         ),
-                        Container(
-                          width: 100,
-                          height: 100,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.purple.withValues(alpha: 0.2),
-                            border: Border.all(color: Colors.purple, width: 2),
-                          ),
-                          child: const Icon(
-                            Icons.beach_access,
-                            color: Colors.purple,
-                            size: 50,
-                          ),
+                        const Icon(
+                          Icons.beach_access,
+                          color: Colors.purple,
+                          size: 40,
                         ),
                       ],
                     ),
                   ),
-
-                  const SizedBox(height: 16),
-
-                  // Mensaje principal
-                  Center(
-                    child: Text(
-                      estadoRaw.toLowerCase() == 'pendiente_admin'
-                          ? 'Tu viaje esta en ADM'
-                          : '✅ ¡Viaje solicitado!',
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-
                   const SizedBox(height: 8),
 
-                  Center(
-                    child: Text(
-                      estadoRaw.toLowerCase() == 'pendiente_admin'
-                          ? 'Solicitud recibida correctamente.\nEn breve te asignamos un chofer de turismo.'
-                          : 'Buscando el mejor chofer para ti',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 16,
-                        height: 1.35,
+                  if (choferAsignado) ...[
+                    _buildChoferAsignadoHero(data),
+                    const SizedBox(height: 16),
+                  ] else ...[
+                    Center(
+                      child: Text(
+                        estadoRaw.toLowerCase() == 'pendiente_admin'
+                            ? 'Buscando chofer turístico'
+                            : '✅ ¡Viaje solicitado!',
+                        style: const TextStyle(
+                          color: Colors.greenAccent,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                  ),
-
-                  if (estadoRaw.toLowerCase() == 'pendiente_admin') ...[
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.deepPurple.withValues(alpha: 0.25),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                              color:
-                                  Colors.purpleAccent.withValues(alpha: 0.5)),
+                      child: Text(
+                        estadoRaw.toLowerCase() == 'pendiente_admin'
+                            ? 'Asignación automática con choferes aprobados.\nSi no hay disponibles, administración o soporte te ayudan.'
+                            : 'Buscando el mejor chofer para ti',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 16,
+                          height: 1.35,
                         ),
-                        child: const Text(
-                          'Estado: pendiente de asignacion por ADM',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (estadoRaw.toLowerCase() == 'pendiente_admin') ...[
+                      const SizedBox(height: 12),
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.deepPurple.withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: Colors.purpleAccent
+                                    .withValues(alpha: 0.5)),
+                          ),
+                          child: const Text(
+                            'Actualización en tiempo real',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                    ],
+                    const SizedBox(height: 24),
                   ],
-
-                  const SizedBox(height: 24),
 
                   // Barra de progreso
                   Container(
@@ -432,18 +1548,22 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                         const SizedBox(height: 12),
                         Row(
                           children: [
-                            const Expanded(
+                            Expanded(
                               child: Text(
-                                'Asignando chofer...',
-                                maxLines: 1,
+                                choferAsignado
+                                    ? 'Chofer confirmado · abriendo viaje…'
+                                    : 'Asignando chofer (auto + ADM)…',
+                                maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: Colors.white70),
+                                style: const TextStyle(color: Colors.white70),
                               ),
                             ),
                             Text(
-                              '⏳ 2-5 min',
+                              choferAsignado ? '✓' : '⏳ 2-5 min',
                               style: TextStyle(
-                                color: Colors.purple.shade200,
+                                color: choferAsignado
+                                    ? Colors.greenAccent
+                                    : Colors.purple.shade200,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -452,6 +1572,15 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                       ],
                     ),
                   ),
+
+                  if (!choferAsignado) ...[
+                    const SizedBox(height: 12),
+                    _buildChoferesDisponiblesPanel(data),
+                  ],
+                  if (sinChoferesEnRed || !choferAsignado) ...[
+                    const SizedBox(height: 12),
+                    _buildSoporteAsignacionesPanel(context),
+                  ],
 
                   const SizedBox(height: 24),
 
@@ -585,21 +1714,15 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     ),
                   ),
 
-                  const SizedBox(height: 16),
-
-                  // Soporte
-                  const Center(
-                    child: Text(
-                      '¿Necesitas ayuda? Contacta a soporte',
-                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                      ]),
                     ),
                   ),
-                ]),
+                ],
               ),
             ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -691,7 +1814,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
         motivo: 'Cancelado desde espera turismo',
       );
       if (!mounted) return;
-      Navigator.of(context).popUntil((Route<dynamic> r) => r.isFirst);
+      await NavigationService.clearAndGo(const ClienteShell());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -19,14 +19,16 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
 // ✅ Confirmación de viaje programado (no confundir con “en curso”)
 
-// ✅ IMPORT para la pantalla de espera de turismo
-import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
+import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
+import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart'
+    hide DestinoSeleccionado;
 
 // Tus servicios/componentes
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -45,6 +47,7 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 
 // ✅ IMPORTS PARA TURISMO
 import 'package:flygo_nuevo/widgets/turismo_destinos_sheet_host.dart';
+import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
@@ -315,6 +318,41 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
   }
 
+  /// Acento del servicio legible sobre fondos claros (p. ej. apariencia blanca).
+  Color _colorServicioLegibleEnFondoClaro() {
+    switch (tipoServicio) {
+      case 'motor':
+        return const Color(0xFFEA580C);
+      case 'turismo':
+        return const Color(0xFF7C3AED);
+      default:
+        return const Color(0xFF059669);
+    }
+  }
+
+  /// Precio grande del resumen de cotización: contraste WCAG sobre el tema elegido.
+  Color _colorPrecioResumenCotizacion({
+    required Color themedBg,
+    required bool mapFloating,
+    required Color accent,
+  }) {
+    if (mapFloating) return accent;
+    if (ThemeData.estimateBrightnessForColor(themedBg) == Brightness.light) {
+      return _colorServicioLegibleEnFondoClaro();
+    }
+    return accent;
+  }
+
+  Color _bordeTarjetaResumenCotizacion({
+    required bool mapFloating,
+    required bool fondoClaro,
+    required Color accent,
+    required Color bordeLegible,
+  }) {
+    if (mapFloating) return accent.withValues(alpha: 0.85);
+    return fondoClaro ? bordeLegible : accent;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -326,11 +364,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (kUsePlacesAutocomplete) {
         _origenBuscarDireccion = true;
       }
-    }
-
-    // Si viene con subtipoTurismo, lo asignamos
-    if (widget.subtipoTurismo != null) {
-      _tipoVehiculoTurismo = _normalizarTipoVehiculo(widget.subtipoTurismo!);
     }
 
     // 🔥 Si viene con destino precargado (desde catálogo turismo)
@@ -533,6 +566,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   // ====== UBICACIÓN/MAPA ======
   Future<void> _initUbicacionParaMapa() async {
     setState(() => _cargandoUbicacion = true);
+    // Flujo explícito (programar viaje): puede mostrar diálogo del SO si aún denied.
     final basic = await LocationPermissionService.checkAndRequestBasicPermission();
     if (!basic.serviceEnabled) {
       if (mounted) {
@@ -1399,6 +1433,273 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     return false;
   }
 
+  /// Un toque en el catálogo: escribe destino, distancia, precio y muestra resumen.
+  Future<void> _aplicarSeleccionTurismo(DestinoSeleccionado seleccion) async {
+    String vehiculoValido = seleccion.tipoVehiculo;
+    const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
+    if (!vehiculosValidos.contains(vehiculoValido)) {
+      debugPrint(
+        '⚠️ tipoVehiculo inválido "$vehiculoValido", usando carro',
+      );
+      vehiculoValido = 'carro';
+    }
+
+    if (seleccion.latOrigen != null && seleccion.lonOrigen != null) {
+      latCliente = seleccion.latOrigen;
+      lonCliente = seleccion.lonOrigen;
+      _origenMap = LatLng(seleccion.latOrigen!, seleccion.lonOrigen!);
+    } else if (latCliente == null && _origenMap != null) {
+      latCliente = _origenMap!.latitude;
+      lonCliente = _origenMap!.longitude;
+    }
+
+    final double precio = seleccion.precio;
+    final int precioCents = (precio * 100).round();
+    final int comisionCents =
+        PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
+
+    if (!mounted) return;
+    setState(() {
+      _destinoTurismoSeleccionado = seleccion.lugar;
+      _tipoVehiculoTurismo = vehiculoValido;
+      _pasajerosTurismo = seleccion.pasajeros;
+
+      latDestino = seleccion.lugar.lat;
+      lonDestino = seleccion.lugar.lon;
+      destinoTexto = seleccion.lugar.nombre;
+      destino = seleccion.lugar.nombre;
+      distanciaKm = seleccion.distanciaKm;
+      precioCalculado = precio;
+      comisionCalculada = comisionCents / 100.0;
+      gananciaTaxistaCalculada = precioCalculado - comisionCalculada;
+      ubicacionObtenida =
+          latCliente != null && lonCliente != null && latDestino != null;
+
+      if (_origenMap != null) {
+        _updateOrigenMarker(_origenMap!);
+      }
+      _markers
+        ..removeWhere((m) => m.markerId.value == 'destino')
+        ..add(
+          Marker(
+            markerId: const MarkerId('destino'),
+            position: LatLng(seleccion.lugar.lat, seleccion.lugar.lon),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueViolet,
+            ),
+            infoWindow: InfoWindow(title: seleccion.lugar.nombre),
+            zIndexInt: 1,
+          ),
+        );
+
+      _cargando = false;
+      _vistaResumenCotizada = precio > 0 && ubicacionObtenida;
+    });
+
+    if (_origenMap != null && latDestino != null && lonDestino != null) {
+      await _dibujarRutaReal(
+        oLat: _origenMap!.latitude,
+        oLon: _origenMap!.longitude,
+        dLat: latDestino!,
+        dLon: lonDestino!,
+        previewOnly: true,
+      );
+    }
+
+    if (precio > 0 && ubicacionObtenida) {
+      _animarSheetParaResumenCotizado();
+    } else {
+      _programarCalculoAutomatico();
+    }
+  }
+
+  /// Origen para cotizar turismo (mapa, GPS o última posición conocida).
+  Future<({double lat, double lon})?> _resolverOrigenParaCotizarTurismo() async {
+    if (latCliente != null && lonCliente != null) {
+      return (lat: latCliente!, lon: lonCliente!);
+    }
+    if (_origenMap != null) {
+      return (lat: _origenMap!.latitude, lon: _origenMap!.longitude);
+    }
+
+    try {
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        return (lat: last.latitude, lon: last.longitude);
+      }
+    } catch (_) {}
+
+    try {
+      final ({bool serviceEnabled, LocationPermission permission}) snap =
+          await GpsService.checkServiceThenRequestPermissionIfNeeded();
+      if (snap.serviceEnabled && GpsService.permissionUsable(snap.permission)) {
+        final Position? pos = await GpsService.obtenerUbicacionActual(
+          timeout: const Duration(seconds: 12),
+          maxEdadUltima: const Duration(hours: 24),
+        );
+        if (pos != null) {
+          return (lat: pos.latitude, lon: pos.longitude);
+        }
+      }
+    } catch (_) {}
+
+    try {
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        return (lat: last.latitude, lon: last.longitude);
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  /// Cotiza turismo al elegir destino (buscador o catálogo) sin depender de que
+  /// [_origenMap] ya estuviera listo antes del debounce genérico.
+  Future<void> _cotizarTurismoTrasElegirDestino() async {
+    final TurismoLugar? dest = _destinoTurismoSeleccionado;
+    if (dest == null || latDestino == null || lonDestino == null) return;
+    if (_cargando) return;
+
+    final int runId = _cotizacionSeq;
+    if (!mounted) return;
+    setState(() => _cargando = true);
+
+    try {
+      final ({double lat, double lon})? origen =
+          await _resolverOrigenParaCotizarTurismo();
+      if (origen == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text(
+                'Activa el GPS y concede permiso de ubicación para cotizar.',
+              ),
+              action: SnackBarAction(
+                label: 'Ajustes',
+                onPressed: () => GpsService.openAppSettings(),
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      latCliente = origen.lat;
+      lonCliente = origen.lon;
+      _origenMap = LatLng(origen.lat, origen.lon);
+      _updateOrigenMarker(_origenMap!);
+
+      double dist = 0;
+      try {
+        final result = await DirectionsService.drivingDistanceKm(
+          originLat: origen.lat,
+          originLon: origen.lon,
+          destLat: latDestino!,
+          destLon: lonDestino!,
+          withTraffic: true,
+          region: 'do',
+        );
+        dist = result?.km ??
+            DistanciaService.calcularDistancia(
+              origen.lat,
+              origen.lon,
+              latDestino!,
+              lonDestino!,
+            );
+      } catch (_) {
+        dist = DistanciaService.calcularDistancia(
+          origen.lat,
+          origen.lon,
+          latDestino!,
+          lonDestino!,
+        );
+      }
+
+      if (dist <= 0) {
+        if (mounted) {
+          _snack('No se pudo calcular la distancia al destino.');
+        }
+        return;
+      }
+
+      final double precioDouble =
+          await _calcularPrecioPorTipo(dist, idaYVuelta, peaje: _peaje);
+      final int precioCents = (precioDouble * 100).round();
+      final int comisionCents =
+          PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
+
+      if (!mounted || runId != _cotizacionSeq) return;
+
+      setState(() {
+        distanciaKm = dist;
+        precioCalculado = precioCents / 100.0;
+        comisionCalculada = comisionCents / 100.0;
+        gananciaTaxistaCalculada = precioCalculado - comisionCalculada;
+        ubicacionObtenida = true;
+        _cargando = false;
+        _vistaResumenCotizada = precioCalculado > 0;
+      });
+
+      await _dibujarRutaReal(
+        oLat: origen.lat,
+        oLon: origen.lon,
+        dLat: latDestino!,
+        dLon: lonDestino!,
+        previewOnly: true,
+      );
+
+      if (precioCalculado > 0) {
+        _animarSheetParaResumenCotizado();
+      }
+    } catch (e) {
+      if (mounted) _snack('Error al cotizar: $e');
+    } finally {
+      _setCargaFalseSiCorre(runId);
+    }
+  }
+
+  /// Destino turismo desde Places (mismo buscador que motor/normal).
+  Future<void> _aplicarDestinoTurismoDesdeBusqueda(DetalleLugar det) async {
+    final String ciudad = (det.address ?? '').split(',').first.trim();
+    final TurismoLugar lugar = TurismoLugar(
+      id: det.placeId.isNotEmpty ? 'google_${det.placeId}' : 'google_manual',
+      nombre: det.name,
+      ciudad: ciudad.isNotEmpty ? ciudad : 'República Dominicana',
+      lat: det.lat,
+      lon: det.lon,
+      subtipo: 'busqueda',
+      descripcion: det.displayLabel,
+      imagen: null,
+      popularidad: 0,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _destinoDet = null;
+      _destinoTurismoSeleccionado = lugar;
+      destino = det.displayLabel;
+      destinoTexto = det.displayLabel;
+      latDestino = det.lat;
+      lonDestino = det.lon;
+    });
+
+    _markers
+      ..removeWhere((m) => m.markerId.value == 'destino')
+      ..add(
+        Marker(
+          markerId: const MarkerId('destino'),
+          position: LatLng(det.lat, det.lon),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueViolet,
+          ),
+          infoWindow: InfoWindow(title: det.name),
+          zIndexInt: 1,
+        ),
+      );
+
+    await _cotizarTurismoTrasElegirDestino();
+  }
+
   // ✅ MÉTODO PARA MOSTRAR SELECTOR DE DESTINOS TURÍSTICOS
   void _mostrarSelectorDestinosTuristicos() {
     showModalBottomSheet(
@@ -1410,60 +1711,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         seedLon: lonCliente ?? _origenMap?.longitude,
         tipoVehiculoInicial: _tipoVehiculoTurismo,
         onDestinoSeleccionado: (seleccion) async {
-          // 🔥 VALIDAR TIPO DE VEHÍCULO - ASEGURAR QUE SEA VÁLIDO
-          String vehiculoValido = seleccion.tipoVehiculo;
-          const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
-          if (!vehiculosValidos.contains(vehiculoValido)) {
-            debugPrint(
-                '⚠️ Valor inválido recibido en tipoVehiculo: "$vehiculoValido", usando "carro"');
-            vehiculoValido = 'carro';
-          }
-
           Navigator.pop(context);
-
-          if (latCliente == null && _origenMap != null) {
-            latCliente = _origenMap!.latitude;
-            lonCliente = _origenMap!.longitude;
-          }
-
-          setState(() {
-            _destinoTurismoSeleccionado = seleccion.lugar;
-            _tipoVehiculoTurismo = vehiculoValido;
-            _pasajerosTurismo = seleccion.pasajeros;
-
-            latDestino = seleccion.lugar.lat;
-            lonDestino = seleccion.lugar.lon;
-            destinoTexto = seleccion.lugar.nombre;
-            destino = seleccion.lugar.nombre;
-
-            distanciaKm = seleccion.distanciaKm;
-            ubicacionObtenida = true;
-
-            if (_map != null) {
-              _markers.removeWhere((m) => m.markerId.value == 'destino');
-              _markers.add(
-                Marker(
-                  markerId: const MarkerId('destino'),
-                  position: LatLng(seleccion.lugar.lat, seleccion.lugar.lon),
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                      BitmapDescriptor.hueViolet),
-                  infoWindow: InfoWindow(title: seleccion.lugar.nombre),
-                ),
-              );
-            }
-          });
-
-          // 🔥 Dibujar ruta y calcular precio inmediatamente
-          if (_origenMap != null && latDestino != null && lonDestino != null) {
-            await _dibujarRutaReal(
-              oLat: _origenMap!.latitude,
-              oLon: _origenMap!.longitude,
-              dLat: latDestino!,
-              dLon: lonDestino!,
-              previewOnly: true,
-            );
-          }
-          _programarCalculoAutomatico();
+          await _aplicarSeleccionTurismo(seleccion);
         },
       ),
     );
@@ -1602,16 +1851,19 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       );
 
       if (viajeInmediato) {
-        // Inmediato (tab «Ahora» o programado con recogida en ventana corta): mismo mapa que motor/ahora.
-        await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+        // Turismo inmediato: pantalla de espera ADM (no mapa genérico hasta asignar chofer).
+        if (tipoServicio == 'turismo') {
+          await NavigationService.clearAndGo(
+            EsperaAsignacionTurismo(viajeId: id),
+          );
+        } else {
+          await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+        }
       } else {
-        // Programado lejano: pantalla de espera hasta ventana de pool / conductor.
+        // Programado lejano: misma pila raíz que multi / confirmar (motor incluido).
         if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute<void>(
-            builder: (_) => ViajeProgramadoPendiente(viajeId: id),
-          ),
+        await NavigationService.clearAndGo(
+          ViajeProgramadoPendiente(viajeId: id),
         );
       }
     } on fs.FirebaseException catch (e) {
@@ -2102,37 +2354,58 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   /// Panel compacto: origen, destino, precio grande, confirmar y acceso al buscador / formulario completo.
   Widget _tarjetaResumenCotizacion() {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool isDark = ThemeData.estimateBrightnessForColor(
+            Theme.of(context).scaffoldBackgroundColor) ==
+        Brightness.dark;
     final bool mapFloating = CustomThemeService.mapFloatingChrome.value;
+    final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
+    final bool fondoClaro = !mapFloating &&
+        ThemeData.estimateBrightnessForColor(themedBg) == Brightness.light;
     // En modo flotante: panel OSCURO sólido + texto blanco + borde de
     // acento brillante + sombra negra para destacar sobre el mapa claro
     // de Google. Funciona idéntico en modo claro y oscuro de la app.
     final Color textPrimary = mapFloating
         ? Colors.white
-        : (isDark ? Colors.white : const Color(0xFF101828));
+        : CustomThemeService.textOn(themedBg);
     final Color textSecondary = mapFloating
         ? Colors.white.withValues(alpha: 0.85)
-        : (isDark ? Colors.white70 : const Color(0xFF475467));
+        : CustomThemeService.textMutedOn(themedBg);
     final Color textMuted = mapFloating
         ? Colors.white.withValues(alpha: 0.70)
-        : (isDark ? Colors.white60 : const Color(0xFF667085));
+        : CustomThemeService.textSubtleOn(themedBg);
     final Color dividerSoft = mapFloating
         ? Colors.white.withValues(alpha: 0.22)
-        : (isDark ? Colors.white24 : const Color(0xFFE4E7EC));
+        : CustomThemeService.borderOn(themedBg);
     final Color metodoPagoChipBg = mapFloating
         ? Colors.white.withValues(alpha: 0.12)
-        : (isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5));
+        : (fondoClaro
+            ? themedBg.withValues(alpha: 0.72)
+            : (isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5)));
     final Color metodoPagoChipBorder = mapFloating
         ? Colors.white.withValues(alpha: 0.42)
-        : (isDark ? Colors.white24 : const Color(0xFFD0D5DD));
+        : (fondoClaro
+            ? CustomThemeService.borderOn(themedBg)
+            : (isDark ? Colors.white24 : const Color(0xFFD0D5DD)));
     final Color c = _colorServicio;
+    final Color cLegible = _colorServicioLegibleEnFondoClaro();
     // En flotante "subimos" el acento del servicio a un tono brillante para
     // que destaque sobre la card oscura. Si ya es brillante, lo dejamos.
     final Color cBright =
         ThemeData.estimateBrightnessForColor(c) == Brightness.dark
             ? Color.alphaBlend(Colors.white.withValues(alpha: 0.55), c)
             : c;
-    final Color accent = mapFloating ? cBright : c;
+    final Color accent = mapFloating ? cBright : (fondoClaro ? cLegible : c);
+    final Color precioColor = _colorPrecioResumenCotizacion(
+      themedBg: themedBg,
+      mapFloating: mapFloating,
+      accent: accent,
+    );
+    final Color cardBorder = _bordeTarjetaResumenCotizacion(
+      mapFloating: mapFloating,
+      fondoClaro: fondoClaro,
+      accent: accent,
+      bordeLegible: cLegible,
+    );
     final pRes = _paletasOrigenDestino(isDark, tipoServicio);
 
     return Padding(
@@ -2145,20 +2418,29 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             decoration: BoxDecoration(
               color: mapFloating
                   ? const Color(0xFF0F172A).withValues(alpha: 0.93)
-                  : null,
+                  : (fondoClaro ? CustomThemeService.cardOn(themedBg) : null),
               gradient: mapFloating
                   ? null
-                  : LinearGradient(
-                      colors: [
-                        c.withValues(alpha: isDark ? 0.22 : 0.12),
-                        c.withValues(alpha: isDark ? 0.08 : 0.04),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                  : fondoClaro
+                      ? LinearGradient(
+                          colors: [
+                            cLegible.withValues(alpha: 0.10),
+                            cLegible.withValues(alpha: 0.03),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        )
+                      : LinearGradient(
+                          colors: [
+                            c.withValues(alpha: isDark ? 0.22 : 0.12),
+                            c.withValues(alpha: isDark ? 0.08 : 0.04),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: mapFloating ? accent.withValues(alpha: 0.85) : c,
+                color: cardBorder,
                 width: 2,
               ),
               boxShadow: mapFloating
@@ -2169,7 +2451,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                         offset: const Offset(0, 6),
                       ),
                     ]
-                  : null,
+                  : fondoClaro
+                      ? <BoxShadow>[
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.06),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ]
+                      : null,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2288,15 +2578,27 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   'TOTAL A PAGAR',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: textMuted,
+                    color: fondoClaro ? textPrimary : textMuted,
                     fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.1,
                   ),
                 ),
-                const SizedBox(height: 4),
-                SizedBox(
+                const SizedBox(height: 8),
+                Container(
                   width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: mapFloating
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : precioColor.withValues(alpha: fondoClaro ? 0.10 : 0.14),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: precioColor.withValues(alpha: fondoClaro ? 0.42 : 0.55),
+                      width: fondoClaro ? 2 : 1.5,
+                    ),
+                  ),
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.center,
@@ -2304,10 +2606,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                       FormatosMoneda.rd(precioCalculado),
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: accent,
+                        color: precioColor,
                         fontSize: 52,
                         fontWeight: FontWeight.w900,
                         height: 1.05,
+                        letterSpacing: -0.5,
                       ),
                     ),
                   ),
@@ -2376,8 +2679,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                       backgroundColor: mapFloating
                           ? Color.alphaBlend(
                               Colors.black.withValues(alpha: 0.26), c)
-                          : c,
-                      foregroundColor: Colors.black,
+                          : (fondoClaro ? cLegible : c),
+                      foregroundColor:
+                          mapFloating ? Colors.white : Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
@@ -2398,7 +2702,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                       style: TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w800,
-                          color: mapFloating ? Colors.white : Colors.black),
+                          color: Colors.white),
                     ),
                   ),
                 ),
@@ -2409,7 +2713,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           Material(
             color: mapFloating
                 ? const Color(0xFF0F172A).withValues(alpha: 0.92)
-                : (isDark ? const Color(0xFF1A1A1A) : Colors.white),
+                : (fondoClaro
+                    ? CustomThemeService.cardOn(themedBg)
+                    : (isDark ? const Color(0xFF1A1A1A) : Colors.white)),
             borderRadius: BorderRadius.circular(14),
             child: InkWell(
               onTap: _abrirFormularioCompletoDesdeResumen,
@@ -2464,7 +2770,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   // 🎨 TARJETA DE SERVICIO
   Widget _selectorTipoServicio() {
     if (widget.tipoServicio != null) {
-      final bool isDark = Theme.of(context).brightness == Brightness.dark;
+      final bool isDark = ThemeData.estimateBrightnessForColor(
+              Theme.of(context).scaffoldBackgroundColor) ==
+          Brightness.dark;
       final bool mapFloating = CustomThemeService.mapFloatingChrome.value;
       // En modo flotante el fondo real es el mapa CLARO de Google → cards
       // oscuras + texto blanco para máxima legibilidad sin importar si la
@@ -2675,17 +2983,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     return ValueListenableBuilder<bool>(
       valueListenable: CustomThemeService.mapFloatingChrome,
       builder: (context, mapFloating, _) {
-        final bool isDark = Theme.of(context).brightness == Brightness.dark;
-        // Fondo personalizable por el usuario (servicio CustomThemeService).
-        //
-        // === Modo [mapFloating] ===
-        // El mapa de Google Maps siempre es predominantemente CLARO (calles
-        // blancas, terreno claro), incluso si la app está en modo oscuro
-        // (no aplicamos map style oscuro). Para que la UI flotante destaque
-        // SIEMPRE contra ese mapa claro, usamos cards GRIS OSCURO casi negro
-        // con borde claro y texto blanco. Funciona idéntico en modo claro
-        // y modo oscuro de la app, porque el mapa de fondo no cambia.
         final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
+        final bool isDark =
+            ThemeData.estimateBrightnessForColor(themedBg) == Brightness.dark;
+        // Fondo personalizable por el usuario (servicio CustomThemeService).
         // Tono de referencia OSCURO en flotante => textOn devuelve BLANCO,
         // borderOn devuelve claro, y _legibilityShadowsForChrome añade halo
         // NEGRO grueso para los textos sueltos sobre el mapa claro.
@@ -2775,17 +3076,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         appBar: RaiAppBar(
           title: 'Programar Viaje',
           backWhenCanPop: true,
-          leading: SafeArea(
-            bottom: false,
-            child: IconButton(
-              icon: Icon(
-                Icons.arrow_back_rounded,
-                color: textPrimary,
-              ),
-              tooltip: 'Volver',
-              onPressed: () => intentarSalirAlGate(context),
-            ),
-          ),
         ),
         body: Stack(
         children: [
@@ -3845,8 +4135,67 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.stretch,
                                             children: [
+                                              CampoLugarAutocomplete(
+                                                label: 'Buscar destino',
+                                                hint:
+                                                    'Dirección, hotel, playa o lugar en RD…',
+                                                initialText:
+                                                    _destinoTurismoSeleccionado
+                                                            ?.nombre ??
+                                                        (destinoTexto
+                                                                .isNotEmpty
+                                                            ? destinoTexto
+                                                            : null),
+                                                country: 'DO',
+                                                biasLat: latCliente ??
+                                                    _origenMap?.latitude,
+                                                biasLon: lonCliente ??
+                                                    _origenMap?.longitude,
+                                                fieldAccent: mapFloating
+                                                    ? const Color(0xFFD8B4FE)
+                                                    : pRuta.destinoAccent,
+                                                fieldFill: mapFloating
+                                                    ? const Color(0xFF111827)
+                                                        .withValues(alpha: 0.92)
+                                                    : (isDark
+                                                        ? const Color(
+                                                            0xFF1A0F2E)
+                                                        : Colors.white),
+                                                onPlaceSelected: (det) async {
+                                                  await _aplicarDestinoTurismoDesdeBusqueda(
+                                                      det);
+                                                },
+                                                onTextChanged: (t) {
+                                                  _markers.removeWhere((m) =>
+                                                      m.markerId.value ==
+                                                      'destino');
+                                                  _polylines.clear();
+                                                  setState(() {
+                                                    destino = t;
+                                                    _destinoDet = null;
+                                                    _destinoTurismoSeleccionado =
+                                                        null;
+                                                    latDestino = null;
+                                                    lonDestino = null;
+                                                    if (t.trim().isEmpty) {
+                                                      destinoTexto = '';
+                                                    }
+                                                    _invalidarCotizacion();
+                                                  });
+                                                },
+                                              ),
+                                              const SizedBox(height: 12),
                                               if (_destinoTurismoSeleccionado ==
-                                                  null)
+                                                  null) ...[
+                                                Text(
+                                                  'o elige del catálogo turístico',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    color: textMuted,
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 8),
                                                 ElevatedButton.icon(
                                                   onPressed:
                                                       _mostrarSelectorDestinosTuristicos,
@@ -3868,8 +4217,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                               12),
                                                     ),
                                                   ),
-                                                )
-                                              else
+                                                ),
+                                              ] else
                                                 Container(
                                                   padding:
                                                       const EdgeInsets.all(12),
@@ -4661,7 +5010,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   ButtonStyle _botonEstilo(BuildContext context,
       {required bool sheetStrongChrome}) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool isDark = ThemeData.estimateBrightnessForColor(
+            Theme.of(context).scaffoldBackgroundColor) ==
+        Brightness.dark;
     // Botón secundario "Seleccionar Fecha y Hora". En modo flotante el sheet
     // tiene cards oscuras sobre mapa claro: el botón se oscurece para igualar
     // el lenguaje visual y el borde es BLANCO semitransparente para destacar
@@ -4786,7 +5137,9 @@ class _Banner extends StatelessWidget {
     final Color textColor = mapFloating
         ? Colors.white
         : CustomThemeService.textOn(cardBg);
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool isDark = ThemeData.estimateBrightnessForColor(
+            Theme.of(context).scaffoldBackgroundColor) ==
+        Brightness.dark;
     final Color accent =
         isDark ? const Color(0xFF49F18B) : const Color(0xFF0F9D58);
     // En flotante usamos verde brillante para que el borde resalte sobre

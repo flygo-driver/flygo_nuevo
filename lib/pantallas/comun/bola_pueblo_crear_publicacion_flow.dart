@@ -279,7 +279,7 @@ class _BolaPuebloCrearPublicacionFlowState
             elevation: 0,
             foregroundColor: c.onSurface,
             leading: IconButton(
-              icon: const Icon(Icons.arrow_back_rounded),
+              icon: Icon(Icons.arrow_back_rounded, color: c.onSurface),
               tooltip: _paso == 0 ? 'Cerrar' : 'Atrás',
               onPressed: _atras,
             ),

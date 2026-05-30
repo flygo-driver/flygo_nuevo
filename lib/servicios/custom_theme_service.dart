@@ -134,6 +134,29 @@ class CustomThemeService {
         : Colors.white;
   }
 
+  /// Rojo semántico (p. ej. cerrar sesión) legible sobre [bg], incluso si el
+  /// usuario eligió un fondo rojizo en Apariencia.
+  static Color destructiveOn(Color bg) {
+    final bool bgDark =
+        ThemeData.estimateBrightnessForColor(bg) == Brightness.dark;
+    const Color darkRed = Color(0xFFB91C1C);
+    const Color brightRed = Color(0xFFFF5252);
+    final hsl = HSLColor.fromColor(bg);
+    final bool bgIsReddish = hsl.hue <= 35 || hsl.hue >= 325;
+    if (bgIsReddish) {
+      return bgDark ? const Color(0xFFFF8A80) : const Color(0xFF7F1D1D);
+    }
+    return bgDark ? brightRed : darkRed;
+  }
+
+  /// Fondo suave para acciones destructivas (cerrar sesión).
+  static Color destructiveSurfaceOn(Color bg) {
+    return destructiveOn(bg).withValues(alpha: bgDark(bg) ? 0.18 : 0.10);
+  }
+
+  static bool bgDark(Color bg) =>
+      ThemeData.estimateBrightnessForColor(bg) == Brightness.dark;
+
   // ---------- HELPERS DE COLOR ----------
 
   /// Aclarar un color por un factor 0.0..1.0.

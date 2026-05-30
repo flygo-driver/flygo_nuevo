@@ -10,6 +10,8 @@ import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class DestinoSeleccionado {
   final TurismoLugar lugar;
@@ -17,6 +19,8 @@ class DestinoSeleccionado {
   final int pasajeros;
   final double distanciaKm;
   final double precio;
+  final double? latOrigen;
+  final double? lonOrigen;
 
   DestinoSeleccionado({
     required this.lugar,
@@ -24,6 +28,8 @@ class DestinoSeleccionado {
     required this.pasajeros,
     required this.distanciaKm,
     required this.precio,
+    this.latOrigen,
+    this.lonOrigen,
   });
 }
 
@@ -269,32 +275,88 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     });
   }
 
-  Future<double> _calcularDistancia(double lat, double lon) async {
-    if (widget.latOrigen == null || widget.lonOrigen == null) return 0.0;
+  Future<double> _calcularDistancia(
+    double latDest,
+    double lonDest, {
+    required double latOrigen,
+    required double lonOrigen,
+  }) async {
     try {
       final result = await DirectionsService.drivingDistanceKm(
-        originLat: widget.latOrigen!,
-        originLon: widget.lonOrigen!,
-        destLat: lat,
-        destLon: lon,
+        originLat: latOrigen,
+        originLon: lonOrigen,
+        destLat: latDest,
+        destLon: lonDest,
         withTraffic: true,
         region: 'do',
       );
       return result?.km ??
           DistanciaService.calcularDistancia(
-            widget.latOrigen!,
-            widget.lonOrigen!,
-            lat,
-            lon,
+            latOrigen,
+            lonOrigen,
+            latDest,
+            lonDest,
           );
     } catch (e) {
       return DistanciaService.calcularDistancia(
-        widget.latOrigen!,
-        widget.lonOrigen!,
-        lat,
-        lon,
+        latOrigen,
+        lonOrigen,
+        latDest,
+        lonDest,
       );
     }
+  }
+
+  /// Si el host aún no propagó coords, las obtiene aquí (con permiso si hace falta).
+  Future<({double lat, double lon})?> _resolverOrigenParaCotizar() async {
+    if (widget.latOrigen != null && widget.lonOrigen != null) {
+      return (lat: widget.latOrigen!, lon: widget.lonOrigen!);
+    }
+
+    try {
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        return (lat: last.latitude, lon: last.longitude);
+      }
+    } catch (_) {}
+
+    try {
+      final ({bool serviceEnabled, LocationPermission permission}) snap =
+          await GpsService.checkServiceThenRequestPermissionIfNeeded();
+      if (snap.serviceEnabled && GpsService.permissionUsable(snap.permission)) {
+        final Position? pos = await GpsService.obtenerUbicacionActual(
+          timeout: const Duration(seconds: 12),
+          maxEdadUltima: const Duration(hours: 24),
+        );
+        if (pos != null) {
+          return (lat: pos.latitude, lon: pos.longitude);
+        }
+      }
+    } catch (_) {}
+
+    try {
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        return (lat: last.latitude, lon: last.longitude);
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  void _mostrarErrorUbicacion() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Activa el GPS y concede permiso de ubicación para cotizar.',
+        ),
+        action: SnackBarAction(
+          label: 'Ajustes',
+          onPressed: () => GpsService.openAppSettings(),
+        ),
+      ),
+    );
   }
 
   Future<void> _seleccionarDestinoGoogle(Map<String, dynamic> lugar) async {
@@ -308,18 +370,25 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       );
       return;
     }
-    if (widget.latOrigen == null || widget.lonOrigen == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Esperando ubicación...')),
-      );
-      return;
-    }
-
     setState(() {
       _calculando = true;
     });
     try {
-      final distancia = await _calcularDistancia(lugar['lat'], lugar['lon']);
+      final ({double lat, double lon})? origen =
+          await _resolverOrigenParaCotizar();
+      if (origen == null) {
+        if (mounted) {
+          setState(() => _calculando = false);
+          _mostrarErrorUbicacion();
+        }
+        return;
+      }
+      final distancia = await _calcularDistancia(
+        lugar['lat'],
+        lugar['lon'],
+        latOrigen: origen.lat,
+        lonOrigen: origen.lon,
+      );
       final contadorViajes = await _obtenerContadorViajes();
 
       final precio = await TarifaServiceUnificado().calcularPrecio(
@@ -353,6 +422,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           pasajeros: _pasajeros,
           distanciaKm: distancia,
           precio: precio,
+          latOrigen: origen.lat,
+          lonOrigen: origen.lon,
         ));
       }
     } catch (e) {
@@ -378,20 +449,27 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       );
       return;
     }
-    if (widget.latOrigen == null || widget.lonOrigen == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Esperando ubicación...')),
-      );
-      return;
-    }
-
     setState(() {
       _destinoSeleccionado = destino;
       _calculando = true;
     });
 
     try {
-      final distancia = await _calcularDistancia(destino.lat, destino.lon);
+      final ({double lat, double lon})? origen =
+          await _resolverOrigenParaCotizar();
+      if (origen == null) {
+        if (mounted) {
+          setState(() => _calculando = false);
+          _mostrarErrorUbicacion();
+        }
+        return;
+      }
+      final distancia = await _calcularDistancia(
+        destino.lat,
+        destino.lon,
+        latOrigen: origen.lat,
+        lonOrigen: origen.lon,
+      );
       final contadorViajes = await _obtenerContadorViajes();
 
       final precio = await TarifaServiceUnificado().calcularPrecio(
@@ -412,6 +490,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           pasajeros: _pasajeros,
           distanciaKm: distancia,
           precio: precio,
+          latOrigen: origen.lat,
+          lonOrigen: origen.lon,
         ));
       }
     } catch (e) {

@@ -145,13 +145,20 @@ class AdminDrawer extends StatelessWidget {
               leading: Icon(Icons.bar_chart, color: iconNeutral),
               title: Text('Reportes y Estadísticas',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                'Quejas viaje, calificaciones, CSV',
+                style: subtleStyle,
+              ),
               onTap: () => _push(context, const ReportesAdmin()),
             ),
             ListTile(
               leading: Icon(Icons.support_agent, color: iconNeutral),
               title: Text('Gestión de incidencias',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              subtitle: Text('Soporte operativo', style: subtleStyle),
+              subtitle: Text(
+                'Tickets soporte (no es calificación de viaje)',
+                style: subtleStyle,
+              ),
               onTap: () => _push(context, const IncidenciasAdminPage()),
             ),
             ListTile(

@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -42,10 +43,32 @@ class _VerificarPagosState extends State<VerificarPagos> {
 
   /// Una sola operación de escritura a la vez (evita doble tap y estados raros en producción).
   Future<void> _ejecutarAccionAdmin(Future<void> Function() job) async {
-    if (_accionEnCurso || !mounted) return;
+    if (!mounted) return;
+    if (_accionEnCurso) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Hay otra acción en curso. Espera un momento e inténtalo de nuevo.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
     setState(() => _accionEnCurso = true);
     try {
       await job();
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      final detail = (e.details != null) ? '\n${e.details}' : '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Cloud Function (${e.code}): ${e.message ?? e.code}$detail',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
     } on fs.FirebaseException catch (e) {
       if (!mounted) return;
       final msg = e.code == 'permission-denied'
@@ -223,7 +246,19 @@ class _VerificarPagosState extends State<VerificarPagos> {
   }
 
   Future<void> _aprobarRecargaComision(RecargaComisionTaxista r) async {
-    if (_accionEnCurso) return;
+    if (_accionEnCurso) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Espera a que termine la acción en curso e inténtalo de nuevo.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
     final bool? confirm = await showDialog<bool>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
@@ -258,13 +293,17 @@ class _VerificarPagosState extends State<VerificarPagos> {
           recargaId: r.id,
           aprobado: true,
         );
+        // Refuerzo: misma fórmula que Functions (prepago + deuda pool admin) y reapertura de pools.
+        await PagosTaxistaRepo.sincronizarBloqueoOperativo(r.uidTaxista);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               'Recarga aprobada: saldo prepago actualizado y bandera sincronizada. '
               'Pool y tomar viajes cuando el saldo alcance al menos '
-              'RD\$${PagosTaxistaRepo.minSaldoPrepagoComisionRd.toStringAsFixed(0)} (y sin deuda legacy bloqueante).',
+              'RD\$${PagosTaxistaRepo.minSaldoPrepagoComisionRd.toStringAsFixed(0)} '
+              '(y sin deuda legacy ni comisión de giras pendiente de admin ≥ '
+              'RD\$${PagosTaxistaRepo.umbralDeudaPoolComisionAdminRd.toStringAsFixed(0)}).',
             ),
             backgroundColor: Colors.green,
           ),
@@ -274,7 +313,19 @@ class _VerificarPagosState extends State<VerificarPagos> {
   }
 
   Future<void> _rechazarRecargaComision(RecargaComisionTaxista r) async {
-    if (_accionEnCurso) return;
+    if (_accionEnCurso) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Espera a que termine la acción en curso e inténtalo de nuevo.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
     final TextEditingController motivoCtrl = TextEditingController();
     try {
       final bool? confirm = await showDialog<bool>(
@@ -354,6 +405,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
               aprobado: false,
               notaAdmin: motivo,
             );
+            await PagosTaxistaRepo.sincronizarBloqueoOperativo(r.uidTaxista);
             if (!mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -387,15 +439,15 @@ class _VerificarPagosState extends State<VerificarPagos> {
               labelText: 'Motivo del rechazo',
               labelStyle: TextStyle(color: AdminUi.secondary(ctx)),
               hintText: 'Ej: no se refleja en cuenta, monto no coincide...',
-              hintStyle:
-                  TextStyle(color: AdminUi.secondary(ctx).withValues(alpha: 0.75)),
+              hintStyle: TextStyle(
+                  color: AdminUi.secondary(ctx).withValues(alpha: 0.75)),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child:
-                  Text('Cancelar', style: TextStyle(color: AdminUi.secondary(ctx))),
+              child: Text('Cancelar',
+                  style: TextStyle(color: AdminUi.secondary(ctx))),
             ),
             ElevatedButton(
               onPressed: () => Navigator.pop(ctx, true),
@@ -650,22 +702,25 @@ class _VerificarPagosState extends State<VerificarPagos> {
       ),
       body: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _tabButton('Comisiones semanales', 0),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _tabButton('Transferencias pendientes', 1),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _tabButton('Transferencias validadas', 2),
-                ),
-              ],
+          // Pestañas: ancho fijo mínimo + scroll horizontal (evita overflow en web / móvil estrecho).
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  SizedBox(
+                      width: 152, child: _tabButton('Comisiones semanales', 0)),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                      width: 172,
+                      child: _tabButton('Transferencias pendientes', 1)),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                      width: 168,
+                      child: _tabButton('Transferencias validadas', 2)),
+                ],
+              ),
             ),
           ),
           Expanded(
@@ -686,6 +741,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
     return OutlinedButton(
       onPressed: () => setState(() => _tabIndex = index),
       style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
         backgroundColor: active ? cs.primary : Colors.transparent,
         side: BorderSide(
             color: active ? cs.primary : AdminUi.borderSubtle(context)),
@@ -693,10 +749,12 @@ class _VerificarPagosState extends State<VerificarPagos> {
       child: Text(
         label,
         textAlign: TextAlign.center,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: active ? cs.onPrimary : AdminUi.secondary(context),
           fontWeight: FontWeight.w600,
-          fontSize: 12,
+          fontSize: 11.5,
         ),
       ),
     );
@@ -706,264 +764,285 @@ class _VerificarPagosState extends State<VerificarPagos> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
-          stream: fs.FirebaseFirestore.instance
-              .collection('recargas_comision_taxista')
-              .snapshots(),
-          builder: (BuildContext context,
-              AsyncSnapshot<fs.QuerySnapshot<Map<String, dynamic>>> rsnap) {
-            if (rsnap.connectionState == ConnectionState.waiting) {
-              return const SizedBox.shrink();
-            }
-            if (rsnap.hasError) {
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Text(
-                  'Recargas efectivo: ${rsnap.error}',
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-                ),
-              );
-            }
-            final List<RecargaComisionTaxista> recargasRaw = (rsnap.data?.docs ?? [])
-                .map(RecargaComisionTaxista.fromDoc)
-                .toList()
-              ..sort((a, b) {
-                final ta = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-                final tb = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-                return tb.compareTo(ta);
-              });
-            final List<RecargaComisionTaxista> recargas = recargasRaw.where((r) {
-              final q = _buscarRecarga.trim().toLowerCase();
-              if (q.isNotEmpty) {
-                final match = r.nombreTaxista.toLowerCase().contains(q) ||
-                    r.uidTaxista.toLowerCase().contains(q);
-                if (!match) return false;
-              }
-              if (_filtroEstadoRecarga != 'todos' &&
-                  r.estado != _filtroEstadoRecarga) {
-                return false;
-              }
-              if (_rangoDiasRecarga > 0) {
-                final limite =
-                    DateTime.now().subtract(Duration(days: _rangoDiasRecarga));
-                final fecha = r.createdAt;
-                if (fecha == null || fecha.isBefore(limite)) return false;
-              }
-              return true;
-            }).toList();
-            if (recargas.isEmpty) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Recargas comisión efectivo (comprobante)',
-                    style: TextStyle(
-                      color: AdminUi.onCard(context),
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
+        // Bloque superior (recargas) puede ser alto: scroll propio para no romper el layout.
+        Flexible(
+          flex: 5,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
+              stream: fs.FirebaseFirestore.instance
+                  .collection('recargas_comision_taxista')
+                  .snapshots(),
+              builder: (BuildContext context,
+                  AsyncSnapshot<fs.QuerySnapshot<Map<String, dynamic>>> rsnap) {
+                if (rsnap.connectionState == ConnectionState.waiting) {
+                  return const SizedBox.shrink();
+                }
+                if (rsnap.hasError) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: Text(
+                      'Recargas efectivo: ${rsnap.error}',
+                      style: const TextStyle(
+                          color: Colors.redAccent, fontSize: 12),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Filtra, busca y procesa recargas con aprobación/rechazo rápido.',
-                    style:
-                        TextStyle(color: AdminUi.muted(context), fontSize: 12),
-                  ),
-                  const SizedBox(height: 8),
-                  _buildResumenTrazabilidadTaxista(context, recargasRaw),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _buscarRecargaCtrl,
-                    onChanged: (v) => setState(() => _buscarRecarga = v.trim()),
-                    style: TextStyle(color: AdminUi.onCard(context)),
-                    decoration: InputDecoration(
-                      hintText: 'Buscar recarga por taxista o UID',
-                      hintStyle: TextStyle(
-                          color:
-                              AdminUi.secondary(context).withValues(alpha: 0.8)),
-                      prefixIcon:
-                          Icon(Icons.search, color: AdminUi.secondary(context)),
-                      suffixIcon: _buscarRecarga.isEmpty
-                          ? null
-                          : IconButton(
-                              icon: Icon(Icons.close,
-                                  color: AdminUi.secondary(context)),
-                              onPressed: () {
-                                _buscarRecargaCtrl.clear();
-                                setState(() => _buscarRecarga = '');
-                              },
-                            ),
-                      filled: true,
-                      fillColor: AdminUi.inputFill(context),
-                      border: OutlineInputBorder(
-                        borderRadius: const BorderRadius.all(Radius.circular(8)),
-                        borderSide:
-                            BorderSide(color: AdminUi.borderSubtle(context)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                  );
+                }
+                final List<RecargaComisionTaxista> recargasRaw = (rsnap
+                            .data?.docs ??
+                        [])
+                    .map(RecargaComisionTaxista.fromDoc)
+                    .toList()
+                  ..sort((a, b) {
+                    final ta =
+                        a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                    final tb =
+                        b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                    return tb.compareTo(ta);
+                  });
+                final List<RecargaComisionTaxista> recargas =
+                    recargasRaw.where((r) {
+                  final q = _buscarRecarga.trim().toLowerCase();
+                  if (q.isNotEmpty) {
+                    final match = r.nombreTaxista.toLowerCase().contains(q) ||
+                        r.uidTaxista.toLowerCase().contains(q);
+                    if (!match) return false;
+                  }
+                  if (_filtroEstadoRecarga != 'todos' &&
+                      r.estado != _filtroEstadoRecarga) {
+                    return false;
+                  }
+                  if (_rangoDiasRecarga > 0) {
+                    final limite = DateTime.now()
+                        .subtract(Duration(days: _rangoDiasRecarga));
+                    final fecha = r.createdAt;
+                    if (fecha == null || fecha.isBefore(limite)) return false;
+                  }
+                  return true;
+                }).toList();
+                if (recargas.isEmpty) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _filtroRecargaChip('Todas', 'todos'),
-                      _filtroRecargaChip('En revisión', 'pendiente_verificacion'),
-                      _filtroRecargaChip('Aprobadas', 'pagado'),
-                      _filtroRecargaChip('Rechazadas', 'rechazado'),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _rangoRecargaChip('Todo', 0),
-                      _rangoRecargaChip('7d', 7),
-                      _rangoRecargaChip('30d', 30),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  ...recargas.map((RecargaComisionTaxista r) {
-                    final bool esPendiente =
-                        r.estado == 'pendiente_verificacion';
-                    final bool esPagada = r.estado == 'pagado';
-                    final Color colorEstado = esPendiente
-                        ? Colors.amber
-                        : (esPagada ? Colors.green : Colors.redAccent);
-                    final String textoEstado = esPendiente
-                        ? 'EN REVISIÓN'
-                        : (esPagada ? 'APROBADA' : 'RECHAZADA');
-                    return Card(
-                      color: AdminUi.card(context),
-                      margin: const EdgeInsets.only(bottom: 8),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(
-                            color: colorEstado.withValues(alpha: 0.6)),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              r.nombreTaxista,
-                              style: TextStyle(
-                                color: AdminUi.onCard(context),
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            Text(
-                              'UID: ${r.uidTaxista}',
-                              style: TextStyle(
-                                  color: AdminUi.muted(context), fontSize: 11),
-                            ),
-                            const SizedBox(height: 6),
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: colorEstado.withValues(alpha: 0.18),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: colorEstado),
-                                  ),
-                                  child: Text(
-                                    textoEstado,
-                                    style: TextStyle(
-                                      color: colorEstado,
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  r.createdAt != null
-                                      ? DateFormat('dd/MM/yyyy HH:mm')
-                                          .format(r.createdAt!)
-                                      : 'Sin fecha',
-                                  style: TextStyle(
-                                      color: AdminUi.muted(context), fontSize: 11),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'Declarado: ${formatter.format(r.montoDeclaradoRd)} · '
-                              '${r.montoElegidoRd != null ? 'Elegido: ${formatter.format(r.montoElegidoRd)} · ' : ''}'
-                              'Saldo prepago al enviar: ${formatter.format(r.saldoPrepagoAlEnviar)} · '
-                              'Legacy pend. al enviar: ${formatter.format(r.comisionPendienteAlEnviar)}',
-                              style: TextStyle(
-                                  color: AdminUi.secondary(context),
-                                  fontSize: 13),
-                            ),
-                            if ((r.notaAdmin ?? '').trim().isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Text(
-                                'Nota admin: ${r.notaAdmin!.trim()}',
-                                style: TextStyle(
-                                  color: AdminUi.secondary(context),
-                                  fontSize: 12,
-                                  fontStyle: FontStyle.italic,
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                TextButton.icon(
-                                  onPressed: _accionEnCurso
-                                      ? null
-                                      : () async {
-                                          final u =
-                                              Uri.tryParse(r.comprobanteUrl);
-                                          if (u != null &&
-                                              await canLaunchUrl(u)) {
-                                            await launchUrl(u,
-                                                mode: LaunchMode
-                                                    .externalApplication);
-                                          }
-                                        },
-                                  icon: const Icon(Icons.open_in_new, size: 18),
-                                  label: const Text('Ver comprobante'),
-                                ),
-                                if (esPendiente) ...[
-                                  FilledButton(
-                                    onPressed: _accionEnCurso
-                                        ? null
-                                        : () => _aprobarRecargaComision(r),
-                                    style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.green),
-                                    child: const Text('Aprobar'),
-                                  ),
-                                  OutlinedButton(
-                                    onPressed: _accionEnCurso
-                                        ? null
-                                        : () => _rechazarRecargaComision(r),
-                                    child: const Text('Rechazar'),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ],
+                      Text(
+                        'Recargas comisión efectivo (comprobante)',
+                        style: TextStyle(
+                          color: AdminUi.onCard(context),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
                         ),
                       ),
-                    );
-                  }),
-                ],
-              ),
-            );
-          },
+                      const SizedBox(height: 4),
+                      Text(
+                        'Filtra, busca y procesa recargas con aprobación/rechazo rápido.',
+                        style: TextStyle(
+                            color: AdminUi.muted(context), fontSize: 12),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildResumenTrazabilidadTaxista(context, recargasRaw),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _buscarRecargaCtrl,
+                        onChanged: (v) =>
+                            setState(() => _buscarRecarga = v.trim()),
+                        style: TextStyle(color: AdminUi.onCard(context)),
+                        decoration: InputDecoration(
+                          hintText: 'Buscar recarga por taxista o UID',
+                          hintStyle: TextStyle(
+                              color: AdminUi.secondary(context)
+                                  .withValues(alpha: 0.8)),
+                          prefixIcon: Icon(Icons.search,
+                              color: AdminUi.secondary(context)),
+                          suffixIcon: _buscarRecarga.isEmpty
+                              ? null
+                              : IconButton(
+                                  icon: Icon(Icons.close,
+                                      color: AdminUi.secondary(context)),
+                                  onPressed: () {
+                                    _buscarRecargaCtrl.clear();
+                                    setState(() => _buscarRecarga = '');
+                                  },
+                                ),
+                          filled: true,
+                          fillColor: AdminUi.inputFill(context),
+                          border: OutlineInputBorder(
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(8)),
+                            borderSide: BorderSide(
+                                color: AdminUi.borderSubtle(context)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _filtroRecargaChip('Todas', 'todos'),
+                          _filtroRecargaChip(
+                              'En revisión', 'pendiente_verificacion'),
+                          _filtroRecargaChip('Aprobadas', 'pagado'),
+                          _filtroRecargaChip('Rechazadas', 'rechazado'),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _rangoRecargaChip('Todo', 0),
+                          _rangoRecargaChip('7d', 7),
+                          _rangoRecargaChip('30d', 30),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      ...recargas.map((RecargaComisionTaxista r) {
+                        final bool esPendiente =
+                            r.estado == 'pendiente_verificacion';
+                        final bool esPagada = r.estado == 'pagado';
+                        final Color colorEstado = esPendiente
+                            ? Colors.amber
+                            : (esPagada ? Colors.green : Colors.redAccent);
+                        final String textoEstado = esPendiente
+                            ? 'EN REVISIÓN'
+                            : (esPagada ? 'APROBADA' : 'RECHAZADA');
+                        return Card(
+                          color: AdminUi.card(context),
+                          margin: const EdgeInsets.only(bottom: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                                color: colorEstado.withValues(alpha: 0.6)),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  r.nombreTaxista,
+                                  style: TextStyle(
+                                    color: AdminUi.onCard(context),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                Text(
+                                  'UID: ${r.uidTaxista}',
+                                  style: TextStyle(
+                                      color: AdminUi.muted(context),
+                                      fontSize: 11),
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            colorEstado.withValues(alpha: 0.18),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: colorEstado),
+                                      ),
+                                      child: Text(
+                                        textoEstado,
+                                        style: TextStyle(
+                                          color: colorEstado,
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      r.createdAt != null
+                                          ? DateFormat('dd/MM/yyyy HH:mm')
+                                              .format(r.createdAt!)
+                                          : 'Sin fecha',
+                                      style: TextStyle(
+                                          color: AdminUi.muted(context),
+                                          fontSize: 11),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Declarado: ${formatter.format(r.montoDeclaradoRd)} · '
+                                  '${r.montoElegidoRd != null ? 'Elegido: ${formatter.format(r.montoElegidoRd)} · ' : ''}'
+                                  'Saldo prepago al enviar: ${formatter.format(r.saldoPrepagoAlEnviar)} · '
+                                  'Legacy pend. al enviar: ${formatter.format(r.comisionPendienteAlEnviar)}',
+                                  style: TextStyle(
+                                      color: AdminUi.secondary(context),
+                                      fontSize: 13),
+                                ),
+                                if ((r.notaAdmin ?? '').trim().isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Nota admin: ${r.notaAdmin!.trim()}',
+                                    style: TextStyle(
+                                      color: AdminUi.secondary(context),
+                                      fontSize: 12,
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    TextButton.icon(
+                                      onPressed: _accionEnCurso
+                                          ? null
+                                          : () async {
+                                              final u = Uri.tryParse(
+                                                  r.comprobanteUrl);
+                                              if (u != null &&
+                                                  await canLaunchUrl(u)) {
+                                                await launchUrl(u,
+                                                    mode: LaunchMode
+                                                        .externalApplication);
+                                              }
+                                            },
+                                      icon: const Icon(Icons.open_in_new,
+                                          size: 18),
+                                      label: const Text('Ver comprobante'),
+                                    ),
+                                    if (esPendiente) ...[
+                                      FilledButton(
+                                        onPressed: _accionEnCurso
+                                            ? null
+                                            : () => _aprobarRecargaComision(r),
+                                        style: FilledButton.styleFrom(
+                                            backgroundColor: Colors.green),
+                                        child: const Text('Aprobar'),
+                                      ),
+                                      OutlinedButton(
+                                        onPressed: _accionEnCurso
+                                            ? null
+                                            : () => _rechazarRecargaComision(r),
+                                        child: const Text('Rechazar'),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
         ),
         Expanded(
+          flex: 6,
           child: StreamBuilder<List<PagoTaxista>>(
             stream: PagosTaxistaRepo.streamPagosPendientes(),
             builder: (BuildContext context,
@@ -1094,22 +1173,22 @@ class _VerificarPagosState extends State<VerificarPagos> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Row(
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
                             _filtroChip('Todos', 'todos'),
-                            const SizedBox(width: 8),
                             _filtroChip('Pendientes', 'pendiente'),
-                            const SizedBox(width: 8),
                             _filtroChip('En revisión', 'revision'),
                           ],
                         ),
                         const SizedBox(height: 8),
-                        Row(
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
                             _rangoChip('Todo', 0),
-                            const SizedBox(width: 8),
                             _rangoChip('7d', 7),
-                            const SizedBox(width: 8),
                             _rangoChip('30d', 30),
                           ],
                         ),
@@ -1352,13 +1431,15 @@ class _VerificarPagosState extends State<VerificarPagos> {
           for (final d in bSnap.data!.docs) d.id: (d.data()),
         };
 
-        final Map<String, _TrazabilidadMini> agg = <String, _TrazabilidadMini>{};
+        final Map<String, _TrazabilidadMini> agg =
+            <String, _TrazabilidadMini>{};
         for (final r in recargasRaw) {
           final uid = r.uidTaxista.trim();
           if (uid.isEmpty) continue;
           final cur = agg.putIfAbsent(
             uid,
-            () => _TrazabilidadMini(uidTaxista: uid, nombreTaxista: r.nombreTaxista),
+            () => _TrazabilidadMini(
+                uidTaxista: uid, nombreTaxista: r.nombreTaxista),
           );
           cur.recargasTotal++;
           if (r.estado == 'pagado') {
@@ -1373,7 +1454,8 @@ class _VerificarPagosState extends State<VerificarPagos> {
 
         for (final e in agg.entries) {
           final b = billePorUid[e.key];
-          e.value.saldoPrepago = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(b);
+          e.value.saldoPrepago =
+              PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(b);
           e.value.comisionLegacyPendiente =
               PagosTaxistaRepo.comisionPendienteDesdeBilletera(b);
         }
@@ -1439,7 +1521,9 @@ class _VerificarPagosState extends State<VerificarPagos> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        t.nombreTaxista.isEmpty ? t.uidTaxista : t.nombreTaxista,
+                        t.nombreTaxista.isEmpty
+                            ? t.uidTaxista
+                            : t.nombreTaxista,
                         style: TextStyle(
                           color: AdminUi.onCard(context),
                           fontWeight: FontWeight.w700,
@@ -1450,13 +1534,15 @@ class _VerificarPagosState extends State<VerificarPagos> {
                       Text(
                         'Aprobadas: ${t.recargasAprobadas} · Pendientes: ${t.recargasPendientes} · '
                         'Rechazadas: ${t.recargasRechazadas} · Total aprobado: ${formatter.format(t.montoAprobado)}',
-                        style: TextStyle(color: AdminUi.secondary(context), fontSize: 11.2),
+                        style: TextStyle(
+                            color: AdminUi.secondary(context), fontSize: 11.2),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         'Saldo prepago: ${formatter.format(t.saldoPrepago)} · '
                         'Legacy pendiente: ${formatter.format(t.comisionLegacyPendiente)}',
-                        style: TextStyle(color: AdminUi.secondary(context), fontSize: 11.2),
+                        style: TextStyle(
+                            color: AdminUi.secondary(context), fontSize: 11.2),
                       ),
                     ],
                   ),
@@ -1540,143 +1626,173 @@ class _VerificarPagosState extends State<VerificarPagos> {
                   (d['comprobanteTransferenciaUrl'] ?? '').toString();
               return Card(
                 color: AdminUi.card(context),
-                child: ListTile(
-                  title: Text(
-                      'Viaje #${_shortDocId(viajeId)} • ${formatter.format(total)}',
-                      style: TextStyle(color: AdminUi.onCard(context))),
-                  subtitle: Text(
-                    'Taxista: $taxista${comprobante.isNotEmpty ? '\nComprobante: cargado' : '\nComprobante: faltante'}',
-                    style: TextStyle(color: AdminUi.secondary(context)),
-                  ),
-                  trailing: Wrap(
-                    spacing: 8,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      ElevatedButton(
-                        onPressed: comprobante.isEmpty || _accionEnCurso
-                            ? null
-                            : () async {
-                                await _ejecutarAccionAdmin(() async {
-                                  await ViajesRepo
-                                      .confirmarTransferenciaCliente(
-                                          viajeId: viajeId);
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content:
-                                            Text('Transferencia confirmada'),
-                                        backgroundColor: Colors.green),
-                                  );
-                                });
-                              },
-                        child: const Text('Confirmar'),
+                      Text(
+                        'Viaje #${_shortDocId(viajeId)} • ${formatter.format(total)}',
+                        style: TextStyle(
+                          color: AdminUi.onCard(context),
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                      OutlinedButton(
-                        onPressed: _accionEnCurso
-                            ? null
-                            : () async {
-                                final motivoCtrl = TextEditingController();
-                                try {
-                                  final ok = await showDialog<bool>(
-                                        context: context,
-                                        builder: (ctx) {
-                                          final cs = Theme.of(ctx).colorScheme;
-                                          return AlertDialog(
-                                            backgroundColor:
-                                                AdminUi.dialogSurface(ctx),
-                                            title: Text(
-                                                'Rechazar transferencia',
-                                                style: TextStyle(
-                                                    color:
-                                                        AdminUi.onCard(ctx))),
-                                            content: TextField(
-                                              controller: motivoCtrl,
-                                              style: TextStyle(
-                                                  color: AdminUi.onCard(ctx)),
-                                              maxLines: 3,
-                                              decoration: InputDecoration(
-                                                hintText: 'Motivo del rechazo',
-                                                hintStyle: TextStyle(
-                                                    color:
-                                                        AdminUi.secondary(ctx)
+                      const SizedBox(height: 6),
+                      Text(
+                        'Taxista: $taxista${comprobante.isNotEmpty ? '\nComprobante: cargado' : '\nComprobante: faltante'}',
+                        style: TextStyle(color: AdminUi.secondary(context)),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ElevatedButton(
+                            onPressed: comprobante.isEmpty || _accionEnCurso
+                                ? null
+                                : () async {
+                                    await _ejecutarAccionAdmin(() async {
+                                      await ViajesRepo
+                                          .confirmarTransferenciaCliente(
+                                              viajeId: viajeId);
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                            content: Text(
+                                                'Transferencia confirmada'),
+                                            backgroundColor: Colors.green),
+                                      );
+                                    });
+                                  },
+                            child: const Text('Confirmar'),
+                          ),
+                          OutlinedButton(
+                            onPressed: _accionEnCurso
+                                ? null
+                                : () async {
+                                    final motivoCtrl = TextEditingController();
+                                    try {
+                                      final ok = await showDialog<bool>(
+                                            context: context,
+                                            builder: (ctx) {
+                                              final cs =
+                                                  Theme.of(ctx).colorScheme;
+                                              return AlertDialog(
+                                                backgroundColor:
+                                                    AdminUi.dialogSurface(ctx),
+                                                title: Text(
+                                                    'Rechazar transferencia',
+                                                    style: TextStyle(
+                                                        color: AdminUi.onCard(
+                                                            ctx))),
+                                                content: TextField(
+                                                  controller: motivoCtrl,
+                                                  style: TextStyle(
+                                                      color:
+                                                          AdminUi.onCard(ctx)),
+                                                  maxLines: 3,
+                                                  decoration: InputDecoration(
+                                                    hintText:
+                                                        'Motivo del rechazo',
+                                                    hintStyle: TextStyle(
+                                                        color: AdminUi
+                                                                .secondary(ctx)
                                                             .withValues(
                                                                 alpha: 0.75)),
-                                                filled: true,
-                                                fillColor:
-                                                    AdminUi.inputFill(ctx),
-                                                border: OutlineInputBorder(
-                                                  borderRadius:
-                                                      const BorderRadius.all(
-                                                          Radius.circular(8)),
-                                                  borderSide: BorderSide(
-                                                      color:
-                                                          AdminUi.borderSubtle(
-                                                              ctx)),
+                                                    filled: true,
+                                                    fillColor:
+                                                        AdminUi.inputFill(ctx),
+                                                    border: OutlineInputBorder(
+                                                      borderRadius:
+                                                          const BorderRadius
+                                                              .all(
+                                                              Radius.circular(
+                                                                  8)),
+                                                      borderSide: BorderSide(
+                                                          color: AdminUi
+                                                              .borderSubtle(
+                                                                  ctx)),
+                                                    ),
+                                                    enabledBorder:
+                                                        OutlineInputBorder(
+                                                      borderRadius:
+                                                          const BorderRadius
+                                                              .all(
+                                                              Radius.circular(
+                                                                  8)),
+                                                      borderSide: BorderSide(
+                                                          color: AdminUi
+                                                              .borderSubtle(
+                                                                  ctx)),
+                                                    ),
+                                                    focusedBorder:
+                                                        OutlineInputBorder(
+                                                      borderRadius:
+                                                          const BorderRadius
+                                                              .all(
+                                                              Radius.circular(
+                                                                  8)),
+                                                      borderSide: BorderSide(
+                                                          color: cs.primary,
+                                                          width: 1.4),
+                                                    ),
+                                                  ),
                                                 ),
-                                                enabledBorder:
-                                                    OutlineInputBorder(
-                                                  borderRadius:
-                                                      const BorderRadius.all(
-                                                          Radius.circular(8)),
-                                                  borderSide: BorderSide(
-                                                      color:
-                                                          AdminUi.borderSubtle(
-                                                              ctx)),
-                                                ),
-                                                focusedBorder:
-                                                    OutlineInputBorder(
-                                                  borderRadius:
-                                                      const BorderRadius.all(
-                                                          Radius.circular(8)),
-                                                  borderSide: BorderSide(
-                                                      color: cs.primary,
-                                                      width: 1.4),
-                                                ),
-                                              ),
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(ctx, false),
-                                                child: Text('Cancelar',
-                                                    style: TextStyle(
-                                                        color:
-                                                            AdminUi.secondary(
-                                                                ctx))),
-                                              ),
-                                              ElevatedButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(ctx, true),
-                                                child: const Text('Rechazar'),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      ) ??
-                                      false;
-                                  if (!ok) return;
-                                  final motivo = motivoCtrl.text.trim().isEmpty
-                                      ? 'No se encontro deposito en la cuenta de RAI.'
-                                      : motivoCtrl.text.trim();
-                                  await _ejecutarAccionAdmin(() async {
-                                    await ViajesRepo
-                                        .rechazarTransferenciaCliente(
-                                      viajeId: viajeId,
-                                      motivo: motivo,
-                                    );
-                                    if (!context.mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content:
-                                            Text('Transferencia rechazada'),
-                                        backgroundColor: Colors.orange,
-                                      ),
-                                    );
-                                  });
-                                } finally {
-                                  motivoCtrl.dispose();
-                                }
-                              },
-                        child: const Text('Rechazar'),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () =>
+                                                        Navigator.pop(
+                                                            ctx, false),
+                                                    child: Text('Cancelar',
+                                                        style: TextStyle(
+                                                            color: AdminUi
+                                                                .secondary(
+                                                                    ctx))),
+                                                  ),
+                                                  ElevatedButton(
+                                                    onPressed: () =>
+                                                        Navigator.pop(
+                                                            ctx, true),
+                                                    child:
+                                                        const Text('Rechazar'),
+                                                  ),
+                                                ],
+                                              );
+                                            },
+                                          ) ??
+                                          false;
+                                      if (!ok) return;
+                                      final motivo = motivoCtrl.text
+                                              .trim()
+                                              .isEmpty
+                                          ? 'No se encontro deposito en la cuenta de RAI.'
+                                          : motivoCtrl.text.trim();
+                                      await _ejecutarAccionAdmin(() async {
+                                        await ViajesRepo
+                                            .rechazarTransferenciaCliente(
+                                          viajeId: viajeId,
+                                          motivo: motivo,
+                                        );
+                                        if (!context.mounted) return;
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                            content:
+                                                Text('Transferencia rechazada'),
+                                            backgroundColor: Colors.orange,
+                                          ),
+                                        );
+                                      });
+                                    } finally {
+                                      motivoCtrl.dispose();
+                                    }
+                                  },
+                            child: const Text('Rechazar'),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -1838,57 +1954,70 @@ class _VerificarPagosState extends State<VerificarPagos> {
                 estadoComision == 'transferencia_rechazada_admin';
             return Card(
               color: AdminUi.card(context),
-              child: ListTile(
-                title: Text(
-                  'Gira #${_shortDocId(poolId)} • Comisión 10%: ${formatter.format(comision)}',
-                  style: TextStyle(
-                      color: AdminUi.onCard(context),
-                      fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  'Publicado por: $owner • Destino: $destino\n'
-                  'Total gira: ${formatter.format(totalGira)}\n'
-                  'Estado transferencia: ${rechazada ? 'RECHAZADA' : 'PENDIENTE'}'
-                  '${motivoRechazo.isNotEmpty ? '\nMotivo: $motivoRechazo' : ''}',
-                  style: TextStyle(color: AdminUi.secondary(context)),
-                ),
-                trailing: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    ElevatedButton(
-                      onPressed: _accionEnCurso
-                          ? null
-                          : () async {
-                              await _ejecutarAccionAdmin(() async {
-                                await fs.FirebaseFirestore.instance
-                                    .collection('viajes_pool')
-                                    .doc(poolId)
-                                    .update({
-                                  'comisionPendientePagoAdmin': false,
-                                  'comisionEstado': 'transferencia_validada_admin',
-                                  'comisionRechazoMotivo': fs.FieldValue.delete(),
-                                  'comisionTransferenciaValidadaAt':
-                                      fs.FieldValue.serverTimestamp(),
-                                  'updatedAt': fs.FieldValue.serverTimestamp(),
-                                });
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                        'Comisión de gira validada (transferencia).'),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              });
-                            },
-                      child: const Text('Validar'),
+                    Text(
+                      'Gira #${_shortDocId(poolId)} • Comisión 10%: ${formatter.format(comision)}',
+                      style: TextStyle(
+                        color: AdminUi.onCard(context),
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                    OutlinedButton(
-                      onPressed: _accionEnCurso
-                          ? null
-                          : () => _rechazarComisionGira(poolId: poolId),
-                      child: const Text('Rechazar'),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Publicado por: $owner • Destino: $destino\n'
+                      'Total gira: ${formatter.format(totalGira)}\n'
+                      'Estado transferencia: ${rechazada ? 'RECHAZADA' : 'PENDIENTE'}'
+                      '${motivoRechazo.isNotEmpty ? '\nMotivo: $motivoRechazo' : ''}',
+                      style: TextStyle(color: AdminUi.secondary(context)),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ElevatedButton(
+                          onPressed: _accionEnCurso
+                              ? null
+                              : () async {
+                                  await _ejecutarAccionAdmin(() async {
+                                    await fs.FirebaseFirestore.instance
+                                        .collection('viajes_pool')
+                                        .doc(poolId)
+                                        .update({
+                                      'comisionPendientePagoAdmin': false,
+                                      'comisionEstado':
+                                          'transferencia_validada_admin',
+                                      'comisionRechazoMotivo':
+                                          fs.FieldValue.delete(),
+                                      'comisionTransferenciaValidadaAt':
+                                          fs.FieldValue.serverTimestamp(),
+                                      'updatedAt':
+                                          fs.FieldValue.serverTimestamp(),
+                                    });
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                            'Comisión de gira validada (transferencia).'),
+                                        backgroundColor: Colors.green,
+                                      ),
+                                    );
+                                  });
+                                },
+                          child: const Text('Validar'),
+                        ),
+                        OutlinedButton(
+                          onPressed: _accionEnCurso
+                              ? null
+                              : () => _rechazarComisionGira(poolId: poolId),
+                          child: const Text('Rechazar'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -2042,7 +2171,8 @@ class _VerificarPagosState extends State<VerificarPagos> {
       selectedColor: cs.secondaryContainer,
       side: BorderSide(color: AdminUi.borderSubtle(context)),
       labelStyle: TextStyle(
-        color: seleccionado ? cs.onSecondaryContainer : AdminUi.secondary(context),
+        color:
+            seleccionado ? cs.onSecondaryContainer : AdminUi.secondary(context),
         fontWeight: FontWeight.w600,
       ),
     );

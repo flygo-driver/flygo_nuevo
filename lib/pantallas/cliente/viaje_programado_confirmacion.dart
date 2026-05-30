@@ -10,6 +10,7 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/widgets/rai_back_button.dart';
 
 String _textoVentanaPoolCliente(int minutos) {
   if (minutos < 1) {
@@ -296,7 +297,10 @@ class _ViajeProgramadoConfirmacionState
           appBar: AppBar(
             title: const Text('Tu reserva'),
             leading: IconButton(
-              icon: const Icon(Icons.close),
+              icon: Icon(
+                Icons.close_rounded,
+                color: RaiBackButton.resolveColor(context),
+              ),
               onPressed: () {
                 Navigator.of(context).pushAndRemoveUntil(
                   MaterialPageRoute<void>(builder: (_) => const ClienteShell()),

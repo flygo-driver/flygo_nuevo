@@ -4,14 +4,28 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_crear_publicacion_flow.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
+import 'package:flygo_nuevo/widgets/bola_cliente_mapa_conductor_live.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 export 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
+
+double _pctComisionDesdeDoc(Map<String, dynamic> data) {
+  final raw = data['comisionPct'];
+  if (raw is num) {
+    final v = raw.toDouble();
+    return v <= 1 ? v * 100 : v;
+  }
+  return PlataformaEconomia.comisionViajePorcentaje;
+}
 
 class BolaPuebloNav {
   BolaPuebloNav._();
@@ -536,10 +550,14 @@ class BolaPuebloFormat {
   BolaPuebloFormat._();
 
   static String textoVigenciaCodigo(dynamic ts) {
-    if (ts is! Timestamp) return 'Vigencia del código: 20 min';
+    final int horas = BolaPuebloRepo.vigenciaCodigoInicio.inHours;
+    if (ts is! Timestamp) return 'Vigencia del código: $horas h';
     final DateTime vence = ts.toDate().add(BolaPuebloRepo.vigenciaCodigoInicio);
     final Duration left = vence.difference(DateTime.now());
     if (left.inSeconds <= 0) return 'Código vencido. Deben reacordar la bola.';
+    if (left.inHours >= 1) {
+      return 'Código vence en ${left.inHours} h ${left.inMinutes.remainder(60)} min';
+    }
     return 'Código vence en ${left.inMinutes} min';
   }
 
@@ -557,6 +575,15 @@ class BolaPuebloFormat {
 class BolaPuebloDialogs {
   BolaPuebloDialogs._();
 
+  static String mensajeExcepcionUsuario(Object e) {
+    var s = e.toString().trim();
+    const p = 'Exception: ';
+    if (s.startsWith(p)) {
+      s = s.substring(p.length).trim();
+    }
+    return s.isEmpty ? 'Ocurrió un error.' : s;
+  }
+
   static Future<String?> pedirCodigoInicio(BuildContext context) async {
     final c = TextEditingController();
     final ok = await showDialog<bool>(
@@ -572,17 +599,60 @@ class BolaPuebloDialogs {
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
             title: Text('Código de verificación',
                 style: TextStyle(color: col.onSurface)),
-            content: TextField(
-              controller: c,
-              keyboardType: TextInputType.number,
-              autofocus: true,
-              style: TextStyle(
-                  color: col.onSurface,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600),
-              decoration: const InputDecoration(
-                labelText: 'Código del cliente',
-                hintText: 'Cuatro dígitos',
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    controller: c,
+                    keyboardType: TextInputType.number,
+                    autofocus: true,
+                    maxLength: 6,
+                    textAlign: TextAlign.center,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                    ],
+                    style: TextStyle(
+                      color: col.onSurface,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 6,
+                    ),
+                    decoration: InputDecoration(
+                      counterText: '',
+                      filled: true,
+                      fillColor: col.surfaceRaised.withValues(alpha: 0.4),
+                      labelText: '6 dígitos que dicta el pasajero',
+                      hintText: '••••••',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final data =
+                          await Clipboard.getData(Clipboard.kTextPlain);
+                      final t = (data?.text ?? '')
+                          .replaceAll(RegExp(r'\D'), '');
+                      if (t.length >= 6) {
+                        c.text = t.substring(0, 6);
+                      } else if (ctx.mounted) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          BolaPuebloTheme.snack(
+                            ctx,
+                            'No hay 6 dígitos en el portapapeles.',
+                            error: true,
+                          ),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.content_paste_go_rounded, size: 20),
+                    label: const Text('Pegar desde portapapeles'),
+                  ),
+                ],
               ),
             ),
             actions: [
@@ -597,8 +667,13 @@ class BolaPuebloDialogs {
         );
       },
     );
-    if (ok != true) return null;
-    return c.text.trim();
+    if (ok != true) {
+      c.dispose();
+      return null;
+    }
+    final out = c.text.trim();
+    c.dispose();
+    return out;
   }
 
   static Future<void> crearPublicacion({
@@ -925,7 +1000,9 @@ class BolaPuebloDialogs {
           style: TextStyle(color: c.onSurface, fontWeight: FontWeight.w800),
         ),
         content: Text(
-          'Podés volver a publicar u ofertar en otra bola. No se puede cancelar si el conductor ya registró el abordo.',
+          'Podés cancelar mientras el conductor no haya registrado el abordo '
+          'ni iniciado el traslado con el PIN. Una vez en ruta al destino, '
+          'no se puede cancelar.',
           style: TextStyle(color: c.onMuted, height: 1.45, fontSize: 14),
         ),
         actions: [
@@ -947,13 +1024,51 @@ class BolaPuebloDialogs {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(BolaPuebloTheme.snack(context, 'Acuerdo cancelado'));
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
       }
     } catch (e) {
       if (context.mounted) {
+        final msg = BolaPuebloDialogs.mensajeExcepcionUsuario(e);
         ScaffoldMessenger.of(context)
-            .showSnackBar(BolaPuebloTheme.snack(context, '$e', error: true));
+            .showSnackBar(BolaPuebloTheme.snack(context, msg, error: true));
       }
     }
+  }
+
+  /// Banner cuando el traslado ya va al destino (sin opción de cancelar).
+  static Widget bannerSinCancelacionEnCurso(BuildContext context) {
+    final c = BolaPuebloColors.of(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: c.isDark ? 0.14 : 0.12),
+        borderRadius: BorderRadius.circular(BolaPuebloUi.radiusSmall),
+        border: Border.all(color: Colors.amber.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline_rounded,
+              color: Colors.amber.shade800, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Traslado en curso hacia el destino. La cancelación ya no está '
+              'disponible; completá el viaje y confirmá llegada para ver la factura.',
+              style: TextStyle(
+                color: c.onSurface,
+                fontSize: 13,
+                height: 1.4,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   static String _etiquetaEstadoOferta(String estado) {
@@ -1896,8 +2011,13 @@ class BolaPuebloDialogs {
           BolaPuebloTheme.snack(context, 'Bola iniciada (en curso)'));
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(BolaPuebloTheme.snack(context, '$e', error: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          BolaPuebloDialogs.mensajeExcepcionUsuario(e),
+          error: true,
+        ),
+      );
     }
   }
 
@@ -1940,8 +2060,13 @@ class BolaPuebloDialogs {
       }
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(BolaPuebloTheme.snack(context, '$e', error: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          BolaPuebloDialogs.mensajeExcepcionUsuario(e),
+          error: true,
+        ),
+      );
     }
   }
 }
@@ -1987,6 +2112,8 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
   late bool _pasoNavegacionListo;
   late bool _pasoAbordoListo;
   bool _busyAbordo = false;
+  final TextEditingController _codigoInicioCtrl = TextEditingController();
+  bool _busyInicioCodigo = false;
   DateTime? _lastResumeSnackAt;
 
   static String _prefNavPickupBola(String docId) => 'bp_nav_pickup_$docId';
@@ -2065,8 +2192,66 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
 
   @override
   void dispose() {
+    _codigoInicioCtrl.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  Future<void> _pegarCodigoPortapapelesTaxista() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final t = (data?.text ?? '').replaceAll(RegExp(r'\D'), '');
+    if (!mounted) return;
+    if (t.length >= 6) {
+      setState(() => _codigoInicioCtrl.text = t.substring(0, 6));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          'No hay 6 dígitos en el portapapeles.',
+          error: true,
+        ),
+      );
+    }
+  }
+
+  Future<void> _iniciarViajeConCodigoTaxista() async {
+    if (_busyInicioCodigo) return;
+    final digits = _codigoInicioCtrl.text.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 6) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          'Ingresá los 6 dígitos que te dicta el pasajero.',
+          error: true,
+        ),
+      );
+      return;
+    }
+    setState(() => _busyInicioCodigo = true);
+    try {
+      await BolaPuebloRepo.marcarEnCurso(
+        bolaId: widget.docId,
+        uidActor: widget.user.uid,
+        codigoIngresado: digits,
+      );
+      if (!mounted) return;
+      _codigoInicioCtrl.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(context, 'Bola iniciada (en curso)'),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          BolaPuebloDialogs.mensajeExcepcionUsuario(e),
+          error: true,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busyInicioCodigo = false);
+    }
   }
 
   Widget _resumenPasoProfesional(BolaPuebloColors c) {
@@ -2204,6 +2389,10 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
                     if (!mounted) return;
                     if (ok) {
                       unawaited(_persistNavPickupBola(true));
+                      unawaited(BolaPuebloRepo.syncViajeEspejoCaminoPickupSiAplica(
+                        bolaId: widget.docId,
+                        uidTaxista: widget.user.uid,
+                      ));
                       setState(() => _pasoNavegacionListo = true);
                     }
                   },
@@ -2214,6 +2403,10 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
                 OutlinedButton.icon(
                   style: BolaPuebloUi.outlineAccent(context),
                   onPressed: () {
+                    unawaited(BolaPuebloRepo.syncViajeEspejoCaminoPickupSiAplica(
+                      bolaId: widget.docId,
+                      uidTaxista: widget.user.uid,
+                    ));
                     unawaited(_persistNavPickupBola(true));
                     setState(() => _pasoNavegacionListo = true);
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -2290,7 +2483,11 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
                                 'Pedí el código al pasajero.',
                               ),
                             );
-                          } catch (e) {
+                          } catch (e, st) {
+                            debugPrint(
+                              '[BOLA_UI] marcarPickupClienteAbordo bolaId=${widget.docId} '
+                              'uidTaxista=${widget.user.uid} error=$e\n$st',
+                            );
                             if (!mounted) return;
                             setState(() => _busyAbordo = false);
                             if (!context.mounted) return;
@@ -2317,26 +2514,105 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
                   ),
                 ),
               ] else ...[
-                // — 3 Código —
+                // — 3 Código (campo visible en pantalla; pegar desde WhatsApp, etc.) —
                 _bolaPasoTitulo(c, '3', 'Iniciar viaje'),
                 const SizedBox(height: 10),
                 Text(
-                  'El pasajero te dicta el código que ve en su pantalla.',
+                  'Pedí el PIN al pasajero. Lo ves en su app; podés pegarlo si te lo mandó por chat.',
                   style:
                       TextStyle(color: c.onMuted, fontSize: 13, height: 1.4),
                 ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  style: BolaPuebloUi.filledPrimary,
-                  onPressed: () => BolaPuebloDialogs.marcarEnCursoDialog(
-                    context,
-                    widget.docId,
-                    widget.user.uid,
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                  decoration: BoxDecoration(
+                    color: c.surfaceRaised.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: BolaPuebloTheme.accent.withValues(alpha: 0.35),
+                    ),
                   ),
-                  icon: const Icon(Icons.pin_rounded, size: 22),
-                  label: const Text(
-                    'Iniciar viaje con código',
-                    textAlign: TextAlign.center,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Código de 6 dígitos',
+                        style: TextStyle(
+                          color: c.onSurface,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _codigoInicioCtrl,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        textAlign: TextAlign.center,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        style: TextStyle(
+                          color: c.onSurface,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 10,
+                        ),
+                        decoration: InputDecoration(
+                          counterText: '',
+                          filled: true,
+                          fillColor: c.surface.withValues(alpha: 0.9),
+                          hintText: '••••••',
+                          hintStyle: TextStyle(
+                            color: c.onMuted.withValues(alpha: 0.45),
+                            letterSpacing: 10,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _busyInicioCodigo
+                                  ? null
+                                  : _pegarCodigoPortapapelesTaxista,
+                              icon: const Icon(Icons.content_paste_go_rounded,
+                                  size: 20),
+                              label: const Text('Pegar'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton.icon(
+                              style: BolaPuebloUi.filledPrimary,
+                              onPressed: _busyInicioCodigo
+                                  ? null
+                                  : _iniciarViajeConCodigoTaxista,
+                              icon: _busyInicioCodigo
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.verified_rounded,
+                                      size: 22),
+                              label: Text(
+                                _busyInicioCodigo
+                                    ? 'Verificando…'
+                                    : 'Iniciar viaje',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -2566,7 +2842,7 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(
+                    SelectableText(
                       codigoBola.isEmpty ? '—' : codigoBola,
                       textAlign: TextAlign.center,
                       style: TextStyle(
@@ -2575,6 +2851,39 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
                         fontSize: 32,
                         letterSpacing: 8,
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      onPressed: codigoBola.isEmpty ||
+                              codigoBola.replaceAll(RegExp(r'\D'), '').length !=
+                                  6
+                          ? null
+                          : () async {
+                              final digits =
+                                  codigoBola.replaceAll(RegExp(r'\D'), '');
+                              await Clipboard.setData(
+                                  ClipboardData(text: digits));
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                BolaPuebloTheme.snack(
+                                  context,
+                                  'Código copiado. Pegalo en el chat si querés.',
+                                ),
+                              );
+                            },
+                      icon: const Icon(Icons.copy_rounded, size: 18),
+                      label: const Text(
+                        'Copiar código',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      'También podés mantener apretado el número para copiar.',
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(color: fgMuted, fontSize: 11.5, height: 1.3),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -3032,6 +3341,9 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
                 : (tarifaNormalRd > 0 ? tarifaNormalRd : monto)));
     final double distanciaKm = ((data['distanciaKm'] ?? 0) as num).toDouble();
     final int pasajeros = ((data['pasajeros'] ?? 1) as num).toInt().clamp(1, 8);
+    final String viajeEspejoIdBola =
+        (data['viajeEspejoId'] ?? '').toString().trim();
+    final double pctComisionLabel = _pctComisionDesdeDoc(data);
     final double? origenLatBola =
         (data['origenLat'] is num) ? (data['origenLat'] as num).toDouble() : null;
     final double? origenLonBola =
@@ -3483,6 +3795,19 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
                 origenLon: origenLonBola,
               ),
               const SizedBox(height: 14),
+              if (origenLatBola != null &&
+                  origenLonBola != null &&
+                  !pickupConfirmadoTaxista &&
+                  uidTaxista.trim().isNotEmpty) ...[
+                BolaClienteMapaConductorLive(
+                  viajeEspejoId: viajeEspejoIdBola,
+                  uidTaxista: uidTaxista,
+                  refLat: origenLatBola,
+                  refLon: origenLonBola,
+                  refNombre: origen.isEmpty ? null : origen,
+                ),
+                const SizedBox(height: 14),
+              ],
               BolaClienteAcordadaCapas(
                 bolaId: docId,
                 uidConductor: uidTaxista,
@@ -3496,7 +3821,45 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
               ),
               const SizedBox(height: 14),
             ],
+            if (partActivo &&
+                estado == 'acordada' &&
+                BolaPuebloRepo.puedeCancelarAcuerdo(data)) ...[
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade700,
+                    side: BorderSide(color: Colors.red.withValues(alpha: 0.45)),
+                  ),
+                  onPressed: () =>
+                      BolaPuebloDialogs.confirmarCancelarAcuerdoBola(
+                    context: context,
+                    bolaId: docId,
+                    uid: user.uid,
+                  ),
+                  icon: const Icon(Icons.cancel_outlined, size: 20),
+                  label: const Text('Cancelar acuerdo'),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             if (estado == 'en_curso' && partActivo) ...[
+              BolaPuebloDialogs.bannerSinCancelacionEnCurso(context),
+              const SizedBox(height: 12),
+              if (soyClienteAsignado &&
+                  destinoLatBola != null &&
+                  destinoLonBola != null &&
+                  uidTaxista.trim().isNotEmpty) ...[
+                BolaClienteMapaConductorLive(
+                  viajeEspejoId: viajeEspejoIdBola,
+                  uidTaxista: uidTaxista,
+                  refLat: destinoLatBola,
+                  refLon: destinoLonBola,
+                  refNombre: destino.isEmpty ? null : destino,
+                  mapaHaciaDestino: true,
+                ),
+                const SizedBox(height: 14),
+              ],
               BolaPuebloContrapartePanel(
                 bolaId: docId,
                 counterpartyUid: soyClienteAsignado ? uidTaxista : uidCliente,
@@ -3568,21 +3931,81 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
               const SizedBox(height: 10),
             ],
             if (partActivo && estado == 'en_curso') ...[
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: BolaPuebloUi.filledPrimary,
-                  onPressed: () =>
-                      BolaPuebloDialogs.confirmarFinalizacionDialog(
-                          context, docId, user.uid),
-                  icon: const Icon(Icons.flag_rounded, size: 22),
-                  label: Text(
-                    soyTaxistaAsignado
-                        ? 'Confirmar llegada al destino'
-                        : 'Confirmar que llegamos',
+              if (viajeEspejoIdBola.isNotEmpty) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: fgMuted.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(BolaPuebloUi.radiusSmall),
+                    border: Border.all(
+                      color: BolaPuebloTheme.accent.withValues(alpha: 0.45),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Viaje vinculado al pool RAI',
+                        style: TextStyle(
+                          color: fg,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Finalizá, factura y comisión (efectivo/transferencia) desde '
+                        '«Mi viaje en curso», igual que un taxi estándar.',
+                        style: TextStyle(
+                          color: fgMuted,
+                          fontSize: 13,
+                          height: 1.4,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          style: BolaPuebloUi.filledPrimary,
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => soyTaxistaAsignado
+                                    ? const ViajeEnCursoTaxista()
+                                    : const ViajeEnCursoCliente(),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.local_taxi_rounded, size: 22),
+                          label: Text(
+                            soyTaxistaAsignado
+                                ? 'Abrir Mi viaje en curso (conductor)'
+                                : 'Abrir Mi viaje en curso',
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
+              ] else ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: BolaPuebloUi.filledPrimary,
+                    onPressed: () =>
+                        BolaPuebloDialogs.confirmarFinalizacionDialog(
+                            context, docId, user.uid),
+                    icon: const Icon(Icons.flag_rounded, size: 22),
+                    label: Text(
+                      soyTaxistaAsignado
+                          ? 'Confirmar llegada al destino'
+                          : 'Confirmar que llegamos',
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
             ],
             if ((estado == 'acordada' || estado == 'en_curso') &&
@@ -3642,7 +4065,7 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
                               context,
                               icon: Icons.percent_rounded,
                               text:
-                                  'Comisión RAI (10%): RD\$${comisionRd.toStringAsFixed(2)}',
+                                  'Comisión RAI (${pctComisionLabel.toStringAsFixed(pctComisionLabel == pctComisionLabel.roundToDouble() ? 0 : 1)}%): RD\$${comisionRd.toStringAsFixed(2)}',
                             ),
                             BolaPuebloUi.metaRow(
                               context,

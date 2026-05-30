@@ -1,14 +1,15 @@
 // lib/servicios/pay_config.dart
 //
-// Datos bancarios en release: opcionalmente por --dart-define (CI) sin editar código:
+// Datos bancarios de depósito a RAI: [RecargaBancariaConfig] es la fuente única.
+// Override opcional en CI con --dart-define=RAI_PAY_* (si el define está vacío, usa recarga).
+//
 //   --dart-define=RAI_PAY_BANK_NAME=...
 //   --dart-define=RAI_PAY_ACCOUNT_TYPE=...
 //   --dart-define=RAI_PAY_ACCOUNT_NUMBER=...
 //   --dart-define=RAI_PAY_ACCOUNT_HOLDER=...
 //   --dart-define=RAI_PAY_RNC=...
-//
-// Valores por defecto: los que ya usaba la app; verifica que coincidan con la cuenta real
-// operativa antes de publicar en Play Console.
+
+import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
 
 class PayConfig {
   /// Cuando la pasarela de tarjeta esté lista, pon `true` y aparecerá "Tarjeta".
@@ -22,26 +23,24 @@ class PayConfig {
 
   static const metodos = ['Transferencia', 'Efectivo'];
 
-  static const String bankName = String.fromEnvironment(
-    'RAI_PAY_BANK_NAME',
-    defaultValue: 'Banco Popular Dominicano',
-  );
-  static const String accountType = String.fromEnvironment(
-    'RAI_PAY_ACCOUNT_TYPE',
-    defaultValue: 'Cuenta Corriente',
-  );
-  static const String accountNumber = String.fromEnvironment(
-    'RAI_PAY_ACCOUNT_NUMBER',
-    defaultValue: '789-123456-7',
-  );
-  static const String accountHolder = String.fromEnvironment(
-    'RAI_PAY_ACCOUNT_HOLDER',
-    defaultValue: 'Open ASK Service SRL',
-  );
-  static const String rnc = String.fromEnvironment(
-    'RAI_PAY_RNC',
-    defaultValue: '1320-11767',
-  );
+  static String _fromEnvOr(String key, String fallback) {
+    final v = String.fromEnvironment(key);
+    return v.trim().isNotEmpty ? v.trim() : fallback;
+  }
+
+  static String get bankName =>
+      _fromEnvOr('RAI_PAY_BANK_NAME', RecargaBancariaConfig.banco);
+
+  static String get accountType =>
+      _fromEnvOr('RAI_PAY_ACCOUNT_TYPE', RecargaBancariaConfig.tipoCuenta);
+
+  static String get accountNumber =>
+      _fromEnvOr('RAI_PAY_ACCOUNT_NUMBER', RecargaBancariaConfig.numeroCuenta);
+
+  static String get accountHolder =>
+      _fromEnvOr('RAI_PAY_ACCOUNT_HOLDER', RecargaBancariaConfig.titular);
+
+  static String get rnc => _fromEnvOr('RAI_PAY_RNC', RecargaBancariaConfig.rnc);
 
   static const reservaMinutos = 10;
 

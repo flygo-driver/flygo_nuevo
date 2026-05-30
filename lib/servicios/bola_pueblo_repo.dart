@@ -11,7 +11,8 @@ class BolaPuebloRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
   static CollectionReference<Map<String, dynamic>> get _col =>
       _db.collection('bolas_pueblo');
-  static const Duration vigenciaCodigoInicio = Duration(minutes: 20);
+  /// Tras acordar la bola puede pasar mucho tiempo hasta pickup + PIN; 20 min era demasiado corto.
+  static const Duration vigenciaCodigoInicio = Duration(hours: 24);
   static const double baseBolaFactor = 0.50; // 50% de tarifa normal estimada.
   static const double ofertaMinFactorSobreBase = 0.80; // 80% de la base bola.
   static const double ofertaMaxFactorSobreNormal =
@@ -423,6 +424,15 @@ class BolaPuebloRepo {
     });
   }
 
+  /// ¿Se puede cancelar el acuerdo? (solo acordada, sin abordo ni PIN / en curso).
+  static bool puedeCancelarAcuerdo(Map<String, dynamic> d) {
+    final estado = (d['estado'] ?? '').toString().trim();
+    if (estado != 'acordada') return false;
+    if (d['pickupConfirmadoTaxista'] == true) return false;
+    if (d['codigoVerificado'] == true) return false;
+    return true;
+  }
+
   /// Cliente o taxista: cancelar el acuerdo antes de confirmar abordo (sin viaje en curso).
   static Future<void> cancelarAcuerdoAntesDeAbordo({
     required String bolaId,
@@ -432,31 +442,76 @@ class BolaPuebloRepo {
     final s = await ref.get();
     if (!s.exists) throw Exception('Publicación no encontrada');
     final d = s.data() ?? <String, dynamic>{};
+    if (!puedeCancelarAcuerdo(d)) {
+      final estado = (d['estado'] ?? '').toString();
+      if (estado == 'en_curso') {
+        throw Exception(
+            'El traslado ya va hacia el destino. No se puede cancelar.');
+      }
+      if (d['pickupConfirmadoTaxista'] == true) {
+        throw Exception(
+            'Ya se registró el abordo. No se puede cancelar.');
+      }
+      if (d['codigoVerificado'] == true) {
+        throw Exception('El traslado ya fue iniciado.');
+      }
+      throw Exception(
+          'Solo se puede cancelar un acuerdo pendiente de iniciar.');
+    }
     final actor = uidActor.trim();
     final createdBy = (d['createdByUid'] ?? '').toString();
     final uidTx = (d['uidTaxista'] ?? '').toString();
     final uidCli = (d['uidCliente'] ?? '').toString();
-    final estado = (d['estado'] ?? '').toString();
-    if (estado != 'acordada') {
-      throw Exception(
-          'Solo se puede cancelar un acuerdo pendiente de iniciar.');
-    }
-    if (d['pickupConfirmadoTaxista'] == true) {
-      throw Exception(
-          'Ya se registró el abordo. No se puede cancelar desde aquí.');
-    }
-    if (d['codigoVerificado'] == true) {
-      throw Exception('El traslado ya fue iniciado.');
-    }
     if (actor != createdBy && actor != uidTx && actor != uidCli) {
       throw Exception('No podés cancelar este acuerdo.');
     }
+
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('cancelarAcuerdoBolaPueblo');
+      await callable.call(<String, dynamic>{'bolaId': bolaId.trim()});
+      return;
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (e.code == 'unavailable' || e.code == 'deadline-exceeded') {
+        debugPrint(
+          '[BOLA_AHORRO] cancelarAcuerdo CF no disponible (${e.code}), fallback cliente',
+        );
+      } else {
+        throw Exception(msg.isNotEmpty ? msg : e.code);
+      }
+    } catch (e) {
+      debugPrint('[BOLA_AHORRO] cancelarAcuerdo CF error $e, fallback cliente');
+    }
+
     await ref.set(<String, dynamic>{
       'estado': 'cancelada',
       'estadoViajeBola': 'cancelada',
       'canceladaEn': FieldValue.serverTimestamp(),
+      'canceladaPor': actor,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    final String viajeEspejoId = (d['viajeEspejoId'] ?? '').toString().trim();
+    if (viajeEspejoId.isNotEmpty) {
+      try {
+        if (actor == uidTx) {
+          await ViajesRepo.cancelarPorTaxista(
+            viajeId: viajeEspejoId,
+            uidTaxista: uidTx,
+          );
+        } else if (actor == uidCli) {
+          await ViajesRepo.cancelarPorCliente(
+            viajeId: viajeEspejoId,
+            uidCliente: uidCli,
+          );
+        }
+      } catch (e, st) {
+        debugPrint(
+          '[BOLA_AHORRO] cancelar espejo tras bola falló viaje=$viajeEspejoId $e $st',
+        );
+      }
+    }
   }
 
   /// Taxista asignado: confirma en Firestore que el cliente ya subió (paso 2 del flujo).
@@ -477,11 +532,79 @@ class BolaPuebloRepo {
       throw Exception(
           'Solo aplica mientras el acuerdo está pendiente de iniciar');
     }
-    await ref.set(<String, dynamic>{
-      'pickupConfirmadoTaxista': true,
-      'pickupConfirmadoTaxistaEn': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final String viajeEspejoId = (d['viajeEspejoId'] ?? '').toString().trim();
+    debugPrint(
+      '[BOLA_AHORRO] marcarPickupClienteAbordo bola=$bolaId espejo=$viajeEspejoId '
+      'estadoBola=$estado uidTaxistaDoc=$uidTx callerUid=${uidTaxista.trim()}',
+    );
+
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('confirmarPickupClienteAbordoBola');
+      await callable.call(<String, dynamic>{'bolaId': bolaId.trim()});
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) {
+        throw Exception(msg);
+      }
+      throw Exception(e.code);
+    }
+
+    if (viajeEspejoId.isNotEmpty) {
+      try {
+        final vs = await _db.collection('viajes').doc(viajeEspejoId).get();
+        final vd = vs.data();
+        debugPrint(
+          '[BOLA_AHORRO] viaje espejo antes sync: existe=${vs.exists} '
+          'estado=${vd?['estado']} uidTaxistaViaje=${vd?['uidTaxista']}',
+        );
+      } catch (e, st) {
+        debugPrint('[BOLA_AHORRO] lectura espejo para log falló: $e $st');
+      }
+      try {
+        await ViajesRepo.marcarEnCaminoPickup(
+          viajeId: viajeEspejoId,
+          uidTaxista: uidTaxista.trim(),
+        );
+      } catch (e, st) {
+        debugPrint(
+          '[BOLA_AHORRO] marcarEnCaminoPickup espejo (ignorado si ya avanzó): $e $st',
+        );
+      }
+      try {
+        await ViajesRepo.marcarClienteAbordo(
+          viajeId: viajeEspejoId,
+          uidTaxista: uidTaxista.trim(),
+        );
+      } catch (e, st) {
+        debugPrint(
+          '[BOLA_AHORRO] marcarClienteAbordo espejo (ignorado si ya a bordo): $e $st',
+        );
+      }
+    }
+  }
+
+  /// Tras abrir navegación al pickup: alinea `en_camino_pickup` en el viaje espejo si aplica.
+  static Future<void> syncViajeEspejoCaminoPickupSiAplica({
+    required String bolaId,
+    required String uidTaxista,
+  }) async {
+    final ref = _col.doc(bolaId.trim());
+    final s = await ref.get();
+    if (!s.exists) return;
+    final d = s.data() ?? <String, dynamic>{};
+    final String viajeEspejoId = (d['viajeEspejoId'] ?? '').toString().trim();
+    if (viajeEspejoId.isEmpty) return;
+    try {
+      await ViajesRepo.marcarEnCaminoPickup(
+        viajeId: viajeEspejoId,
+        uidTaxista: uidTaxista.trim(),
+      );
+    } catch (e) {
+      debugPrint(
+        '[BOLA_AHORRO] syncViajeEspejoCaminoPickupSiAplica (ignorado): $e',
+      );
+    }
   }
 
   static Future<void> marcarEnCurso({
@@ -497,7 +620,9 @@ class BolaPuebloRepo {
     final String estado = (d['estado'] ?? '').toString();
     final String codigo = (d['codigoVerificacionBola'] ?? '').toString().trim();
     final Timestamp? codigoTs = d['codigoGeneradoEn'] as Timestamp?;
-    final entered = codigoIngresado.trim();
+    final enteredDigits =
+        codigoIngresado.replaceAll(RegExp(r'\D'), '');
+    final codigoDigits = codigo.replaceAll(RegExp(r'\D'), '');
     if (uidTx.isEmpty) throw Exception('No hay taxista definido en el acuerdo');
     if (uidTx != uidActor.trim()) {
       throw Exception('Solo el taxista puede iniciar');
@@ -520,9 +645,19 @@ class BolaPuebloRepo {
       throw Exception(
           'Código vencido. Reacuerda la bola para generar uno nuevo.');
     }
-    if (entered.isEmpty || entered != codigo) {
+    if (enteredDigits.isEmpty || enteredDigits != codigoDigits) {
       throw Exception('Código incorrecto. Pide el código al cliente.');
     }
+
+    final String viajeEspejoId = (d['viajeEspejoId'] ?? '').toString().trim();
+    if (viajeEspejoId.isNotEmpty) {
+      await ViajesRepo.iniciarViaje(
+        viajeId: viajeEspejoId,
+        uidTaxista: uidActor.trim(),
+        pinVerificacion: enteredDigits,
+      );
+    }
+
     await ref.set(<String, dynamic>{
       'estado': 'en_curso',
       'estadoViajeBola': 'en_curso',
@@ -560,6 +695,44 @@ class BolaPuebloRepo {
         'bolaId': bolaId.trim(),
         'metodoPago': m,
       });
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) throw Exception(msg);
+      throw Exception(e.code);
+    }
+  }
+
+  /// Cliente: reporta comprobante de transferencia tras cierre (CF servidor).
+  static Future<void> reportarTransferenciaCliente({
+    required String bolaId,
+    required String comprobanteUrl,
+  }) async {
+    if (bolaId.trim().isEmpty || comprobanteUrl.trim().isEmpty) {
+      throw Exception('Datos inválidos');
+    }
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('reportarTransferenciaBolaClienteSeguro');
+      await callable.call(<String, dynamic>{
+        'bolaId': bolaId.trim(),
+        'comprobanteUrl': comprobanteUrl.trim(),
+      });
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) throw Exception(msg);
+      throw Exception(e.code);
+    }
+  }
+
+  /// Taxista: confirma que recibió la transferencia del pasajero.
+  static Future<void> confirmarTransferenciaPorTaxista({
+    required String bolaId,
+  }) async {
+    if (bolaId.trim().isEmpty) throw Exception('Publicación inválida');
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('confirmarTransferenciaBolaTaxistaSeguro');
+      await callable.call(<String, dynamic>{'bolaId': bolaId.trim()});
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
       if (msg.isNotEmpty) throw Exception(msg);

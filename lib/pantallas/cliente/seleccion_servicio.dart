@@ -1,7 +1,7 @@
-// lib/pantallas/cliente/seleccion_servicio.dart
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
 import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
@@ -10,11 +10,55 @@ import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
-import 'package:flygo_nuevo/widgets/turismo_destinos_sheet_host.dart';
+import 'package:flygo_nuevo/widgets/auto_trip_router.dart';
+import 'package:flygo_nuevo/widgets/promo_taxi_pista_animation.dart';
 import 'package:flygo_nuevo/widgets/motor_servicio_animation.dart';
 import 'package:flygo_nuevo/widgets/giras_cupos_animation.dart';
 import 'package:flygo_nuevo/widgets/turismo_servicio_animation.dart';
-import 'package:flygo_nuevo/widgets/promo_taxi_pista_animation.dart';
+import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
+
+/// Colores del inicio derivados del fondo real (Apariencia + claro/oscuro).
+class _HomePalette {
+  const _HomePalette({required this.scaffold, required this.card});
+
+  final Color scaffold;
+  final Color card;
+
+  factory _HomePalette.of(BuildContext context) {
+    final Color scaffold = Theme.of(context).scaffoldBackgroundColor;
+    return _HomePalette(
+      scaffold: scaffold,
+      card: CustomThemeService.cardOn(scaffold),
+    );
+  }
+
+  bool get scaffoldIsDark =>
+      ThemeData.estimateBrightnessForColor(scaffold) == Brightness.dark;
+
+  bool get cardIsDark =>
+      ThemeData.estimateBrightnessForColor(card) == Brightness.dark;
+
+  Color get textOnScaffold => CustomThemeService.textOn(scaffold);
+  Color get textMutedScaffold => CustomThemeService.textMutedOn(scaffold);
+  Color get textOnCard => CustomThemeService.textOn(card);
+  Color get textMutedCard => CustomThemeService.textMutedOn(card);
+  Color get borderScaffold => CustomThemeService.borderOn(scaffold);
+  Color get borderCard => CustomThemeService.borderOn(card);
+
+  /// Campo «¿A dónde vas?» y fondo del segmento no seleccionado.
+  Color get inputFill => cardIsDark
+      ? Colors.white.withValues(alpha: 0.07)
+      : CustomThemeService.darken(card, 0.035);
+
+  Color get cardShadow =>
+      Colors.black.withValues(alpha: cardIsDark ? 0.32 : 0.08);
+
+  Color get accentGreen =>
+      scaffoldIsDark ? const Color(0xFF34D399) : const Color(0xFF059669);
+
+  Color get conductoresAccent =>
+      scaffoldIsDark ? const Color(0xFFFFB74D) : const Color(0xFFE8590C);
+}
 
 class SeleccionServicio extends StatelessWidget {
   const SeleccionServicio({super.key, this.bannerEncabezado});
@@ -37,18 +81,14 @@ class SeleccionServicio extends StatelessWidget {
     // El fondo viene del Theme global (que el usuario puede personalizar
     // desde Apariencia). Los textos se calculan automáticamente por contraste
     // WCAG sobre ese fondo, así sea blanco, negro, rojo, amarillo, etc.
-    final Color bgScaffold = Theme.of(context).scaffoldBackgroundColor;
+    final _HomePalette palette = _HomePalette.of(context);
+    final Color bgScaffold = palette.scaffold;
     final Color appBarBg = bgScaffold;
-    final bool isDarkBg =
-        ThemeData.estimateBrightnessForColor(bgScaffold) == Brightness.dark;
-    final Color textPrimary = CustomThemeService.textOn(bgScaffold);
-    final Color textMuted = CustomThemeService.textMutedOn(bgScaffold);
-    final Color sectionLabel = CustomThemeService.textSubtleOn(bgScaffold);
-    final Color promoBorder = CustomThemeService.borderOn(bgScaffold);
-    final Color promoBg = CustomThemeService.cardOn(bgScaffold);
-    final Color verConductoresColor =
-        isDarkBg ? const Color(0xFFFFB74D) : const Color(0xFFE8590C);
-    final Color footerColor = CustomThemeService.textSubtleOn(bgScaffold);
+    final Color textPrimary = palette.textOnScaffold;
+    final Color textMuted = palette.textMutedScaffold;
+    final Color promoBorder = palette.borderScaffold;
+    final Color promoBg = palette.card;
+    final Color verConductoresColor = palette.conductoresAccent;
 
     return Scaffold(
       backgroundColor: bgScaffold,
@@ -56,23 +96,10 @@ class SeleccionServicio extends StatelessWidget {
         backgroundColor: appBarBg,
         surfaceTintColor: Colors.transparent,
         automaticallyImplyLeading: false,
-        leading: const SizedBox(width: 48),
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Spacer(),
-            SizedBox(
-              height: 40,
-              child: Image.asset(
-                'assets/icon/logo_rai_vertical.png',
-                fit: BoxFit.contain,
-              ),
-            ),
-            const Spacer(),
-          ],
-        ),
-        centerTitle: false,
+        centerTitle: true,
+        toolbarHeight: 56,
         elevation: 0,
+        title: const RaiHeaderLogo(height: 38),
       ),
       body: Stack(
         fit: StackFit.expand,
@@ -101,22 +128,26 @@ class SeleccionServicio extends StatelessWidget {
                         children: [
                           Text(
                             '¿A dónde quieres ir?',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: textPrimary,
-                              fontSize: 26,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.6,
-                              height: 1.15,
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.7,
+                              height: 1.12,
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 8),
                           Text(
-                            'Pide ahora, programados u otras formas de viajar',
+                            'Toca abajo para pedir tu viaje en minutos',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: textMuted,
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
-                              height: 1.3,
+                              height: 1.35,
                             ),
                           ),
                         ],
@@ -125,8 +156,8 @@ class SeleccionServicio extends StatelessWidget {
                   ),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
-                      child: _HomeWhereToRow(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                      child: _HomePrimaryTripBlock(
                         onPedirAhora: () {
                           Navigator.push(
                             context,
@@ -150,7 +181,7 @@ class SeleccionServicio extends StatelessWidget {
                   ),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -159,24 +190,12 @@ class SeleccionServicio extends StatelessWidget {
                                 Navigator.of(context, rootNavigator: true)
                                     .pushNamed(rutaBolaPueblo),
                           ),
-                          const SizedBox(height: 8),
-                          TextButton(
-                            style: TextButton.styleFrom(
-                              minimumSize: const Size.fromHeight(44),
-                              tapTargetSize: MaterialTapTargetSize.padded,
-                            ),
-                            onPressed: () => NavigationService.push(
+                          const SizedBox(height: 10),
+                          _HomeConductoresTile(
+                            onTap: () => NavigationService.push(
                               const BolaConductoresEnRutaClientePage(),
                             ),
-                            child: Text(
-                              'Ver conductores en ruta (desde dónde van)',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: verConductoresColor,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                              ),
-                            ),
+                            accentColor: verConductoresColor,
                           ),
                         ],
                       ),
@@ -184,72 +203,53 @@ class SeleccionServicio extends StatelessWidget {
                   ),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
-                      child: Text(
-                        'Más formas de viajar',
-                        style: TextStyle(
-                          color: sectionLabel,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.5,
-                        ),
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Más opciones',
+                              style: TextStyle(
+                                color: textPrimary,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.3,
+                              ),
+                            ),
+                          ),
+                          Icon(Icons.swipe_rounded,
+                              size: 18, color: textMuted),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Desliza',
+                            style: TextStyle(
+                              color: textMuted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                   SliverToBoxAdapter(
                     child: Builder(
                       builder: (context) {
-                        final h = MediaQuery.sizeOf(context).height;
-                        final stripH = (h * 0.26).clamp(196.0, 268.0);
+                        final double h = MediaQuery.sizeOf(context).height;
+                        final double stripH = (h * 0.26).clamp(196.0, 268.0);
+                        const double cardW = 168.0;
                         return SizedBox(
                           height: stripH,
                           child: ListView(
                             scrollDirection: Axis.horizontal,
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             children: [
-                              _buildGiantServiceCard(
-                                context,
-                                id: 'programar',
-                                cardWidth: 162,
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFF2979FF),
-                                    Color(0xFF0D47A1)
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                icon: Icons.calendar_month,
-                                iconSize: 30,
-                                title: 'PROGRAMAR\nVIAJE',
-                                titleSize: 16,
-                                subtitle: 'Elige fecha y hora',
-                                price: 'ANTICIPADO',
-                                features: const [
-                                  '📅 Hasta 7 días',
-                                  '🕐 Recordatorio',
-                                ],
-                                badge: const Icon(Icons.event_available,
-                                    color: Colors.white, size: 16),
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const ProgramarViaje(
-                                          modoAhora: false),
-                                    ),
-                                  );
-                                },
-                              ),
-                              const SizedBox(width: 10),
-                              _buildGiantServiceCard(
-                                context,
-                                id: 'multi',
-                                cardWidth: 162,
+                              _HomeGiantServiceCard(
+                                cardWidth: cardW,
                                 gradient: const LinearGradient(
                                   colors: [
                                     Color(0xFFFF5252),
-                                    Color(0xFFD32F2F)
+                                    Color(0xFFD32F2F),
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
@@ -277,14 +277,12 @@ class SeleccionServicio extends StatelessWidget {
                                 },
                               ),
                               const SizedBox(width: 10),
-                              _buildGiantServiceCard(
-                                context,
-                                id: 'motor',
-                                cardWidth: 162,
+                              _HomeGiantServiceCard(
+                                cardWidth: cardW,
                                 gradient: const LinearGradient(
                                   colors: [
                                     Color(0xFFFF9100),
-                                    Color(0xFFE65100)
+                                    Color(0xFFE65100),
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
@@ -315,14 +313,12 @@ class SeleccionServicio extends StatelessWidget {
                                 },
                               ),
                               const SizedBox(width: 10),
-                              _buildGiantServiceCard(
-                                context,
-                                id: 'cupos',
-                                cardWidth: 162,
+                              _HomeGiantServiceCard(
+                                cardWidth: cardW,
                                 gradient: const LinearGradient(
                                   colors: [
                                     Color(0xFF00ACC1),
-                                    Color(0xFF006064)
+                                    Color(0xFF006064),
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
@@ -351,14 +347,12 @@ class SeleccionServicio extends StatelessWidget {
                                 },
                               ),
                               const SizedBox(width: 10),
-                              _buildGiantServiceCard(
-                                context,
-                                id: 'turismo',
-                                cardWidth: 162,
+                              _HomeGiantServiceCard(
+                                cardWidth: cardW,
                                 gradient: const LinearGradient(
                                   colors: [
                                     Color(0xFFAA00FF),
-                                    Color(0xFF4A0072)
+                                    Color(0xFF4A0072),
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
@@ -376,9 +370,7 @@ class SeleccionServicio extends StatelessWidget {
                                 ],
                                 badge: const Icon(Icons.airplanemode_active,
                                     color: Colors.white, size: 16),
-                                onTap: () {
-                                  _mostrarSelectorDestinos(context);
-                                },
+                                onTap: () => _abrirTurismoDesdeInicio(context),
                               ),
                             ],
                           ),
@@ -420,7 +412,7 @@ class SeleccionServicio extends StatelessWidget {
                     'by Rai Driver',
                     style: TextStyle(
                       fontSize: 11,
-                      color: footerColor,
+                      color: textMuted,
                       letterSpacing: 1.35,
                       fontWeight: FontWeight.w400,
                     ),
@@ -434,55 +426,327 @@ class SeleccionServicio extends StatelessWidget {
     );
   }
 
-  /// Turismo: abre el selector al toque; la ubicación se resuelve dentro del sheet.
-  void _mostrarSelectorDestinos(BuildContext context) {
+  /// Turismo: pantalla de programar + selector; un toque en destino cotiza y rellena.
+  void _abrirTurismoDesdeInicio(BuildContext context) {
     if (!context.mounted) return;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (modalContext) => TurismoDestinosSheetHost(
-        tipoVehiculoInicial: 'carro',
-        onDestinoSeleccionado: (seleccion) {
-          if (!modalContext.mounted) return;
-          Navigator.push(
-            modalContext,
-            MaterialPageRoute(
-              builder: (_) => ProgramarViaje(
-                modoAhora: true,
-                tipoServicio: 'turismo',
-                subtipoTurismo: seleccion.lugar.subtipo,
-                catalogoTurismoId: seleccion.lugar.id,
-                destinoPrecargado: seleccion.lugar.nombre,
-                latDestinoPrecargado: seleccion.lugar.lat,
-                lonDestinoPrecargado: seleccion.lugar.lon,
-              ),
-            ),
-          );
-        },
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const ClienteTripRouter(
+          child: ProgramarViaje(
+            modoAhora: true,
+            tipoServicio: 'turismo',
+          ),
+        ),
       ),
     );
   }
+}
 
-  Widget _buildGiantServiceCard(
-    BuildContext context, {
-    required String id,
-    double cardWidth = 218,
-    required Gradient gradient,
-    required IconData icon,
-    required double iconSize,
-    Widget? customHeader,
-    required String title,
-    required double titleSize,
-    required String subtitle,
-    required String price,
-    required List<String> features,
-    required Widget badge,
-    required VoidCallback onTap,
-  }) {
+/// Bloque superior: selector Pide ahora / Programar + destino + CTA.
+class _HomePrimaryTripBlock extends StatefulWidget {
+  const _HomePrimaryTripBlock({
+    required this.onPedirAhora,
+    required this.onProgramar,
+  });
+
+  final VoidCallback onPedirAhora;
+  final VoidCallback onProgramar;
+
+  @override
+  State<_HomePrimaryTripBlock> createState() => _HomePrimaryTripBlockState();
+}
+
+class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
+  bool _programar = false;
+
+  void _continuar() {
+    if (_programar) {
+      widget.onProgramar();
+    } else {
+      widget.onPedirAhora();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final _HomePalette p = _HomePalette.of(context);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: p.borderCard),
+        boxShadow: [
+          BoxShadow(
+            color: p.cardShadow,
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final bool narrow = constraints.maxWidth < 340;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SegmentedButton<bool>(
+                  segments: [
+                    ButtonSegment<bool>(
+                      value: false,
+                      icon: Icon(Icons.bolt_rounded, size: narrow ? 18 : 20),
+                      label: Text(
+                        'Pide ahora',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: narrow ? 13 : 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    ButtonSegment<bool>(
+                      value: true,
+                      icon: Icon(Icons.event_rounded, size: narrow ? 18 : 20),
+                      label: Text(
+                        'Programar',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: narrow ? 13 : 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                  selected: {_programar},
+                  showSelectedIcon: !narrow,
+                  emptySelectionAllowed: false,
+                  onSelectionChanged: (selection) {
+                    setState(() => _programar = selection.first);
+                  },
+                  style: SegmentedButton.styleFrom(
+                    selectedBackgroundColor: p.accentGreen,
+                    selectedForegroundColor: Colors.white,
+                    backgroundColor: p.inputFill,
+                    foregroundColor: p.textOnCard,
+                    side: BorderSide(color: p.borderCard),
+                    padding: EdgeInsets.symmetric(
+                      vertical: narrow ? 8 : 12,
+                      horizontal: narrow ? 2 : 6,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    visualDensity: narrow
+                        ? VisualDensity.compact
+                        : VisualDensity.standard,
+                    tapTargetSize: MaterialTapTargetSize.padded,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _continuar,
+                    borderRadius: BorderRadius.circular(14),
+                    child: Ink(
+                      decoration: BoxDecoration(
+                        color: p.inputFill,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: p.borderCard),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 16,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.search_rounded,
+                                color: p.textMutedCard, size: 22),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                '¿A dónde vas?',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: p.textMutedCard,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            Icon(Icons.arrow_forward_ios_rounded,
+                                size: 14, color: p.textMutedCard),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                FilledButton(
+                  onPressed: _continuar,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: p.accentGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16,
+                      horizontal: 16,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _programar ? Icons.event_rounded : Icons.bolt_rounded,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          _programar
+                              ? 'Elegir fecha y destino'
+                              : 'Pedir viaje ahora',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// Tile compacto: conductores en ruta cerca del usuario.
+class _HomeConductoresTile extends StatelessWidget {
+  const _HomeConductoresTile({
+    required this.onTap,
+    required this.accentColor,
+  });
+
+  final VoidCallback onTap;
+  final Color accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final _HomePalette p = _HomePalette.of(context);
+
+    return Material(
+      color: Colors.transparent,
+      child: Ink(
+        decoration: BoxDecoration(
+          color: p.card,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: p.borderCard),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: accentColor
+                        .withValues(alpha: p.cardIsDark ? 0.22 : 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.directions_car_filled_rounded,
+                      color: accentColor, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Conductores en ruta',
+                        style: TextStyle(
+                          color: p.textOnCard,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Ver quién pasa cerca de ti',
+                        style: TextStyle(
+                          color: p.textMutedCard,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, color: p.textMutedCard),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tarjeta grande con gradiente para «Más opciones» (motor, turismo, etc.).
+class _HomeGiantServiceCard extends StatelessWidget {
+  const _HomeGiantServiceCard({
+    required this.cardWidth,
+    required this.gradient,
+    required this.icon,
+    required this.iconSize,
+    required this.title,
+    required this.titleSize,
+    required this.subtitle,
+    required this.price,
+    required this.features,
+    required this.badge,
+    required this.onTap,
+    this.customHeader,
+  });
+
+  final double cardWidth;
+  final Gradient gradient;
+  final IconData icon;
+  final double iconSize;
+  final Widget? customHeader;
+  final String title;
+  final double titleSize;
+  final String subtitle;
+  final String price;
+  final List<String> features;
+  final Widget badge;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
     final bool compact = cardWidth < 200;
     final double radius = compact ? 16.0 : 20.0;
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool isDarkBg = _HomePalette.of(context).scaffoldIsDark;
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -492,8 +756,7 @@ class SeleccionServicio extends StatelessWidget {
           borderRadius: BorderRadius.circular(radius),
           boxShadow: [
             BoxShadow(
-              color: Colors.black
-                  .withValues(alpha: isDark ? 0.32 : 0.16),
+              color: Colors.black.withValues(alpha: isDarkBg ? 0.32 : 0.16),
               blurRadius: compact ? 10 : 14,
               spreadRadius: 0,
               offset: Offset(0, compact ? 4 : 6),
@@ -506,8 +769,8 @@ class SeleccionServicio extends StatelessWidget {
             Positioned.fill(
               child: CustomPaint(
                 painter: _PatternPainter(
-                  color:
-                      Colors.white.withValues(alpha: compact ? 0.035 : 0.055),
+                  color: Colors.white
+                      .withValues(alpha: compact ? 0.035 : 0.055),
                   step: compact ? 30 : 24,
                   strokeWidth: compact ? 0.55 : 0.75,
                 ),
@@ -536,8 +799,8 @@ class SeleccionServicio extends StatelessWidget {
                 builder: (context, constraints) {
                   final double headerH = (constraints.maxHeight - 4)
                       .clamp(0.0, compact ? 52.0 : 86.0);
-                  final double headerDesignW = compact ? 140 : 200;
-                  final double headerDesignH = compact ? 52 : 86;
+                  const double headerDesignW = 140;
+                  const double headerDesignH = 52;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -564,8 +827,8 @@ class SeleccionServicio extends StatelessWidget {
                                       child: Icon(
                                         icon,
                                         color: Colors.white,
-                                        size:
-                                            math.min(iconSize, headerH * 0.85),
+                                        size: math.min(
+                                            iconSize, headerH * 0.85),
                                       ),
                                     ),
                                   ),
@@ -586,8 +849,16 @@ class SeleccionServicio extends StatelessWidget {
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: titleSize,
-                                  fontWeight: FontWeight.w800,
+                                  fontWeight: FontWeight.w900,
                                   height: 1.02,
+                                  letterSpacing: -0.2,
+                                  shadows: const [
+                                    Shadow(
+                                      offset: Offset(0, 1),
+                                      blurRadius: 4,
+                                      color: Color(0x59000000),
+                                    ),
+                                  ],
                                 ),
                               ),
                               const SizedBox(height: 5),
@@ -596,17 +867,25 @@ class SeleccionServicio extends StatelessWidget {
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.88),
-                                  fontSize: compact ? 11 : 12.5,
-                                  fontWeight: FontWeight.w500,
+                                  color: Colors.white.withValues(alpha: 0.95),
+                                  fontSize: compact ? 11.5 : 13,
+                                  fontWeight: FontWeight.w600,
                                   height: 1.2,
+                                  shadows: const [
+                                    Shadow(
+                                      offset: Offset(0, 1),
+                                      blurRadius: 3,
+                                      color: Color(0x45000000),
+                                    ),
+                                  ],
                                 ),
                               ),
                               SizedBox(height: compact ? 6 : 8),
                               Container(
                                 padding: EdgeInsets.symmetric(
-                                    horizontal: compact ? 8 : 10,
-                                    vertical: compact ? 3 : 4),
+                                  horizontal: compact ? 8 : 10,
+                                  vertical: compact ? 3 : 4,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.white.withValues(alpha: 0.18),
                                   borderRadius: BorderRadius.circular(20),
@@ -615,8 +894,9 @@ class SeleccionServicio extends StatelessWidget {
                                   price,
                                   style: TextStyle(
                                     color: Colors.white,
-                                    fontSize: compact ? 9.5 : 11,
-                                    fontWeight: FontWeight.w700,
+                                    fontSize: compact ? 10 : 11.5,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.3,
                                   ),
                                 ),
                               ),
@@ -628,9 +908,12 @@ class SeleccionServicio extends StatelessWidget {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Icon(Icons.check,
-                                          color: Colors.white,
-                                          size: compact ? 11 : 13),
+                                      Icon(
+                                        Icons.check,
+                                        color: Colors.white
+                                            .withValues(alpha: 0.98),
+                                        size: compact ? 12 : 14,
+                                      ),
                                       SizedBox(width: compact ? 4 : 5),
                                       Expanded(
                                         child: Text(
@@ -639,9 +922,10 @@ class SeleccionServicio extends StatelessWidget {
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             color: Colors.white
-                                                .withValues(alpha: 0.88),
-                                            fontSize: compact ? 10 : 11,
-                                            height: 1.25,
+                                                .withValues(alpha: 0.96),
+                                            fontSize: compact ? 10.5 : 11.5,
+                                            fontWeight: FontWeight.w600,
+                                            height: 1.28,
                                           ),
                                         ),
                                       ),
@@ -659,288 +943,6 @@ class SeleccionServicio extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Pide ahora + Programados — tarjetas horizontales iguales. Soportan tema.
-class _HomeWhereToRow extends StatelessWidget {
-  const _HomeWhereToRow({
-    required this.onPedirAhora,
-    required this.onProgramar,
-  });
-
-  final VoidCallback onPedirAhora;
-  final VoidCallback onProgramar;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color titleColor = isDark ? Colors.white : const Color(0xFF101828);
-    final Color subtitleColor = isDark
-        ? Colors.white.withValues(alpha: 0.65)
-        : const Color(0xFF667085);
-
-    // Verde de marca para "Pide ahora" (acción primaria, debe destacar).
-    final Color greenSolid =
-        isDark ? const Color(0xFF22C55E) : const Color(0xFF10B981);
-    final Color greenCardBg =
-        isDark ? const Color(0xFF0F2117) : const Color(0xFFF0FDF4);
-    final Color greenCardBorder =
-        isDark ? const Color(0xFF22C55E) : const Color(0xFF34D399);
-
-    // Azul para "Programados" (acción secundaria con identidad propia).
-    final Color blueSolid =
-        isDark ? const Color(0xFF3B82F6) : const Color(0xFF2563EB);
-    final Color blueCardBg =
-        isDark ? const Color(0xFF0F1A2E) : const Color(0xFFEFF6FF);
-    final Color blueCardBorder =
-        isDark ? const Color(0xFF3B82F6) : const Color(0xFF60A5FA);
-
-    Widget card({
-      required VoidCallback onTap,
-      required IconData icon,
-      required Color iconSolidBg,
-      required Color cardBg,
-      required Color cardBorder,
-      required String title,
-      required String subtitle,
-    }) {
-      return Material(
-        color: Colors.transparent,
-        child: Ink(
-          decoration: BoxDecoration(
-            color: cardBg,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: cardBorder, width: 1.4),
-            boxShadow: <BoxShadow>[
-              BoxShadow(
-                color: iconSolidBg
-                    .withValues(alpha: isDark ? 0.18 : 0.14),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(16),
-            child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: iconSolidBg,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(icon, color: Colors.white, size: 22),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: titleColor,
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: subtitleColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    size: 20,
-                    color: iconSolidBg,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    final Widget pideAhoraCard = card(
-      onTap: onPedirAhora,
-      icon: Icons.bolt_rounded,
-      iconSolidBg: greenSolid,
-      cardBg: greenCardBg,
-      cardBorder: greenCardBorder,
-      title: 'Pide ahora',
-      subtitle: 'Llega en minutos',
-    );
-
-    final Widget programadosCard = card(
-      onTap: onProgramar,
-      icon: Icons.event_rounded,
-      iconSolidBg: blueSolid,
-      cardBg: blueCardBg,
-      cardBorder: blueCardBorder,
-      title: 'Programados',
-      subtitle: 'Elige fecha y hora',
-    );
-
-    return LayoutBuilder(
-      builder: (context, c) {
-        final bool narrow = c.maxWidth < 340;
-        if (narrow) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              pideAhoraCard,
-              const SizedBox(height: 10),
-              programadosCard,
-            ],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(child: pideAhoraCard),
-            const SizedBox(width: 12),
-            Expanded(child: programadosCard),
-          ],
-        );
-      },
-    );
-  }
-}
-
-/// Bola Ahorro: tarjeta destacada con fondo de color suave (naranja) y soporte tema.
-class _FeaturedBolaAhorroCard extends StatelessWidget {
-  const _FeaturedBolaAhorroCard({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final TextStyle titleWord = TextStyle(
-      color: isDark ? Colors.white : const Color(0xFF7C2D12),
-      fontSize: 17,
-      fontWeight: FontWeight.w800,
-      letterSpacing: -0.2,
-      height: 1.05,
-    );
-    final Color subtitleColor = isDark
-        ? Colors.white.withValues(alpha: 0.94)
-        : const Color(0xFF9A3412);
-    final Color chevronColor = isDark
-        ? Colors.white.withValues(alpha: 0.9)
-        : const Color(0xFFEA580C);
-    final BoxDecoration deco = isDark
-        ? BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                Color(0xFFFF8C00),
-                Color(0xFFFF6B35),
-                Color(0xFFE65100),
-              ],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.30),
-                blurRadius: 14,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          )
-        : BoxDecoration(
-            color: const Color(0xFFFFF4E6),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFFDBA74)),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFEA580C).withValues(alpha: 0.10),
-                blurRadius: 14,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          );
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          decoration: deco,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Wrap(
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 4,
-                        runSpacing: 2,
-                        children: [
-                          Text('Bola', style: titleWord),
-                          Image.asset(
-                            'assets/icon/logo_rai_vertical.png',
-                            height: 22,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.high,
-                          ),
-                          Text('Ahorro', style: titleWord),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Viajes compartidos hasta 50% más baratos',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: subtitleColor,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w500,
-                          height: 1.3,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: chevronColor,
-                  size: 26,
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );
@@ -977,5 +979,129 @@ class _PatternPainter extends CustomPainter {
     return oldDelegate.color != color ||
         oldDelegate.step != step ||
         oldDelegate.strokeWidth != strokeWidth;
+  }
+}
+
+/// Bola Ahorro: tarjeta destacada con contraste sobre cualquier fondo custom.
+class _FeaturedBolaAhorroCard extends StatelessWidget {
+  const _FeaturedBolaAhorroCard({required this.onTap});
+
+  final VoidCallback onTap;
+
+  static const Color _lightSurface = Color(0xFFFFF4E6);
+  static const Color _darkGradientMid = Color(0xFFFF6B35);
+
+  @override
+  Widget build(BuildContext context) {
+    final _HomePalette p = _HomePalette.of(context);
+    final bool useGradient = p.scaffoldIsDark;
+
+    final Color titleColor = useGradient
+        ? Colors.white
+        : CustomThemeService.textOn(_lightSurface);
+    final Color subtitleColor = useGradient
+        ? Colors.white.withValues(alpha: 0.95)
+        : CustomThemeService.textMutedOn(_lightSurface);
+    final Color chevronColor = useGradient
+        ? Colors.white.withValues(alpha: 0.95)
+        : CustomThemeService.textOn(_lightSurface);
+    final Color borderColor = useGradient
+        ? Colors.white.withValues(alpha: 0.22)
+        : CustomThemeService.borderOn(_lightSurface);
+
+    final BoxDecoration deco = useGradient
+        ? BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [
+                Color(0xFFFF8C00),
+                _darkGradientMid,
+                Color(0xFFE65100),
+              ],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: borderColor),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.30),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          )
+        : BoxDecoration(
+            color: _lightSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: borderColor),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFEA580C).withValues(alpha: 0.10),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          );
+
+    final TextStyle titleWord = TextStyle(
+      color: titleColor,
+      fontSize: 17,
+      fontWeight: FontWeight.w900,
+      letterSpacing: -0.2,
+      height: 1.05,
+    );
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          decoration: deco,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          Text('Bola', style: titleWord),
+                          const RaiHeaderLogoInline(height: 26),
+                          Text('Ahorro', style: titleWord),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Viajes compartidos hasta 50% más baratos',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: subtitleColor,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: chevronColor,
+                  size: 26,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

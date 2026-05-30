@@ -4,11 +4,39 @@ import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firesto
 
 import { syncTaxistaComisionTrasBola } from "./finance.js";
 import { ledgerComisionBolaPuebloCf } from "./taxista_prepago_ledger.js";
+import {
+  comisionCentsDesdePrecioCents,
+  getComisionViajePorcentajeCached,
+} from "./comision_viaje_pct.js";
 
-const comisionPct = 0.1;
+async function comisionDesdeMontoAcordado(montoAcordado: number): Promise<{
+  comisionPct: number;
+  comision: number;
+  gananciaNeta: number;
+  precioCents: number;
+  comisionCents: number;
+  gananciaCents: number;
+}> {
+  const pctLabel = await getComisionViajePorcentajeCached();
+  const comisionPct = pctLabel / 100;
+  const precioCents = Math.round(montoAcordado * 100);
+  const comisionCents = comisionCentsDesdePrecioCents(precioCents, pctLabel);
+  const comision = Number.parseFloat((comisionCents / 100).toFixed(2));
+  const gananciaCents = Math.max(0, precioCents - comisionCents);
+  const gananciaNeta = Number.parseFloat((gananciaCents / 100).toFixed(2));
+  return {
+    comisionPct,
+    comision,
+    gananciaNeta,
+    precioCents,
+    comisionCents,
+    gananciaCents,
+  };
+}
 
+/** Misma convención que `viajes.codigoVerificacion` en la app (6 dígitos). */
 function generarCodigoVerificacion(): string {
-  return String(randomInt(1000, 10000));
+  return String(randomInt(100000, 1000000));
 }
 
 function esRolTaxista(r: string): boolean {
@@ -120,8 +148,9 @@ export const aceptarOfertaBola = onCall(async (request) => {
     }
   }
 
-  const comision = Number.parseFloat((montoAcordado * comisionPct).toFixed(2));
-  const gananciaNeta = Number.parseFloat((montoAcordado - comision).toFixed(2));
+  const comisionCalc = await comisionDesdeMontoAcordado(montoAcordado);
+  const { comisionPct, comision, gananciaNeta, precioCents, comisionCents, gananciaCents } =
+    comisionCalc;
   const codigo = generarCodigoVerificacion();
 
   const ofertasSnap = await pubRef.collection("ofertas").get();
@@ -184,10 +213,6 @@ export const aceptarOfertaBola = onCall(async (request) => {
     const telefonoTx = String(ud.telefono ?? "").trim();
     const placaTx = String(ud.placa ?? "").trim();
 
-    const precioCents = Math.round(montoAcordado * 100);
-    const comisionCents = Math.round(comision * 100);
-    const gananciaCents = Math.round(gananciaNeta * 100);
-
     const viajePatch: Record<string, unknown> = {
       bolaNegociacionAbierta: false,
       uidTaxista,
@@ -206,6 +231,8 @@ export const aceptarOfertaBola = onCall(async (request) => {
       ganancia_cents: gananciaCents,
       estado: "aceptado",
       aceptado: true,
+      codigoVerificacion: codigo,
+      codigoVerificado: false,
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
     };
@@ -282,8 +309,9 @@ export const aceptarContraofertaClienteBola = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Monto inválido.");
   }
 
-  const comision = Number.parseFloat((montoAcordado * comisionPct).toFixed(2));
-  const gananciaNeta = Number.parseFloat((montoAcordado - comision).toFixed(2));
+  const comisionCalc = await comisionDesdeMontoAcordado(montoAcordado);
+  const { comisionPct, comision, gananciaNeta, precioCents, comisionCents, gananciaCents } =
+    comisionCalc;
   const codigo = generarCodigoVerificacion();
 
   const ofertasSnap = await pubRef.collection("ofertas").get();
@@ -345,10 +373,6 @@ export const aceptarContraofertaClienteBola = onCall(async (request) => {
     const telefonoTx = String(ud.telefono ?? "").trim();
     const placaTx = String(ud.placa ?? "").trim();
 
-    const precioCents = Math.round(montoAcordado * 100);
-    const comisionCents = Math.round(comision * 100);
-    const gananciaCents = Math.round(gananciaNeta * 100);
-
     const viajePatch: Record<string, unknown> = {
       bolaNegociacionAbierta: false,
       uidTaxista,
@@ -367,6 +391,8 @@ export const aceptarContraofertaClienteBola = onCall(async (request) => {
       ganancia_cents: gananciaCents,
       estado: "aceptado",
       aceptado: true,
+      codigoVerificacion: codigo,
+      codigoVerificado: false,
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
     };
@@ -488,6 +514,51 @@ export const actualizarMetodoPagoBola = onCall(async (request) => {
 });
 
 /**
+ * Taxista asignado: confirma abordo en `bolas_pueblo` (servidor).
+ * Evita permission-denied por diff/merge estricto en reglas de cliente.
+ */
+export const confirmarPickupClienteAbordoBola = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+  const bolaId = String(request.data?.bolaId ?? "").trim();
+  if (!bolaId) {
+    throw new HttpsError("invalid-argument", "Falta bolaId.");
+  }
+
+  const db = getFirestore();
+  const ref = db.collection("bolas_pueblo").doc(bolaId);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "Publicación no encontrada.");
+  }
+  const d = snap.data()!;
+  const uidTx = String(d.uidTaxista ?? "").trim();
+  const estado = String(d.estado ?? "");
+
+  if (!uidTx || uidTx !== uid) {
+    throw new HttpsError("permission-denied", "Solo el taxista asignado puede confirmar el abordo.");
+  }
+  if (estado !== "acordada") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Solo aplica mientras el acuerdo está pendiente de iniciar.",
+    );
+  }
+
+  await ref.set(
+    {
+      pickupConfirmadoTaxista: true,
+      pickupConfirmadoTaxistaEn: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+  return { ok: true };
+});
+
+/**
  * Confirmación de llegada al destino (cliente o taxista). Solo servidor escribe
  * finalizada + comisionAplicada + billetera (reglas bloquean eso al cliente).
  */
@@ -533,15 +604,34 @@ export const finalizarBolaPueblo = onCall(async (request) => {
       );
     }
 
+    const viajeEspejoId = String(d.viajeEspejoId ?? "").trim();
+    let mirrorViajeYaFacturadoEnApp = false;
+    if (viajeEspejoId) {
+      const vSnap = await tx.get(db.collection("viajes").doc(viajeEspejoId));
+      if (vSnap.exists) {
+        const vd = (vSnap.data() ?? {}) as Record<string, unknown>;
+        if (vd.completado !== true) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Este Bola Ahorro tiene viaje en la app: el cierre y la factura los hace el conductor "
+              + "con «Finalizar viaje» en Mi viaje en curso (RAI Driver).",
+          );
+        }
+        mirrorViajeYaFacturadoEnApp = true;
+      }
+    }
+
     const comision = Number(d.comisionRd ?? 0);
     if (!Number.isFinite(comision) || comision < 0) {
       throw new HttpsError("failed-precondition", "Comisión inválida en la publicación.");
     }
 
     const metodoPago = String(d.metodoPago ?? "efectivo").toLowerCase().trim();
+    const esEfectivo =
+      metodoPago.length === 0 || metodoPago.includes("efectivo");
     const updates: Record<string, unknown> = {
       updatedAt: FieldValue.serverTimestamp(),
-      metodoPago: metodoPago === "transferencia" ? "transferencia" : "efectivo",
+      metodoPago: esEfectivo ? "efectivo" : "transferencia",
     };
     if (uid === uidTx) {
       updates.confirmacionTaxistaFinal = true;
@@ -559,7 +649,8 @@ export const finalizarBolaPueblo = onCall(async (request) => {
       updates.estado = "finalizada";
       updates.estadoViajeBola = "finalizada";
       updates.finalizadaEn = FieldValue.serverTimestamp();
-      if (d.comisionAplicada !== true) {
+      if (d.comisionAplicada !== true && !mirrorViajeYaFacturadoEnApp) {
+        if (esEfectivo) {
         const bRef = db.collection("billeteras_taxista").doc(uidTx);
         const bSnap = await tx.get(bRef);
         const b0 = (bSnap.data() ?? {}) as Record<string, unknown>;
@@ -631,6 +722,14 @@ export const finalizarBolaPueblo = onCall(async (request) => {
           );
         }
         updates.comisionAplicada = true;
+        updates.estadoPago = "pagado";
+        updates.facturaSaldoPrepagoComisionRd = saldo;
+        } else {
+          updates.comisionAplicada = true;
+          updates.estadoPago = "pendiente";
+        }
+      } else if (d.comisionAplicada !== true && mirrorViajeYaFacturadoEnApp) {
+        updates.comisionAplicada = true;
       }
     }
 
@@ -647,4 +746,241 @@ export const finalizarBolaPueblo = onCall(async (request) => {
   }
 
   return { ok: true };
+});
+
+/**
+ * Cancelar acuerdo Bola Ahorro antes de abordar (estado acordada, sin pickup ni PIN).
+ * Tras iniciar ruta al destino (en_curso / código verificado) no se permite.
+ */
+export const cancelarAcuerdoBolaPueblo = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+  const bolaId = String(request.data?.bolaId ?? "").trim();
+  if (!bolaId) {
+    throw new HttpsError("invalid-argument", "Falta bolaId.");
+  }
+
+  const db = getFirestore();
+  const ref = db.collection("bolas_pueblo").doc(bolaId);
+
+  let viajeEspejoId = "";
+  let uidTaxista = "";
+  let uidCliente = "";
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Publicación no encontrada.");
+    }
+    const d = snap.data()!;
+    const createdBy = String(d.createdByUid ?? "").trim();
+    uidTaxista = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
+    uidCliente = String(d.uidCliente ?? "").trim();
+    const estado = String(d.estado ?? "").trim();
+
+    if (uid !== createdBy && uid !== uidTaxista && uid !== uidCliente) {
+      throw new HttpsError("permission-denied", "No podés cancelar este acuerdo.");
+    }
+    if (estado !== "acordada") {
+      throw new HttpsError(
+        "failed-precondition",
+        estado === "en_curso"
+          ? "El traslado ya inició hacia el destino. No se puede cancelar."
+          : "Solo se puede cancelar un acuerdo pendiente de iniciar.",
+      );
+    }
+    if (d.pickupConfirmadoTaxista === true) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Ya se registró el abordo. No se puede cancelar.",
+      );
+    }
+    if (d.codigoVerificado === true) {
+      throw new HttpsError(
+        "failed-precondition",
+        "El traslado ya fue iniciado con el código PIN.",
+      );
+    }
+
+    viajeEspejoId = String(d.viajeEspejoId ?? "").trim();
+
+    tx.set(
+      ref,
+      {
+        estado: "cancelada",
+        estadoViajeBola: "cancelada",
+        canceladaEn: FieldValue.serverTimestamp(),
+        canceladaPor: uid,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+
+  if (viajeEspejoId) {
+    try {
+      const vRef = db.collection("viajes").doc(viajeEspejoId);
+      const vSnap = await vRef.get();
+      if (vSnap.exists) {
+        const vd = (vSnap.data() ?? {}) as Record<string, unknown>;
+        const est = String(vd.estado ?? "").trim().toLowerCase();
+        const cancelable =
+          est === "aceptado" ||
+          est === "en_camino_pickup" ||
+          est === "encaminopickup" ||
+          est === "pendiente";
+        if (cancelable) {
+          const actorEsTaxista = uid === uidTaxista;
+          await vRef.set(
+            {
+              estado: actorEsTaxista ? "pendiente" : "cancelado",
+              aceptado: false,
+              rechazado: actorEsTaxista ? false : true,
+              activo: false,
+              uidTaxista: "",
+              taxistaId: "",
+              nombreTaxista: "",
+              telefono: "",
+              placa: "",
+              republicado: actorEsTaxista,
+              canceladoPor: actorEsTaxista ? "taxista" : "cliente",
+              canceladoTaxistaEn: actorEsTaxista ? FieldValue.serverTimestamp() : FieldValue.delete(),
+              canceladoClienteEn: actorEsTaxista ? FieldValue.delete() : FieldValue.serverTimestamp(),
+              updatedAt: FieldValue.serverTimestamp(),
+              actualizadoEn: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+        }
+      }
+    } catch (e) {
+      console.error("[cancelarAcuerdoBolaPueblo] espejo", viajeEspejoId, e);
+    }
+  }
+
+  const limpiar = [uidTaxista, uidCliente].filter((x) => x.length > 0);
+  await Promise.all(
+    limpiar.map((u) =>
+      db.collection("usuarios").doc(u).set(
+        {
+          viajeActivoId: "",
+          updatedAt: FieldValue.serverTimestamp(),
+          actualizadoEn: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      ),
+    ),
+  );
+
+  return { ok: true, bolaId };
+});
+
+/** Cliente reporta comprobante de transferencia (mismo modelo que viajes). */
+export const reportarTransferenciaBolaClienteSeguro = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+  const bolaId = String(request.data?.bolaId ?? "").trim();
+  const comprobanteUrl = String(request.data?.comprobanteUrl ?? "").trim();
+  if (!bolaId) {
+    throw new HttpsError("invalid-argument", "Falta bolaId.");
+  }
+  if (!comprobanteUrl) {
+    throw new HttpsError("invalid-argument", "Falta comprobanteUrl.");
+  }
+
+  const db = getFirestore();
+  const ref = db.collection("bolas_pueblo").doc(bolaId);
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Publicación no encontrada.");
+    }
+    const d = snap.data()!;
+    const uidCli = String(d.uidCliente ?? "").trim();
+    if (uidCli !== uid) {
+      throw new HttpsError("permission-denied", "Solo el pasajero asignado puede reportar el comprobante.");
+    }
+    const estado = String(d.estado ?? "").trim();
+    if (estado !== "finalizada") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Solo se reporta comprobante tras finalizar el traslado.",
+      );
+    }
+    const metodo = String(d.metodoPago ?? "").toLowerCase().trim();
+    if (!metodo.includes("transfer")) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Este acuerdo no está marcado como transferencia.",
+      );
+    }
+    tx.set(
+      ref,
+      {
+        comprobanteTransferenciaUrl: comprobanteUrl,
+        transferenciaConfirmada: false,
+        estadoPago: "pagado",
+        transferenciaReportadaEn: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+
+  return { ok: true, bolaId };
+});
+
+/** Taxista confirma recepción de transferencia (con comprobante del cliente). */
+export const confirmarTransferenciaBolaTaxistaSeguro = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+  const bolaId = String(request.data?.bolaId ?? "").trim();
+  if (!bolaId) {
+    throw new HttpsError("invalid-argument", "Falta bolaId.");
+  }
+
+  const db = getFirestore();
+  const ref = db.collection("bolas_pueblo").doc(bolaId);
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Publicación no encontrada.");
+    }
+    const d = snap.data()!;
+    const uidTx = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
+    if (uidTx !== uid) {
+      throw new HttpsError("permission-denied", "Solo el conductor asignado puede confirmar.");
+    }
+    const comprobante = String(d.comprobanteTransferenciaUrl ?? "").trim();
+    if (!comprobante) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Aún no hay comprobante reportado por el cliente.",
+      );
+    }
+    if (d.transferenciaConfirmada === true) {
+      return;
+    }
+    tx.set(
+      ref,
+      {
+        transferenciaConfirmada: true,
+        transferenciaConfirmadaPor: "taxista",
+        transferenciaConfirmadaEn: FieldValue.serverTimestamp(),
+        estadoPago: "verificado",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+
+  return { ok: true, bolaId };
 });

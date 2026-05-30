@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 
 /// Compatibilidad: delega en [LocationPermissionService] con mensajes claros.
+/// Llamada típica desde acciones explícitas del usuario (no desde initState pasivo).
 class PermisosService {
   static Future<bool> ensureUbicacion(BuildContext context) async {
     final messenger = ScaffoldMessenger.maybeOf(context);

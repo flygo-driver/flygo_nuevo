@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/data/reportes_viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
 class ReportarViaje extends StatefulWidget {
   const ReportarViaje({super.key, required this.viaje});
@@ -35,8 +36,18 @@ class _ReportarViajeState extends State<ReportarViaje> {
 
   Future<void> _enviar() async {
     if (_guardando) return;
-    final uidCliente = FirebaseAuth.instance.currentUser?.uid ?? '';
-    if (uidCliente.isEmpty) return;
+    if (FirebaseAuth.instance.currentUser?.uid == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tu sesión expiró, inicia sesión nuevamente.'),
+        ),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await NavigationService.clearToAuthGate();
+      });
+      return;
+    }
     final comentario = _comentarioCtrl.text.trim();
     if (comentario.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -46,10 +57,8 @@ class _ReportarViajeState extends State<ReportarViaje> {
     }
     setState(() => _guardando = true);
     try {
-      await ReportesViajeData.crearReporte(
+      await ReportesViajeData.reportarProblemaSeguro(
         viajeId: widget.viaje.id,
-        uidCliente: uidCliente,
-        uidTaxista: widget.viaje.uidTaxista,
         motivo: _motivo,
         comentario: comentario,
       );
@@ -57,7 +66,7 @@ class _ReportarViajeState extends State<ReportarViaje> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Reporte enviado correctamente.')),
       );
-      Navigator.of(context).pop(true);
+      Navigator.of(context, rootNavigator: true).pop(true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

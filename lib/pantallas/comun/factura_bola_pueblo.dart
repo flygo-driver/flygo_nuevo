@@ -8,8 +8,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/comprobante_transferencia_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
+
+double _pctComisionDesdeDoc(Map<String, dynamic> data) {
+  final raw = data['comisionPct'];
+  if (raw is num) {
+    final v = raw.toDouble();
+    return v <= 1 ? v * 100 : v;
+  }
+  return PlataformaEconomia.comisionViajePorcentaje;
+}
 
 class FacturaBolaPueblo extends StatelessWidget {
   const FacturaBolaPueblo({
@@ -113,12 +126,25 @@ class _FacturaBolaContent extends StatelessWidget {
     final bool esTransferencia = MetodoPagoViaje.esTransferencia(metodoPago);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoPago);
 
-    final double total =
-        _toDouble(data['montoAcordadoRd'] ?? data['precio'] ?? 0);
+    final double total = totalRdDesdeDocViaje(data);
+    final bool montoPendienteServidor =
+        (data['estado'] ?? '').toString().trim().toLowerCase() == 'finalizada' &&
+            total <= 1e-6;
     final double comision = _toDouble(data['comisionRd'] ?? 0);
     final double gananciaNeta =
         _toDouble(data['gananciaNetaChoferRd'] ?? (total - comision));
+    final double pctComision = _pctComisionDesdeDoc(data);
     final String uidTaxista = (data['uidTaxista'] ?? '').toString().trim();
+    final double? saldoPrepagoFactura = data['facturaSaldoPrepagoComisionRd']
+        is num
+        ? (data['facturaSaldoPrepagoComisionRd'] as num).toDouble()
+        : null;
+    final String estadoPago =
+        (data['estadoPago'] ?? '').toString().trim().toLowerCase();
+    final String comprobanteUrl =
+        (data['comprobanteTransferenciaUrl'] ?? '').toString().trim();
+    final bool transferenciaConfirmada =
+        data['transferenciaConfirmada'] == true;
 
     final bool esTaxista = role == 'taxista';
 
@@ -214,7 +240,9 @@ class _FacturaBolaContent extends StatelessWidget {
             children: [
               _Row(
                 label: 'Total del traslado (RD\$)',
-                value: FormatosMoneda.rd(total),
+                value: montoPendienteServidor
+                    ? 'Confirmando…'
+                    : FormatosMoneda.rd(total),
                 boldValue: true,
               ),
               _Row(
@@ -224,7 +252,8 @@ class _FacturaBolaContent extends StatelessWidget {
               if (esTaxista) ...[
                 const Divider(height: 22),
                 _Row(
-                  label: 'Comisión RAI: 10% (especial para Bola Ahorro)',
+                  label:
+                      'Comisión RAI (${pctComision.toStringAsFixed(pctComision == pctComision.roundToDouble() ? 0 : 1)}%)',
                   value: FormatosMoneda.rd(comision),
                 ),
                 _Row(
@@ -232,12 +261,24 @@ class _FacturaBolaContent extends StatelessWidget {
                   value: FormatosMoneda.rd(gananciaNeta),
                   boldValue: true,
                 ),
+                if (esEfectivo && saldoPrepagoFactura != null) ...[
+                  const SizedBox(height: 8),
+                  _Row(
+                    label: 'Saldo prepago comisión (tras este viaje)',
+                    value: FormatosMoneda.rd(saldoPrepagoFactura),
+                    boldValue: true,
+                  ),
+                ],
                 const SizedBox(height: 10),
                 Text(
-                  'La comisión de plataforma se registró en tu billetera de conductor '
-                  '(saldo prepago y/o comisión pendiente de efectivo), conforme a las políticas '
-                  'vigentes en la aplicación. Regularizá en Mis pagos para mantener tu cuenta '
-                  'operativa sin restricciones.',
+                  esEfectivo
+                      ? 'La comisión de plataforma se registró en tu billetera de conductor '
+                          '(saldo prepago y/o comisión pendiente de efectivo), conforme a las '
+                          'políticas vigentes. Regularizá en Mis pagos para mantener tu cuenta '
+                          'operativa sin restricciones.'
+                      : 'Pago por transferencia: el importe neto acordado lo recibís del '
+                          'pasajero. La comisión RAI se liquida según el modelo de viajes '
+                          'estándar (sin descuento automático del prepago en efectivo).',
                   style: tt.bodySmall?.copyWith(
                     color: cs.onSurfaceVariant,
                     height: 1.35,
@@ -258,6 +299,17 @@ class _FacturaBolaContent extends StatelessWidget {
             ],
           ),
         ),
+        if (montoPendienteServidor) ...[
+          const SizedBox(height: 12),
+          _SectionCard(
+            title: 'Confirmando monto',
+            child: Text(
+              'El servidor está registrando el monto acordado. '
+              'Este comprobante se actualizará solo en unos segundos.',
+              style: tt.bodyMedium?.copyWith(height: 1.35),
+            ),
+          ),
+        ],
         if (esEfectivo) ...[
           const SizedBox(height: 12),
           _SectionCard(
@@ -282,7 +334,15 @@ class _FacturaBolaContent extends StatelessWidget {
         ],
         if (esTransferencia && uidTaxista.isNotEmpty) ...[
           const SizedBox(height: 12),
-          _BancariosTaxistaStream(uidTaxista: uidTaxista, total: total),
+          _SeccionTransferenciaBola(
+            bolaId: bolaId,
+            uidTaxista: uidTaxista,
+            total: total,
+            role: role,
+            comprobanteUrl: comprobanteUrl,
+            transferenciaConfirmada: transferenciaConfirmada,
+            estadoPago: estadoPago,
+          ),
         ],
         const SizedBox(height: 14),
         _SectionCard(
@@ -455,6 +515,221 @@ class _Row extends StatelessWidget {
   }
 }
 
+class _SeccionTransferenciaBola extends StatelessWidget {
+  const _SeccionTransferenciaBola({
+    required this.bolaId,
+    required this.uidTaxista,
+    required this.total,
+    required this.role,
+    required this.comprobanteUrl,
+    required this.transferenciaConfirmada,
+    required this.estadoPago,
+  });
+
+  final String bolaId;
+  final String uidTaxista;
+  final double total;
+  final String role;
+  final String comprobanteUrl;
+  final bool transferenciaConfirmada;
+  final String estadoPago;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('bolas_pueblo')
+          .doc(bolaId)
+          .snapshots(),
+      builder: (context, bolaSnap) {
+        final bd = bolaSnap.data?.data() ?? <String, dynamic>{};
+        final String url =
+            (bd['comprobanteTransferenciaUrl'] ?? comprobanteUrl).toString().trim();
+        final bool confirmada =
+            bd['transferenciaConfirmada'] == true || transferenciaConfirmada;
+        final String ep =
+            (bd['estadoPago'] ?? estadoPago).toString().trim().toLowerCase();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _BancariosTaxistaStream(uidTaxista: uidTaxista, total: total),
+            const SizedBox(height: 12),
+            _SectionCard(
+              title: 'Estado de la transferencia',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _Row(
+                    label: 'Estado',
+                    value: confirmada
+                        ? 'Confirmada por el conductor'
+                        : (url.isEmpty
+                            ? 'Pendiente de comprobante'
+                            : 'Comprobante enviado — pendiente confirmación'),
+                    boldValue: confirmada,
+                  ),
+                  if (ep.isNotEmpty && !confirmada)
+                    _Row(label: 'Detalle', value: ep),
+                  if (url.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Comprobante',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        url,
+                        fit: BoxFit.cover,
+                        height: 200,
+                        errorBuilder: (_, __, ___) => const SizedBox(
+                          height: 48,
+                          child: Center(
+                            child: Text('No se pudo cargar el comprobante.'),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (role == 'cliente' &&
+                      !confirmada &&
+                      url.isEmpty) ...[
+                    const SizedBox(height: 14),
+                    _BotonSubirComprobanteBola(bolaId: bolaId),
+                  ],
+                  if (role == 'taxista' &&
+                      !confirmada &&
+                      url.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    _BotonConfirmarTransferenciaBola(bolaId: bolaId),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _BotonSubirComprobanteBola extends StatefulWidget {
+  const _BotonSubirComprobanteBola({required this.bolaId});
+  final String bolaId;
+
+  @override
+  State<_BotonSubirComprobanteBola> createState() =>
+      _BotonSubirComprobanteBolaState();
+}
+
+class _BotonSubirComprobanteBolaState extends State<_BotonSubirComprobanteBola> {
+  bool _subiendo = false;
+
+  Future<void> _subir() async {
+    if (_subiendo) return;
+    setState(() => _subiendo = true);
+    final r = await ComprobanteTransferenciaService.subirYReportarBola(
+      bolaId: widget.bolaId,
+    );
+    if (!mounted) return;
+    setState(() => _subiendo = false);
+    ComprobanteTransferenciaService.mostrarFeedback(context, r);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: _subiendo ? null : _subir,
+        icon: _subiendo
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.upload_file_rounded),
+        label: Text(_subiendo
+            ? 'Subiendo comprobante…'
+            : 'Subir comprobante de pago'),
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(48),
+          backgroundColor: Colors.green,
+          foregroundColor: Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+class _BotonConfirmarTransferenciaBola extends StatefulWidget {
+  const _BotonConfirmarTransferenciaBola({required this.bolaId});
+  final String bolaId;
+
+  @override
+  State<_BotonConfirmarTransferenciaBola> createState() =>
+      _BotonConfirmarTransferenciaBolaState();
+}
+
+class _BotonConfirmarTransferenciaBolaState
+    extends State<_BotonConfirmarTransferenciaBola> {
+  bool _busy = false;
+
+  Future<void> _confirmar() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await BolaPuebloRepo.confirmarTransferenciaPorTaxista(
+        bolaId: widget.bolaId,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Transferencia confirmada.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: _busy ? null : _confirmar,
+        icon: _busy
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.verified_rounded),
+        label: Text(_busy
+            ? 'Confirmando…'
+            : 'Confirmar que recibí la transferencia'),
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(48),
+        ),
+      ),
+    );
+  }
+}
+
 class _BancariosTaxistaStream extends StatelessWidget {
   const _BancariosTaxistaStream({
     required this.uidTaxista,
@@ -480,7 +755,6 @@ class _BancariosTaxistaStream extends StatelessWidget {
         final tipo = (d['tipoCuenta'] ?? '').toString().trim();
         final titular =
             (d['titularCuenta'] ?? d['titular'] ?? '').toString().trim();
-        final tel = (d['whatsapp'] ?? d['telefono'] ?? '').toString().trim();
 
         return _SectionCard(
           title: 'Datos para transferencia al conductor',
@@ -512,14 +786,13 @@ class _BancariosTaxistaStream extends StatelessWidget {
               ],
               const SizedBox(height: 12),
               Text(
-                'Importe a transferir: ${FormatosMoneda.rd(total)}',
+                'Importe a transferir: ${total > 1e-6 ? FormatosMoneda.rd(total) : 'Confirmando…'}',
                 style: tt.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
               Text(
-                tel.isNotEmpty
-                    ? 'Enviá el comprobante bancario por WhatsApp al $tel para acuse de recibo por parte del conductor.'
-                    : 'Enviá el comprobante al conductor por el canal acordado en el chat de la publicación.',
+                'Subí el comprobante desde este comprobante RAI cuando hayas '
+                'realizado la transferencia (botón abajo).',
                 style: tt.bodySmall?.copyWith(
                   color: cs.onSurfaceVariant,
                   height: 1.35,

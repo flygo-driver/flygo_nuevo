@@ -74,6 +74,30 @@ class NavegacionExternaLauncher {
     await abrirGoogleMapsDestino(lat, lon);
   }
 
+  /// Ruta con origen, paradas intermedias y destino (Google Maps; Waze solo admite un destino).
+  static Future<void> abrirGoogleMapsRutaConParadas({
+    required double origenLat,
+    required double origenLon,
+    required double destinoLat,
+    required double destinoLon,
+    List<({double lat, double lon})> paradas = const [],
+  }) async {
+    final String o = '${fmtCoord(origenLat)},${fmtCoord(origenLon)}';
+    final String d = '${fmtCoord(destinoLat)},${fmtCoord(destinoLon)}';
+    final String wp = paradas
+        .map((p) => '${fmtCoord(p.lat)},${fmtCoord(p.lon)}')
+        .join('|');
+    final Uri mapsDir = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1'
+      '&origin=$o'
+      '&destination=$d'
+      '${wp.isNotEmpty ? '&waypoints=$wp' : ''}'
+      '&travelmode=driving',
+    );
+    if (await tryLaunch(mapsDir, preferExternalApp: false)) return;
+    await abrirGoogleMapsDestino(destinoLat, destinoLon);
+  }
+
   static Future<void> abrirWazeBusqueda(String query) async {
     final q = Uri.encodeComponent(query);
     final wazeDeep = Uri.parse('waze://?q=$q&navigate=yes');

@@ -2,6 +2,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flygo_nuevo/servicios/lugares_service.dart';
+
 class SimpleLatLng {
   final double latitude;
   final double longitude;
@@ -53,87 +55,42 @@ class PlacesService {
   });
 
   // -------------------- AUTOCOMPLETE --------------------
+  /// Delega en [LugaresService] (sin `types: geocode`, variantes y POI locales RD).
   Future<List<PlacePrediction>> autocomplete(
     String input, {
     String? sessionToken,
     double? biasLat,
     double? biasLon,
-    int? biasRadiusMeters, // p.ej. 30000
+    int? biasRadiusMeters, // ignorado; LugaresService usa radio amplio RD
   }) async {
     final q = input.trim();
     if (q.isEmpty) return const <PlacePrediction>[];
 
-    final params = <String, String>{
-      'input': q,
-      'key': apiKey,
-      'language': language,
-      'types': 'geocode', // direcciones/lugares físicos
-    };
-    if (sessionToken != null && sessionToken.trim().isNotEmpty) {
-      params['sessiontoken'] = sessionToken;
-    }
-    if (components.isNotEmpty) {
-      params['components'] = components.join('|'); // p.ej. country:do
-    }
-    if (biasLat != null && biasLon != null) {
-      params['location'] =
-          '${biasLat.toStringAsFixed(6)},${biasLon.toStringAsFixed(6)}';
-      params['radius'] = '${biasRadiusMeters ?? 30000}';
+    String? country;
+    for (final c in components) {
+      final t = c.trim().toLowerCase();
+      if (t.startsWith('country:')) {
+        country = t.substring('country:'.length);
+        break;
+      }
     }
 
-    final uri = Uri.https(
-      'maps.googleapis.com',
-      '/maps/api/place/autocomplete/json',
-      params,
+    final preds = await LugaresService.instance.autocompletar(
+      q,
+      country: country ?? 'DO',
+      biasLat: biasLat,
+      biasLon: biasLon,
     );
 
-    try {
-      final json = await _getJson(uri);
-      if (json == null) return const <PlacePrediction>[];
-
-      final status = (json['status'] ?? '').toString();
-      if (status != 'OK' && status != 'ZERO_RESULTS') {
-        return const <PlacePrediction>[];
-      }
-
-      final List preds = (json['predictions'] as List?) ?? const [];
-      return preds
-          .map((e) {
-            final m = (e as Map).cast<String, dynamic>();
-            final placeId = (m['place_id'] ?? '').toString();
-            final desc = (m['description'] ?? '').toString();
-
-            String primary = desc;
-            String? secondary;
-
-            final sf =
-                (m['structured_formatting'] as Map?)?.cast<String, dynamic>();
-            final mainText = sf?['main_text']?.toString();
-            final secText = sf?['secondary_text']?.toString();
-            if ((mainText ?? '').trim().isNotEmpty) {
-              primary = mainText!.trim();
-              secondary =
-                  (secText ?? '').trim().isEmpty ? null : secText!.trim();
-            } else {
-              final parts = desc.split(',').map((s) => s.trim()).toList();
-              if (parts.length > 1) {
-                primary = parts.first;
-                secondary = parts.sublist(1).join(', ');
-              }
-            }
-
-            return PlacePrediction(
-              placeId: placeId.isNotEmpty ? placeId : desc,
-              primary: primary.isNotEmpty ? primary : desc,
-              secondary:
-                  (secondary ?? '').trim().isEmpty ? null : secondary!.trim(),
-            );
-          })
-          .cast<PlacePrediction>()
-          .toList(growable: false);
-    } catch (_) {
-      return const <PlacePrediction>[];
-    }
+    return preds
+        .map(
+          (p) => PlacePrediction(
+            placeId: p.placeId,
+            primary: p.primary,
+            secondary: p.secondary,
+          ),
+        )
+        .toList(growable: false);
   }
 
   // -------------------- DETAILS --------------------
@@ -144,52 +101,16 @@ class PlacesService {
     final pid = placeId.trim();
     if (pid.isEmpty) return null;
 
-    final params = <String, String>{
-      'place_id': pid,
-      'fields': 'name,formatted_address,geometry',
-      'language': language,
-      'key': apiKey,
-    };
-    if (sessionToken != null && sessionToken.trim().isNotEmpty) {
-      params['sessiontoken'] = sessionToken;
-    }
+    final det = await LugaresService.instance.detalle(pid);
+    if (det == null) return null;
 
-    final uri = Uri.https(
-      'maps.googleapis.com',
-      '/maps/api/place/details/json',
-      params,
+    final addr = (det.address ?? det.displayLabel).trim();
+    return PlaceDetails(
+      placeId: det.placeId,
+      name: det.name.isNotEmpty ? det.name : addr,
+      address: addr.isNotEmpty ? addr : det.name,
+      latLng: SimpleLatLng(det.lat, det.lon),
     );
-
-    try {
-      final json = await _getJson(uri);
-      if (json == null) return null;
-
-      final status = (json['status'] ?? '').toString();
-      if (status != 'OK') return null;
-
-      final result = (json['result'] as Map?)?.cast<String, dynamic>();
-      if (result == null) return null;
-
-      final name = (result['name'] ?? '').toString().trim();
-      final addr = (result['formatted_address'] ?? '').toString().trim();
-
-      final geom = (result['geometry'] as Map?)?.cast<String, dynamic>();
-      final loc = (geom?['location'] as Map?)?.cast<String, dynamic>();
-      final lat = (loc?['lat'] as num?)?.toDouble();
-      final lng = (loc?['lng'] as num?)?.toDouble();
-      if (lat == null || lng == null) return null;
-
-      final address = addr.isNotEmpty ? addr : name;
-
-      return PlaceDetails(
-        placeId: pid,
-        name: name.isNotEmpty ? name : address,
-        address: address,
-        latLng: SimpleLatLng(lat, lng),
-      );
-    } catch (_) {
-      return null;
-    }
   }
 
   // -------------------- HTTP helper --------------------

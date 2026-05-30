@@ -32,6 +32,7 @@ class _ReportesAdminState extends State<ReportesAdmin> {
   String _tipoExport = 'viajes';
   int _diasExport = 7;
   bool _exportando = false;
+  final Set<String> _uidsBloqueando = <String>{};
 
   double _toDouble(dynamic v) {
     if (v is num) return v.toDouble();
@@ -163,6 +164,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               _filtroFechaReportesCard(context),
               const SizedBox(height: 12),
               _busquedaReportesCard(context),
+              const SizedBox(height: 12),
+              _calificacionesViajeCard(context),
               const SizedBox(height: 12),
               _reportesQuejasCard(context),
               const SizedBox(height: 16),
@@ -697,6 +700,188 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     );
   }
 
+  Future<void> _bloquearUsuarioReportado(String uid) async {
+    final String id = uid.trim();
+    if (id.isEmpty) return;
+    if (_uidsBloqueando.contains(id)) return;
+
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('Bloquear usuario'),
+        content: Text(
+          '¿Bloquear al usuario reportado?\n\nUID: $id\n\n'
+          'No podrá operar en la app hasta que lo desbloquees en Gestionar usuarios.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Bloquear'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() => _uidsBloqueando.add(id));
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await _db.collection('usuarios').doc(id).get();
+      final Map<String, dynamic> data = snap.data() ?? <String, dynamic>{};
+      final bool docsAprobados = data['docsEstado'] == 'aprobado' ||
+          data['estadoDocumentos'] == 'aprobado' ||
+          data['documentosCompletos'] == true;
+      final bool bloqueoOperativoComision = data['tienePagoPendiente'] == true;
+      final bool puedeOperarAlDesbloquear =
+          docsAprobados && !bloqueoOperativoComision;
+
+      await _db.collection('usuarios').doc(id).set(
+        <String, dynamic>{
+          'bloqueado': true,
+          'motivoBloqueo': 'reporte_viaje_admin',
+          'disponible': false,
+          'puedeRecibirViajes': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            puedeOperarAlDesbloquear
+                ? '🚫 Usuario bloqueado (admin)'
+                : '🚫 Usuario bloqueado (sigue con restricción de prepago/comisión)',
+          ),
+        ),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.code == 'permission-denied'
+                ? 'Sin permiso para bloquear (reglas Firestore).'
+                : 'Error: ${e.code}',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uidsBloqueando.remove(id));
+    }
+  }
+
+  Widget _calificacionesViajeCard(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _db.collection('calificaciones').limit(200).snapshots(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return _cardNumero(context, 'Calificaciones de viajes', 'Cargando…');
+        }
+        if (snap.hasError) {
+          return _cardNumero(
+            context,
+            'Calificaciones de viajes',
+            'Error: ${snap.error}',
+          );
+        }
+
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> raw =
+            snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+            List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(raw)
+              ..sort((a, b) {
+                final Timestamp? ta = a.data()['fecha'] as Timestamp?;
+                final Timestamp? tb = b.data()['fecha'] as Timestamp?;
+                final DateTime da = ta?.toDate() ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+                final DateTime db = tb?.toDate() ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+                return db.compareTo(da);
+              });
+
+        final int clienteATaxista = docs.where((d) {
+          final String o =
+              (d.data()['rolOrigen'] ?? '').toString().toLowerCase();
+          return o == 'cliente';
+        }).length;
+        final int taxistaACliente = docs.length - clienteATaxista;
+
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AdminUi.card(context),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AdminUi.borderSubtle(context)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Calificaciones (${docs.length})',
+                style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Cliente→chofer: $clienteATaxista · Chofer→cliente: $taxistaACliente',
+                style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+              if (docs.isEmpty)
+                Text(
+                  'Aún no hay calificaciones en la colección unificada.',
+                  style: TextStyle(color: AdminUi.secondary(context)),
+                ),
+              for (final d in docs.take(15)) ...[
+                Builder(
+                  builder: (_) {
+                    final Map<String, dynamic> data = d.data();
+                    final String origen =
+                        (data['rolOrigen'] ?? '—').toString();
+                    final String destino =
+                        (data['rolDestino'] ?? '—').toString();
+                    final int stars =
+                        (data['calificacion'] as num?)?.round() ?? 0;
+                    final String viaje =
+                        (data['viajeId'] ?? '').toString();
+                    final String comentario =
+                        (data['comentario'] ?? '').toString();
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        '• $origen → $destino · $stars★ · viaje ${viaje.length > 8 ? viaje.substring(0, 8) : viaje}'
+                        '${comentario.isNotEmpty ? ' · “${comentario.length > 40 ? '${comentario.substring(0, 40)}…' : comentario}”' : ''}',
+                        style: TextStyle(
+                          color: AdminUi.secondary(context),
+                          fontSize: 12,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+              if (docs.length > 15)
+                Text(
+                  '+${docs.length - 15} más…',
+                  style: TextStyle(color: AdminUi.muted(context), fontSize: 11),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   String _csvCell(Object? value) {
     final raw = (value ?? '').toString().replaceAll('"', '""');
     return '"$raw"';
@@ -1142,7 +1327,14 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           final viajeId = (data['viajeId'] ?? '').toString().toLowerCase();
           final uidTaxista =
               (data['uidTaxista'] ?? '').toString().toLowerCase();
-          return viajeId.contains(_buscar) || uidTaxista.contains(_buscar);
+          final uidCliente =
+              (data['uidCliente'] ?? '').toString().toLowerCase();
+          final uidReportado =
+              (data['uidReportado'] ?? '').toString().toLowerCase();
+          return viajeId.contains(_buscar) ||
+              uidTaxista.contains(_buscar) ||
+              uidCliente.contains(_buscar) ||
+              uidReportado.contains(_buscar);
         }).toList()
           ..sort((a, b) {
             final ta = (a.data()['creadoEn'] as Timestamp?)?.toDate() ??
@@ -1157,17 +1349,38 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           return creadoEn is Timestamp && !creadoEn.toDate().isBefore(limite);
         });
         final Map<String, int> abiertosPorTaxista = <String, int>{};
+        final Map<String, int> abiertosPorCliente = <String, int>{};
         for (final d in docsEnRango) {
           final data = d.data();
           final estado =
               (data['estado'] ?? 'pendiente').toString().trim().toLowerCase();
           if (estado == 'cerrado') continue;
-          final uidTaxista = (data['uidTaxista'] ?? '').toString().trim();
-          if (uidTaxista.isEmpty) continue;
-          abiertosPorTaxista[uidTaxista] =
-              (abiertosPorTaxista[uidTaxista] ?? 0) + 1;
+          final String rolReportado =
+              (data['rolReportado'] ?? data['rolAfectado'] ?? 'taxista')
+                  .toString()
+                  .trim()
+                  .toLowerCase();
+          final String uidReportado =
+              (data['uidReportado'] ?? '').toString().trim();
+          if (rolReportado == 'cliente') {
+            final String uid = uidReportado.isNotEmpty
+                ? uidReportado
+                : (data['uidCliente'] ?? '').toString().trim();
+            if (uid.isNotEmpty) {
+              abiertosPorCliente[uid] = (abiertosPorCliente[uid] ?? 0) + 1;
+            }
+          } else {
+            final String uid = uidReportado.isNotEmpty
+                ? uidReportado
+                : (data['uidTaxista'] ?? '').toString().trim();
+            if (uid.isNotEmpty) {
+              abiertosPorTaxista[uid] = (abiertosPorTaxista[uid] ?? 0) + 1;
+            }
+          }
         }
         final topTaxistas = abiertosPorTaxista.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        final topClientes = abiertosPorCliente.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
 
         return Container(
@@ -1181,11 +1394,18 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Reportes de clientes (${docs.length})',
+                'Reportes de viajes (${docs.length})',
                 style: TextStyle(
                   color: AdminUi.onCard(context),
                   fontWeight: FontWeight.w800,
                   fontSize: 16,
+                ),
+              ),
+              Text(
+                'Cliente→chofer y chofer→cliente. Bloquea en Usuarios con el UID reportado.',
+                style: TextStyle(
+                  color: AdminUi.secondary(context),
+                  fontSize: 12,
                 ),
               ),
               const SizedBox(height: 8),
@@ -1229,6 +1449,21 @@ class _ReportesAdminState extends State<ReportesAdmin> {
                   ),
                 const SizedBox(height: 10),
               ],
+              if (topClientes.isNotEmpty) ...[
+                Text(
+                  'Pasajeros con más reportes abiertos',
+                  style: TextStyle(
+                      color: AdminUi.secondary(context),
+                      fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                for (final e in topClientes.take(3))
+                  Text(
+                    '• ${e.key} · ${e.value} abiertos',
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                const SizedBox(height: 10),
+              ],
               const SizedBox(height: 10),
               if (docs.isEmpty)
                 Text(
@@ -1243,24 +1478,51 @@ class _ReportesAdminState extends State<ReportesAdmin> {
                     Expanded(
                       child: Text(
                         '• ${(d.data()['motivo'] ?? 'Sin motivo').toString()}'
+                        ' · ${(d.data()['rolReportante'] ?? 'cliente').toString()}'
+                        ' → ${(d.data()['rolReportado'] ?? 'taxista').toString()}'
                         ' · viaje ${(d.data()['viajeId'] ?? '').toString()}'
-                        ' · estado ${((d.data()['estado'] ?? 'pendiente').toString())}',
+                        ' · UID ${(d.data()['uidReportado'] ?? d.data()['uidTaxista'] ?? '').toString()}'
+                        ' · ${((d.data()['estado'] ?? 'pendiente').toString())}',
                         style: TextStyle(color: AdminUi.secondary(context)),
                       ),
                     ),
                     PopupMenuButton<String>(
                       icon: Icon(Icons.more_vert,
                           color: AdminUi.muted(context), size: 18),
-                      onSelected: (v) => _cambiarEstadoReporte(d.id, v),
-                      itemBuilder: (_) => const [
+                      onSelected: (String v) async {
+                        if (v == 'bloquear') {
+                          final String uidReportado =
+                              (d.data()['uidReportado'] ?? '').toString();
+                          await _bloquearUsuarioReportado(uidReportado);
+                          return;
+                        }
+                        await _cambiarEstadoReporte(d.id, v);
+                      },
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
+                          value: 'pendiente',
+                          child: Text('Marcar pendiente'),
+                        ),
+                        const PopupMenuItem(
+                          value: 'en_revision',
+                          child: Text('Marcar en revisión'),
+                        ),
+                        const PopupMenuItem(
+                          value: 'cerrado',
+                          child: Text('Marcar cerrado'),
+                        ),
+                        const PopupMenuDivider(),
                         PopupMenuItem(
-                            value: 'pendiente',
-                            child: Text('Marcar pendiente')),
-                        PopupMenuItem(
-                            value: 'en_revision',
-                            child: Text('Marcar en revisión')),
-                        PopupMenuItem(
-                            value: 'cerrado', child: Text('Marcar cerrado')),
+                          value: 'bloquear',
+                          enabled: (d.data()['uidReportado'] ?? '')
+                              .toString()
+                              .trim()
+                              .isNotEmpty,
+                          child: const Text(
+                            'Bloquear usuario reportado',
+                            style: TextStyle(color: Colors.redAccent),
+                          ),
+                        ),
                       ],
                     ),
                   ],

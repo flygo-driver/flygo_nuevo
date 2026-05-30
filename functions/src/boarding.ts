@@ -1,4 +1,5 @@
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { multiparadaInitPatch } from "./multiparada.js";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 const db = () => getFirestore();
@@ -155,6 +156,7 @@ export const iniciarViajeSeguro = onCall(async (request) => {
       }
     }
 
+    const multiInit = multiparadaInitPatch(data);
     tx.update(viajeRef, {
       estado: "en_curso",
       codigoVerificado: true,
@@ -165,6 +167,7 @@ export const iniciarViajeSeguro = onCall(async (request) => {
       activo: true,
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
+      ...(multiInit ?? {}),
     });
     return { ok: true, viajeId, alreadyStarted: false };
   });

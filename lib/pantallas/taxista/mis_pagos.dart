@@ -17,6 +17,7 @@ import '../../servicios/analytics_rai.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/rai_local_read_cache.dart';
 import '../../modelo/pago_taxista.dart';
+import '../../widgets/configuracion_bancaria.dart';
 import '../../widgets/rai_offline_banner.dart';
 
 Widget _kvRecarga(ColorScheme cs, String label, String value) {
@@ -82,6 +83,98 @@ Widget _pasoRecarga(
       ),
     ],
   );
+}
+
+/// Aviso si faltan datos bancarios para que el cliente pueda transferir en viajes.
+class _AvisoPerfilBancarioTransferencia extends StatelessWidget {
+  const _AvisoPerfilBancarioTransferencia({required this.uid});
+
+  final String uid;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snap,
+      ) {
+        if (!snap.hasData) return const SizedBox.shrink();
+        final Map<String, dynamic>? data = snap.data?.data();
+        if (PagosTaxistaRepo.perfilBancarioTransferenciaCompleto(data)) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Material(
+            color: Colors.orange.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () {
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ConfiguracionBancaria(),
+                  ),
+                );
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.account_balance_outlined,
+                        color: Colors.orangeAccent, size: 26),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Completa tu cuenta bancaria',
+                            style: TextStyle(
+                              color: cs.onSurface,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Si aceptás viajes por transferencia, el cliente necesita ver '
+                            'tu banco, número de cuenta y titular. Completá esos datos '
+                            'antes de tomar ese tipo de viajes.',
+                            style: TextStyle(
+                              color: cs.onSurfaceVariant,
+                              fontSize: 12.5,
+                              height: 1.35,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Tocá aquí para ir a Datos bancarios',
+                            style: TextStyle(
+                              color: Colors.orangeAccent.shade200,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class MisPagos extends StatefulWidget {
@@ -257,7 +350,8 @@ class _MisPagosState extends State<MisPagos> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 DropdownButtonFormField<String>(
-                  value: metodo,
+                  key: ValueKey<String>(metodo),
+                  initialValue: metodo,
                   dropdownColor: dcs.surfaceContainerHighest,
                   style: TextStyle(color: dcs.onSurface),
                   decoration: InputDecoration(
@@ -603,6 +697,7 @@ class _MisPagosState extends State<MisPagos> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                   RaiOfflineBanner(uid: user?.uid),
+                  _AvisoPerfilBancarioTransferencia(uid: user!.uid),
                   KeyedSubtree(
                     key: _recargaSeccionKey,
                     child: _PanelRecargaComisionEfectivo(
@@ -1287,9 +1382,10 @@ class _PanelRecargaComisionEfectivoState
                       // build release falla con "Object can't be assigned to String".
                       // ignore: unnecessary_cast
                       (bloqueoOperativo
-                          ? (pend > 1e-6
-                              ? 'Estado: BLOQUEADO por comisión pendiente. Regulariza el pendiente para volver a tomar viajes.'
-                              : 'Estado: BLOQUEADO por saldo prepago insuficiente. Te faltan ${widget.formatter.format(saldoFaltante)} para el mínimo.')
+                          ? (PagosTaxistaRepo.bloqueoPorComisionLegacyTope(bill)
+                              ? 'Estado: BLOQUEADO por comisión legacy (tope RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}). '
+                                  'Una recarga aprobada paga primero esa deuda; el resto suma al prepago.'
+                              : 'Estado: BLOQUEADO por saldo prepago disponible insuficiente. Te faltan ${widget.formatter.format(saldoFaltante)} para el mínimo.')
                           : (riesgoBloqueoProximo
                               ? 'Estado: ALERTA PREVENTIVA. Te quedan ${widget.formatter.format(disponible)} disponibles (prepago bruto ${widget.formatter.format(saldo)}) y si no recargas se bloquearán pool y viajes al agotarse.'
                               : 'Estado: ACTIVO para operar. Tu saldo actual cumple la regla de servicio.')) as String,
@@ -1301,6 +1397,59 @@ class _PanelRecargaComisionEfectivoState
                       ),
                     ),
                   ),
+                  if (PagosTaxistaRepo.bloqueoPorComisionLegacyTope(bill)) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: cs.outlineVariant.withValues(alpha: 0.75),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Cuánto transferir (orientativo)',
+                            style: TextStyle(
+                              color: cs.onSurface,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Mínimo para que, al aprobar la recarga, el legacy baje debajo de RD\$'
+                            '${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)} y puedas operar: '
+                            '${widget.formatter.format(PagosTaxistaRepo.montoMinimoRecargaParaSalirBloqueoLegacyRd(pend))}.',
+                            style: TextStyle(
+                              color: cs.onSurfaceVariant,
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
+                          ),
+                          if (PagosTaxistaRepo.montoParaLiquidarLegacyCompletoRd(pend) >
+                              PagosTaxistaRepo.montoMinimoRecargaParaSalirBloqueoLegacyRd(
+                                      pend) +
+                                  0.01) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              'Para dejar la comisión legacy en cero: '
+                              '${widget.formatter.format(PagosTaxistaRepo.montoParaLiquidarLegacyCompletoRd(pend))}.',
+                              style: TextStyle(
+                                color: cs.onSurfaceVariant,
+                                fontSize: 12,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   Row(
                     children: [
@@ -1327,7 +1476,8 @@ class _PanelRecargaComisionEfectivoState
                     'Este saldo cubre la comisión del $pctComStr% sobre viajes en efectivo '
                     '(vos te quedás con el $pctTaxStr% del total del viaje). '
                     'Transferí a la cuenta de la empresa y, cuando tengas el bauche, '
-                    'completá los pasos más abajo. El administrador acredita el saldo al aprobar.',
+                    'completá los pasos más abajo. Al aprobar el admin, el monto verificado paga primero '
+                    'la comisión legacy pendiente (si hay) y el resto queda acreditado en tu prepago.',
                     style: TextStyle(
                         color: cs.onSurfaceVariant, fontSize: 12, height: 1.35),
                   ),

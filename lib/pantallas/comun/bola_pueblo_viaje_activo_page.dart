@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
+import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
@@ -267,9 +269,13 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
             final distanciaKm = ((data['distanciaKm'] ?? 0) as num).toDouble();
             final pasajeros =
                 ((data['pasajeros'] ?? 1) as num).toInt().clamp(1, 8);
+            final String viajeEspejoId =
+                (data['viajeEspejoId'] ?? '').toString().trim();
             final bool mostrarTaxistaEnMapa = soyClienteAsignado &&
                 uidTaxista.isNotEmpty &&
                 (estado == 'acordada' || estado == 'en_curso');
+            final bool mapaEstiloCalleBlanca =
+                soyClienteAsignado && mostrarTaxistaEnMapa;
             final double safeBottom = MediaQuery.of(context).padding.bottom;
 
             return Scaffold(
@@ -279,7 +285,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                 elevation: 0,
                 foregroundColor: c.onSurface,
                 leading: IconButton(
-                  icon: const Icon(Icons.arrow_back_rounded),
+                  icon: Icon(Icons.arrow_back_rounded, color: c.onSurface),
                   tooltip: 'Volver al tablero',
                   onPressed: () => Navigator.maybePop(context),
                 ),
@@ -321,6 +327,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                             mostrarDestino: dd != null,
                             mostrarTaxista: false,
                             polylinePreviewPoints: poly,
+                            estiloCalleAnchaBlanca: mapaEstiloCalleBlanca,
                           )
                         : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                             stream: FirebaseFirestore.instance
@@ -353,6 +360,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                 mostrarTaxista: txPos != null,
                                 ubicacionTaxista: txPos,
                                 polylinePreviewPoints: trackPreview,
+                                estiloCalleAnchaBlanca: mapaEstiloCalleBlanca,
                               );
                             },
                           ),
@@ -909,99 +917,238 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 16),
                                   ],
-                                  if (estado == 'en_curso' && partActivo) ...[
-                                    BolaPuebloContrapartePanel(
-                                      bolaId: bolaId,
-                                      counterpartyUid: soyClienteAsignado
-                                          ? uidTaxista
-                                          : uidCliente,
-                                      sectionTitle: soyClienteAsignado
-                                          ? 'Tu conductor'
-                                          : 'Tu pasajero',
-                                      vistaChofer: soyTaxistaAsignado,
-                                    ),
-                                    const SizedBox(height: 14),
-                                    BolaPuebloUi.sectionLabel(
-                                        context, 'Estado del traslado'),
-                                    BolaPuebloUi.metaRow(
-                                      context,
-                                      icon: Icons.verified_outlined,
-                                      text:
-                                          'Código: ${codigoVerificado ? 'verificado' : 'pendiente'}',
-                                    ),
-                                    BolaPuebloUi.metaRow(
-                                      context,
-                                      icon: Icons.local_taxi_outlined,
-                                      text:
-                                          'Conductor: ${confTax ? 'confirmó llegada' : 'pendiente'}',
-                                    ),
-                                    BolaPuebloUi.metaRow(
-                                      context,
-                                      icon: Icons.person_pin_outlined,
-                                      text:
-                                          'Cliente: ${confCli ? 'confirmó llegada' : 'pendiente'}',
-                                    ),
-                                    const SizedBox(height: 14),
-                                    BolaPuebloUi.sectionLabel(
-                                        context, 'Ir al destino'),
-                                    const SizedBox(height: 8),
+                                  if (partActivo &&
+                                      estado == 'acordada' &&
+                                      BolaPuebloRepo.puedeCancelarAcuerdo(
+                                          data)) ...[
                                     SizedBox(
                                       width: double.infinity,
-                                      child: FilledButton.icon(
-                                        style: BolaPuebloUi.filledSecondary,
-                                        onPressed: destino.trim().isEmpty
-                                            ? null
-                                            : () => BolaPuebloNav
-                                                .abrirSelectorSoloDestino(
-                                                  context,
-                                                  destinoLabel: destino,
-                                                  destinoLat: dLa,
-                                                  destinoLon: dLo,
-                                                ),
-                                        icon: const Icon(
-                                            Icons.directions_car_filled_rounded,
-                                            size: 22),
-                                        label: const Text(
-                                            'Maps / Waze hasta el destino'),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 14),
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: FilledButton.icon(
-                                        style: BolaPuebloUi.filledPrimary,
-                                        onPressed: () => BolaPuebloDialogs
-                                            .confirmarFinalizacionDialog(
-                                                context, bolaId, user.uid),
-                                        icon: const Icon(Icons.flag_rounded,
-                                            size: 22),
-                                        label: Text(
-                                          soyTaxistaAsignado
-                                              ? 'Confirmar llegada al destino'
-                                              : 'Confirmar que llegamos',
+                                      child: OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor:
+                                              Colors.red.shade700,
+                                          side: BorderSide(
+                                            color: Colors.red
+                                                .withValues(alpha: 0.45),
+                                          ),
                                         ),
+                                        onPressed: () => BolaPuebloDialogs
+                                            .confirmarCancelarAcuerdoBola(
+                                          context: context,
+                                          bolaId: bolaId,
+                                          uid: user.uid,
+                                        ),
+                                        icon: const Icon(Icons.cancel_outlined,
+                                            size: 20),
+                                        label:
+                                            const Text('Cancelar acuerdo'),
                                       ),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    OutlinedButton.icon(
-                                      style:
-                                          BolaPuebloUi.outlineAccent(context),
-                                      onPressed: () =>
-                                          BolaPuebloNav.abrirSelectorNavegacion(
-                                        context,
-                                        origen: origen,
-                                        destino: destino,
-                                        origenLat: oLa,
-                                        origenLon: oLo,
-                                        destinoLat: dLa,
-                                        destinoLon: dLo,
-                                      ),
-                                      icon: const Icon(Icons.navigation_rounded,
-                                          size: 21),
-                                      label: const Text(
-                                          'Ruta completa otra vez (origen → destino)'),
                                     ),
                                     const SizedBox(height: 16),
+                                  ],
+                                  if (estado == 'en_curso' && partActivo) ...[
+                                    BolaPuebloDialogs
+                                        .bannerSinCancelacionEnCurso(context),
+                                    const SizedBox(height: 12),
+                                    if (viajeEspejoId.isNotEmpty) ...[
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: fgMuted.withValues(alpha: 0.08),
+                                          borderRadius: BorderRadius.circular(
+                                              BolaPuebloUi.radiusSmall),
+                                          border: Border.all(
+                                            color: BolaPuebloTheme.accent
+                                                .withValues(alpha: 0.45),
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
+                                            Text(
+                                              'Viaje vinculado al pool',
+                                              style: TextStyle(
+                                                color: fg,
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'La factura, la comisión sobre tu saldo de recargas y «Finalizar viaje» '
+                                              'se gestionan en la misma pantalla que un taxi estándar (Mi viaje en curso). '
+                                              'Desde acá podés chatear, llamar y abrir navegación al destino.',
+                                              style: TextStyle(
+                                                color: fgMuted,
+                                                fontSize: 13,
+                                                height: 1.4,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 14),
+                                            BolaPuebloContrapartePanel(
+                                              bolaId: bolaId,
+                                              counterpartyUid:
+                                                  soyClienteAsignado
+                                                      ? uidTaxista
+                                                      : uidCliente,
+                                              sectionTitle: soyClienteAsignado
+                                                  ? 'Tu conductor'
+                                                  : 'Tu pasajero',
+                                              vistaChofer: soyTaxistaAsignado,
+                                            ),
+                                            const SizedBox(height: 14),
+                                            BolaPuebloUi.sectionLabel(
+                                                context, 'Ir al destino'),
+                                            const SizedBox(height: 8),
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: FilledButton.icon(
+                                                style:
+                                                    BolaPuebloUi.filledSecondary,
+                                                onPressed: destino.trim().isEmpty
+                                                    ? null
+                                                    : () => BolaPuebloNav
+                                                        .abrirSelectorSoloDestino(
+                                                          context,
+                                                          destinoLabel: destino,
+                                                          destinoLat: dLa,
+                                                          destinoLon: dLo,
+                                                        ),
+                                                icon: const Icon(
+                                                    Icons
+                                                        .directions_car_filled_rounded,
+                                                    size: 22),
+                                                label: const Text(
+                                                    'Maps / Waze hasta el destino'),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: FilledButton.icon(
+                                                style: BolaPuebloUi.filledPrimary,
+                                                onPressed: () {
+                                                  Navigator.of(context).push(
+                                                    MaterialPageRoute<void>(
+                                                      builder: (_) =>
+                                                          soyTaxistaAsignado
+                                                              ? const ViajeEnCursoTaxista()
+                                                              : const ViajeEnCursoCliente(),
+                                                    ),
+                                                  );
+                                                },
+                                                icon: const Icon(
+                                                    Icons.local_taxi_rounded,
+                                                    size: 22),
+                                                label: Text(
+                                                  soyTaxistaAsignado
+                                                      ? 'Abrir Mi viaje en curso (conductor)'
+                                                      : 'Abrir Mi viaje en curso',
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 16),
+                                    ] else ...[
+                                      BolaPuebloContrapartePanel(
+                                        bolaId: bolaId,
+                                        counterpartyUid: soyClienteAsignado
+                                            ? uidTaxista
+                                            : uidCliente,
+                                        sectionTitle: soyClienteAsignado
+                                            ? 'Tu conductor'
+                                            : 'Tu pasajero',
+                                        vistaChofer: soyTaxistaAsignado,
+                                      ),
+                                      const SizedBox(height: 14),
+                                      BolaPuebloUi.sectionLabel(
+                                          context, 'Estado del traslado'),
+                                      BolaPuebloUi.metaRow(
+                                        context,
+                                        icon: Icons.verified_outlined,
+                                        text:
+                                            'Código: ${codigoVerificado ? 'verificado' : 'pendiente'}',
+                                      ),
+                                      BolaPuebloUi.metaRow(
+                                        context,
+                                        icon: Icons.local_taxi_outlined,
+                                        text:
+                                            'Conductor: ${confTax ? 'confirmó llegada' : 'pendiente'}',
+                                      ),
+                                      BolaPuebloUi.metaRow(
+                                        context,
+                                        icon: Icons.person_pin_outlined,
+                                        text:
+                                            'Cliente: ${confCli ? 'confirmó llegada' : 'pendiente'}',
+                                      ),
+                                      const SizedBox(height: 14),
+                                      BolaPuebloUi.sectionLabel(
+                                          context, 'Ir al destino'),
+                                      const SizedBox(height: 8),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: FilledButton.icon(
+                                          style: BolaPuebloUi.filledSecondary,
+                                          onPressed: destino.trim().isEmpty
+                                              ? null
+                                              : () => BolaPuebloNav
+                                                  .abrirSelectorSoloDestino(
+                                                    context,
+                                                    destinoLabel: destino,
+                                                    destinoLat: dLa,
+                                                    destinoLon: dLo,
+                                                  ),
+                                          icon: const Icon(
+                                              Icons.directions_car_filled_rounded,
+                                              size: 22),
+                                          label: const Text(
+                                              'Maps / Waze hasta el destino'),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 14),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: FilledButton.icon(
+                                          style: BolaPuebloUi.filledPrimary,
+                                          onPressed: () => BolaPuebloDialogs
+                                              .confirmarFinalizacionDialog(
+                                                  context, bolaId, user.uid),
+                                          icon: const Icon(Icons.flag_rounded,
+                                              size: 22),
+                                          label: Text(
+                                            soyTaxistaAsignado
+                                                ? 'Confirmar llegada al destino'
+                                                : 'Confirmar que llegamos',
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      OutlinedButton.icon(
+                                        style:
+                                            BolaPuebloUi.outlineAccent(context),
+                                        onPressed: () =>
+                                            BolaPuebloNav.abrirSelectorNavegacion(
+                                          context,
+                                          origen: origen,
+                                          destino: destino,
+                                          origenLat: oLa,
+                                          origenLon: oLo,
+                                          destinoLat: dLa,
+                                          destinoLon: dLo,
+                                        ),
+                                        icon: const Icon(
+                                            Icons.navigation_rounded,
+                                            size: 21),
+                                        label: const Text(
+                                            'Ruta completa otra vez (origen → destino)'),
+                                      ),
+                                      const SizedBox(height: 16),
+                                    ],
                                   ],
                                   Theme(
                                     data: Theme.of(context).copyWith(

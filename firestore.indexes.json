@@ -313,6 +313,14 @@
       "collectionGroup": "viajes",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "taxistaId", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "programado", "order": "ASCENDING" },
         { "fieldPath": "estado", "order": "ASCENDING" },
         { "fieldPath": "publishAt", "order": "DESCENDING" }

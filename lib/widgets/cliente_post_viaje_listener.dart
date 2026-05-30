@@ -1,7 +1,7 @@
 // lib/widgets/cliente_post_viaje_listener.dart
 //
 // Si el viaje termina mientras el cliente está en el flujo principal (home visible),
-// abre el mismo [PostViajeClienteFlow] que tras completar en pantalla de viaje.
+// abre factura (paridad con [ViajeEnCursoCliente]) y luego [PostViajeClienteFlow].
 // No dispara si hay otra ruta encima (ej. Viaje en curso), para no competir con su pushReplacement.
 import 'dart:async';
 
@@ -11,7 +11,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 
 class ClientePostViajeListener extends StatefulWidget {
   final Widget child;
@@ -26,6 +29,7 @@ class ClientePostViajeListener extends StatefulWidget {
 class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
   String? _ultimoViajeOfrecido;
+  bool _flujoPostViajeEnCurso = false;
 
   @override
   void initState() {
@@ -58,7 +62,11 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
     final Map<String, dynamic> d = snap.docs.first.data();
     final String id = snap.docs.first.id;
 
-    if (_ultimoViajeOfrecido == id) return;
+    if (ClientePostViajeReopenGuard.shouldSuppressListenerPush(id)) {
+      return;
+    }
+
+    if (_ultimoViajeOfrecido == id || _flujoPostViajeEnCurso) return;
 
     final Timestamp? finTs = d['finalizadoEn'] as Timestamp?;
     if (finTs == null) return;
@@ -66,24 +74,56 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
         DateTime.now().difference(finTs.toDate()).inMinutes <= 10;
     if (!reciente) return;
 
+    if (ActiveTripService.debeMantenerOverlayViajeEnShell) {
+      return;
+    }
+
     final ModalRoute<dynamic>? route = ModalRoute.of(context);
     if (route?.isCurrent != true) {
       return;
     }
 
     _ultimoViajeOfrecido = id;
+    _flujoPostViajeEnCurso = true;
+    ClientePostViajeReopenGuard.markOpened(id);
 
     SchedulerBinding.instance.addPostFrameCallback((_) {
+      unawaited(_abrirFacturaYPostViaje(id, d));
+    });
+  }
+
+  Future<void> _abrirFacturaYPostViaje(
+    String viajeId,
+    Map<String, dynamic> data,
+  ) async {
+    try {
       if (!mounted) return;
-      final nav = NavigationService.navigatorKey.currentState;
+      final NavigatorState? nav = NavigationService.navigatorKey.currentState;
       if (nav == null) return;
-      nav.push<void>(
+
+      try {
+        await FacturaViaje.mostrar(
+          nav.context,
+          viajeId: viajeId,
+          role: 'cliente',
+        );
+      } catch (_) {}
+
+      if (!nav.mounted) return;
+      await nav.push<void>(
         MaterialPageRoute<void>(
           fullscreenDialog: true,
-          builder: (_) => PostViajeClienteFlow(viajeId: id),
+          builder: (_) => PostViajeClienteFlow(
+            viajeId: viajeId,
+            viajeDataSemilla: Map<String, dynamic>.from(data),
+          ),
         ),
       );
-    });
+    } finally {
+      if (mounted) {
+        _flujoPostViajeEnCurso = false;
+      }
+    }
   }
 
   @override

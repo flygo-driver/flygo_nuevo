@@ -1,6 +1,10 @@
 // lib/servicios/location_permission_service.dart
 // Gestión central de permisos y frescura de ubicación (GPS + permisos).
 //
+// Política: [checkAndRequestBasicPermission] con requestIfDenied:false en arranque
+// pasivo; con requestIfDenied:true (default) solo en flujos explícitos (solicitar
+// viaje, programar, ensureLocationReady). Ver contrato en [GpsService].
+//
 // ignore_for_file: avoid_print
 
 import 'dart:async';
@@ -71,9 +75,13 @@ class LocationPermissionService {
   static bool get _nativeMobile =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-  /// Llamar al arranque (splash / bootstrap): solo permiso **mientras se usa la app**.
-  static Future<LocationBasicResult> checkAndRequestBasicPermission() async {
-    print('[LOCATION] checkAndRequestBasicPermission');
+  /// [requestIfDenied] en false: solo lectura estabilizada (p. ej. arranque de app);
+  /// no llama a [Geolocator.requestPermission] aunque siga [denied] (estilo inDrive:
+  /// el permiso se pide en flujos explícitos: solicitar viaje, disponibilidad, etc.).
+  static Future<LocationBasicResult> checkAndRequestBasicPermission({
+    bool requestIfDenied = true,
+  }) async {
+    print('[LOCATION] checkAndRequestBasicPermission requestIfDenied=$requestIfDenied');
     if (!_nativeMobile) {
       print('[LOCATION] skip: no es móvil nativo');
       return const LocationBasicResult(
@@ -82,9 +90,39 @@ class LocationPermissionService {
       );
     }
 
-    final snap = await GpsService.checkServiceThenRequestPermissionIfNeeded();
+    final snap =
+        await GpsService.readServiceAndPermissionStabilizedNoRequest();
     print(
-        '[LOCATION] isLocationServiceEnabled=${snap.serviceEnabled} permission=${snap.permission}');
+        '[LOCATION] readNoRequest serviceEnabled=${snap.serviceEnabled} permission=${snap.permission}',
+    );
+
+    if (GpsService.permissionUsable(snap.permission)) {
+      return LocationBasicResult(
+        serviceEnabled: snap.serviceEnabled,
+        permission: snap.permission,
+      );
+    }
+    if (!snap.serviceEnabled) {
+      return LocationBasicResult(
+        serviceEnabled: false,
+        permission: snap.permission,
+      );
+    }
+    if (snap.permission == LocationPermission.denied && requestIfDenied) {
+      final LocationPermission p =
+          await GpsService.requestPermissionIfDeniedThrottled();
+      final bool se = await Geolocator.isLocationServiceEnabled();
+      print(
+        '[LOCATION] tras request throttled serviceEnabled=$se permission=$p',
+      );
+      return LocationBasicResult(serviceEnabled: se, permission: p);
+    }
+
+    if (snap.permission == LocationPermission.denied && !requestIfDenied) {
+      print(
+        '[LOCATION] denied pero requestIfDenied=false → sin Geolocator.requestPermission',
+      );
+    }
 
     return LocationBasicResult(
       serviceEnabled: snap.serviceEnabled,

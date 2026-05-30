@@ -6,6 +6,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class ConfiguracionPerfil extends StatefulWidget {
   const ConfiguracionPerfil({super.key});
@@ -285,22 +286,10 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
         FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
 
     return Scaffold(
-      backgroundColor: cs.surface,
-      appBar: AppBar(
-        backgroundColor: cs.surface,
-        foregroundColor: cs.onSurface,
-        surfaceTintColor: cs.surfaceTint,
-        elevation: 0,
-        scrolledUnderElevation: 1,
-        title: Text(
-          'Configuración de perfil',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: cs.onSurface,
-          ),
-        ),
+      appBar: const RaiAppBar(
+        title: 'Configuración de perfil',
         centerTitle: true,
+        showBackWhenCanPop: true,
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: docRef.snapshots(),

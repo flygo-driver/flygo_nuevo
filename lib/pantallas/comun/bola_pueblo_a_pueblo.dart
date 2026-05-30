@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
+import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
 class BolaPuebloAPuebloPage extends StatefulWidget {
   const BolaPuebloAPuebloPage({super.key});
@@ -207,15 +208,10 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
 
         Widget appBarTitleRow() {
           return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Image.asset(
-                'assets/icon/logo_rai_vertical.png',
-                height: 32,
-                fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) =>
-                    Icon(Icons.location_city, color: col.onSurface),
-              ),
-              const SizedBox(width: 10),
+              const RaiHeaderLogo(height: 34),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Bola Ahorro',
@@ -235,7 +231,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
               elevation: 0,
               foregroundColor: col.onSurface,
               leading: IconButton(
-                icon: const Icon(Icons.arrow_back_rounded),
+                icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                 tooltip: 'Volver',
                 onPressed: () => Navigator.maybePop(context),
               ),
@@ -699,7 +695,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
               elevation: 0,
               foregroundColor: col.onSurface,
               leading: IconButton(
-                icon: const Icon(Icons.arrow_back_rounded),
+                icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                 tooltip: 'Volver',
                 onPressed: () => Navigator.maybePop(context),
               ),
@@ -749,7 +745,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                     elevation: 0,
                     foregroundColor: col.onSurface,
                     leading: IconButton(
-                      icon: const Icon(Icons.arrow_back_rounded),
+                      icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                       tooltip: 'Volver',
                       onPressed: () => Navigator.maybePop(context),
                     ),

@@ -7,12 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
-import 'package:geocoding/geocoding.dart';
-
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
-import 'package:flygo_nuevo/servicios/places_service.dart';
+import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
@@ -21,9 +19,8 @@ import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
-import 'package:flygo_nuevo/keys.dart' as app_keys;
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
@@ -69,10 +66,15 @@ class ProgramarViajeMulti extends StatefulWidget {
     }
   }
 
-  /// Motor/normal → pool general (`ViajeDisponible`). Turismo → `PoolTurismoTaxista`.
+  /// Motor/normal → pool general (`ViajeDisponible`).
+  ///
+  /// Turismo multiparada: **mismo primer paso que viaje simple** → cola ADM
+  /// (`admin`). Si ADM no asigna, [ViajesRepo.crearViajePendiente] puede pasar el
+  /// viaje a [AsignacionTurismoRepo.canalTurismoPool] (auto-asignación fallida o
+  /// liberación manual desde panel admin).
   static String canalAsignacionParaMulti(String tipoNorm) {
     if (tipoNorm == 'turismo') {
-      return AsignacionTurismoRepo.canalTurismoPool;
+      return 'admin';
     }
     return 'pool';
   }
@@ -109,6 +111,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   // Timer para debounce del cálculo automático
   Timer? _calculoDebounce;
 
+  final ScrollController _listaScroll = ScrollController();
+
   /// Evita que un cálculo en curso bloquee el siguiente (varios tramos tardan más que el debounce).
   int _calculoSeq = 0;
 
@@ -126,9 +130,21 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
   }
 
+  void _scrollAlResumenCotizado() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_listaScroll.hasClients) return;
+      _listaScroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
   @override
   void dispose() {
     _calculoDebounce?.cancel();
+    _listaScroll.dispose();
     super.dispose();
   }
 
@@ -441,6 +457,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             'tramo': i + 1,
             'origen': desde.label,
             'destino': hasta.label,
+            'latOrigen': desde.lat,
+            'lonOrigen': desde.lon,
+            'latDestino': hasta.lat,
+            'lonDestino': hasta.lon,
             'km': kmSeg,
             'peaje': peajeSeg,
           });
@@ -485,6 +505,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             'tramo': i + 1,
             'origen': prevLabel,
             'destino': w.label,
+            'latOrigen': prevLat,
+            'lonOrigen': prevLon,
+            'latDestino': w.lat,
+            'lonDestino': w.lon,
             'km': resultado['km'],
             'peaje': resultado['peaje'],
           });
@@ -518,6 +542,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           'tramo': waypoints.length + 1,
           'origen': prevLabel,
           'destino': _destino!.label,
+          'latOrigen': prevLat,
+          'lonOrigen': prevLon,
+          'latDestino': _destino!.lat,
+          'lonDestino': _destino!.lon,
           'km': resultadoFinal['km'],
           'peaje': resultadoFinal['peaje'],
         });
@@ -585,9 +613,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _promoSnapshotCotizacion = promoSnapshot;
         _cargando = false;
         _mensajeCarga = '';
-        // En automático (catálogo/buscador), mantenemos el formulario estable.
-        _vistaResumenCotizada = !automatico && _tipoServicio != 'turismo';
+        // Igual que [ProgramarViaje]: al terminar la cotización, resumen arriba con precio grande.
+        _vistaResumenCotizada = _tipoServicio != 'turismo';
       });
+      if (_tipoServicio != 'turismo') {
+        _scrollAlResumenCotizado();
+      }
     } catch (e) {
       if (!automatico && runId == _calculoSeq) {
         _snack('Error calculando rutas: $e');
@@ -628,8 +659,23 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
     setState(() => _cargando = true);
 
+    bool navegoFuera = false;
+    NavigatorState? navAntesDeCrear =
+        NavigationService.navigatorKey.currentState;
+    if (navAntesDeCrear == null && context.mounted) {
+      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
+    }
+
     try {
       final List<Map<String, dynamic>> waypoints = <Map<String, dynamic>>[];
+      final List<Map<String, dynamic>> rutaPuntos = <Map<String, dynamic>>[
+        <String, dynamic>{
+          'lat': _origen!.lat,
+          'lon': _origen!.lon,
+          'label': _origen!.label,
+          'rol': 'origen',
+        },
+      ];
 
       for (final _LugarSel? p in _paradas) {
         if (p == null) continue;
@@ -638,7 +684,19 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           'lon': p.lon,
           'label': p.label,
         });
+        rutaPuntos.add({
+          'lat': p.lat,
+          'lon': p.lon,
+          'label': p.label,
+          'rol': 'parada',
+        });
       }
+      rutaPuntos.add(<String, dynamic>{
+        'lat': _destino!.lat,
+        'lon': _destino!.lon,
+        'label': _destino!.label,
+        'rol': 'destino',
+      });
 
       final String tipoSrv =
           ProgramarViajeMulti.normalizarTipoServicioMulti(_tipoServicio);
@@ -646,13 +704,17 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           ProgramarViajeMulti.canalAsignacionParaMulti(tipoSrv);
 
       final DateTime nowUtc = DateTime.now().toUtc();
-      final DateTime fechaHoraViaje = _esAhora
-          ? nowUtc.add(const Duration(minutes: 10))
-          : _fechaHora.toUtc();
+      // Misma política que [ProgramarViaje] modoAhora: recogida = ahora (UTC), no +10 min.
+      final DateTime fechaHoraViaje =
+          _esAhora ? nowUtc : _fechaHora.toUtc();
 
       final bool viajeInmediato =
           TripPublishWindows.esProgramadoRecogidaCasiInmediata(
               fechaHoraViaje, nowUtc);
+
+      /// Igual que `_programarViaje`: mapa en vivo si entra en ventana de pool inmediata.
+      /// `_esAhora` refuerza el modo «múltiples paradas ahora» aunque algo falle en la heurística.
+      final bool irAViajeEnCurso = _esAhora || viajeInmediato;
 
       DateTime? publishAtArg;
       DateTime? acceptAfterArg;
@@ -689,6 +751,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         extras: {
           'paradas_count': waypoints.length,
           'segmentos': _segmentos,
+          'rutaPuntos': rutaPuntos,
           'peaje_total': _peaje,
           'esAhora': viajeInmediato,
           if (_promoSnapshotCotizacion != null)
@@ -700,24 +763,39 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         acceptAfter: acceptAfterArg,
       );
 
-      if (!mounted) return;
+      if (context.mounted) {
+        _snack('✅ Viaje creado — #${id.substring(0, 6)}');
+      }
 
-      _snack('✅ Viaje creado — #${id.substring(0, 6)}');
-
-      // Misma navegación que [ProgramarViajePage] / motor: turismo incluido.
-      if (viajeInmediato) {
-        await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+      navegoFuera = true;
+      if (irAViajeEnCurso) {
+        if (tipoSrv == 'turismo') {
+          await NavigationService.clearAndGo(
+            EsperaAsignacionTurismo(viajeId: id),
+          );
+        } else {
+          await NavigationService.clearAndGoViajeEnCursoCliente(
+            preNav: navAntesDeCrear,
+          );
+        }
       } else {
-        await NavigationService.clearAndGo(
-          ViajeProgramadoPendiente(viajeId: id),
-        );
+        final NavigatorState? nav =
+            NavigationService.navigatorKey.currentState ?? navAntesDeCrear;
+        if (nav != null && nav.mounted) {
+          await nav.pushAndRemoveUntil<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => ViajeProgramadoPendiente(viajeId: id),
+            ),
+            (Route<dynamic> r) => false,
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
         _snack('Error: $e');
       }
     } finally {
-      if (mounted) {
+      if (mounted && !navegoFuera) {
         setState(() => _cargando = false);
       }
     }
@@ -1059,12 +1137,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               if (_peaje > 0) ...<Widget>[
                 const SizedBox(height: 6),
                 Text(
-                  'Peaje: ${FormatosMoneda.rd(_peaje)}',
+                  'Peaje incluido: ${FormatosMoneda.rd(_peaje)}',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: textMuted, fontSize: 12),
                 ),
               ],
-              const SizedBox(height: 14),
+              const SizedBox(height: 18),
               Text(
                 'TOTAL A PAGAR',
                 textAlign: TextAlign.center,
@@ -1437,6 +1515,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         body: Stack(
         children: <Widget>[
           ListView(
+            controller: _listaScroll,
             padding: const EdgeInsets.all(16),
             children: <Widget>[
               if (_cargando)
@@ -1742,7 +1821,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     ],
                   ),
                 ),
-                if (_precio > 0 && !_cargando) ...<Widget>[
+                if (_precio > 0 && !_cargando && !_mostrarResumenMulti) ...<Widget>[
                   const SizedBox(height: 16),
                   Container(
                     margin: const EdgeInsets.symmetric(vertical: 8),
@@ -2198,13 +2277,6 @@ class DestinoSeleccionado {
 }
 
 // ---------- BottomSheet de búsqueda ----------
-class _ScoredPrediction {
-  final PlacePrediction prediction;
-  final int score;
-
-  const _ScoredPrediction(this.prediction, this.score);
-}
-
 class _BuscarLugarSheet extends StatefulWidget {
   final String titulo;
   const _BuscarLugarSheet({required this.titulo});
@@ -2215,25 +2287,18 @@ class _BuscarLugarSheet extends StatefulWidget {
 
 class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
   final TextEditingController _ctrl = TextEditingController();
+  final LugaresService _lugares = LugaresService.instance;
   Timer? _deb;
   bool _loading = false;
-  List<PlacePrediction> _preds = const <PlacePrediction>[];
-  List<Map<String, String>> _sugerenciasDestacadas = [];
+  List<PrediccionLugar> _preds = const <PrediccionLugar>[];
+  List<RecienteLugar> _recientes = const <RecienteLugar>[];
 
-  // Evita que respuestas de búsquedas anteriores "pisen" el estado actual
-  // cuando el usuario escribe rápido.
   int _autocompleteSeq = 0;
-
-  final PlacesService _places = PlacesService(
-    app_keys.kGooglePlacesApiKey,
-    language: 'es',
-    components: const <String>['country:do'],
-  );
 
   @override
   void initState() {
     super.initState();
-    _cargarSugerenciasDestacadas();
+    _cargarRecientes();
   }
 
   @override
@@ -2243,145 +2308,72 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
     super.dispose();
   }
 
-  void _cargarSugerenciasDestacadas() {
-    final sugerencias = [
-      'Aeropuerto Internacional Las Américas (SDQ)',
-      'Aeropuerto Internacional de Punta Cana (PUJ)',
-      'Aeropuerto Internacional del Cibao (STI)',
-      'Aeropuerto Internacional Gregorio Luperón (POP)',
-      'Aeropuerto Internacional La Romana (LRM)',
-      'Bávaro, Punta Cana',
-      'Zona Colonial, Santo Domingo',
-      'Playa Macao, Punta Cana',
-      'Cabo Engaño, La Altagracia',
-      'Samaná, Santa Bárbara de Samaná',
-      'Puerto Plata, República Dominicana',
-      'Jarabacoa, La Vega',
-      'Constanza, La Vega',
-      'Bayahíbe, La Altagracia',
-      'Las Terrenas, Samaná',
-      'Sosúa, Puerto Plata',
-      'Cabarete, Puerto Plata',
-      'Pico Duarte',
-      'Parque Nacional Los Haitises',
-      'Isla Saona',
-      'Isla Catalina',
-      'Monumento de Santiago',
-      'Acuario Nacional, Santo Domingo',
-      'Teleférico de Puerto Plata',
-    ];
-
-    _sugerenciasDestacadas = sugerencias
-        .map((s) => {
-              'id': 'sug_${s.hashCode}',
-              'text': s,
-            })
-        .toList();
-
-    setState(() {});
+  Future<void> _cargarRecientes() async {
+    final list = await _lugares.cargarRecientes();
+    if (!mounted) return;
+    setState(() => _recientes = list);
   }
 
-  String _getPlaceDescription(PlacePrediction p) {
-    try {
-      final fullDesc = (p as dynamic).fullDescription;
-      if (fullDesc != null && fullDesc.isNotEmpty) return fullDesc;
-    } catch (_) {}
-
-    try {
-      final desc = (p as dynamic).description;
-      if (desc != null && desc.isNotEmpty) return desc;
-    } catch (_) {}
-
-    try {
-      final mainText = (p as dynamic).mainText;
-      if (mainText != null && mainText.isNotEmpty) return mainText;
-    } catch (_) {}
-
-    try {
-      return p.toString();
-    } catch (_) {}
-
-    return 'Lugar seleccionado';
-  }
-
-  String _stripAccents(String s) {
-    try {
-      // En esta app usamos un "strip" básico para mejorar ranking sin depender
-      // de métodos no disponibles (normalize no existe en tu entorno).
-      final v = s.toLowerCase().trim();
-      return v
-          .replaceAll('á', 'a')
-          .replaceAll('é', 'e')
-          .replaceAll('í', 'i')
-          .replaceAll('ó', 'o')
-          .replaceAll('ú', 'u')
-          .replaceAll('ñ', 'n')
-          .replaceAll('ü', 'u')
-          .replaceAll('Á', 'a')
-          .replaceAll('É', 'e')
-          .replaceAll('Í', 'i')
-          .replaceAll('Ó', 'o')
-          .replaceAll('Ú', 'u')
-          .replaceAll('Ñ', 'n')
-          .replaceAll('Ü', 'u');
-    } catch (_) {
-      return s.toLowerCase().trim();
+  List<PrediccionLugar> _recientesComoPredicciones(String q) {
+    final nq = q.trim().toLowerCase();
+    final out = <PrediccionLugar>[];
+    for (final e in _recientes) {
+      if (nq.isNotEmpty && !e.label.toLowerCase().contains(nq)) continue;
+      out.add(
+        PrediccionLugar(
+          placeId: e.placeId.isNotEmpty ? e.placeId : 'recent:${e.label}',
+          primary: e.label,
+          secondary: 'Reciente',
+        ),
+      );
     }
+    return out;
   }
 
-  List<PlacePrediction> _rankPredictions(
-      List<PlacePrediction> preds, String q) {
-    final nq = _stripAccents(q);
-    if (nq.isEmpty) return preds;
+  bool _esReciente(PrediccionLugar p) =>
+      p.secondary == 'Reciente' || p.placeId.startsWith('recent:');
 
-    // Score simple basado en coincidencias con el texto del usuario.
-    final scored = <_ScoredPrediction>[];
-    for (final p in preds) {
-      final primary = _stripAccents(p.primary);
-      final secondary = _stripAccents(p.secondary ?? '');
-
-      int score = 0;
-      if (primary.startsWith(nq)) score += 120;
-      if (secondary.isNotEmpty && secondary.contains(nq)) score += 40;
-      if (primary.contains(nq)) score += 20;
-
-      scored.add(_ScoredPrediction(p, score));
+  String _displayPrediccion(PrediccionLugar p) {
+    final sec = (p.secondary ?? '').trim();
+    if (sec.isNotEmpty && sec != 'Reciente') {
+      return '$sec — ${p.primary}';
     }
-
-    scored.sort((a, b) {
-      // Orden descendente por score (si empatan, se mantiene orden relativo).
-      final d = b.score.compareTo(a.score);
-      return d != 0 ? d : 0;
-    });
-
-    return scored.map((e) => e.prediction).toList(growable: false);
+    return p.primary;
   }
 
   void _onChanged(String v) {
     _deb?.cancel();
-    _deb = Timer(const Duration(milliseconds: 350), () async {
+    _deb = Timer(const Duration(milliseconds: 110), () async {
       if (!mounted) return;
       final String q = v.trim();
       if (q.isEmpty) {
-        setState(() => _preds = const <PlacePrediction>[]);
+        setState(() => _preds = _recientesComoPredicciones(''));
         return;
       }
 
       final int seq = ++_autocompleteSeq;
       setState(() => _loading = true);
       try {
-        final List<PlacePrediction> r = await _places.autocomplete(q);
+        final remotas = await _lugares.autocompletar(q, country: 'DO');
         if (!mounted || seq != _autocompleteSeq) return;
-
-        // Si el usuario cambió el texto mientras llegaba la respuesta,
-        // no actualizamos la lista (evita "flicker" y resultados incorrectos).
         if (_ctrl.text.trim() != q) return;
 
-        setState(() => _preds = _rankPredictions(r, q));
+        final recientes = _recientesComoPredicciones(q);
+        final seen = <String>{};
+        final merged = <PrediccionLugar>[...recientes, ...remotas]
+            .where((p) {
+              final k = '${p.placeId}|${p.primary.toLowerCase()}';
+              if (seen.contains(k)) return false;
+              seen.add(k);
+              return true;
+            })
+            .toList(growable: false);
+
+        setState(() => _preds = _lugares.rankearPredicciones(merged, q));
       } catch (e) {
         if (!mounted || seq != _autocompleteSeq) return;
         if (_ctrl.text.trim() != q) return;
-        setState(() => _preds = const <PlacePrediction>[]);
+        setState(() => _preds = _recientesComoPredicciones(q));
       } finally {
         if (mounted && seq == _autocompleteSeq && _ctrl.text.trim() == q) {
           setState(() => _loading = false);
@@ -2390,48 +2382,46 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
     });
   }
 
-  Future<void> _selectSugerencia(Map<String, String> sugerencia) async {
+  Future<void> _selectPlace(PrediccionLugar p) async {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final results = await locationFromAddress(sugerencia['text']!);
-      if (results.isNotEmpty && mounted) {
-        Navigator.pop(
-          context,
-          _LugarSel(
-            label: sugerencia['text']!,
-            lat: results.first.latitude,
-            lon: results.first.longitude,
-          ),
-        );
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo ubicar este destino')),
-        );
+      if (_esReciente(p)) {
+        final idx = _recientes.indexWhere((e) => e.label == p.primary);
+        if (idx >= 0 && _recientes[idx].placeId.isNotEmpty) {
+          final det = await _lugares.detalle(_recientes[idx].placeId);
+          if (!mounted || det == null) return;
+          await _lugares.guardarReciente(det);
+          if (!mounted) return;
+          Navigator.pop(
+            context,
+            _LugarSel(
+              label: det.displayLabel,
+              lat: det.lat,
+              lon: det.lon,
+            ),
+          );
+          return;
+        }
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error ubicando destino: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
 
-  Future<void> _selectPlace(PlacePrediction p) async {
-    if (!mounted) return;
-    setState(() => _loading = true);
-    try {
-      final PlaceDetails? det = await _places.details(p.placeId);
-      if (!mounted || det == null) return;
+      final det = await _lugares.detalle(p.placeId);
+      if (!mounted || det == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No se pudo obtener el lugar')),
+          );
+        }
+        return;
+      }
+      await _lugares.guardarReciente(det);
+      if (!mounted) return;
       Navigator.pop(
         context,
         _LugarSel(
-          label: det.address,
-          lat: det.latLng.latitude,
-          lon: det.latLng.longitude,
+          label: det.displayLabel,
+          lat: det.lat,
+          lon: det.lon,
         ),
       );
     } catch (e) {
@@ -2491,8 +2481,8 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                   textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
                     hintText: isDestino
-                        ? 'Busca destinos turísticos...'
-                        : 'Escribe dirección o lugar…',
+                        ? 'Escribe barrio, calle, hotel, aeropuerto…'
+                        : 'Escribe dirección o referencia…',
                     filled: true,
                     fillColor: const Color(0xFF1A1A1A),
                     prefixIcon: const Icon(Icons.search, color: Colors.white54),
@@ -2534,40 +2524,26 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
                   child: ListView.separated(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-                    itemCount: _ctrl.text.isEmpty
-                        ? _sugerenciasDestacadas.length
-                        : _preds.length,
+                    itemCount: _preds.length,
                     separatorBuilder: (_, __) =>
                         const Divider(color: Colors.white12, height: 1),
                     itemBuilder: (_, int i) {
-                      if (_ctrl.text.isEmpty) {
-                        final sugerencia = _sugerenciasDestacadas[i];
-                        return ListTile(
-                          leading: const Icon(Icons.star,
-                              color: Colors.amber, size: 20),
-                          title: Text(
-                            sugerencia['text']!,
-                            style: const TextStyle(color: Colors.white),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () => _selectSugerencia(sugerencia),
-                        );
-                      } else {
-                        final PlacePrediction p = _preds[i];
-                        final String displayText = _getPlaceDescription(p);
-                        return ListTile(
-                          leading: const Icon(Icons.location_on,
-                              color: Colors.greenAccent, size: 20),
-                          title: Text(
-                            displayText,
-                            style: const TextStyle(color: Colors.white),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () => _selectPlace(p),
-                        );
-                      }
+                      final PrediccionLugar p = _preds[i];
+                      final esReciente = _esReciente(p);
+                      return ListTile(
+                        leading: Icon(
+                          esReciente ? Icons.history : Icons.location_on,
+                          color: esReciente ? Colors.amber : Colors.greenAccent,
+                          size: 20,
+                        ),
+                        title: Text(
+                          _displayPrediccion(p),
+                          style: const TextStyle(color: Colors.white),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () => _selectPlace(p),
+                      );
                     },
                   ),
                 ),

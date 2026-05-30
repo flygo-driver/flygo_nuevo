@@ -84,7 +84,7 @@ class Soporte extends StatelessWidget {
         backgroundColor: Colors.black,
         appBar: const RaiAppBar(
           title: 'Soporte',
-          backWhenCanPop: true,
+          showBackWhenCanPop: true,
         ),
         body: ListView(
         padding: const EdgeInsets.all(16),

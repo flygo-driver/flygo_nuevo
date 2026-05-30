@@ -31,6 +31,7 @@ import 'package:flygo_nuevo/widgets/empty_trips_widget.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/widgets/rai_linear_loading_body.dart';
+import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
 class _Item {
   final Viaje v;
@@ -1465,7 +1466,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       builder: (context, snap) {
         final data = snap.data?.data();
         final saldo = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(data);
+        final disponible =
+            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(data);
         final pendLegacy = PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
+        final legacyTope = PagosTaxistaRepo.bloqueoPorComisionLegacyTope(data);
         final bloqueado =
             PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(data);
         final ultimaComisionCents = data?['ultimaComisionCents'];
@@ -1473,9 +1477,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             ? (ultimaComisionCents.toDouble() / 100.0)
             : 0.0;
         final viajesEstimados = ultimaComisionRd > 0
-            ? (saldo / ultimaComisionRd).floor().clamp(0, 9999)
+            ? (disponible / ultimaComisionRd).floor().clamp(0, 9999)
             : null;
-        final faltante = (minSaldo - saldo).clamp(0.0, double.infinity);
+        final faltante = (minSaldo - disponible).clamp(0.0, double.infinity);
 
         return Container(
           width: double.infinity,
@@ -1502,8 +1506,15 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               Expanded(
                 child: Text(
                   bloqueado
-                      ? 'Recarga BLOQUEADA. Saldo actual ${FormatosMoneda.rd(saldo)} (mínimo RD\$${minSaldo.toStringAsFixed(0)}). Te faltan ${FormatosMoneda.rd(faltante)} para volver a operar.'
-                      : 'Saldo recarga en tiempo real: ${FormatosMoneda.rd(saldo)}. ${viajesEstimados == null ? '' : 'Estimado: ~$viajesEstimados viajes como el último antes de llegar al mínimo. '}'
+                      ? (legacyTope
+                          ? 'Recarga BLOQUEADA: comisión legacy ${FormatosMoneda.rd(pendLegacy)} (tope RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}). '
+                              'Aunque el prepago muestre saldo, hay que bajar esa deuda: al aprobar una recarga, '
+                              'lo verificado paga primero legacy; el sobrante suma prepago. Prepago bruto: ${FormatosMoneda.rd(saldo)}; disponible p. comisión: ${FormatosMoneda.rd(disponible)}.'
+                          : 'Recarga BLOQUEADA. Prepago disponible para comisión: ${FormatosMoneda.rd(disponible)} '
+                              '(mín. RD\$${minSaldo.toStringAsFixed(0)}). Te faltan ${FormatosMoneda.rd(faltante)}. '
+                              'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.')
+                      : 'Saldo recarga en tiempo real: ${FormatosMoneda.rd(saldo)} (disponible p. comisión: ${FormatosMoneda.rd(disponible)}). '
+                          '${viajesEstimados == null ? '' : 'Estimado: ~$viajesEstimados viajes como el último antes de llegar al mínimo. '}'
                           'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.',
                   style: TextStyle(
                     color: isDark ? Colors.white70 : const Color(0xFF374151),
@@ -1607,7 +1618,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                     icon: Icons.savings_outlined,
                     titulo: 'Recarga comisión (efectivo)',
                     texto:
-                        'En Mis pagos, recarga prepago: monto, foto del depósito. Al aprobar el admin se acredita saldo (mín. RD\$200 para seguir activo tras el 1.er viaje en efectivo).',
+                        'En Mis pagos, recarga prepago: monto, foto del depósito. Al aprobar el admin, el monto '
+                        'paga primero la comisión legacy pendiente (si hay) y el resto suma al prepago; '
+                        'necesitás al menos RD\$${PagosTaxistaRepo.minSaldoPrepagoComisionRd.toStringAsFixed(0)} '
+                        'disponible para comisión tras el 1.er viaje en efectivo.',
                     textMuted: textMuted,
                     isDark: isDark,
                   ),
@@ -2425,17 +2439,12 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         appBar: AppBar(
           backgroundColor: appBarBg,
           automaticallyImplyLeading: false,
-          leading: const SizedBox(width: 48),
-          title: const Text(
-            'Viajes Disponibles',
-            style: TextStyle(
-              fontSize: 24,
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
           centerTitle: true,
-          iconTheme: const IconThemeData(color: Colors.white),
+          toolbarHeight: 56,
+          title: const RaiHeaderLogo(height: 36),
+          iconTheme: IconThemeData(
+            color: Theme.of(context).appBarTheme.foregroundColor,
+          ),
           actions: const [SaldoGananciasChip()],
           bottom: TabBar(
             controller: _tabPool,
@@ -2481,7 +2490,12 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                           vals != null && vals.isNotEmpty && vals[0];
                       final bool deudaComision =
                           vals != null && vals.length > 1 && vals[1];
-                      final bool bloqueadoPago = deudaComision;
+                      final bool bloqueoPorBanderaUsuario =
+                          uData?['tienePagoPendiente'] == true;
+                      // `deudaComision` = billetera (prepago/legacy). `tienePagoPendiente` incluye también
+                      // deuda pool ≥ umbral (misma regla que Cloud Functions).
+                      final bool bloqueadoPago =
+                          deudaComision || bloqueoPorBanderaUsuario;
                       if (bloqueadoPago) {
                         Future.microtask(
                             () => _notificarBloqueoPagoSiAplica(u.uid));

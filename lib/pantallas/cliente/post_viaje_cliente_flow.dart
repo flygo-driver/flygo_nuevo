@@ -1,6 +1,8 @@
 // lib/pantallas/cliente/post_viaje_cliente_flow.dart
 //
 // Flujo único post-viaje: resumen (según método) → calificación → cierre.
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -8,13 +10,29 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/reportar_viaje.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/shell/cliente_shell.dart';
+import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/post_viaje_rating_throttle.dart';
+import 'package:flygo_nuevo/widgets/datos_transferencia_conductor_panel.dart';
 
 class PostViajeClienteFlow extends StatefulWidget {
   final String viajeId;
 
-  const PostViajeClienteFlow({super.key, required this.viajeId});
+  /// Datos del viaje ya conocidos en pantalla previa (p. ej. [ViajeEnCursoCliente]).
+  /// Evita el “hueco” en que el cuerpo es solo spinner hasta el primer snapshot remoto.
+  final Map<String, dynamic>? viajeDataSemilla;
+
+  const PostViajeClienteFlow({
+    super.key,
+    required this.viajeId,
+    this.viajeDataSemilla,
+  });
 
   @override
   State<PostViajeClienteFlow> createState() => _PostViajeClienteFlowState();
@@ -25,10 +43,85 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   double _calificacion = 5;
   final TextEditingController _comentario = TextEditingController();
   bool _cargandoRating = false;
+  /// Tras enviar calificación u omitir: el stream puede traer aún `calificado: false`
+  /// y devolvía al paso 1 (botones “muertos”). Forzamos no bajar de cierre.
+  bool _salioDeCalificacion = false;
+  bool _scheduledAuthRedirect = false;
   static const int _maxComentario = 280;
+
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeSub;
+  DocumentSnapshot<Map<String, dynamic>>? _viajeSnap;
+  /// Copia local hasta tener [DocumentSnapshot] fiable (semilla o post-[get]).
+  Map<String, dynamic>? _viajeDatosUi;
+  Object? _viajeListenError;
+  Timer? _snapDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    ClientePostViajeReopenGuard.markOpened(widget.viajeId);
+    // Evita que el shell siga en modo “viaje en curso” tapando tabs / bloqueando toques.
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    final Map<String, dynamic>? sem = widget.viajeDataSemilla;
+    if (sem != null && sem.isNotEmpty) {
+      _viajeDatosUi = Map<String, dynamic>.from(sem);
+    }
+    unawaited(_bootstrapViajeDoc());
+  }
+
+  Future<void> _bootstrapViajeDoc() async {
+    final DocumentReference<Map<String, dynamic>> ref = FirebaseFirestore
+        .instance
+        .collection('viajes')
+        .doc(widget.viajeId);
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> primero =
+          await ref.get(const GetOptions(source: Source.serverAndCache)).timeout(
+                const Duration(seconds: 20),
+                onTimeout: () => throw TimeoutException(
+                  'Tiempo de espera al leer el viaje (comprueba conexión).',
+                ),
+              );
+      if (!mounted) return;
+      setState(() {
+        _viajeSnap = primero;
+        _viajeListenError = null;
+        if (primero.exists) {
+          _viajeDatosUi = null;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _viajeListenError = e);
+    }
+
+    _viajeSub = ref.snapshots().listen(
+      (DocumentSnapshot<Map<String, dynamic>> snap) {
+        _snapDebounce?.cancel();
+        _snapDebounce = Timer(const Duration(milliseconds: 120), () {
+          if (!mounted) return;
+          setState(() {
+            _viajeSnap = snap;
+            _viajeListenError = null;
+            if (snap.exists) {
+              _viajeDatosUi = null;
+            }
+          });
+        });
+      },
+      onError: (Object e) {
+        if (!mounted) return;
+        setState(() {
+          _viajeListenError = e;
+        });
+      },
+    );
+  }
 
   @override
   void dispose() {
+    _snapDebounce?.cancel();
+    _viajeSub?.cancel();
     _comentario.dispose();
     super.dispose();
   }
@@ -70,29 +163,82 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     required bool yaVioRecibo,
     required String uid,
   }) async {
-    if (esEfectivo && !yaVioRecibo) {
-      try {
-        await _marcarReciboEfectivoVisto(v.id, uid);
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('No se pudo guardar el recibo: $e')),
-          );
-        }
-      }
-    }
-    if (!mounted) return;
     final String estN = EstadosViaje.normalizar(v.estado);
     final bool puedeRate = v.uidTaxista.isNotEmpty &&
         v.calificado != true &&
         !EstadosViaje.esCancelado(estN);
+    bool mostrarCalificacion = puedeRate;
+    if (mostrarCalificacion) {
+      mostrarCalificacion =
+          await PostViajeRatingThrottle.shouldShowRatingPrompt();
+      if (!mostrarCalificacion) {
+        await PostViajeRatingThrottle.recordViajeSinPromptCalificacion();
+      }
+    }
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
     setState(() {
-      _step = puedeRate ? 1 : 2;
+      _step = (puedeRate && mostrarCalificacion) ? 1 : 2;
+    });
+    if (puedeRate && mostrarCalificacion) {
+      await PostViajeRatingThrottle.recordPromptShown();
+    }
+
+    if (esEfectivo && !yaVioRecibo) {
+      unawaited(() async {
+        try {
+          await _marcarReciboEfectivoVisto(v.id, uid);
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('No se pudo guardar el recibo: $e')),
+            );
+          }
+        }
+      }());
+    }
+  }
+
+  /// Sesión nula o rechazada por el servidor al calificar: snack + stack a [AuthGatePublic].
+  Future<void> _redirigirALogin(String mensaje) async {
+    if (!mounted) return;
+    try {
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+    } catch (_) {}
+    try {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(mensaje)));
+    } catch (_) {}
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final NavigatorState? nav = NavigationService.navigatorKey.currentState;
+      if (nav != null) {
+        await NavigationService.clearToAuthGate();
+        return;
+      }
+      if (!mounted) return;
+      await Navigator.of(context, rootNavigator: true).pushNamedAndRemoveUntil(
+        '/auth_check',
+        (Route<dynamic> r) => false,
+      );
     });
   }
 
   Future<void> _enviarCalificacion(Viaje v, String uid) async {
     if (_cargandoRating) return;
+    final User? fresh =
+        FirebaseAuth.instance.currentUser ?? await resolveFirebaseUser();
+    if (fresh == null) {
+      unawaited(_redirigirALogin(
+        'Tu sesión expiró, inicia sesión nuevamente.',
+      ));
+      return;
+    }
+    if (fresh.uid != uid) {
+      unawaited(_redirigirALogin(
+        'Tu sesión no coincide con este viaje. Inicia sesión nuevamente.',
+      ));
+      return;
+    }
+    if (!mounted) return;
     FocusScope.of(context).unfocus();
     setState(() => _cargandoRating = true);
     try {
@@ -101,6 +247,11 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
         uidCliente: uid,
         calificacion: _calificacion.clamp(1, 5).toDouble(),
         comentario: _comentario.text.trim(),
+      ).timeout(
+        const Duration(seconds: 28),
+        onTimeout: () => throw TimeoutException(
+          'El servidor no respondió a tiempo. Reintentá con mejor señal.',
+        ),
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -108,21 +259,53 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       );
       setState(() {
         _cargandoRating = false;
+        _salioDeCalificacion = true;
         _step = 2;
       });
+    } on SessionExpiredForTrip catch (_) {
+      if (mounted) {
+        setState(() => _cargandoRating = false);
+        unawaited(_redirigirALogin(
+          'Tu sesión expiró, inicia sesión nuevamente.',
+        ));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al calificar: $e')),
+          SnackBar(
+            content: Text('Error al calificar: $e'),
+            action: SnackBarAction(
+              label: 'Reintentar',
+              onPressed: () => unawaited(_enviarCalificacion(v, uid)),
+            ),
+          ),
         );
         setState(() => _cargandoRating = false);
       }
     }
   }
 
-  void _irInicio() {
-    Navigator.of(context)
-        .pushNamedAndRemoveUntil('/auth_check', (Route<dynamic> r) => false);
+  /// Vuelve al home del cliente: overlay primero; navegación **en el siguiente frame**
+  /// para no chocar con el frame del botón / PopScope. `clearAndGo` evita fallos de
+  /// rutas nombradas si el stack actual no las resolvió bien.
+  Future<void> _irInicio() async {
+    try {
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+    } catch (_) {}
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final NavigatorState? nav =
+          NavigationService.navigatorKey.currentState;
+      if (nav != null) {
+        await NavigationService.clearAndGo(const ClienteShell());
+        return;
+      }
+      await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
+        (Route<dynamic> r) => false,
+      );
+    });
   }
 
   Widget _stepResumen({
@@ -130,10 +313,12 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     required Map<String, dynamic> d,
     required String uid,
   }) {
-    final String metodoRaw =
-        (d['metodoPago'] ?? v.metodoPago).toString().toLowerCase();
-    final bool esEfectivo = metodoRaw.contains('efectivo');
-    final bool esTransfer = metodoRaw.contains('transfer');
+    final String metodoRaw = (d['metodoPago'] ?? v.metodoPago).toString();
+    final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoRaw);
+    final bool esTransfer = MetodoPagoViaje.esTransferencia(metodoRaw);
+    final String uidTaxista = v.uidTaxista.isNotEmpty
+        ? v.uidTaxista
+        : (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
     final bool yaVioRecibo = d['clienteFacturaEfectivoVistaEn'] != null;
     final double total = (d['precioFinal'] is num)
         ? (d['precioFinal'] as num).toDouble()
@@ -190,7 +375,16 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
                         ? 'Efectivo'
                         : (esTransfer ? 'Transferencia' : v.metodoPago)),
                 if (v.origen.isNotEmpty) _kv('Origen', v.origen),
-                if (v.destino.isNotEmpty) _kv('Destino', v.destino),
+                if (v.waypoints != null && v.waypoints!.isNotEmpty)
+                  ...v.waypoints!.asMap().entries.map(
+                    (MapEntry<int, Map<String, dynamic>> e) {
+                      final String label =
+                          (e.value['label'] ?? 'Parada ${e.key + 1}')
+                              .toString();
+                      return _kv('Parada ${e.key + 1}', label);
+                    },
+                  ),
+                if (v.destino.isNotEmpty) _kv('Destino final', v.destino),
                 if (v.nombreTaxista.isNotEmpty)
                   _kv('Conductor', v.nombreTaxista),
                 const Divider(height: 28, color: Colors.white24),
@@ -208,6 +402,25 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
               ],
             ),
           ),
+          if (esTransfer) ...[
+            const SizedBox(height: 16),
+            DatosTransferenciaConductorPanel(
+              viajeData: d,
+              uidTaxista: uidTaxista,
+              montoRd: total,
+              fondoOscuro: true,
+              titulo: 'CUENTA DEL CONDUCTOR PARA TRANSFERIR',
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Text(
+                'Usá estos mismos datos que ve el conductor en su comprobante. '
+                'Si ya transferiste, conservá el comprobante.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.35),
+              ),
+            ),
+          ],
           const SizedBox(height: 28),
           FilledButton(
             onPressed: () => _continuarDesdeResumen(
@@ -281,6 +494,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
             children: List.generate(5, (i) {
               final filled = _calificacion >= i + 1;
               return GestureDetector(
+                behavior: HitTestBehavior.opaque,
                 onTap: ya
                     ? null
                     : () => setState(() => _calificacion = (i + 1).toDouble()),
@@ -352,11 +566,14 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
             ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
-            onPressed: () {
-              Navigator.of(context).push<void>(
+            onPressed: () async {
+              await Navigator.of(context, rootNavigator: true).push<void>(
                 MaterialPageRoute<void>(
-                    builder: (_) => ReportarViaje(viaje: v)),
+                  fullscreenDialog: true,
+                  builder: (_) => ReportarViaje(viaje: v),
+                ),
               );
+              if (mounted) setState(() {});
             },
             style: OutlinedButton.styleFrom(
               foregroundColor: Colors.orangeAccent,
@@ -373,7 +590,12 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
           ),
           if (!ya)
             TextButton(
-              onPressed: () => setState(() => _step = 2),
+              onPressed: () {
+                try {
+                  ActiveTripService.cancelarMantenimientoOverlayViaje();
+                } catch (_) {}
+                unawaited(_irInicio());
+              },
               child: const Text('Omitir por ahora',
                   style: TextStyle(color: Colors.white38)),
             ),
@@ -405,7 +627,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
           ),
           const SizedBox(height: 36),
           FilledButton(
-            onPressed: _irInicio,
+            onPressed: () => _irInicio(),
             style: FilledButton.styleFrom(
               backgroundColor: Colors.greenAccent,
               foregroundColor: Colors.black87,
@@ -444,7 +666,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
           ),
           const SizedBox(height: 36),
           FilledButton(
-            onPressed: _irInicio,
+            onPressed: () => _irInicio(),
             style: FilledButton.styleFrom(
               backgroundColor: Colors.white24,
               foregroundColor: Colors.white,
@@ -460,100 +682,175 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final User? u = FirebaseAuth.instance.currentUser;
-    if (u == null) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-            child:
-                Text('Inicia sesión', style: TextStyle(color: Colors.white70))),
+  Widget _buildViajeBody(String uidCliente) {
+    if (_viajeListenError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'No pudimos cargar el viaje.\n$_viajeListenError',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 20),
+              FilledButton(
+                onPressed: () => _irInicio(),
+                child: const Text('Ir al inicio'),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
-    return PopScope(
-      canPop: false,
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          foregroundColor: Colors.white,
-          automaticallyImplyLeading: false,
-          title: Text(
-            _step == 0
-                ? 'Resumen'
-                : _step == 1
-                    ? 'Calificación'
-                    : 'Cierre',
-            style: const TextStyle(fontWeight: FontWeight.w700),
+    Map<String, dynamic>? raw;
+    if (_viajeSnap != null && _viajeSnap!.exists) {
+      raw = _viajeSnap!.data();
+    } else {
+      raw = _viajeDatosUi;
+    }
+
+    if (raw == null) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.greenAccent),
+      );
+    }
+
+    final Map<String, dynamic> d = Map<String, dynamic>.from(raw);
+    Viaje v;
+    try {
+      v = Viaje.fromMap(widget.viajeId, d);
+    } catch (e, st) {
+      debugPrint('[PostViajeClienteFlow] Viaje.fromMap: $e\n$st');
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'Datos del viaje incompletos.\n$e',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 20),
+              FilledButton(
+                onPressed: () => _irInicio(),
+                child: const Text('Ir al inicio'),
+              ),
+            ],
           ),
         ),
-        body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('viajes')
-              .doc(widget.viajeId)
-              .snapshots(),
-          builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
-              return const Center(
-                  child: CircularProgressIndicator(color: Colors.greenAccent));
-            }
-            if (snap.hasError || !snap.hasData || !snap.data!.exists) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'No encontramos el viaje.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 20),
-                      FilledButton(
-                        onPressed: _irInicio,
-                        child: const Text('Ir al inicio'),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }
-            final d = snap.data!.data() ?? {};
-            final v =
-                Viaje.fromMap(snap.data!.id, Map<String, dynamic>.from(d));
-            final st =
-                EstadosViaje.normalizar((d['estado'] ?? v.estado).toString());
-            final bool esCancel =
-                st == EstadosViaje.cancelado || st == EstadosViaje.rechazado;
-            final bool esOk =
-                (d['completado'] == true) || st == EstadosViaje.completado;
+      );
+    }
+    final String st =
+        EstadosViaje.normalizar((d['estado'] ?? v.estado).toString());
+    final bool esCancel =
+        st == EstadosViaje.cancelado || st == EstadosViaje.rechazado;
+    // No depender solo de `completado: true` (a veces el doc llega con estado
+    // terminal antes de que el flag se replique en caché).
+    final bool esOk =
+        (d['completado'] == true) || EstadosViaje.esCompletado(st);
 
-            if (esCancel) {
-              return _canceladoUi(v);
-            }
-            if (!esOk) {
-              return const Center(
-                child: Text(
-                  'Actualizando estado del viaje…',
-                  style: TextStyle(color: Colors.white70),
-                ),
-              );
-            }
+    if (esCancel) {
+      return _canceladoUi(v);
+    }
+    if (!esOk) {
+      return const Center(
+        child: Text(
+          'Actualizando estado del viaje…',
+          style: TextStyle(color: Colors.white70),
+        ),
+      );
+    }
 
-            switch (_step) {
-              case 0:
-                return _stepResumen(v: v, d: d, uid: u.uid);
-              case 1:
-                return _stepCalificar(v, u.uid);
-              default:
-                return _stepCierre();
+    // Si el viaje ya quedó calificado (u otra sesión), no dejar pantalla “muerta” en paso 1.
+    // Si el usuario ya envió/omitió, no volver al paso 1 aunque el snapshot venga stale.
+    final int stepUi = _salioDeCalificacion
+        ? (_step < 2 ? 2 : _step).clamp(0, 2)
+        : ((_step == 1 && v.calificado == true) ? 2 : _step.clamp(0, 2));
+
+    switch (stepUi) {
+      case 0:
+        return _stepResumen(v: v, d: d, uid: uidCliente);
+      case 1:
+        return _stepCalificar(v, uidCliente);
+      default:
+        return _stepCierre();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      initialData: FirebaseAuth.instance.currentUser,
+      builder: (context, snapshot) {
+        final User? u =
+            snapshot.data ?? FirebaseAuth.instance.currentUser;
+
+        // Auth aún cargando o restaurando sesión: no mandar a login.
+        if (u == null &&
+            snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(
+              child: CircularProgressIndicator(color: Colors.greenAccent),
+            ),
+          );
+        }
+
+        if (u == null) {
+          if (!_scheduledAuthRedirect) {
+            _scheduledAuthRedirect = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              if (!mounted) return;
+              await NavigationService.clearToAuthGate();
+            });
+          }
+          return const Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(
+              child: Text(
+                'Tu sesión expiró.\nRedirigiendo…',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+          );
+        }
+
+        _scheduledAuthRedirect = false;
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (bool didPop, Object? result) {
+            if (!didPop) {
+              unawaited(_irInicio());
             }
           },
-        ),
-      ),
+          child: Scaffold(
+            resizeToAvoidBottomInset: true,
+            backgroundColor: Colors.black,
+            appBar: AppBar(
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+              automaticallyImplyLeading: false,
+              title: Text(
+                _step == 0
+                    ? 'Resumen'
+                    : _step == 1
+                        ? 'Calificación'
+                        : 'Cierre',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            body: _buildViajeBody(u.uid),
+          ),
+        );
+      },
     );
   }
 }

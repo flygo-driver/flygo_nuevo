@@ -76,6 +76,38 @@ class PagosTaxistaRepo {
   static const double umbralBloqueoComisionEfectivoRd =
       umbralComisionLegacyBloqueoRd;
 
+  /// Misma regla que [syncTienePagoPendiente] en `functions/src/finance.ts` (deuda comisión giras/pool).
+  static const double umbralDeudaPoolComisionAdminRd = 500;
+
+  /// Suma montos de comisión pendiente de validación admin en `viajes_pool`.
+  static Future<double> sumarDeudaPoolComisionPendienteAdmin(
+      String uidTaxista) async {
+    final uid = uidTaxista.trim();
+    if (uid.isEmpty) return 0;
+    double total = 0;
+    try {
+      final snap = await _db
+          .collection('viajes_pool')
+          .where('ownerTaxistaId', isEqualTo: uid)
+          .where('comisionPendientePagoAdmin', isEqualTo: true)
+          .limit(500)
+          .get();
+      for (final doc in snap.docs) {
+        final m = doc.data();
+        final v = m['montoComisionPendienteAdmin'] ?? m['montoComision'];
+        if (v is num && v.isFinite) {
+          total += v.toDouble();
+        } else if (v != null) {
+          final n = double.tryParse(v.toString());
+          if (n != null && n.isFinite) total += n;
+        }
+      }
+    } catch (e) {
+      debugPrint('[PagosTaxistaRepo] sumarDeudaPoolComisionPendienteAdmin: $e');
+    }
+    return double.parse(total.clamp(0, 1e9).toStringAsFixed(2));
+  }
+
   /// Textos UX (prepago + comisión 20% en efectivo).
   static const String mensajeRecargaTomarViajes =
       'Recarga crédito prepago (mín. RD\$200): el 20% de cada viaje en efectivo se descuenta de tu saldo. '
@@ -91,12 +123,98 @@ class PagosTaxistaRepo {
   static const String mensajeRecargaListaVacia =
       'No hay viajes disponibles hasta que regularices tu saldo prepago (comisión efectivo).';
 
+  /// Bloqueo al abrir la app (prepago bajo), distinto del recordatorio largo.
+  /// Coherente con la CF: una recarga aprobada paga primero [comisionPendiente] legacy y el resto suma prepago.
+  static const String mensajeBloqueoAppSaldoRecargas =
+      'Saldo prepago disponible para comisión en efectivo insuficiente (mín. RD\$200 tras el '
+      'primer viaje en efectivo). Recarga en Mis pagos; al aprobar el admin se acredita. '
+      'Si tenés comisión legacy pendiente, ese mismo depósito primero baja esa deuda y el '
+      'resto queda en prepago.';
+
+  /// Legacy `comisionPendiente` ≥ tope: bloquea aunque el prepago en pantalla sea alto.
+  static const String mensajeBloqueoComisionLegacyTopeApp =
+      'Tu comisión en efectivo pendiente (legacy) superó el tope permitido (RD\$500). Por eso '
+      'el acceso está cortado aunque veas saldo en prepago. Deposita y sube el comprobante en '
+      'Mis pagos: al aprobar el admin, el monto verificado paga primero esa comisión pendiente '
+      'y lo que sobra queda en tu prepago para los próximos viajes.';
+
+  /// Suma de comisiones de giras/pool marcadas pendientes de validación admin ≥ tope.
+  static const String mensajeBloqueoDeudaPoolAdminApp =
+      'Hay comisión de giras/pool pendiente de validación por el administrador que supera el '
+      'tope permitido. Seguí las indicaciones en Mis pagos o soporte hasta que el equipo '
+      'regularice esos viajes de gira.';
+
+  /// Cuota semanal de servicio vencida (>14 días) sin regularizar.
+  static const String mensajeBloqueoDeudaSemanalApp =
+      'Tenés pagos semanales del servicio vencidos. Regularizá en Mis pagos para volver a operar.';
+
   static String get mensajeRecargaAccesoPantallaCompleta =>
       'Tu acceso queda suspendido: agotaste tu saldo prepago de comisión en efectivo. '
       'Recarga (sugerido RD\$${minSaldoPrepagoComisionRd.toStringAsFixed(0)} o más) '
       'para seguir operando; el 20% de cada viaje en efectivo se descuenta del saldo, '
       'o regularizar comisión legacy ≥ RD\$${umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}. '
-      'Recarga desde Mis pagos; al verificar el admin, el servicio vuelve.';
+      'Recarga desde Mis pagos; al verificar el admin, el monto paga primero el legacy pendiente '
+      '(si hay) y el resto suma al prepago.';
+
+  /// `true` si la deuda legacy alcanzó el tope (bloquea aunque el prepago bruto sea alto).
+  static bool bloqueoPorComisionLegacyTope(Map<String, dynamic>? billeData) {
+    return comisionPendienteDesdeBilletera(billeData) >=
+        umbralComisionLegacyBloqueoRd - 1e-6;
+  }
+
+  /// Mínimo que debe aprobarse en una recarga (todo va primero a legacy) para que
+  /// [comisionPendiente] quede **debajo** del tope y se quite el bloqueo por legacy.
+  /// Coherente con [bloqueoPorComisionLegacyTope] (≥ [umbralComisionLegacyBloqueoRd] bloquea).
+  static double montoMinimoRecargaParaSalirBloqueoLegacyRd(
+    double comisionPendienteRd,
+  ) {
+    final p = comisionPendienteRd;
+    if (p + 1e-9 < umbralComisionLegacyBloqueoRd) return 0;
+    return double.parse(
+      (p - umbralComisionLegacyBloqueoRd + 0.01).clamp(0, 1e9).toStringAsFixed(2),
+    );
+  }
+
+  /// Monto que, si entero en recarga aprobada y va todo a legacy, deja `comisionPendiente` en 0.
+  static double montoParaLiquidarLegacyCompletoRd(double comisionPendienteRd) {
+    if (comisionPendienteRd <= 1e-9) return 0;
+    return double.parse(comisionPendienteRd.clamp(0, 1e9).toStringAsFixed(2));
+  }
+
+  static double deudaPoolPendienteRdDesdeUsuario(Map<String, dynamic>? usuarioData) {
+    final v = usuarioData?['deudaPoolPendienteRd'];
+    if (v is num && v.isFinite) return v.toDouble();
+    return double.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  /// Misma regla que [sumarDeudaPoolComisionPendienteAdmin] + umbral, usando snapshot en `usuarios`.
+  static bool bloqueoPorDeudaPoolAdminDesdeUsuario(
+      Map<String, dynamic>? usuarioData) {
+    return deudaPoolPendienteRdDesdeUsuario(usuarioData) + 1e-9 >=
+        umbralDeudaPoolComisionAdminRd;
+  }
+
+  /// Texto principal de pantalla “cuenta bloqueada”: prioridad semanal → legacy → prepago → pool → genérico.
+  static String mensajeCuentaBloqueadaOperativo({
+    required bool deudaSemanalVencida,
+    required Map<String, dynamic>? billeData,
+    required Map<String, dynamic>? usuarioData,
+  }) {
+    if (deudaSemanalVencida) return mensajeBloqueoDeudaSemanalApp;
+    if (bloqueoPorComisionLegacyTope(billeData)) {
+      return mensajeBloqueoComisionLegacyTopeApp;
+    }
+    if (bloqueoOperativoPorComisionEfectivo(billeData)) {
+      return mensajeBloqueoAppSaldoRecargas;
+    }
+    if (bloqueoPorDeudaPoolAdminDesdeUsuario(usuarioData)) {
+      return mensajeBloqueoDeudaPoolAdminApp;
+    }
+    if (usuarioData?['tienePagoPendiente'] == true) {
+      return mensajeBloqueoDeudaPoolAdminApp;
+    }
+    return mensajeRecargaAccesoPantallaCompleta;
+  }
 
   /// Misma regla que `bloqueoOperativoPrepago` en Cloud Functions.
   static bool bloqueoOperativoPorComisionEfectivo(
@@ -228,11 +346,17 @@ class PagosTaxistaRepo {
     if (uidTaxista.trim().isEmpty) return;
     final bille =
         await _db.collection('billeteras_taxista').doc(uidTaxista).get();
-    final bool tienePagoPendiente =
+    final bool bloqueoComision =
         bloqueoOperativoPorComisionEfectivo(bille.data());
+    final double deudaPoolRd =
+        await sumarDeudaPoolComisionPendienteAdmin(uidTaxista);
+    final bool bloqueoPool =
+        deudaPoolRd + 1e-9 >= umbralDeudaPoolComisionAdminRd;
+    final bool tienePagoPendiente = bloqueoComision || bloqueoPool;
     await _db.collection('usuarios').doc(uidTaxista).set(
       {
         'tienePagoPendiente': tienePagoPendiente,
+        'deudaPoolPendienteRd': deudaPoolRd,
         'updatedAt': FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),
@@ -351,19 +475,35 @@ class PagosTaxistaRepo {
   }) async {
     final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
     if (aprobado) {
-      final callable = fx.httpsCallable('approveRecargaComision');
-      await callable.call(<String, dynamic>{
+      final HttpsCallable callable =
+          fx.httpsCallable('approveRecargaComision');
+      final HttpsCallableResult<dynamic> res =
+          await callable.call(<String, dynamic>{
         'recargaId': recargaId.trim(),
         'notaAdmin': (notaAdmin ?? '').trim(),
       });
+      final Object? data = res.data;
+      if (data is! Map || data['ok'] != true) {
+        throw Exception(
+          'approveRecargaComision no confirmó ok. Respuesta: $data',
+        );
+      }
     } else {
       final motivo = (notaAdmin ?? '').trim();
       if (motivo.isEmpty) throw Exception('Indica el motivo del rechazo');
-      final callable = fx.httpsCallable('rejectRecargaComision');
-      await callable.call(<String, dynamic>{
+      final HttpsCallable callable =
+          fx.httpsCallable('rejectRecargaComision');
+      final HttpsCallableResult<dynamic> res =
+          await callable.call(<String, dynamic>{
         'recargaId': recargaId.trim(),
         'notaAdmin': motivo,
       });
+      final Object? data = res.data;
+      if (data is! Map || data['ok'] != true) {
+        throw Exception(
+          'rejectRecargaComision no confirmó ok. Respuesta: $data',
+        );
+      }
     }
   }
 
@@ -478,27 +618,65 @@ class PagosTaxistaRepo {
   // ==============================================================
   // VERIFICAR SI TAXISTA PUEDE TRABAJAR
   // ==============================================================
-  static Future<bool> puedeTrabajar(String uidTaxista) async {
+
+  /// Misma regla que la primera parte de [puedeTrabajar] (deuda semanal >14 días).
+  static Future<bool> tieneDeudaSemanalVencida(String uidTaxista) async {
+    if (uidTaxista.trim().isEmpty) return false;
     try {
-      // Verificar si tiene pagos vencidos (más de 2 semanas)
       final now = DateTime.now();
       final dosSemanasAtras = now.subtract(const Duration(days: 14));
-
       final pagosVencidos = await _col
           .where('uidTaxista', isEqualTo: uidTaxista)
           .where('estado', whereIn: _estadosDeudaAbierta)
           .where('fechaFin', isLessThan: Timestamp.fromDate(dosSemanasAtras))
           .limit(1)
           .get();
+      return pagosVencidos.docs.isNotEmpty;
+    } catch (e) {
+      debugPrint('Error tieneDeudaSemanalVencida: $e');
+      return false;
+    }
+  }
 
-      if (pagosVencidos.docs.isNotEmpty) {
-        return false; // Bloqueado por deuda
+  /// Banco + cuenta + titular en `usuarios` (cliente transfiere al taxista en viajes transferencia).
+  static bool perfilBancarioTransferenciaCompleto(
+      Map<String, dynamic>? usuarioData) {
+    if (usuarioData == null) return false;
+    final String banco = (usuarioData['banco'] ?? '').toString().trim();
+    final String cuenta =
+        (usuarioData['numeroCuenta'] ?? '').toString().trim();
+    final String titular = (usuarioData['titularCuenta'] ??
+            usuarioData['titular'] ??
+            '')
+        .toString()
+        .trim();
+    return banco.isNotEmpty && cuenta.isNotEmpty && titular.isNotEmpty;
+  }
+
+  static Future<bool> puedeTrabajar(String uidTaxista) async {
+    try {
+      if (await tieneDeudaSemanalVencida(uidTaxista)) {
+        return false;
+      }
+
+      final usr =
+          await _db.collection('usuarios').doc(uidTaxista).get();
+      final ud = usr.data();
+      if (ud != null && ud['tienePagoPendiente'] == true) {
+        return false;
+      }
+
+      final bille =
+          await _db.collection('billeteras_taxista').doc(uidTaxista).get();
+      if (bloqueoOperativoPorComisionEfectivo(bille.data())) {
+        return false;
       }
 
       return true;
     } catch (e) {
       debugPrint('Error verificando si puede trabajar: $e');
-      return true; // Por seguridad, permitir trabajar si hay error
+      // Fail-closed: sin lectura fiable de billetera/usuario no se abre el pool.
+      return false;
     }
   }
 

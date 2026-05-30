@@ -18,14 +18,14 @@ class RaiOfflineBanner extends StatefulWidget {
 class _RaiOfflineBannerState extends State<RaiOfflineBanner> {
   late final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _sub;
-  List<ConnectivityResult> _results = const <ConnectivityResult>[
-    ConnectivityResult.none,
-  ];
+  /// Vacío = aún no hubo lectura fiable: **no** mostrar «sin conexión» (evita flash rojo al abrir).
+  List<ConnectivityResult> _results = const <ConnectivityResult>[];
   String? _viajeCache;
   double? _saldoCache;
+  Timer? _offlineDebounce;
 
   bool _sinRed(List<ConnectivityResult> r) {
-    if (r.isEmpty) return true;
+    if (r.isEmpty) return false;
     return r.every((e) => e == ConnectivityResult.none);
   }
 
@@ -44,8 +44,26 @@ class _RaiOfflineBannerState extends State<RaiOfflineBanner> {
 
   void _onConnectivity(List<ConnectivityResult> r) {
     if (!mounted) return;
-    setState(() => _results = r);
-    unawaited(_refrescarCacheSiOffline());
+    _offlineDebounce?.cancel();
+    if (!_sinRed(r)) {
+      setState(() => _results = r);
+      unawaited(_refrescarCacheSiOffline());
+      return;
+    }
+    // Algunos dispositivos emiten `none` un instante antes de wifi/datos: esperar un poco
+    // antes de pintar el banner rojo.
+    _offlineDebounce = Timer(const Duration(milliseconds: 450), () async {
+      if (!mounted) return;
+      List<ConnectivityResult> effective = r;
+      try {
+        effective = await _connectivity.checkConnectivity();
+      } catch (_) {
+        effective = r;
+      }
+      if (!mounted) return;
+      setState(() => _results = effective);
+      unawaited(_refrescarCacheSiOffline());
+    });
   }
 
   Future<void> _bootstrapConnectivity() async {
@@ -53,7 +71,8 @@ class _RaiOfflineBannerState extends State<RaiOfflineBanner> {
       final r = await _connectivity.checkConnectivity();
       _onConnectivity(r);
     } catch (_) {
-      _onConnectivity(const [ConnectivityResult.none]);
+      // Sin asumir offline: evita banner rojo permanente si el plugin falla al iniciar.
+      _onConnectivity(const <ConnectivityResult>[]);
     }
   }
 
@@ -66,6 +85,7 @@ class _RaiOfflineBannerState extends State<RaiOfflineBanner> {
 
   @override
   void dispose() {
+    _offlineDebounce?.cancel();
     unawaited(_sub?.cancel() ?? Future<void>.value());
     super.dispose();
   }

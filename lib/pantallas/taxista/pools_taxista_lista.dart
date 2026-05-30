@@ -226,8 +226,7 @@ Contactanos por esta via para mas informacion y confirmacion.
   }
 
   bool _puedeCancelar(Map<String, dynamic> d) {
-    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
-    return estado != 'finalizado' && estado != 'cancelado';
+    return PoolRepo.giraPuedeCancelarseAntesDeIniciar(d);
   }
 
   Future<void> _operarPool(

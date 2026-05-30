@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/text_scale_service.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 /// Pantalla "Apariencia" del cliente.
 ///
@@ -114,9 +115,10 @@ class _AparienciaScreenState extends State<AparienciaScreen> {
     final Color previewBorder = CustomThemeService.borderOn(current);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Apariencia'),
+      appBar: const RaiAppBar(
+        title: 'Apariencia',
         centerTitle: true,
+        showBackWhenCanPop: true,
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
+import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
+import 'package:flygo_nuevo/widgets/rai_back_button.dart';
+import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
 class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
@@ -14,18 +16,29 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
   /// En flujos del cliente apilados sobre el shell: atrás en lugar del logo Rai.
   final bool backWhenCanPop;
 
+  /// Pantallas secundarias (Cuenta → Apariencia): flecha si hay ruta anterior.
+  final bool showBackWhenCanPop;
+
   const RaiAppBar({
-    Key? key,
+    super.key,
     required this.title,
     this.titleSemanticsLabel,
     this.actions,
     this.centerTitle = false,
     this.leading,
     this.backWhenCanPop = false,
-  }) : super(key: key);
+    this.showBackWhenCanPop = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final AppBarThemeData appBarTheme = theme.appBarTheme;
+    final Color bg =
+        appBarTheme.backgroundColor ?? theme.scaffoldBackgroundColor;
+    final Color fg = appBarTheme.foregroundColor ??
+        CustomThemeService.textOn(bg);
+
     final Widget titleWidget;
     if (title.isEmpty) {
       final a11y = titleSemanticsLabel?.trim();
@@ -43,8 +56,8 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
         title,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          color: Colors.white,
+        style: TextStyle(
+          color: fg,
           fontSize: 20,
           fontWeight: FontWeight.bold,
         ),
@@ -52,23 +65,16 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
     }
 
     Widget? resolvedLeading = leading;
-    if (resolvedLeading == null && backWhenCanPop) {
-      resolvedLeading = IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
-        tooltip: 'Atrás',
-        onPressed: () => intentarSalirAlGate(context),
-      );
+    if (resolvedLeading == null &&
+        (backWhenCanPop ||
+            (showBackWhenCanPop && Navigator.canPop(context)))) {
+      resolvedLeading = RaiBackButton(color: fg);
     }
-    resolvedLeading ??= Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: Image.asset(
-        'assets/icon/icono_app_R.png',
-        height: 28,
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => const SizedBox(
-          width: 28,
-          child: Icon(Icons.error, color: Colors.red, size: 20),
-        ),
+    resolvedLeading ??= const SizedBox(
+      width: kToolbarHeight,
+      height: kToolbarHeight,
+      child: Center(
+        child: RaiHeaderLogo(height: 30),
       ),
     );
 
@@ -78,9 +84,12 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
       title: titleWidget,
       centerTitle: centerTitle,
       actions: actions,
-      backgroundColor: Colors.black,
-      foregroundColor: Colors.white,
+      backgroundColor: bg,
+      foregroundColor: fg,
+      iconTheme: IconThemeData(color: fg),
+      actionsIconTheme: IconThemeData(color: fg),
       elevation: 0,
+      surfaceTintColor: Colors.transparent,
     );
   }
 

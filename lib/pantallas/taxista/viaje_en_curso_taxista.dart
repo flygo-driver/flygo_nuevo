@@ -25,12 +25,14 @@ import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
+import 'package:flygo_nuevo/pantallas/taxista/post_viaje_taxista_flow.dart';
 import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart'; // 🔥 ESTA LÍNEA
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/ux_log.dart';
 import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
@@ -66,6 +68,13 @@ class ViajeEnCursoTaxista extends StatefulWidget {
 
 class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
+  /// Pruebas en silla: sin GPS real ni distancias al finalizar.
+  /// `kDebugMode` o `--dart-define=FLYGO_SIM_CASA=true` (profile/release).
+  static const bool _kSimCasaFromDefine =
+      bool.fromEnvironment('FLYGO_SIM_CASA', defaultValue: false);
+
+  bool get _flygoSimCasa => kDebugMode || _kSimCasaFromDefine;
+
   @override
   bool get wantKeepAlive => true;
 
@@ -124,6 +133,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   /// Distancia al pin de destino (último waypoint o destino); solo en `en_curso`.
   double? _distanciaMetrosAlDestino;
 
+  /// Multiparada: cuántos destinos (paradas + final) ya confirmó el taxista.
+  int _multiLegCompletadas = 0;
+  String? _multiNavViajeId;
+
   // ===== Stream principal (deduplicado: el taxista escribe GPS en el mismo doc → sin esto, cada ping reconstruye toda la pantalla) =====
   Stream<Viaje?> _stream() {
     final u = FirebaseAuth.instance.currentUser;
@@ -151,7 +164,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     // _cachedViaje vía copyWith en el listener GPS.
     // Cliente/destino con 6 decimales para ver movimiento en tiempo real en el mapa.
     return '${v.id}|$est|${r6(v.latCliente)}|${r6(v.lonCliente)}|${r6(v.latDestino)}|${r6(v.lonDestino)}|'
-        '${v.codigoVerificado}|${v.uidTaxista}|${v.completado}|$wp';
+        '${v.codigoVerificado}|${v.uidTaxista}|${v.completado}|$wp|${v.multiparadaLegCompletadas}|${v.multiparadaCompleta}';
   }
 
   /// Solo campos que afectan polilíneas hacia el cliente o destino.
@@ -213,6 +226,387 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       if (d != null && d.isFinite) return d;
     }
     return null;
+  }
+
+  bool _esMultiparada(Viaje v) {
+    final List<Map<String, dynamic>>? wps = v.waypoints;
+    if (wps != null && wps.isNotEmpty) return true;
+    final dynamic rp = v.extras?['rutaPuntos'];
+    if (rp is! List) return false;
+    for (final dynamic item in rp) {
+      if (item is! Map) continue;
+      final String rol = (item['rol'] ?? '').toString().toLowerCase();
+      if (rol == 'parada') return true;
+    }
+    return false;
+  }
+
+  List<({double lat, double lon, String label})> _paradasIntermediasDesdeViaje(
+    Viaje v,
+  ) {
+    final List<({double lat, double lon, String label})> out =
+        <({double lat, double lon, String label})>[];
+    final List<Map<String, dynamic>>? raw = v.waypoints;
+    if (raw != null) {
+      for (final Map<String, dynamic> m in raw) {
+        final double? lat = _waypointLat(m);
+        final double? lon = _waypointLon(m);
+        if (lat == null || lon == null || !_coordsValid(lat, lon)) continue;
+        final String label = (m['label'] ?? '').toString().trim();
+        out.add((
+          lat: lat,
+          lon: lon,
+          label: label.isEmpty ? 'Parada ${out.length + 1}' : label,
+        ));
+      }
+    }
+    if (out.isNotEmpty) return out;
+
+    final dynamic rp = v.extras?['rutaPuntos'];
+    if (rp is List) {
+      for (final dynamic item in rp) {
+        if (item is! Map) continue;
+        final String rol = (item['rol'] ?? '').toString().toLowerCase();
+        if (rol == 'origen' || rol == 'destino') continue;
+        final double? lat = _waypointLat(Map<String, dynamic>.from(item));
+        final double? lon = _waypointLon(Map<String, dynamic>.from(item));
+        if (lat == null || lon == null || !_coordsValid(lat, lon)) continue;
+        final String label = (item['label'] ?? 'Parada').toString().trim();
+        out.add((
+          lat: lat,
+          lon: lon,
+          label: label.isEmpty ? 'Parada ${out.length + 1}' : label,
+        ));
+      }
+    }
+    return out;
+  }
+
+  List<({double lat, double lon, String label, bool esFinal})>
+      _destinosOrdenadosMultiparada(Viaje v) {
+    final List<({double lat, double lon, String label, bool esFinal})> out =
+        <({double lat, double lon, String label, bool esFinal})>[];
+    for (final ({double lat, double lon, String label}) p
+        in _paradasIntermediasDesdeViaje(v)) {
+      out.add((lat: p.lat, lon: p.lon, label: p.label, esFinal: false));
+    }
+    if (_coordsValid(v.latDestino, v.lonDestino)) {
+      final String dest = v.destino.trim();
+      out.add((
+        lat: v.latDestino,
+        lon: v.lonDestino,
+        label: dest.isNotEmpty ? dest : 'Destino final',
+        esFinal: true,
+      ));
+    }
+    return out;
+  }
+
+  ({double lat, double lon, String label, bool esFinal})? _destinoMultiActual(
+      Viaje v) {
+    final List<({double lat, double lon, String label, bool esFinal})> legs =
+        _destinosOrdenadosMultiparada(v);
+    if (_multiLegCompletadas >= legs.length) return null;
+    return legs[_multiLegCompletadas];
+  }
+
+  bool _multiparadaRutaCompleta(Viaje v) {
+    if (!_esMultiparada(v)) return true;
+    if (v.multiparadaCompleta) return true;
+    final int total = _destinosOrdenadosMultiparada(v).length;
+    if (total <= 0) return true;
+    return v.multiparadaLegCompletadas >= total ||
+        _multiLegCompletadas >= total;
+  }
+
+  void _aplicarProgresoMultiparadaDesdeViaje(Viaje v) {
+    if (!_esMultiparada(v)) {
+      if (_multiLegCompletadas != 0 || _multiNavViajeId != null) {
+        _multiLegCompletadas = 0;
+        _multiNavViajeId = null;
+      }
+      return;
+    }
+    final int total = _destinosOrdenadosMultiparada(v).length;
+    final int fromServer = v.multiparadaLegCompletadas.clamp(0, total);
+    if (_multiNavViajeId != v.id || _multiLegCompletadas != fromServer) {
+      _multiLegCompletadas = fromServer;
+      _multiNavViajeId = v.id;
+    }
+  }
+
+  bool _puedeFinalizarViajeMultiparada(Viaje v) =>
+      !_esMultiparada(v) || _multiparadaRutaCompleta(v);
+
+  ({double lat, double lon})? _coordsLegMultiActual(Viaje v) {
+    final leg = _destinoMultiActual(v);
+    if (leg != null) return (lat: leg.lat, lon: leg.lon);
+    return _coordsDestinoParaFinalizar(v);
+  }
+
+  Future<void> _navegarDestinoMultiparadaActual(Viaje v) async {
+    final leg = _destinoMultiActual(v);
+    if (leg == null) return;
+    final int total = _destinosOrdenadosMultiparada(v).length;
+    final int paso = _multiLegCompletadas + 1;
+    final String tipo = leg.esFinal ? 'destino final' : 'parada $paso';
+    await _selectorNavegacionDestino(
+      leg.lat,
+      leg.lon,
+      titulo: leg.esFinal ? 'Navegar al destino final' : 'Navegar a la parada',
+      addressLine: '${leg.label}\n($paso de $total · $tipo)',
+      footerHint:
+          'Waze o Maps abren este punto exacto (lat/lon). Al salir, confirma «Llegué — siguiente destino».',
+    );
+  }
+
+  Future<void> _confirmarLlegadaDestinoMulti(Viaje v) async {
+    if (_actionBusy) return;
+    final int total = _destinosOrdenadosMultiparada(v).length;
+    if (_multiLegCompletadas >= total || v.multiparadaCompleta) return;
+    _actionBusy = true;
+    try {
+      await ViajesRepo.registrarLegMultiparadaCompletada(viajeId: v.id);
+      if (!mounted) return;
+      final snap = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(v.id)
+          .get();
+      if (!mounted) return;
+      final data = snap.data();
+      if (data != null) {
+        final Viaje actualizado = Viaje.fromMap(v.id, data);
+        setState(() {
+          _aplicarProgresoMultiparadaDesdeViaje(actualizado);
+          _cachedViaje = actualizado;
+        });
+        _recalcDistanciaDestino();
+        _scheduleDrawRoute();
+        final int next = _multiLegCompletadas;
+        if (next >= total) {
+          _tripFlowSnack(
+            'Ruta multiparada completada. Podés finalizar el viaje.',
+            backgroundColor: Colors.greenAccent,
+          );
+        } else {
+          final leg = _destinoMultiActual(actualizado);
+          _tripFlowSnack(
+            leg == null
+                ? 'Parada registrada.'
+                : 'Siguiente: ${leg.label}',
+            backgroundColor: Colors.lightBlueAccent,
+          );
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _tripFlowSnack(
+        e.toString().replaceFirst('Exception: ', ''),
+        backgroundColor: Colors.redAccent,
+      );
+    } finally {
+      if (mounted) _actionBusy = false;
+    }
+  }
+
+  Future<void> _abrirGoogleMapsRutaMultiRestante(Viaje v) async {
+    final List<({double lat, double lon, String label, bool esFinal})> legs =
+        _destinosOrdenadosMultiparada(v);
+    if (legs.isEmpty) return;
+    final int from = _multiLegCompletadas.clamp(0, legs.length);
+    if (from >= legs.length) return;
+
+    double oLat = v.latCliente;
+    double oLon = v.lonCliente;
+    if (!_coordsValid(oLat, oLon)) {
+      final ping = _taxistaPosCola.value;
+      if (ping != null) {
+        oLat = ping.$1;
+        oLon = ping.$2;
+      } else if (_coordsValid(v.latTaxista, v.lonTaxista)) {
+        oLat = v.latTaxista;
+        oLon = v.lonTaxista;
+      }
+    }
+    if (!_coordsValid(oLat, oLon)) {
+      _tripFlowSnack('Sin ubicación de origen para la ruta.');
+      return;
+    }
+
+    final List<({double lat, double lon, String label, bool esFinal})> remaining =
+        legs.sublist(from.clamp(0, legs.length));
+    if (remaining.isEmpty) return;
+    final double dLat = remaining.last.lat;
+    final double dLon = remaining.last.lon;
+    final List<({double lat, double lon})> paradas =
+        <({double lat, double lon})>[];
+    if (remaining.length > 1) {
+      for (var i = 0; i < remaining.length - 1; i++) {
+        paradas.add((lat: remaining[i].lat, lon: remaining[i].lon));
+      }
+    }
+
+    await showNavegacionWazeMapsSheet(
+      context,
+      title: 'Ruta con paradas restantes',
+      addressLine:
+          'Google Maps: ${paradas.length} parada(s) + destino final.',
+      tieneCoords: true,
+      footerHint:
+          'Waze solo admite un destino; usa los botones «Navegar» parada a parada.',
+      onWaze: () => unawaited(
+        NavegacionExternaLauncher.abrirWazeDestino(dLat, dLon),
+      ),
+      onMaps: () => unawaited(
+        NavegacionExternaLauncher.abrirGoogleMapsRutaConParadas(
+          origenLat: oLat,
+          origenLon: oLon,
+          destinoLat: dLat,
+          destinoLon: dLon,
+          paradas: paradas,
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _bloqueNavegacionMultiparada(Viaje v) {
+    final List<({double lat, double lon, String label, bool esFinal})> legs =
+        _destinosOrdenadosMultiparada(v);
+    if (legs.isEmpty) return const <Widget>[];
+
+    final int total = legs.length;
+    final int hechos = _multiLegCompletadas.clamp(0, total);
+    final bool completa = hechos >= total;
+    final leg = _destinoMultiActual(v);
+
+    return <Widget>[
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.orange.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.45)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              completa
+                  ? 'Multiparada: todos los destinos visitados ($total/$total)'
+                  : 'Multiparada: destino ${hechos + 1} de $total',
+              style: const TextStyle(
+                color: Colors.orangeAccent,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 6),
+            for (var i = 0; i < legs.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Icon(
+                      i < hechos
+                          ? Icons.check_circle
+                          : (i == hechos && !completa
+                              ? Icons.radio_button_checked
+                              : Icons.circle_outlined),
+                      size: 18,
+                      color: i < hechos
+                          ? Colors.greenAccent
+                          : (i == hechos && !completa
+                              ? Colors.orangeAccent
+                              : Colors.white38),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${i + 1}. ${legs[i].label}${legs[i].esFinal ? ' (final)' : ''}',
+                        style: TextStyle(
+                          color: i == hechos && !completa
+                              ? Colors.white
+                              : Colors.white70,
+                          fontSize: 13,
+                          fontWeight: i == hechos && !completa
+                              ? FontWeight.w600
+                              : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      if (!completa && leg != null) ...<Widget>[
+        _btnPrimario(
+          icon: const Icon(Icons.navigation, size: 24),
+          label: Text(
+            leg.esFinal
+                ? 'NAVEGAR AL DESTINO FINAL'
+                : 'NAVEGAR A PARADA ${hechos + 1}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+          ),
+          onPressed: _actionBusy
+              ? null
+              : () async {
+                  if (_actionBusy || _selectorNavegacionAbierto) return;
+                  _actionBusy = true;
+                  try {
+                    final bool okGps = await _asegurarGps(v.id);
+                    if (!okGps || !mounted) return;
+                    await _navegarDestinoMultiparadaActual(v);
+                  } finally {
+                    if (mounted) _actionBusy = false;
+                  }
+                },
+        ),
+        const SizedBox(height: 10),
+        Text(
+          leg.label,
+          style: const TextStyle(color: Colors.white70, fontSize: 14),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 12),
+        _btnPrimario(
+          icon: const Icon(Icons.check_circle_outline, size: 24),
+          label: const Text(
+            'LLEGUÉ AQUÍ — SIGUIENTE DESTINO',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+          ),
+          backgroundColor: Colors.deepOrange,
+          onPressed: _actionBusy
+              ? null
+              : () async {
+                  if (_actionBusy) return;
+                  _actionBusy = true;
+                  try {
+                    await _confirmarLlegadaDestinoMulti(v);
+                  } finally {
+                    if (mounted) _actionBusy = false;
+                  }
+                },
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: () => unawaited(_abrirGoogleMapsRutaMultiRestante(v)),
+          icon: const Icon(Icons.map, size: 20),
+          label: const Text('Ver ruta completa restante (Google Maps)'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.lightBlueAccent,
+            side: BorderSide(color: Colors.lightBlueAccent.withValues(alpha: 0.5)),
+            minimumSize: const Size(double.infinity, 48),
+          ),
+        ),
+      ],
+    ];
   }
 
   /// Punto de cierre: última parada con coordenadas o destino del documento.
@@ -318,7 +712,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
       return;
     }
-    final dest = _coordsDestinoParaFinalizar(v);
+    final dest = _esMultiparada(v) && !_multiparadaRutaCompleta(v)
+        ? _coordsLegMultiActual(v)
+        : _coordsDestinoParaFinalizar(v);
     if (dest == null) {
       if (_distanciaMetrosAlDestino != null) {
         setState(() => _distanciaMetrosAlDestino = null);
@@ -351,16 +747,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (prev == null || (d - prev).abs() > 3) {
       setState(() => _distanciaMetrosAlDestino = d);
     }
-  }
-
-  bool _puedeMostrarBotonFinalizar(Viaje v) {
-    final pin = _coordsDestinoParaFinalizar(v);
-    if (pin == null) return false;
-    final d = _distanciaMetrosAlDestino;
-    // Si aún no hay ping GPS en [_taxistaPosCola], la distancia puede ser null:
-    // igual mostramos Finalizar; [_finalizarViaje] vuelve a medir / confirma.
-    if (d == null) return true;
-    return d <= kFinalizarRadioMetros;
   }
 
   Future<void> _refrescarViajeDocDesdeFirestore() async {
@@ -659,15 +1045,26 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     logDbg('🛑 GPS detenido');
   }
 
-  Future<bool> _asegurarGps(String viajeId) async {
-    logDbg('_asegurarGps($viajeId) - _gpsActivo: $_gpsActivo');
+  Future<bool> _asegurarGps(
+    String viajeId, {
+    bool allowPermissionDialog = true,
+  }) async {
+    logDbg(
+      '_asegurarGps($viajeId) allowPermissionDialog=$allowPermissionDialog '
+      '_gpsActivo: $_gpsActivo',
+    );
 
     if (_gpsActivo && _gpsParaViajeId == viajeId) {
       logDbg('✅ GPS ya activo');
       return true;
     }
 
-    final snap = await GpsService.checkServiceThenRequestPermissionIfNeeded();
+    final ({bool serviceEnabled, LocationPermission permission}) snap =
+        // Explícito: solo cuando el taxista inicia GPS del viaje con diálogo permitido.
+        // resumed / reanudación usa allowPermissionDialog:false → readNoRequest.
+        allowPermissionDialog
+            ? await GpsService.checkServiceThenRequestPermissionIfNeeded()
+            : await GpsService.readServiceAndPermissionStabilizedNoRequest();
     if (!snap.serviceEnabled) {
       if (!mounted) return false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -750,11 +1147,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (rutaAlDestino &&
         _coordsValid(v.latCliente, v.lonCliente) &&
         _coordsValid(v.latDestino, v.lonDestino)) {
+      List<({double lat, double lon})>? vias;
+      if (_esMultiparada(v)) {
+        vias = <({double lat, double lon})>[];
+        for (final leg in _destinosOrdenadosMultiparada(v)) {
+          if (!leg.esFinal) {
+            vias.add((lat: leg.lat, lon: leg.lon));
+          }
+        }
+        if (vias.isEmpty) vias = null;
+      }
       await _drawRoute(
         LatLng(v.latCliente, v.lonCliente),
         LatLng(v.latDestino, v.lonDestino),
         id: 'to_destino',
         color: const Color(0xFF49F18B),
+        viaIntermediate: vias,
       );
     }
 
@@ -778,6 +1186,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     required String id,
     required Color color,
     int width = 5,
+    List<({double lat, double lon})>? viaIntermediate,
   }) async {
     try {
       final result = await DirectionsService.drivingDistanceKm(
@@ -785,6 +1194,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         originLon: a.longitude,
         destLat: b.latitude,
         destLon: b.longitude,
+        waypoints: (viaIntermediate != null && viaIntermediate.isNotEmpty)
+            ? viaIntermediate
+            : null,
         withTraffic: true,
         region: 'do',
       );
@@ -966,6 +1378,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       print('[VIAJE_ACTIVO] taxista lifecycle resumed');
+      // resumed: GPS se reanuda con _asegurarGps(..., allowPermissionDialog:false) → readNoRequest, sin diálogo del SO.
       unawaited(() async {
         await _refrescarViajeDocDesdeFirestore();
         if (!mounted) return;
@@ -988,12 +1401,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               ? EstadosViaje.completado
               : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
-    if (!EstadosViaje.esEnCurso(estadoBase)) return;
+    if (!EstadosViaje.taxistaReanudaGpsStreamTrasResume(estadoBase,
+        codigoVerificado: v.codigoVerificado)) {
+      return;
+    }
     if (_gpsActivo) return;
     logDbg(
-        '[VIAJE_ACTIVO] resume: reintentar GPS en_curso viaje=${v.id} (_gpsActivo=false)',
+        '[VIAJE_ACTIVO] resume: reintentar GPS (en_curso o a_bordo+PIN) viaje=${v.id} (_gpsActivo=false)',
     );
-    await _asegurarGps(v.id);
+    await _asegurarGps(v.id, allowPermissionDialog: false);
   }
 
   @override
@@ -1370,6 +1786,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
       final data = viajeSnap.data();
       if (data != null) {
+        if ((data['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro') {
+          unawaited(BolaPuebloFirestoreSync.syncBolaEnCursoDesdeViaje(viajeId));
+        }
         if (mounted && _cachedViaje?.id == viajeId) {
           setState(() {
             _cachedViaje = Viaje.fromMap(viajeId, data);
@@ -1417,9 +1836,28 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return;
     }
 
-      print('[FINALIZAR] _finalizarViaje start viajeId=${v.id} uid=$uid');
+    print('[FINALIZAR] _finalizarViaje start viajeId=${v.id} uid=$uid');
     final messenger = ScaffoldMessenger.of(context);
     final String estadoLocal = EstadosViaje.normalizar(v.estado);
+
+    if (!_puedeFinalizarViajeMultiparada(v)) {
+      final int total = _destinosOrdenadosMultiparada(v).length;
+      final int hechos = v.multiparadaLegCompletadas.clamp(0, total);
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Viaje multiparada: confirmá las $total paradas/destinos antes de finalizar '
+              '($hechos/$total registrados).',
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+      _actionBusy = false;
+      return;
+    }
 
     // Callable acepta `en_curso` o `a_bordo` (PIN verificado sin transición).
     if (!EstadosViaje.taxistaPuedeInvocarFinalizar(estadoLocal)) {
@@ -1465,107 +1903,40 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
     }
 
-    final ({double lat, double lon})? pinParaRadio = _coordsDestinoParaFinalizar(v);
-    if (pinParaRadio != null) {
-      double? dm = _distanciaMetrosAlDestino;
-      dm ??= await _menorDistanciaMetrosAlDestinoParaFinalizar(
-        v,
-        pinParaRadio,
-        pingStreamLatLon: _taxistaPosCola.value,
+    if (_flygoSimCasa) {
+      print(
+        '[FLYGO_SIM_CASA] finalizar sin GPS/diálogo/medición (solo validación estado Firestore)',
       );
-      if (dm != null && dm > kFinalizarRadioMetros) {
-        print(
-            '[FINALIZAR_VIAJE] rechazado: fuera de radio (${dm.toStringAsFixed(0)} m > $kFinalizarRadioMetros m)');
-        if (mounted) {
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                'Debés estar a menos de ${kFinalizarRadioMetros.toStringAsFixed(0)} m del destino para finalizar '
-                '(ahora ~${dm.toStringAsFixed(0)} m).',
-              ),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
+    } else {
+      // Intento de GPS en vivo sin abrir diálogo de permisos (permiso ya concedido).
+      await _asegurarGps(v.id, allowPermissionDialog: false);
+
+      // Diálogo informativo; no bloqueamos por distancia.
+      final ({double lat, double lon})? pinDestino =
+          _coordsDestinoParaFinalizar(v);
+      double? distMinM;
+      if (pinDestino != null) {
+        distMinM = await _menorDistanciaMetrosAlDestinoParaFinalizar(
+          v,
+          pinDestino,
+          pingStreamLatLon: _taxistaPosCola.value,
+        );
+      }
+
+      if (!mounted) {
         _actionBusy = false;
         return;
       }
-    }
 
-    // Cliente a bordo y en ruta al destino: asegurar stream GPS (ping en vivo) antes de medir cercanía.
-    await _asegurarGps(v.id);
-
-    // Perímetro al destino registrado (pin del viaje): en zona → mensaje corto; fuera/sin señal →
-    // mismo botón y diálogo alternativo (no se bloquea el cierre).
-    final ({double lat, double lon})? pinDestino = _coordsDestinoParaFinalizar(v);
-    double? distMinM;
-    if (pinDestino != null) {
-      distMinM = await _menorDistanciaMetrosAlDestinoParaFinalizar(
-        v,
-        pinDestino,
-        pingStreamLatLon: _taxistaPosCola.value,
-      );
-    }
-
-    if (!mounted) {
-      _actionBusy = false;
-      return;
-    }
-
-    final ok = await _dialogoConfirmarFinalizarViaje(
-          context,
-          hayPinDestino: pinDestino != null,
-          distanciaMetrosMin: distMinM,
-        ) ??
-        false;
-
-    if (!ok) {
-      print('[FINALIZAR_VIAJE] usuario canceló diálogo');
-      _actionBusy = false;
-      return;
-    }
-
-    // Última comprobación de cercanía antes del callable (reusa [_distanciaMetrosAlDestino]).
-    final ({double lat, double lon})? pinUltimoCheck =
-        _coordsDestinoParaFinalizar(v);
-    double? dmPreCallable = _distanciaMetrosAlDestino;
-    if (pinUltimoCheck != null && dmPreCallable == null) {
-      dmPreCallable = await _menorDistanciaMetrosAlDestinoParaFinalizar(
-        v,
-        pinUltimoCheck,
-        pingStreamLatLon: _taxistaPosCola.value,
-      );
-    }
-    if (!mounted) {
-      _actionBusy = false;
-      return;
-    }
-    final dmFinalCheck = dmPreCallable;
-    if (dmFinalCheck != null && dmFinalCheck > 50) {
-      final double dmWarn = dmFinalCheck;
-      final continuar = await showDialog<bool>(
-            context: context,
-            barrierDismissible: false,
-            builder: (ctx) => AlertDialog(
-              title: const Text('¿Finalizar lejos del destino?'),
-              content: Text(
-                'La distancia al pin es de unos ${dmWarn.toStringAsFixed(0)} m '
-                '(más de 50 m). ¿Confirmás la finalización?',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancelar'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Finalizar igual'),
-                ),
-              ],
-            ),
+      final ok = await _dialogoConfirmarFinalizarViaje(
+            context,
+            hayPinDestino: pinDestino != null,
+            distanciaMetrosMin: distMinM,
           ) ??
           false;
-      if (!continuar) {
+
+      if (!ok) {
+        print('[FINALIZAR_VIAJE] usuario canceló diálogo');
         _actionBusy = false;
         return;
       }
@@ -1680,17 +2051,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             .doc(v.id)
             .get();
         final data = doc.data() ?? {};
-        double _toDouble(dynamic x) =>
+        double toDoubleLocal(dynamic x) =>
             x is num ? x.toDouble() : (double.tryParse('$x') ?? 0.0);
 
-        total = _toDouble(data['precioFinal'] ?? data['precio'] ?? v.precio);
+        total = totalRdDesdeDocViaje(data);
+        if (total <= 1e-6) {
+          total = v.precio > 0 ? v.precio : v.precioFinal;
+        }
 
         final cc = data['comision_cents'];
         if (cc is num && cc > 0) {
           comision = cc.toDouble() / 100.0;
         } else {
           final comisionCampo =
-              _toDouble(data['comision'] ?? data['comisionFlyGo']);
+              toDoubleLocal(data['comision'] ?? data['comisionFlyGo']);
           comision = comisionCampo > 0
               ? comisionCampo
               : (total * PlataformaEconomia.factorComision);
@@ -1700,7 +2074,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         if (gc is num && gc > 0) {
           ganancia = gc.toDouble() / 100.0;
         } else {
-          final gananciaCampo = _toDouble(data['gananciaTaxista']);
+          final gananciaCampo = toDoubleLocal(data['gananciaTaxista']);
           ganancia = gananciaCampo > 0 ? gananciaCampo : (total - comision);
         }
 
@@ -1777,9 +2151,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         role: 'taxista',
       );
       if (!mounted) return;
-      await TaxistaColaPostCompletar.navegarTrasCompletar(
-        context: context,
-        uidTaxista: uid,
+      final Map<String, dynamic>? semillaViaje =
+          await FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(v.id)
+              .get()
+              .then((DocumentSnapshot<Map<String, dynamic>> s) => s.data());
+      if (!mounted) return;
+      await Navigator.of(context, rootNavigator: true).push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (_) => PostViajeTaxistaFlow(
+            viajeId: v.id,
+            uidTaxista: uid,
+            viajeDataSemilla: semillaViaje,
+          ),
+        ),
       );
     } catch (e, st) {
       print('[FINALIZAR] _finalizarViaje catch outer $e $st');
@@ -2210,7 +2597,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
-  Future<void> _selectorNavegacionDestino(double lat, double lon) async {
+  Future<void> _selectorNavegacionDestino(
+    double lat,
+    double lon, {
+    String titulo = 'Abrir navegación',
+    String? addressLine,
+    String? footerHint,
+  }) async {
     if (!mounted) return;
     if (_selectorNavegacionAbierto) return;
     _selectorNavegacionAbierto = true;
@@ -2219,11 +2612,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       try {
         await showNavegacionWazeMapsSheet(
           context,
-          title: 'Abrir navegación',
+          title: titulo,
+          addressLine: addressLine,
           tieneCoords: true,
           gpsCoordinatesLine:
               'GPS: ${NavegacionExternaLauncher.fmtCoord(lat)}, ${NavegacionExternaLauncher.fmtCoord(lon)}',
-          footerHint: 'Elige Waze o Google Maps para ir al destino del viaje.',
+          footerHint: footerHint ??
+              'Elige Waze o Google Maps. Las coordenadas son el pin exacto del viaje.',
           onWaze: () {
             unawaited(NavegacionExternaLauncher.abrirWazeDestino(lat, lon));
           },
@@ -2347,7 +2742,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       style: const TextStyle(color: Colors.white70),
                     ),
                   ),
-                  if (navOk && wLat != null && wLon != null)
+                  if (navOk &&
+                      wLat != null &&
+                      wLon != null &&
+                      !_esMultiparada(v))
                     IconButton(
                       tooltip: 'Navegar a esta parada',
                       padding: EdgeInsets.zero,
@@ -2820,10 +3218,33 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
-        title: const Text(
-          'Mi viaje en curso',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
+        title: _flygoSimCasa
+            ? GestureDetector(
+                onDoubleTap: () {
+                  final v = _cachedViaje;
+                  if (v == null || !mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        '[SIM CASA] Doble tap en título → finalizar (mismo que el botón)',
+                      ),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                  unawaited(_finalizarViaje(v));
+                },
+                child: const Text(
+                  'Mi viaje en curso',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              )
+            : const Text(
+                'Mi viaje en curso',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
         actions: [
           ViajesCercanosTaxistaAppBarAction(
             controller: _viajesCercanosCtl,
@@ -3015,7 +3436,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 if (_cachedViaje?.id != v.id) {
                   _navPickupPrefsLoadedForId = null;
                   _distanciaMetrosAlDestino = null;
+                  _multiLegCompletadas = 0;
+                  _multiNavViajeId = null;
                   _cachedViaje = v;
+                  _aplicarProgresoMultiparadaDesdeViaje(v);
                   _escucharCancelacionRemota(v.id);
 
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3030,6 +3454,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       ? _firmaRutaMapaTaxista(_cachedViaje!)
                       : '';
                   _cachedViaje = v;
+                  _aplicarProgresoMultiparadaDesdeViaje(v);
                   final String newSig = _firmaRutaMapaTaxista(v);
                   if (prevSig != newSig && mounted) {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3039,7 +3464,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 }
 
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) unawaited(_loadNavPickupPrefs(v));
+                  if (mounted) {
+                    unawaited(_loadNavPickupPrefs(v));
+                  }
                   _recalcDistanciaDestino();
                 });
 
@@ -3704,12 +4131,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 final okGps = await _asegurarGps(v.id);
                 if (!okGps) return;
                 if (!mounted) return;
-                await _selectorNavegacionDestino(v.latDestino, v.lonDestino);
+                if (_esMultiparada(v)) {
+                  await _navegarDestinoMultiparadaActual(v);
+                } else {
+                  await _selectorNavegacionDestino(
+                    v.latDestino,
+                    v.lonDestino,
+                  );
+                }
               } finally {
                 _actionBusy = false;
               }
             },
           ),
+          if (_esMultiparada(v)) ..._bloqueNavegacionMultiparada(v),
           const SizedBox(height: 12),
           Row(
             children: [
@@ -3731,6 +4166,58 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
+          const SizedBox(height: 12),
+          if (!_esMultiparada(v)) ...[
+            Text(
+              'Si ya estás en destino o el sistema no pasó a «en ruta», podés finalizar '
+              'igual: se usa la misma facturación que con «FINALIZAR» en viaje en curso '
+              '(motor, turismo o programado).',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.62),
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _ConfirmarTransferenciaTaxistaButton(
+              viajeId: v.id,
+              metodoPagoFallback: v.metodoPago,
+            ),
+            if (_flygoSimCasa) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '[SIM CASA] FINALIZAR llama al callable sin GPS, sin medir distancia '
+                  'ni diálogo. Doble tap en el título «Mi viaje en curso» hace lo mismo.',
+                  style: TextStyle(
+                    color: Colors.deepOrangeAccent.withValues(alpha: 0.95),
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+            _btnPrimario(
+              icon: const Icon(Icons.check_circle, size: 24),
+              label: const Text('FINALIZAR VIAJE',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              onPressed: _actionBusy ? null : () => _finalizarViaje(v),
+              backgroundColor: Colors.blueAccent,
+            ),
+          ] else ...[
+            Text(
+              'Viaje multiparada: iniciá la ruta y confirmá cada parada con '
+              '«Llegué — siguiente destino» antes de finalizar.',
+              style: TextStyle(
+                color: Colors.orangeAccent.withValues(alpha: 0.95),
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
           const SizedBox(height: 12),
@@ -3848,35 +4335,42 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
 
     if (EstadosViaje.esEnCurso(estadoBase)) {
+      final legMulti = _destinoMultiActual(v);
+      final String destinoUi = _esMultiparada(v) && legMulti != null
+          ? legMulti.label
+          : v.destino;
       return [
         _estadoProfesionalCard(
           icon: Icons.route_rounded,
           color: Colors.lightBlueAccent,
-          titulo: 'Paso actual: en ruta al destino',
-          detalle:
-              'Siguiente acción esperada: al llegar, confirmar y finalizar el viaje.',
+          titulo: _esMultiparada(v)
+              ? 'Paso actual: ruta multiparada'
+              : 'Paso actual: en ruta al destino',
+          detalle: _esMultiparada(v)
+              ? 'Navega parada a parada. Al salir de Waze/Maps, toca «Llegué — siguiente destino».'
+              : 'Siguiente acción esperada: al llegar, confirmar y finalizar el viaje.',
         ),
         const SizedBox(height: 12),
-        const Text(
-          'En camino al destino',
-          style: TextStyle(
+        Text(
+          _esMultiparada(v) ? 'Destino actual' : 'En camino al destino',
+          style: const TextStyle(
               color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 4),
         Text(
-          v.destino,
+          destinoUi,
           style: const TextStyle(color: Colors.white70, fontSize: 14),
-          maxLines: 2,
+          maxLines: 3,
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 8),
         Text(
-          _coordsDestinoParaFinalizar(v) == null
-              ? 'No hay coordenadas de destino en el viaje: pedí ayuda a soporte para cerrar.'
+          _coordsLegMultiActual(v) == null
+              ? 'No hay coordenadas de destino en el viaje: podés finalizar igual para emitir la factura.'
               : _distanciaMetrosAlDestino == null
-                  ? 'Calculando distancia al destino (GPS). El botón Finalizar aparece al estar a menos de ${kFinalizarRadioMetros.toStringAsFixed(0)} m.'
-                  : 'Distancia al pin de destino: ${_textoDistanciaAlPin(_distanciaMetrosAlDestino!)}. '
-                      'Finalizar se habilita si estás a ≤ ${kFinalizarRadioMetros.toStringAsFixed(0)} m.',
+                  ? 'Distancia al destino: sin señal GPS en este momento (podés finalizar igual).'
+                  : 'Distancia al pin actual: ${_textoDistanciaAlPin(_distanciaMetrosAlDestino!)} '
+                      '(referencia; podés finalizar cuando corresponda).',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.62),
             fontSize: 12.5,
@@ -3884,17 +4378,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ),
         ),
         const SizedBox(height: 16),
-        _btnPrimario(
-          icon: const Icon(Icons.navigation, size: 24),
-          label: const Text('NAVEGAR AL DESTINO',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          onPressed: () async {
-            final okGps = await _asegurarGps(v.id);
-            if (!okGps) return;
-            await _selectorNavegacionDestino(v.latDestino, v.lonDestino);
-          },
-        ),
-        const SizedBox(height: 12),
+        if (_esMultiparada(v)) ..._bloqueNavegacionMultiparada(v),
+        if (!_esMultiparada(v) || _multiparadaRutaCompleta(v)) ...[
+          _btnPrimario(
+            icon: const Icon(Icons.navigation, size: 24),
+            label: const Text('NAVEGAR AL DESTINO',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              final okGps = await _asegurarGps(v.id);
+              if (!okGps) return;
+              await _selectorNavegacionDestino(v.latDestino, v.lonDestino);
+            },
+          ),
+          const SizedBox(height: 12),
+        ],
         Row(
           children: [
             _btnSecundario(
@@ -3925,14 +4422,53 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           viajeId: v.id,
           metodoPagoFallback: v.metodoPago,
         ),
-        if (_puedeMostrarBotonFinalizar(v))
-          _btnPrimario(
-            icon: const Icon(Icons.check_circle, size: 24),
-            label: const Text('FINALIZAR VIAJE',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            onPressed: _actionBusy ? null : () => _finalizarViaje(v),
-            backgroundColor: Colors.blueAccent,
+        if (_flygoSimCasa) ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              '[SIM CASA] FINALIZAR llama al callable sin GPS, sin medir distancia '
+              'ni diálogo. Doble tap en el título «Mi viaje en curso» hace lo mismo.',
+              style: TextStyle(
+                color: Colors.deepOrangeAccent.withValues(alpha: 0.95),
+                fontSize: 11.5,
+                height: 1.35,
+              ),
+            ),
           ),
+        ],
+        if (_esMultiparada(v) && !_multiparadaRutaCompleta(v)) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.45)),
+            ),
+            child: Text(
+              'Multiparada: faltan destinos por confirmar '
+              '(${_multiLegCompletadas.clamp(0, _destinosOrdenadosMultiparada(v).length)}/'
+              '${_destinosOrdenadosMultiparada(v).length}). '
+              'Usá «Llegué — siguiente destino» en cada parada.',
+              style: const TextStyle(
+                color: Colors.orangeAccent,
+                fontSize: 13,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        _btnPrimario(
+          icon: const Icon(Icons.check_circle, size: 24),
+          label: const Text('FINALIZAR VIAJE',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          onPressed: (_actionBusy || !_puedeFinalizarViajeMultiparada(v))
+              ? null
+              : () => _finalizarViaje(v),
+          backgroundColor: Colors.blueAccent,
+        ),
       ];
     }
 

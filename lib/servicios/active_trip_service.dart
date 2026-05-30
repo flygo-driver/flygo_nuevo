@@ -11,6 +11,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/calculos/estados.dart';
 
 /// Servicio central para shells y pantallas de “solicitud / home”.
 class ActiveTripService {
@@ -37,18 +38,55 @@ class ActiveTripService {
   static bool get debeMantenerOverlayViajeEnShell =>
       DateTime.now().millisecondsSinceEpoch < _mantenerOverlayViajeHastaMs;
 
+  /// Libera el modo “pantalla completa viaje” (p. ej. al abrir post-viaje o volver al home).
+  /// Sin esto, [ClienteShell] puede seguir mostrando [ViajeEnCursoCliente] ~90s aunque el viaje ya cerró.
+  static void cancelarMantenimientoOverlayViaje() {
+    _mantenerOverlayViajeHastaMs = 0;
+  }
+
   /// Documento del viaje activo, o `null`.
   static Future<DocumentSnapshot<Map<String, dynamic>>?> obtenerDocumentoViajeActivo(
       String uid) {
     return ViajesRepo.getViajeActivoParaUsuario(uid);
   }
 
+  /// Cliente con `viajeActivoId` y viaje no terminal (incluye **pendiente** buscando conductor).
+  /// [getViajeActivoParaUsuario] solo cuenta aceptado→en_curso; sin esto el shell no
+  /// abre [ViajeEnCursoCliente] tras confirmar multiparadas / viaje ahora.
+  static Future<bool> clienteTieneViajeEnSeguimiento(String uid) async {
+    final String u = uid.trim();
+    if (u.isEmpty) return false;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> userSnap =
+          await _db.collection('usuarios').doc(u).get();
+      final String vid =
+          (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isEmpty) return false;
+
+      final DocumentSnapshot<Map<String, dynamic>> vSnap =
+          await _db.collection('viajes').doc(vid).get();
+      if (!vSnap.exists) return false;
+      final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
+      final bool esCliente = (d['uidCliente'] ?? '').toString().trim() == u ||
+          (d['clienteId'] ?? '').toString().trim() == u;
+      if (!esCliente) return false;
+
+      final String st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      if (d['completado'] == true || EstadosViaje.esTerminal(st)) {
+        return false;
+      }
+      return true;
+    } catch (e) {
+      print('[VIAJE_ACTIVO] clienteTieneViajeEnSeguimiento error: $e');
+      return false;
+    }
+  }
+
   /// `true` si hay un viaje activo verificado en servidor.
   static Future<bool> tieneViajeActivo(String uid) async {
     final u = uid.trim();
     if (u.isEmpty) return false;
-    final snap = await obtenerDocumentoViajeActivo(u);
-    final ok = snap != null && snap.exists;
+    final bool ok = await clienteTieneViajeEnSeguimiento(u);
     print('[VIAJE_ACTIVO] ActiveTripService.tieneViajeActivo($u) → $ok');
     return ok;
   }
@@ -72,12 +110,18 @@ class ActiveTripService {
         })
         .distinct()
         .asyncMap((_) async {
-          final snap = await ViajesRepo.getViajeActivoParaUsuario(u);
-          final ok = snap != null && snap.exists;
+          final bool ok = await clienteTieneViajeEnSeguimiento(u);
           print(
               '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → $ok');
           if (ok) {
-            unawaited(RaiLocalReadCache.rememberActiveTripId(u, snap.id));
+            final String vid = (await _db.collection('usuarios').doc(u).get())
+                .data()?['viajeActivoId']
+                ?.toString()
+                .trim() ??
+                '';
+            if (vid.isNotEmpty) {
+              unawaited(RaiLocalReadCache.rememberActiveTripId(u, vid));
+            }
           }
           return ok;
         });

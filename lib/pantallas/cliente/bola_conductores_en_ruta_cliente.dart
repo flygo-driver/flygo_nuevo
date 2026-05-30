@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_viaje_activo_page.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
@@ -91,7 +92,7 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                                 '1) Elegís un conductor y su ruta (está en un punto y va hacia otro).\n'
                                 '2) Negociás el monto en la tarjeta; al cerrar, vas al punto donde él espera (navegación).\n'
                                 '3) Subís, él confirma abordo e inicia con tu código → viaje en curso.\n'
-                                '4) Cuando ambos confirman llegada al destino, la bola queda finalizada y se registra el 10% RAI sobre el monto acordado (comisión del conductor, como en el tablero completo).',
+                                '4) Cuando ambos confirman llegada al destino, la bola queda finalizada y se registra la comisión RAI (${PlataformaEconomia.comisionViajePorcentaje.toStringAsFixed(0)}%) sobre el monto acordado (mismo modelo que un viaje en efectivo).',
                                 style: BolaPuebloUi.panelBody(context),
                               ),
                             ],

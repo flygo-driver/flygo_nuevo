@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +23,7 @@ class _PoolsClienteDetalleState extends State<PoolsClienteDetalle>
   int _seats = 1;
   String _metodo = 'transferencia'; // 'transferencia' | 'efectivo'
   bool _saving = false;
+  String? _cancelandoReservaId;
   late final AnimationController _marqueeCtrl;
 
   static const String _concepto = 'Deposito reserva de cupos';
@@ -799,6 +801,15 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
 
               const SizedBox(height: 12),
 
+              _MisReservasGiraPanel(
+                poolId: widget.poolId,
+                poolData: d,
+                cancelandoReservaId: _cancelandoReservaId,
+                onCancelar: _cancelarMiReserva,
+              ),
+
+              const SizedBox(height: 12),
+
               // Botón reservar
               SizedBox(
                 width: double.infinity,
@@ -904,6 +915,49 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
       _snack('❌ $e');
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _cancelarMiReserva(String reservaId) async {
+    if (_cancelandoReservaId != null) return;
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancelar reserva'),
+        content: const Text(
+          '¿Liberar tus asientos? Si pagaste depósito por transferencia y ya enviaste '
+          'comprobante, coordina con el operador.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sí, cancelar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _cancelandoReservaId = reservaId);
+    try {
+      await PoolRepo.cancelarReservaClienteSeguro(
+        poolId: widget.poolId,
+        reservaId: reservaId,
+      );
+      if (!mounted) return;
+      _snack('Reserva cancelada. Los cupos quedaron disponibles.');
+    } on FirebaseFunctionsException catch (e) {
+      _snack((e.message ?? e.code).trim().isNotEmpty
+          ? (e.message ?? e.code)
+          : 'No se pudo cancelar la reserva.');
+    } catch (e) {
+      _snack('No se pudo cancelar: $e');
+    } finally {
+      if (mounted) setState(() => _cancelandoReservaId = null);
     }
   }
 
@@ -1015,6 +1069,104 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
           Expanded(child: Text(v, style: TextStyle(color: valueColor))),
         ],
       ),
+    );
+  }
+}
+
+class _MisReservasGiraPanel extends StatelessWidget {
+  const _MisReservasGiraPanel({
+    required this.poolId,
+    required this.poolData,
+    required this.cancelandoReservaId,
+    required this.onCancelar,
+  });
+
+  final String poolId;
+  final Map<String, dynamic> poolData;
+  final String? cancelandoReservaId;
+  final Future<void> Function(String reservaId) onCancelar;
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) return const SizedBox.shrink();
+
+    final bool poolPermiteCancel =
+        PoolRepo.giraPuedeCancelarseAntesDeIniciar(poolData);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? Colors.greenAccent : const Color(0xFF059669);
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('viajes_pool')
+          .doc(poolId)
+          .collection('reservas')
+          .where('uidCliente', isEqualTo: uid)
+          .snapshots(),
+      builder: (context, snap) {
+        if (!snap.hasData) return const SizedBox.shrink();
+        final docs = snap.data!.docs.where((d) {
+          final e = (d.data()['estado'] ?? '').toString().trim().toLowerCase();
+          return e == 'reservado' || e == 'pagado';
+        }).toList();
+        if (docs.isEmpty) return const SizedBox.shrink();
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: accent.withValues(alpha: 0.35)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Tus reservas en este viaje',
+                style: TextStyle(
+                  color: accent,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...docs.map((doc) {
+                final r = doc.data();
+                final estado =
+                    (r['estado'] ?? '').toString().trim().toLowerCase();
+                final seats = ((r['seats'] ?? 1) as num).toInt();
+                final metodo = (r['metodoPago'] ?? '').toString();
+                final bool puedeCancelar =
+                    poolPermiteCancel && estado == 'reservado';
+                final bool cancelando = cancelandoReservaId == doc.id;
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '$seats asiento(s) · $metodo · '
+                          '${estado == 'pagado' ? 'Pago confirmado' : 'Pendiente (depósito o abordaje)'}',
+                          style: TextStyle(
+                            color: isDark ? Colors.white70 : Colors.black87,
+                          ),
+                        ),
+                      ),
+                      if (puedeCancelar)
+                        TextButton(
+                          onPressed: cancelando ? null : () => onCancelar(doc.id),
+                          child: Text(cancelando ? '…' : 'Cancelar'),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -1,18 +1,8 @@
 // lib/widgets/campo_lugar_autocomplete.dart
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../servicios/lugares_service.dart';
-
-/// Entrada persistida: con `placeId` el toque dispara el mismo flujo que elegir de la lista (precio, ruta).
-class _RecienteEntry {
-  const _RecienteEntry({required this.label, required this.placeId});
-
-  final String label;
-  final String placeId;
-}
 
 class CampoLugarAutocomplete extends StatefulWidget {
   final String label;
@@ -90,11 +80,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   /// [onTextChanged] en el padre (p. ej. programar_viaje borraba lat/_destinoDet y la cotización no corría).
   bool _applyingResolvedPlace = false;
 
-  // Lugares recientes (label + placeId para re-selección fiable).
-  List<_RecienteEntry> _recientes = [];
-  static const int _maxRecientes = 4;
-  static const String _prefsRecientesV2 = 'lugares_recientes_v2';
-  static const String _prefsRecientesLegacy = 'lugares_recientes';
+  List<RecienteLugar> _recientes = [];
 
   @override
   void initState() {
@@ -122,62 +108,36 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   }
 
   Future<void> _cargarRecientes() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rawV2 = prefs.getString(_prefsRecientesV2);
-    List<_RecienteEntry> list = [];
-    if (rawV2 != null && rawV2.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(rawV2);
-        if (decoded is List) {
-          for (final e in decoded) {
-            if (e is! Map) continue;
-            final m = Map<String, dynamic>.from(e);
-            final l = (m['l'] ?? m['label'] ?? '').toString().trim();
-            if (l.isEmpty) continue;
-            final p = (m['p'] ?? m['placeId'] ?? '').toString().trim();
-            list.add(_RecienteEntry(label: l, placeId: p));
-          }
-        }
-      } catch (_) {}
-    }
-    if (list.isEmpty) {
-      final legacy = prefs.getStringList(_prefsRecientesLegacy) ?? [];
-      for (final l in legacy) {
-        final t = l.trim();
-        if (t.isNotEmpty) list.add(_RecienteEntry(label: t, placeId: ''));
-      }
-    }
-    if (list.length > _maxRecientes) {
-      list = list.sublist(0, _maxRecientes);
-    }
+    final list = await _svc.cargarRecientes();
     if (!mounted) return;
     setState(() => _recientes = list);
   }
 
   Future<void> _guardarReciente(DetalleLugar det) async {
-    final prefs = await SharedPreferences.getInstance();
-    var list = List<_RecienteEntry>.from(_recientes);
-
-    list.removeWhere((e) {
-      if (det.placeId.isNotEmpty && e.placeId == det.placeId) return true;
-      return _norm(e.label) == _norm(det.displayLabel);
-    });
-    list.insert(
-      0,
-      _RecienteEntry(label: det.displayLabel, placeId: det.placeId),
-    );
-    if (list.length > _maxRecientes) {
-      list = list.sublist(0, _maxRecientes);
-    }
-
-    final encoded = jsonEncode(
-      list.map((e) => {'l': e.label, 'p': e.placeId}).toList(),
-    );
-    await prefs.setString(_prefsRecientesV2, encoded);
-    await prefs.remove(_prefsRecientesLegacy);
+    await _svc.guardarReciente(det);
+    final list = await _svc.cargarRecientes();
     if (!mounted) return;
     setState(() => _recientes = list);
   }
+
+  List<PrediccionLugar> _recientesComoPredicciones(String q) {
+    final nq = _norm(q.trim());
+    final out = <PrediccionLugar>[];
+    for (final e in _recientes) {
+      if (nq.isNotEmpty && !_norm(e.label).contains(nq)) continue;
+      out.add(
+        PrediccionLugar(
+          placeId: e.placeId.isNotEmpty ? e.placeId : 'recent:${e.label}',
+          primary: e.label,
+          secondary: 'Reciente',
+        ),
+      );
+    }
+    return out;
+  }
+
+  bool _esPrediccionReciente(PrediccionLugar p) =>
+      p.secondary == 'Reciente' || p.placeId.startsWith('recent:');
 
   @override
   void dispose() {
@@ -298,16 +258,42 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                             Divider(height: 1, color: dividerColor),
                         itemBuilder: (_, i) {
                           final p = _sugs[i];
-                          final subtitle = (p.secondary ?? '').trim();
+                          final esReciente = _esPrediccionReciente(p);
+                          final subtitle = esReciente
+                              ? null
+                              : (p.secondary ?? '').trim();
                           return ListTile(
                             dense: true,
-                            leading: Icon(Icons.place,
-                                color: placeIconColor, size: 20),
+                            leading: Icon(
+                              esReciente ? Icons.history : Icons.place,
+                              color: esReciente
+                                  ? (isDark
+                                      ? Colors.amber.shade200
+                                      : Colors.amber.shade800)
+                                  : placeIconColor,
+                              size: 20,
+                            ),
                             title: Text(p.primary, style: titleStyle),
-                            subtitle: subtitle.isNotEmpty
+                            subtitle: subtitle != null && subtitle.isNotEmpty
                                 ? Text(subtitle, style: subtitleStyle)
                                 : null,
-                            onTap: () => _selectPrediction(p),
+                            onTap: () {
+                              if (esReciente) {
+                                final idx = _recientes.indexWhere(
+                                  (e) =>
+                                      e.label == p.primary ||
+                                      (e.placeId.isNotEmpty &&
+                                          e.placeId == p.placeId),
+                                );
+                                if (idx >= 0) {
+                                  _seleccionarReciente(_recientes[idx]);
+                                } else {
+                                  _seleccionarPopular(p.primary);
+                                }
+                              } else {
+                                _selectPrediction(p);
+                              }
+                            },
                           );
                         },
                       ),
@@ -361,29 +347,6 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
         .replaceAll('Ü', 'u');
   }
 
-  List<PrediccionLugar> _rankPredictions(
-    List<PrediccionLugar> preds,
-    String q,
-  ) {
-    final nq = _norm(q);
-    if (nq.isEmpty) return preds;
-
-    final scored = preds.map((p) {
-      final primary = _norm(p.primary);
-      final secondary = _norm(p.secondary ?? '');
-
-      int score = 0;
-      if (primary.startsWith(nq)) score += 120;
-      if (secondary.isNotEmpty && secondary.contains(nq)) score += 40;
-      if (primary.contains(nq)) score += 20;
-
-      return MapEntry(p, score);
-    }).toList();
-
-    scored.sort((a, b) => b.value.compareTo(a.value));
-    return scored.map((e) => e.key).toList(growable: false);
-  }
-
   void _onChanged(String text) {
     if (_applyingResolvedPlace) {
       _debounce?.cancel();
@@ -400,17 +363,59 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     widget.onTextChanged?.call(text);
 
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 180), () async {
+    _debounce = Timer(const Duration(milliseconds: 110), () async {
       final q = text.trim();
-      if (q.length < widget.minChars || !_focus.hasFocus) {
+      if (!_focus.hasFocus) {
         _clearSugsAndOverlay();
+        return;
+      }
+
+      if (q.isEmpty) {
+        final soloRecientes = _recientesComoPredicciones('');
+        if (soloRecientes.isEmpty) {
+          _clearSugsAndOverlay();
+          return;
+        }
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _sugs = soloRecientes;
+        });
+        if (_focus.hasFocus) {
+          if (_entry == null) {
+            _showOverlay();
+          } else {
+            _refreshOverlay();
+          }
+        }
+        return;
+      }
+
+      if (q.length < widget.minChars) {
+        final parcial = _recientesComoPredicciones(q);
+        if (parcial.isEmpty) {
+          _clearSugsAndOverlay();
+          return;
+        }
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _sugs = parcial;
+        });
+        if (_focus.hasFocus) {
+          if (_entry == null) {
+            _showOverlay();
+          } else {
+            _refreshOverlay();
+          }
+        }
         return;
       }
 
       final int seq = ++_autocompleteSeq;
       if (mounted) setState(() => _loading = true);
 
-      final sugs = await _svc.autocompletar(
+      final remotas = await _svc.autocompletar(
         q,
         biasLat: widget.biasLat,
         biasLon: widget.biasLon,
@@ -421,20 +426,29 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
       if (seq != _autocompleteSeq) return;
       if (_controller.text.trim() != q) return;
 
+      final recientes = _recientesComoPredicciones(q);
+      final seen = <String>{};
+      final merged = <PrediccionLugar>[...recientes, ...remotas]
+          .where((p) {
+            final k = '${p.placeId}|${_norm(p.primary)}';
+            if (seen.contains(k)) return false;
+            seen.add(k);
+            return true;
+          })
+          .toList(growable: false);
+
       setState(() {
         _loading = false;
-        _sugs = _rankPredictions(sugs, q);
+        _sugs = _svc.rankearPredicciones(merged, q);
       });
 
       if (_sugs.isEmpty) {
         _removeOverlay();
-      } else {
-        if (_focus.hasFocus) {
-          if (_entry == null) {
-            _showOverlay();
-          } else {
-            _refreshOverlay();
-          }
+      } else if (_focus.hasFocus) {
+        if (_entry == null) {
+          _showOverlay();
+        } else {
+          _refreshOverlay();
         }
       }
     });
@@ -477,7 +491,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   }
 
   /// Toca un chip reciente: prioriza `detalle(placeId)` para disparar igual que una sugerencia.
-  Future<void> _seleccionarReciente(_RecienteEntry entry) async {
+  Future<void> _seleccionarReciente(RecienteLugar entry) async {
     if (entry.placeId.isNotEmpty) {
       if (mounted) setState(() => _loading = true);
       _removeOverlay();
@@ -524,7 +538,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
 
     if (!mounted) return;
     if (sugs.isNotEmpty) {
-      final ranked = _rankPredictions(sugs, lugar);
+      final ranked = _svc.rankearPredicciones(sugs, lugar);
       await _selectPrediction(ranked.first);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -642,7 +656,16 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
               ).applyDefaults(theme.inputDecorationTheme),
               onChanged: _onChanged,
               onTap: () {
-                if (_sugs.isNotEmpty && _focus.hasFocus) _showOverlay();
+                if (!_focus.hasFocus) return;
+                if (_sugs.isNotEmpty) {
+                  _showOverlay();
+                  return;
+                }
+                final rec = _recientesComoPredicciones(_controller.text.trim());
+                if (rec.isNotEmpty) {
+                  setState(() => _sugs = rec);
+                  _showOverlay();
+                }
               },
             ),
           ),

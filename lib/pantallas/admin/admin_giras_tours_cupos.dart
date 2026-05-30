@@ -567,7 +567,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                     final puedeIniciar = _puedeIniciar(d);
                     final puedeFinalizar = estadoL == 'en_ruta';
                     final puedeCancelar =
-                        estadoL != 'finalizado' && estadoL != 'cancelado';
+                        PoolRepo.giraPuedeCancelarseAntesDeIniciar(d);
                     final puedeAnularTrasFinalizar = estadoL == 'finalizado';
                     final yaAnuladaTrasFinal =
                         d['anuladaTrasFinalizar'] == true;

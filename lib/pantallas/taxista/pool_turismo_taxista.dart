@@ -16,6 +16,7 @@ import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
@@ -388,6 +389,38 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         DateTime.now(),
       );
 
+  /// Mismos códigos que [ViajesRepo.claimTripWithReason] / [DetalleViaje].
+  String _mensajeClaimFallidoPoolTurismo(String res) {
+    switch (res) {
+      case 'no-existe':
+        return 'El viaje ya no existe.';
+      case 'estado-no-pendiente':
+        return 'El viaje ya no está pendiente.';
+      case 'ya-asignado':
+        return 'Ese viaje ya fue asignado.';
+      case 'acceptAfter-futuro':
+        return 'Aún no se libera (acceptAfter en el futuro).';
+      case 'publish-futuro':
+        return 'Aún no se publica (publishAt en el futuro).';
+      case 'reservado-otro':
+        return 'Reservado por otro taxista.';
+      case 'taxista-ocupado':
+        return 'Tienes un viaje activo.';
+      case 'bloqueado-pago-semanal':
+      case 'bloqueado-comision-efectivo':
+        return PagosTaxistaRepo.mensajeRecargaTomarViajes;
+      default:
+        if (res.startsWith('permiso:')) {
+          return 'Permisos/reglas Firestore: ${res.split(':').last}';
+        }
+        if (res.startsWith('bloqueado')) {
+          return PagosTaxistaRepo.mensajeRecargaTomarViajes;
+        }
+        return 'Tu cuenta está bloqueada por saldo insuficiente o deuda '
+            'pendiente. Ve a Mis pagos para más información.';
+    }
+  }
+
   Future<void> _aceptarViajeTurismo(
     Viaje v,
     Map<String, dynamic> raw, {
@@ -498,20 +531,29 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         return;
       }
 
-      final msg = switch (res) {
-        'no-existe' => 'El viaje ya no existe.',
-        'estado-no-pendiente' => 'El viaje ya no está pendiente.',
-        'ya-asignado' => 'Ese viaje ya fue asignado.',
-        'acceptAfter-futuro' => 'Aún no se libera (acceptAfter en el futuro).',
-        'publish-futuro' => 'Aún no se publica (publishAt en el futuro).',
-        'reservado-otro' => 'Reservado por otro taxista.',
-        _ => res.startsWith('permiso:')
-            ? 'Permisos/reglas Firestore: ${res.split(':').last}'
-            : 'No se pudo aceptar: $res',
-      };
+      final String msg = _mensajeClaimFallidoPoolTurismo(res);
+      final bool esBloqueoSaldo = res == 'bloqueado-pago-semanal' ||
+          res == 'bloqueado-comision-efectivo' ||
+          res.startsWith('bloqueado');
 
       messenger.showSnackBar(
-        SnackBar(content: Text(msg), backgroundColor: cs.error),
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: cs.error,
+          duration: esBloqueoSaldo
+              ? const Duration(seconds: 8)
+              : const Duration(seconds: 4),
+          action: esBloqueoSaldo
+              ? SnackBarAction(
+                  label: 'Mis pagos',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    Navigator.of(context, rootNavigator: true)
+                        .pushNamed('/mis_pagos');
+                  },
+                )
+              : null,
+        ),
       );
     } catch (e) {
       if (!mounted) return;

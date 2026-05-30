@@ -1,6 +1,6 @@
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
-import { ledgerComisionViajeEfectivoCf } from "./taxista_prepago_ledger.js";
-import type { DocumentSnapshot } from "firebase-admin/firestore";
+import { ledgerComisionViajeEfectivoCf, comisionViajeEfectivoLedgerRef } from "./taxista_prepago_ledger.js";
+import type { DocumentSnapshot, Transaction } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
@@ -8,6 +8,7 @@ import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
 import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import { assertMultiparadaCompletaParaFinalizar } from "./multiparada.js";
 
 const db = () => getFirestore();
 const messaging = () => getMessaging();
@@ -86,6 +87,24 @@ function saldoDisponiblePrepagoRdFromBilletera(data: AnyMap | undefined): number
   const prep = saldoPrepagoRdFromBilletera(data);
   const res = saldoReservadoGirasRdFromBilletera(data);
   return Math.max(0, prep - res);
+}
+
+/** Snapshot inmutable en `viajes` al cierre: perfil bancario + cédula del taxista. */
+function snapshotPerfilTaxistaParaFactura(uData: AnyMap | undefined): {
+  bancoTaxista: string;
+  numeroCuentaTaxista: string;
+  tipoCuentaTaxista: string;
+  titularCuentaTaxista: string;
+  ciTaxista: string;
+} {
+  const u = uData ?? {};
+  return {
+    bancoTaxista: String(u.banco ?? "").trim(),
+    numeroCuentaTaxista: String(u.numeroCuenta ?? "").trim(),
+    tipoCuentaTaxista: String(u.tipoCuenta ?? "").trim(),
+    titularCuentaTaxista: String(u.titularCuenta ?? u.titular ?? "").trim(),
+    ciTaxista: String(u.ciTaxista ?? u.cedula ?? u.cedulaTaxista ?? "").trim(),
+  };
 }
 
 function numOr(n: unknown, fallback: number): number {
@@ -316,29 +335,39 @@ async function notificarLegacyComisionTope(uid: string, pendAntes: number, pendD
 
 /** Devuelve el valor final de `tienePagoPendiente` escrito en `usuarios`. */
 async function syncTienePagoPendiente(uidTaxista: string): Promise<boolean> {
-  const billeSnap = await db().collection("billeteras_taxista").doc(uidTaxista).get();
+  const uid = uidTaxista.trim();
+  if (!uid) {
+    logger.warn("[syncTienePagoPendiente] uid vacío; omitido");
+    return false;
+  }
+  const billeSnap = await db().collection("billeteras_taxista").doc(uid).get();
   const bloqueoComision = bloqueoOperativoPrepago(billeSnap.data() as AnyMap | undefined);
   // Deuda de pool pendiente de validación admin (acumulada por taxista).
-  const poolsPendSnap = await db()
-    .collection("viajes_pool")
-    .where("ownerTaxistaId", "==", uidTaxista)
-    .where("comisionPendientePagoAdmin", "==", true)
-    .limit(500)
-    .get();
   let deudaPoolPendienteRd = 0;
-  for (const doc of poolsPendSnap.docs) {
-    const d = (doc.data() ?? {}) as AnyMap;
-    const v = d.montoComisionPendienteAdmin ?? d.montoComision;
-    if (typeof v === "number" && Number.isFinite(v)) deudaPoolPendienteRd += v;
-    else if (typeof v === "string") {
-      const n = Number(v);
-      if (Number.isFinite(n)) deudaPoolPendienteRd += n;
+  try {
+    const poolsPendSnap = await db()
+      .collection("viajes_pool")
+      .where("ownerTaxistaId", "==", uid)
+      .where("comisionPendientePagoAdmin", "==", true)
+      .limit(500)
+      .get();
+    for (const doc of poolsPendSnap.docs) {
+      const d = (doc.data() ?? {}) as AnyMap;
+      const v = d.montoComisionPendienteAdmin ?? d.montoComision;
+      if (typeof v === "number" && Number.isFinite(v)) deudaPoolPendienteRd += v;
+      else if (typeof v === "string") {
+        const n = Number(v);
+        if (Number.isFinite(n)) deudaPoolPendienteRd += n;
+      }
     }
+  } catch (e) {
+    // Índice compuesto faltante u otro error: no bloquear finalización de viaje.
+    logger.warn("[syncTienePagoPendiente] consulta pool omitida", { uid, err: e });
   }
   const bloqueoPool = deudaPoolPendienteRd + 1e-9 >= UMBRAL_DEUDA_POOL_RD;
   // Misma regla + deuda pool: prepago bajo/legacy o deuda pool acumulada >= tope.
   const tienePagoPendiente = bloqueoComision || bloqueoPool;
-  await db().collection("usuarios").doc(uidTaxista).set(
+  await db().collection("usuarios").doc(uid).set(
     {
       tienePagoPendiente,
       deudaPoolPendienteRd: Number(deudaPoolPendienteRd.toFixed(2)),
@@ -349,40 +378,127 @@ async function syncTienePagoPendiente(uidTaxista: string): Promise<boolean> {
   return tienePagoPendiente;
 }
 
+/** Misma lógica que `refundGiraReservaPagoSemanal` / `cancelPoolTrip`, inlined para sync servidor. */
+function numOr0Gira(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number.parseFloat(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+async function devolverPrepagoGiraReservadaSiAplica(
+  tx: Transaction,
+  poolId: string,
+  pool: AnyMap,
+  motivoLedger: string,
+): Promise<number> {
+  const reserved = Math.max(0, numOr0Gira(pool.comisionGiraEstimadaRd));
+  const etapa = String(pool.prepagoComisionEtapa ?? "").trim().toLowerCase();
+  if (reserved <= 1e-9 || etapa !== "reservada_creacion") return 0;
+  const owner = String(pool.ownerTaxistaId ?? "").trim();
+  if (!owner) return 0;
+
+  const billeRef = db().collection("billeteras_taxista").doc(owner);
+  const bs = await tx.get(billeRef);
+  const bille = (bs.data() ?? {}) as AnyMap;
+  const prep = Math.max(0, numOr0Gira(bille.saldoPrepagoComisionRd));
+  const reserv = Math.max(0, numOr0Gira(bille.saldoReservadoParaGiras));
+  if (reserv + 1e-9 < reserved) {
+    logger.warn("[GIRA_PREPAGO] sync pago semanal: reserv insuficiente", { poolId, reserv, reserved });
+    return 0;
+  }
+
+  tx.set(
+    billeRef,
+    {
+      saldoPrepagoComisionRd: Number((prep + reserved).toFixed(2)),
+      saldoReservadoParaGiras: Number((reserv - reserved).toFixed(2)),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+  tx.update(db().collection("viajes_pool").doc(poolId), {
+    prepagoComisionEtapa: "devuelta_pago_semanal",
+    comisionGiraEstimadaRd: 0,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  const led = db().collection("ledger_giras").doc();
+  tx.set(led, {
+    tipo: "devolucion_reserva",
+    poolId,
+    uidTaxista: owner,
+    monto: reserved,
+    motivo: motivoLedger,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  return reserved;
+}
+
 /** Misma lógica que `PoolRepo.syncPoolsPorPagoSemanal` en la app (cierra pools si comisión ≥ tope). */
 async function syncPoolsPorPagoSemanal(ownerTaxistaId: string, tienePagoPendiente: boolean): Promise<void> {
   const trimmed = ownerTaxistaId.trim();
   if (!trimmed) return;
   const snap = await db().collection("viajes_pool").where("ownerTaxistaId", "==", trimmed).get();
   if (snap.empty) return;
-  const chunkSize = 450;
-  for (let i = 0; i < snap.docs.length; i += chunkSize) {
-    const chunk = snap.docs.slice(i, i + chunkSize);
-    const b = db().batch();
-    for (const docSnap of chunk) {
-      const d = (docSnap.data() ?? {}) as AnyMap;
-      const estadoActual = String(d.estado ?? "abierto");
-      const canceladoPorPagoSemanal = d.canceladoPorPagoSemanal === true;
-      const estadoPrevio = String(d.estadoPrevioPorPagoSemanal ?? estadoActual);
-      if (tienePagoPendiente) {
-        if (estadoActual === "cancelado" && canceladoPorPagoSemanal) continue;
-        if (estadoActual === "cancelado" && !canceladoPorPagoSemanal) continue;
-        b.update(docSnap.ref, {
-          estado: "cancelado",
-          canceladoPorPagoSemanal: true,
-          estadoPrevioPorPagoSemanal: estadoActual,
-          canceladoPorPagoSemanalEn: FieldValue.serverTimestamp(),
+
+  for (const docSnap of snap.docs) {
+    const d = (docSnap.data() ?? {}) as AnyMap;
+    const estadoActual = String(d.estado ?? "abierto");
+    const canceladoPorPagoSemanal = d.canceladoPorPagoSemanal === true;
+    const estadoPrevio = String(d.estadoPrevioPorPagoSemanal ?? estadoActual);
+
+    if (tienePagoPendiente) {
+      if (estadoActual === "cancelado" && canceladoPorPagoSemanal) continue;
+      if (estadoActual === "cancelado" && !canceladoPorPagoSemanal) continue;
+      try {
+        await db().runTransaction(async (tx) => {
+          const fresh = await tx.get(docSnap.ref);
+          if (!fresh.exists) return;
+          const p = (fresh.data() ?? {}) as AnyMap;
+          const est = String(p.estado ?? "abierto");
+          if (est === "cancelado" && p.canceladoPorPagoSemanal === true) return;
+          if (est === "cancelado" && p.canceladoPorPagoSemanal !== true) return;
+
+          await devolverPrepagoGiraReservadaSiAplica(
+            tx,
+            docSnap.id,
+            p,
+            "pago_semanal_cierra_pool",
+          );
+
+          tx.update(docSnap.ref, {
+            estado: "cancelado",
+            canceladoPorPagoSemanal: true,
+            estadoPrevioPorPagoSemanal: est,
+            canceladoPorPagoSemanalEn: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
         });
-      } else if (estadoActual === "cancelado" && canceladoPorPagoSemanal) {
-        b.update(docSnap.ref, {
-          estado: estadoPrevio.length > 0 ? estadoPrevio : "abierto",
-          canceladoPorPagoSemanal: false,
-          estadoPrevioPorPagoSemanal: FieldValue.delete(),
-          canceladoPorPagoSemanalEn: FieldValue.delete(),
+      } catch (e) {
+        logger.error("[syncPoolsPorPagoSemanal] cancel+refund pool", { poolId: docSnap.id, e });
+      }
+    } else if (estadoActual === "cancelado" && canceladoPorPagoSemanal) {
+      try {
+        await db().runTransaction(async (tx) => {
+          const fresh = await tx.get(docSnap.ref);
+          if (!fresh.exists) return;
+          const p = (fresh.data() ?? {}) as AnyMap;
+          if (p.estado !== "cancelado" || p.canceladoPorPagoSemanal !== true) return;
+          const prev = String(p.estadoPrevioPorPagoSemanal ?? "").trim();
+          tx.update(docSnap.ref, {
+            estado: prev.length > 0 ? prev : "abierto",
+            canceladoPorPagoSemanal: false,
+            estadoPrevioPorPagoSemanal: FieldValue.delete(),
+            canceladoPorPagoSemanalEn: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
         });
+      } catch (e) {
+        logger.error("[syncPoolsPorPagoSemanal] restore pool", { poolId: docSnap.id, e });
       }
     }
-    await b.commit();
   }
 }
 
@@ -439,6 +555,73 @@ function estadoPermiteFinalizarTaxista(estadoNorm: string): boolean {
   return estadoNorm === "en_curso" || estadoNorm === "a_bordo";
 }
 
+/** Viaje espejo Bola Ahorro (`tipoServicio == bola_ahorro`): alinea tablero `bolas_pueblo`. */
+function bolaIdDesdeViajeEspejo(d: AnyMap): string {
+  if (String(d.tipoServicio ?? "").trim() !== "bola_ahorro") return "";
+  return String(d.bolaPuebloId ?? d.bolaId ?? "").trim();
+}
+
+function patchBolaPuebloTrasViajeEspejoFinalizado(
+  viajeId: string,
+  viajeData: AnyMap,
+  esEfectivo: boolean,
+  facturaSaldoPrepagoComisionRd: number | null,
+): Record<string, unknown> | null {
+  const bolaId = bolaIdDesdeViajeEspejo(viajeData);
+  if (!bolaId) return null;
+
+  const estadoPagoRaw = viajeData.estadoPago;
+  const estadoPago = String(
+    estadoPagoRaw ?? (esEfectivo ? "pagado" : "pendiente"),
+  ).trim();
+
+  const patch: Record<string, unknown> = {
+    estado: "finalizada",
+    estadoViajeBola: "finalizada",
+    finalizadaEn: FieldValue.serverTimestamp(),
+    comisionAplicada: true,
+    viajeCompletadoId: viajeId,
+    updatedAt: FieldValue.serverTimestamp(),
+    metodoPago: esEfectivo ? "efectivo" : "transferencia",
+    estadoPago,
+    confirmacionTaxistaFinal: true,
+    confirmacionClienteFinal: true,
+  };
+
+  const saldo =
+    facturaSaldoPrepagoComisionRd ?? viajeData.facturaSaldoPrepagoComisionRd;
+  if (typeof saldo === "number" && Number.isFinite(saldo)) {
+    patch.facturaSaldoPrepagoComisionRd = saldo;
+  }
+  const comp = String(viajeData.comprobanteTransferenciaUrl ?? "").trim();
+  if (comp) patch.comprobanteTransferenciaUrl = comp;
+  if (viajeData.transferenciaConfirmada === true) {
+    patch.transferenciaConfirmada = true;
+  }
+  return patch;
+}
+
+async function syncBolaPuebloTrasViajeEspejoFinalizado(
+  viajeId: string,
+  viajeData: AnyMap,
+): Promise<void> {
+  const metodo = String(viajeData.metodoPago ?? "").toLowerCase().trim();
+  const esEfectivo = metodo.length === 0 || metodo.includes("efectivo");
+  const saldoRaw = viajeData.facturaSaldoPrepagoComisionRd;
+  const saldo =
+    typeof saldoRaw === "number" && Number.isFinite(saldoRaw) ? saldoRaw : null;
+  const patch = patchBolaPuebloTrasViajeEspejoFinalizado(
+    viajeId,
+    viajeData,
+    esEfectivo,
+    saldo,
+  );
+  if (!patch) return;
+  const bolaId = bolaIdDesdeViajeEspejo(viajeData);
+  await db().collection("bolas_pueblo").doc(bolaId).set(patch, { merge: true });
+  logger.info("[BOLA_AHORRO] sync bola finalizada desde viaje espejo", { viajeId, bolaId });
+}
+
 async function ensureIdempotencyStart(
   key: string,
   op: string,
@@ -479,7 +662,8 @@ async function markIdempotencyDone(
 }
 
 export const finalizarViajeSeguro = onCall(async (request) => {
-  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  try {
+    if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uidActor = request.auth.uid;
   const viajeIdRaw = request.data?.viajeId;
   const idemRaw = request.data?.idempotencyKey;
@@ -504,10 +688,16 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     if (!vSnap.exists) throw new HttpsError("not-found", "Viaje no existe");
     const d = (vSnap.data() ?? {}) as AnyMap;
 
-    const uidTaxista = String(d.uidTaxista ?? d.taxistaId ?? "");
-    const uidCliente = String(d.uidCliente ?? d.clienteId ?? "");
+    const uidTaxista = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
+    const uidCliente = String(d.uidCliente ?? d.clienteId ?? "").trim();
     const estado = normalizeEstadoViajeDoc(d.estado);
     const completado = d.completado === true;
+    if (!uidTaxista) {
+      throw new HttpsError(
+        "failed-precondition",
+        "El viaje no tiene conductor asignado (uidTaxista vacío). Revisá el documento en Firestore o reasigná el viaje.",
+      );
+    }
     if (role === "taxista" && uidTaxista !== uidActor) {
       throw new HttpsError("permission-denied", "No autorizado para este viaje");
     }
@@ -515,6 +705,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     if (completado || estado === "completado") {
       return { ok: true, viajeId, alreadyCompleted: true, uidTaxista };
     }
+    assertMultiparadaCompletaParaFinalizar(d);
+
     if (!estadoPermiteFinalizarTaxista(estado)) {
       const rawEst = String(d.estado ?? "");
       logger.warn("[FINALIZAR_ERROR] finalizarViajeSeguro estado no finalizable", {
@@ -551,6 +743,33 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const metodoAsiento = esEfectivo ? "efectivo" : (metodo.includes("transfer") ? "transferencia" : "tarjeta");
     const pagoRegistrado = d.pagoRegistrado === true;
 
+    const billeRef = db().collection("billeteras_taxista").doc(uidTaxista);
+    const asientoRef = db().collection("pagos").doc(`viaje_${viajeId}_asiento`);
+    const userTaxRef = db().collection("usuarios").doc(uidTaxista);
+
+    // Firestore: todas las lecturas de la transacción antes de cualquier escritura.
+    const uSnap = await tx.get(userTaxRef);
+    const billeSnapPre = await tx.get(billeRef);
+    let asientoSnapPre: DocumentSnapshot | null = null;
+    let ledgerMovSnapPre: DocumentSnapshot | null = null;
+    if (!pagoRegistrado) {
+      asientoSnapPre = await tx.get(asientoRef);
+      if (esEfectivo) {
+        ledgerMovSnapPre = await tx.get(comisionViajeEfectivoLedgerRef(uidTaxista, viajeId));
+      }
+    }
+
+    const uData = (uSnap.data() ?? {}) as AnyMap;
+    const perfilFacturaSnap = snapshotPerfilTaxistaParaFactura(uData);
+
+    /** Saldo prepago comisión tras este cierre (solo viajes en efectivo); `null` = no aplica (transferencia/tarjeta). */
+    let facturaSaldoPrepagoComisionRd: number | null = null;
+    if (esEfectivo) {
+      facturaSaldoPrepagoComisionRd = Number.parseFloat(
+        saldoPrepagoRdFromBilletera((billeSnapPre.data() ?? {}) as AnyMap).toFixed(2),
+      );
+    }
+
     if (!pagoRegistrado) {
       tx.update(viajeRef, {
         metodoPago: esEfectivo ? "Efectivo" : (metodo.includes("transfer") ? "Transferencia" : "Tarjeta"),
@@ -583,9 +802,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         actualizadoEn: FieldValue.serverTimestamp(),
       });
 
-      const billeRef = db().collection("billeteras_taxista").doc(uidTaxista);
-      const billeSnap = await tx.get(billeRef);
-      const bData = (billeSnap.data() ?? {}) as AnyMap;
+      const bData = (billeSnapPre.data() ?? {}) as AnyMap;
       const billePatch: Record<string, unknown> = {
         ultimoViajeId: viajeId,
         ultimaComisionCents: comisionCents,
@@ -599,6 +816,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         const comisionRd = fromCents(comisionCents);
         if (!flag && pend < 1e-6) {
           billePatch.primerViajeComisionGratisConsumido = true;
+          facturaSaldoPrepagoComisionRd = Number.parseFloat(saldoIni.toFixed(2));
           await ledgerComisionViajeEfectivoCf(tx, {
             uidTaxista,
             viajeId,
@@ -609,6 +827,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
             pendienteDespues: pend,
             saldoPrepagoDespues: saldoIni,
             primerEfectivoSinDescuento: true,
+            existingMovSnap: ledgerMovSnapPre ?? undefined,
           });
         } else {
           let p = pend;
@@ -623,6 +842,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
           billePatch.comisionPendiente = p;
           billePatch.saldoPrepagoComisionRd = saldo;
           billePatch.primerViajeComisionGratisConsumido = true;
+          facturaSaldoPrepagoComisionRd = Number.parseFloat(saldo.toFixed(2));
           await ledgerComisionViajeEfectivoCf(tx, {
             uidTaxista,
             viajeId,
@@ -633,14 +853,13 @@ export const finalizarViajeSeguro = onCall(async (request) => {
             pendienteDespues: p,
             saldoPrepagoDespues: saldo,
             primerEfectivoSinDescuento: false,
+            existingMovSnap: ledgerMovSnapPre ?? undefined,
           });
         }
       }
       tx.set(billeRef, billePatch, { merge: true });
 
-      const asientoRef = db().collection("pagos").doc(`viaje_${viajeId}_asiento`);
-      const asientoSnap = await tx.get(asientoRef);
-      if (!asientoSnap.exists) {
+      if (asientoSnapPre && !asientoSnapPre.exists) {
         tx.set(asientoRef, {
           tipo: "taxista",
           viajeId,
@@ -675,6 +894,13 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       finalizadoEn: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
+      // Snapshot perfil + saldo prepago post-cierre (factura inmutable).
+      bancoTaxista: perfilFacturaSnap.bancoTaxista,
+      numeroCuentaTaxista: perfilFacturaSnap.numeroCuentaTaxista,
+      tipoCuentaTaxista: perfilFacturaSnap.tipoCuentaTaxista,
+      titularCuentaTaxista: perfilFacturaSnap.titularCuentaTaxista,
+      ciTaxista: perfilFacturaSnap.ciTaxista,
+      facturaSaldoPrepagoComisionRd,
     });
 
     tx.set(
@@ -697,19 +923,61 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         { merge: true },
       );
     }
+
+    const bolaPatch = patchBolaPuebloTrasViajeEspejoFinalizado(
+      viajeId,
+      d,
+      esEfectivo,
+      facturaSaldoPrepagoComisionRd,
+    );
+    if (bolaPatch) {
+      const bolaId = bolaIdDesdeViajeEspejo(d);
+      tx.set(db().collection("bolas_pueblo").doc(bolaId), bolaPatch, { merge: true });
+    }
+
     return { ok: true, viajeId, alreadyCompleted: false, uidTaxista };
   });
 
-  const uidT = String((result as AnyMap).uidTaxista ?? "");
-  if (uidT && (result as AnyMap).alreadyCompleted !== true) {
-    await syncTaxistaBloqueoOperativo(uidT);
+  if ((result as AnyMap).alreadyCompleted === true) {
+    try {
+      const vHeal = await viajeRef.get();
+      const vd = (vHeal.data() ?? {}) as AnyMap;
+      if (vHeal.exists && (vd.completado === true || normalizeEstadoViajeDoc(vd.estado) === "completado")) {
+        await syncBolaPuebloTrasViajeEspejoFinalizado(viajeId, vd);
+      }
+    } catch (healErr: unknown) {
+      logger.warn("[BOLA_AHORRO] sync bola heal post-alreadyCompleted falló", { viajeId, healErr });
+    }
   }
 
-  await markIdempotencyDone(idem.ref, result);
-  return result;
-});
+  const uidT = String((result as AnyMap).uidTaxista ?? "").trim();
+  if (uidT && (result as AnyMap).alreadyCompleted !== true) {
+    try {
+      await syncTaxistaBloqueoOperativo(uidT);
+    } catch (syncErr: unknown) {
+      logger.error("[FINALIZAR_WARN] syncTaxistaBloqueoOperativo falló (viaje ya cerrado en tx)", {
+        uidT,
+        viajeId,
+        syncErr,
+      });
+    }
+  }
 
-// Cliente reporta transferencia sin alterar estado operativo del viaje.
+  try {
+    await markIdempotencyDone(idem.ref, result as AnyMap);
+  } catch (idemErr: unknown) {
+    logger.error("[FINALIZAR_WARN] markIdempotencyDone falló", { viajeId, idemErr });
+  }
+  } catch (e: unknown) {
+    if (e instanceof HttpsError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.error("[FINALIZAR_FATAL] finalizarViajeSeguro", e);
+    throw new HttpsError(
+      "internal",
+      `Error interno al finalizar: ${msg}`,
+    );
+  }
+});
 export const reportarTransferenciaClienteSeguro = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uidActor = request.auth.uid;
@@ -1215,8 +1483,11 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       throw new HttpsError("failed-precondition", "No se puede cancelar en este estado");
     }
 
-    tx.update(viajeRef, {
-      estado: "pendiente",
+    const esTurismo = String(d.tipoServicio ?? "").trim() === "turismo";
+    const estadoTrasCancel = esTurismo ? "pendiente_admin" : "pendiente";
+
+    const cancelPatch: Record<string, unknown> = {
+      estado: estadoTrasCancel,
       aceptado: false,
       rechazado: false,
       activo: false,
@@ -1238,7 +1509,18 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       finalizadoEn: FieldValue.delete(),
       reservadoPor: "",
       reservadoHasta: null,
-    });
+      ignoradosPor: FieldValue.arrayUnion([uidActor]),
+    };
+    if (esTurismo) {
+      cancelPatch.codigoVerificado = false;
+      cancelPatch.codigoVerificadoEn = FieldValue.delete();
+      cancelPatch.asignacionAutomatica = FieldValue.delete();
+      cancelPatch.asignadoPor = FieldValue.delete();
+      cancelPatch.asignadoEn = FieldValue.delete();
+      cancelPatch.aceptadoEn = FieldValue.delete();
+    }
+
+    tx.update(viajeRef, cancelPatch);
 
     tx.set(userRef, {
       viajeActivoId: "",

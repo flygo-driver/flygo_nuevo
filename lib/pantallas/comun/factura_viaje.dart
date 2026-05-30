@@ -5,9 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/comprobante_transferencia_service.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 
 /// Pantalla de factura visual del viaje.
 ///
@@ -146,8 +149,15 @@ class _FacturaContent extends StatelessWidget {
             '')
         .toString()
         .trim();
+    final String ci = (data['ciTaxista'] ?? data['cedulaTaxista'] ?? '')
+        .toString()
+        .trim();
 
-    if (banco.isEmpty && cuenta.isEmpty && titular.isEmpty) {
+    if (banco.isEmpty &&
+        cuenta.isEmpty &&
+        titular.isEmpty &&
+        tipoCuenta.isEmpty &&
+        ci.isEmpty) {
       return null;
     }
     return _DatosBancarios(
@@ -155,7 +165,27 @@ class _FacturaContent extends StatelessWidget {
       cuenta: cuenta,
       tipoCuenta: tipoCuenta,
       titular: titular,
+      ci: ci,
     );
+  }
+
+  String _lineaSaldoPrepagoFactura() {
+    if (!MetodoPagoViaje.esEfectivo(
+        (data['metodoPago'] ?? 'Efectivo').toString())) {
+      return 'Saldo restante en tu billetera de recargas (comisión): No aplica';
+    }
+    final v = data['facturaSaldoPrepagoComisionRd'];
+    if (v == null) {
+      return 'Saldo restante en tu billetera de recargas (comisión): no registrado en este comprobante';
+    }
+    if (v is num) {
+      return 'Saldo restante en tu billetera de recargas (comisión): ${FormatosMoneda.rd(v.toDouble())}';
+    }
+    final parsed = double.tryParse(v.toString());
+    if (parsed != null) {
+      return 'Saldo restante en tu billetera de recargas (comisión): ${FormatosMoneda.rd(parsed)}';
+    }
+    return 'Saldo restante en tu billetera de recargas (comisión): —';
   }
 
   String _uidTaxista() {
@@ -163,6 +193,56 @@ class _FacturaContent extends StatelessWidget {
     if (a.isNotEmpty) return a;
     final String b = (data['taxistaId'] ?? '').toString().trim();
     return b;
+  }
+
+  List<Map<String, dynamic>> _waypointsDesdeData() {
+    final dynamic raw = data['waypoints'];
+    if (raw is! List) return const <Map<String, dynamic>>[];
+    final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
+    for (final dynamic w in raw) {
+      if (w is! Map) continue;
+      final String label = (w['label'] ?? '').toString().trim();
+      if (label.isEmpty) continue;
+      out.add(Map<String, dynamic>.from(w));
+    }
+    return out;
+  }
+
+  double _peajeDesdeData() {
+    final dynamic extras = data['extras'];
+    if (extras is Map) {
+      final dynamic p = extras['peaje_total'] ?? extras['peaje'];
+      if (p is num) return p.toDouble();
+    }
+    return _toDouble(data['peaje'] ?? data['peaje_total'] ?? 0);
+  }
+
+  bool get _esViajeMulti =>
+      (data['categoria'] ?? '').toString().trim().toLowerCase() == 'multi';
+
+  ({double comision, double ganancia}) _liquidacionTaxistaDesdeDoc(
+      double total) {
+    double comision = 0;
+    final ccRaw = data['comision_cents'];
+    if (ccRaw is num && ccRaw > 0) {
+      comision = ccRaw.toDouble() / 100.0;
+    } else {
+      comision = _toDouble(data['comision'] ?? data['comisionFlygo'] ?? 0);
+    }
+    double ganancia = 0;
+    final gcRaw = data['ganancia_cents'];
+    if (gcRaw is num && gcRaw > 0) {
+      ganancia = gcRaw.toDouble() / 100.0;
+    } else {
+      ganancia = _toDouble(data['gananciaTaxista'] ?? 0);
+    }
+    if (comision <= 1e-6 && total > 1e-6) {
+      comision = PlataformaEconomia.comisionRdDesdeTotal(total);
+    }
+    if (ganancia <= 1e-6 && total > 1e-6) {
+      ganancia = PlataformaEconomia.gananciaTaxistaRdDesdeTotal(total);
+    }
+    return (comision: comision, ganancia: ganancia);
   }
 
   @override
@@ -174,8 +254,10 @@ class _FacturaContent extends StatelessWidget {
     final String metodoPago = (data['metodoPago'] ?? 'Efectivo').toString();
     final bool esTransferencia = MetodoPagoViaje.esTransferencia(metodoPago);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoPago);
-    final double total =
-        _toDouble(data['precioFinal'] ?? data['precio'] ?? 0);
+    final double total = totalRdDesdeDocViaje(data);
+    final bool montoPendienteServidor =
+        viajeDocCompletado(data) && total <= 1e-6;
+    final String etiquetaServicio = etiquetaTipoServicioFactura(data);
     final double tarifaBase = _toDouble(data['tarifaBase'] ?? 0);
     final double distanciaKm = _toDouble(data['distanciaKm'] ?? 0);
     final String estadoPago =
@@ -203,25 +285,46 @@ class _FacturaContent extends StatelessWidget {
     );
 
     final bool esTaxista = role == 'taxista';
-    double comisionCond = 0;
-    final ccRaw = data['comision_cents'];
-    if (ccRaw is num && ccRaw > 0) {
-      comisionCond = ccRaw.toDouble() / 100.0;
-    } else {
-      comisionCond = _toDouble(data['comision'] ?? data['comisionFlygo'] ?? 0);
+    final ({double comision, double ganancia}) liq =
+        _liquidacionTaxistaDesdeDoc(total);
+    final double comisionCond = liq.comision;
+    final double gananciaCond = liq.ganancia;
+    final double peaje = _peajeDesdeData();
+    final List<Map<String, dynamic>> waypoints = _waypointsDesdeData();
+    final List<Map<String, dynamic>> visitadas = data['multiparadaParadasVisitadas']
+            is List
+        ? List<Map<String, dynamic>>.from(
+            (data['multiparadaParadasVisitadas'] as List).map(
+              (dynamic e) =>
+                  e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{},
+            ),
+          )
+        : <Map<String, dynamic>>[];
+    bool _legVisitado(int legIndex) {
+      for (final Map<String, dynamic> v in visitadas) {
+        if (v['legIndex'] is num && (v['legIndex'] as num).toInt() == legIndex) {
+          return true;
+        }
+      }
+      return false;
     }
-    double gananciaCond = 0;
-    final gcRaw = data['ganancia_cents'];
-    if (gcRaw is num && gcRaw > 0) {
-      gananciaCond = gcRaw.toDouble() / 100.0;
-    } else {
-      gananciaCond = _toDouble(data['gananciaTaxista'] ?? 0);
-    }
-    final bool mostrarLiquidacionTx =
-        esTaxista && (comisionCond > 1e-6 || gananciaCond > 1e-6);
+
+    final bool viajeCompletado = viajeDocCompletado(data);
+    final bool mostrarLiquidacionTx = esTaxista &&
+        viajeCompletado &&
+        total > 1e-6 &&
+        (comisionCond > 1e-6 || gananciaCond > 1e-6);
+
+    // Espacio bajo el botón final: la barra de navegación/gestos del sistema
+    // tapaba "Entendido, cerrar comprobante" con el padding fijo de 28.
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double sysBottom = mq.viewPadding.bottom > mq.padding.bottom
+        ? mq.viewPadding.bottom
+        : mq.padding.bottom;
+    final double bottomScrollPad = sysBottom + 56;
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      padding: EdgeInsets.fromLTRB(20, 12, 20, bottomScrollPad),
       children: [
         _FacturaViajeDocBanner(cs: cs, tt: Theme.of(context).textTheme),
         const SizedBox(height: 16),
@@ -312,7 +415,7 @@ class _FacturaContent extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         _SectionCard(
-          title: 'Itinerario',
+          title: _esViajeMulti ? 'Itinerario (múltiples paradas)' : 'Itinerario',
           children: [
             _Row(
               icon: Icons.my_location_rounded,
@@ -320,10 +423,27 @@ class _FacturaContent extends StatelessWidget {
               label: 'Origen',
               value: origen.isEmpty ? '—' : origen,
             ),
+            ...waypoints.asMap().entries.map(
+              (MapEntry<int, Map<String, dynamic>> e) {
+                final String label =
+                    (e.value['label'] ?? 'Parada ${e.key + 1}').toString();
+                final bool ok = _legVisitado(e.key);
+                return _Row(
+                  icon: ok ? Icons.check_circle_rounded : Icons.place_outlined,
+                  iconColor: ok ? Colors.green.shade700 : cs.secondary,
+                  label: 'Parada ${e.key + 1}${ok ? ' ✓' : ''}',
+                  value: label,
+                );
+              },
+            ),
             _Row(
-              icon: Icons.flag_rounded,
-              iconColor: cs.error,
-              label: 'Destino',
+              icon: _legVisitado(waypoints.length)
+                  ? Icons.check_circle_rounded
+                  : Icons.flag_rounded,
+              iconColor: _legVisitado(waypoints.length)
+                  ? Colors.green.shade700
+                  : cs.error,
+              label: 'Destino final${_legVisitado(waypoints.length) ? ' ✓' : ''}',
               value: destino.isEmpty ? '—' : destino,
             ),
             if (distanciaKm > 0)
@@ -335,10 +455,33 @@ class _FacturaContent extends StatelessWidget {
               ),
           ],
         ),
+        if (montoPendienteServidor) ...[
+          const SizedBox(height: 12),
+          const _SectionCard(
+            title: 'Confirmando monto',
+            children: [
+              _InfoBanner(
+                icon: Icons.hourglass_top_rounded,
+                color: Colors.orange,
+                text:
+                    'El servidor está registrando el monto final del viaje. '
+                    'Este comprobante se actualizará solo en unos segundos; '
+                    'no cierres la app.',
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 12),
         _SectionCard(
           title: 'Importe y forma de pago',
           children: [
+            if (etiquetaServicio.isNotEmpty)
+              _Row(
+                icon: Icons.local_taxi_rounded,
+                iconColor: cs.tertiary,
+                label: 'Tipo de servicio',
+                value: etiquetaServicio,
+              ),
             if (tarifaBase > 0)
               _Row(
                 icon: Icons.confirmation_number_rounded,
@@ -346,11 +489,20 @@ class _FacturaContent extends StatelessWidget {
                 label: 'Tarifa base',
                 value: FormatosMoneda.rd(tarifaBase),
               ),
+            if (peaje > 0)
+              _Row(
+                icon: Icons.toll_rounded,
+                iconColor: cs.outline,
+                label: 'Peaje incluido',
+                value: FormatosMoneda.rd(peaje),
+              ),
             _Row(
               icon: Icons.payments_rounded,
               iconColor: cs.primary,
               label: 'Total del servicio (RD\$)',
-              value: FormatosMoneda.rd(total),
+              value: montoPendienteServidor
+                  ? 'Confirmando…'
+                  : FormatosMoneda.rd(total),
               valueBold: true,
             ),
             _Row(
@@ -383,9 +535,12 @@ class _FacturaContent extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Los montos reflejan el cierre registrado en servidor. La comisión de plataforma '
-                'se gestiona en tu billetera de conductor (prepago y/o comisión pendiente). '
-                'Regularizá en Mis pagos para mantener la cuenta operativa.',
+                esEfectivo
+                    ? 'Los montos reflejan el cierre en servidor. En efectivo, la comisión RAI '
+                        'impacta tu prepago y/o comisión pendiente; regularizá en Mis pagos.'
+                    : 'Los montos reflejan el cierre en servidor. En transferencia, cobrás el '
+                        'total al pasajero; la comisión RAI y el estado de tu cuenta (prepago, '
+                        'legacy o bloqueo) se gestionan en Mis pagos.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: cs.onSurfaceVariant,
                       height: 1.35,
@@ -415,6 +570,7 @@ class _FacturaContent extends StatelessWidget {
             viajeId: viajeId,
             role: role,
             total: total,
+            montoPendienteServidor: montoPendienteServidor,
             uidTaxista: uidTaxista,
             snap: snapBancario,
             comprobanteUrl: comprobanteUrl,
@@ -422,6 +578,17 @@ class _FacturaContent extends StatelessWidget {
             estadoPago: estadoPago,
             paymentStatus: paymentStatus,
             motivoRechazo: motivoRechazo,
+          ),
+        ],
+        if (esTaxista) ...[
+          const SizedBox(height: 12),
+          _FacturaPanelComisionRecargaBloqueo(
+            uidTaxista: uidTaxista,
+            esEfectivo: esEfectivo,
+            esTransferencia: esTransferencia,
+            comisionViaje: comisionCond,
+            gananciaViaje: gananciaCond,
+            lineaSaldoPrepagoFactura: _lineaSaldoPrepagoFactura(),
           ),
         ],
         const SizedBox(height: 14),
@@ -501,6 +668,237 @@ class _FacturaContent extends StatelessWidget {
   }
 }
 
+/// Comisión del viaje, saldo prepago, deuda legacy (admin) y bloqueo operativo:
+/// misma información que «Mis pagos», alineada al cierre (viaje estándar y multiparadas).
+String _saldoPrepagoTrasCierreTexto(String lineaFactura, double saldoLive) {
+  const String prefijo =
+      'Saldo restante en tu billetera de recargas (comisión): ';
+  if (lineaFactura.contains('No aplica')) return 'No aplica';
+  if (lineaFactura.startsWith(prefijo)) {
+    final String tail = lineaFactura.substring(prefijo.length).trim();
+    if (tail.isNotEmpty && tail != '—' && !tail.contains('no registrado')) {
+      return tail;
+    }
+  }
+  if (saldoLive > 1e-6) return FormatosMoneda.rd(saldoLive);
+  return lineaFactura.replaceFirst(prefijo, '').trim().isEmpty
+      ? '—'
+      : lineaFactura.replaceFirst(prefijo, '').trim();
+}
+
+class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
+  const _FacturaPanelComisionRecargaBloqueo({
+    required this.uidTaxista,
+    required this.esEfectivo,
+    required this.esTransferencia,
+    required this.comisionViaje,
+    required this.gananciaViaje,
+    required this.lineaSaldoPrepagoFactura,
+  });
+
+  final String uidTaxista;
+  final bool esEfectivo;
+  final bool esTransferencia;
+  final double comisionViaje;
+  final double gananciaViaje;
+  final String lineaSaldoPrepagoFactura;
+
+  Widget _cardSinStreams(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    return _SectionCard(
+      title: 'Comisión, recarga y bloqueo',
+      muted: true,
+      children: [
+        if (comisionViaje > 1e-6)
+          _Row(
+            icon: Icons.percent_rounded,
+            iconColor: cs.tertiary,
+            label: 'Comisión RAI (este viaje)',
+            value: FormatosMoneda.rd(comisionViaje),
+          ),
+        if (gananciaViaje > 1e-6)
+          _Row(
+            icon: Icons.savings_outlined,
+            iconColor: Colors.green.shade700,
+            label: 'Ingreso neto (este viaje)',
+            value: FormatosMoneda.rd(gananciaViaje),
+            valueBold: true,
+          ),
+        Text(
+          lineaSaldoPrepagoFactura,
+          style: tt.bodyMedium?.copyWith(height: 1.45),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+
+    if (uidTaxista.isEmpty) {
+      return _cardSinStreams(context);
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('billeteras_taxista')
+          .doc(uidTaxista)
+          .snapshots(),
+      builder: (context, billSnap) {
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('usuarios')
+              .doc(uidTaxista)
+              .snapshots(),
+          builder: (context, userSnap) {
+            final Map<String, dynamic>? bill = billSnap.data?.data();
+            final Map<String, dynamic>? uData = userSnap.data?.data();
+
+            final double pend =
+                PagosTaxistaRepo.comisionPendienteDesdeBilletera(bill);
+            final double saldoPrepago =
+                PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(bill);
+            final double disponible =
+                PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(
+                    bill);
+            final bool bloqueoPrepago =
+                PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(bill);
+            final bool bloqueoPool =
+                PagosTaxistaRepo.bloqueoPorDeudaPoolAdminDesdeUsuario(uData) ||
+                    uData?['tienePagoPendiente'] == true;
+            final bool legacyTope =
+                PagosTaxistaRepo.bloqueoPorComisionLegacyTope(bill);
+            const double minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
+            final bool riesgoPrepago = !bloqueoPrepago &&
+                !bloqueoPool &&
+                pend <= 1e-6 &&
+                PagosTaxistaRepo.primerViajeComisionGratisConsumido(bill) &&
+                disponible > 1e-6 &&
+                disponible < minSaldo;
+
+            final bool cuentaBloqueada =
+                bloqueoPrepago || bloqueoPool || legacyTope;
+
+            final Color estadoColor = cuentaBloqueada
+                ? Colors.red.shade700
+                : (riesgoPrepago ? Colors.orange : Colors.green.shade700);
+
+            final String estadoTxt = cuentaBloqueada
+                ? PagosTaxistaRepo.mensajeCuentaBloqueadaOperativo(
+                    deudaSemanalVencida: false,
+                    billeData: bill,
+                    usuarioData: uData,
+                  )
+                : (riesgoPrepago
+                    ? 'ALERTA: prepago bajo para viajes en efectivo. Recargá en Mis pagos antes de quedar bloqueado.'
+                    : 'ACTIVO: podés operar (efectivo y transferencia) según las reglas de RAI.');
+
+            final String pie = esTransferencia
+                ? 'Este viaje se cobró por transferencia al pasajero (arriba: datos bancarios y comprobante). '
+                    'La comisión RAI de este servicio figura en «Liquidación RAI». '
+                    'Tu prepago, deuda legacy y bloqueos siguen en Mis pagos → recarga con bauche → revisión del administrador.'
+                : 'Este viaje fue en efectivo: al cerrar, el servidor actualizó tu prepago (arriba «Saldo prepago tras este cierre»). '
+                    'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.';
+
+            return _SectionCard(
+              title: 'Comisión, recarga y bloqueo',
+              children: [
+                _Row(
+                  icon: esTransferencia
+                      ? Icons.account_balance_rounded
+                      : Icons.attach_money_rounded,
+                  iconColor: cs.primary,
+                  label: 'Forma de pago de este viaje',
+                  value: esTransferencia ? 'Transferencia' : 'Efectivo',
+                ),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: estadoColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    border:
+                        Border.all(color: estadoColor.withValues(alpha: 0.45)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        cuentaBloqueada
+                            ? Icons.lock_rounded
+                            : (riesgoPrepago
+                                ? Icons.warning_amber_rounded
+                                : Icons.check_circle_outline_rounded),
+                        size: 20,
+                        color: estadoColor,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          estadoTxt,
+                          style: tt.bodySmall?.copyWith(
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w700,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (esEfectivo)
+                  _Row(
+                    icon: Icons.account_balance_wallet_outlined,
+                    iconColor: cs.primary,
+                    label: 'Saldo prepago tras este cierre',
+                    value: _saldoPrepagoTrasCierreTexto(
+                      lineaSaldoPrepagoFactura,
+                      saldoPrepago,
+                    ),
+                  )
+                else
+                  _Row(
+                    icon: Icons.info_outline_rounded,
+                    iconColor: cs.secondary,
+                    label: 'Prepago en este cierre',
+                    value:
+                        'No se descuenta (transferencia). Saldo actual: ${FormatosMoneda.rd(disponible)}',
+                  ),
+                _Row(
+                  icon: Icons.savings_outlined,
+                  iconColor: cs.secondary,
+                  label: 'Prepago disponible (ahora)',
+                  value: FormatosMoneda.rd(disponible),
+                ),
+                if (pend > 1e-6)
+                  _Row(
+                    icon: Icons.history_rounded,
+                    iconColor: Colors.orange.shade800,
+                    label: 'Comisión pendiente (legacy / admin)',
+                    value: FormatosMoneda.rd(pend),
+                  ),
+                const SizedBox(height: 8),
+                Text(
+                  pie,
+                  style: tt.bodySmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 class _FacturaViajeDocBanner extends StatelessWidget {
   const _FacturaViajeDocBanner({required this.cs, required this.tt});
 
@@ -558,6 +956,7 @@ class _SectionTransferencia extends StatelessWidget {
     required this.viajeId,
     required this.role,
     required this.total,
+    required this.montoPendienteServidor,
     required this.uidTaxista,
     required this.snap,
     required this.comprobanteUrl,
@@ -570,6 +969,7 @@ class _SectionTransferencia extends StatelessWidget {
   final String viajeId;
   final String role;
   final double total;
+  final bool montoPendienteServidor;
   final String uidTaxista;
   final _DatosBancarios? snap;
   final String comprobanteUrl;
@@ -620,6 +1020,9 @@ class _SectionTransferencia extends StatelessWidget {
           cuenta: (m['numeroCuenta'] ?? '').toString().trim(),
           tipoCuenta: (m['tipoCuenta'] ?? '').toString().trim(),
           titular: (m['titularCuenta'] ?? m['titular'] ?? '').toString().trim(),
+          ci: (m['ciTaxista'] ?? m['cedula'] ?? m['cedulaTaxista'] ?? '')
+              .toString()
+              .trim(),
         );
         if (live.banco.isEmpty &&
             live.cuenta.isEmpty &&
@@ -657,9 +1060,15 @@ class _SectionTransferencia extends StatelessWidget {
         _InfoBanner(
           icon: Icons.payments_rounded,
           color: cs.primary,
-          text: role == 'taxista'
-              ? 'El pasajero debe transferirte ${FormatosMoneda.rd(total)} a la cuenta indicada.'
-              : 'Transferí ${FormatosMoneda.rd(total)} a la cuenta del conductor:',
+          text: montoPendienteServidor
+              ? (role == 'taxista'
+                  ? 'El monto exacto se confirmará en unos segundos. '
+                      'El pasajero debe transferirte a la cuenta indicada.'
+                  : 'El monto exacto se confirmará en unos segundos. '
+                      'Transferí a la cuenta del conductor cuando aparezca arriba:')
+              : (role == 'taxista'
+                  ? 'El pasajero debe transferirte ${FormatosMoneda.rd(total)} a la cuenta indicada.'
+                  : 'Transferí ${FormatosMoneda.rd(total)} a la cuenta del conductor:'),
         ),
         const SizedBox(height: 6),
         if (b.banco.isNotEmpty)
@@ -675,6 +1084,23 @@ class _SectionTransferencia extends StatelessWidget {
             iconColor: cs.primary,
             label: 'Cuenta',
             value: b.cuenta,
+            trailing: role == 'cliente' && b.cuenta.trim().isNotEmpty
+                ? IconButton(
+                    tooltip: 'Copiar número de cuenta',
+                    icon: const Icon(Icons.copy_rounded, size: 20),
+                    onPressed: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: b.cuenta.trim()),
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Número de cuenta copiado'),
+                        ),
+                      );
+                    },
+                  )
+                : null,
           ),
         if (b.tipoCuenta.isNotEmpty)
           _Row(
@@ -689,6 +1115,13 @@ class _SectionTransferencia extends StatelessWidget {
             iconColor: cs.primary,
             label: 'Titular',
             value: b.titular,
+          ),
+        if (b.ci.isNotEmpty)
+          _Row(
+            icon: Icons.badge_outlined,
+            iconColor: cs.primary,
+            label: 'C.I.',
+            value: b.ci,
           ),
         _Row(
           icon: transferenciaConfirmada
@@ -822,11 +1255,13 @@ class _DatosBancarios {
     required this.cuenta,
     required this.tipoCuenta,
     required this.titular,
+    this.ci = '',
   });
   final String banco;
   final String cuenta;
   final String tipoCuenta;
   final String titular;
+  final String ci;
 }
 
 class _EstadoPagoUI {
@@ -965,12 +1400,14 @@ class _Row extends StatelessWidget {
     required this.label,
     required this.value,
     this.valueBold = false,
+    this.trailing,
   });
   final IconData icon;
   final Color iconColor;
   final String label;
   final String value;
   final bool valueBold;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -1007,6 +1444,7 @@ class _Row extends StatelessWidget {
               ],
             ),
           ),
+          if (trailing != null) trailing!,
         ],
       ),
     );
