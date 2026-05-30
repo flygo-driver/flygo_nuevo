@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_crear_publicacion_flow.dart';
+import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:flygo_nuevo/widgets/bola_cliente_mapa_conductor_live.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -2051,6 +2052,7 @@ class BolaPuebloDialogs {
         final uidTx = (d!['uidTaxista'] ?? '').toString().trim();
         final role =
             uidActor.trim() == uidTx ? 'taxista' : 'cliente';
+        BolaPostFacturaReopenGuard.markOpened(bolaId.trim());
         await FacturaBolaPueblo.mostrar(
           context,
           bolaId: bolaId.trim(),

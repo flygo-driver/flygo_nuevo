@@ -3612,6 +3612,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   final String lost = _lastNonEmptyViajeActivoId;
 
                   if (lost.isNotEmpty) {
+                    ActiveTripService.mantenerOverlayViajeEnShell(
+                      const Duration(seconds: 90),
+                    );
+                  }
+
+                  if (lost.isNotEmpty) {
                     DocumentSnapshot<Map<String, dynamic>>? docSnap =
                         _viajeCierreDocSnap;
                     if (docSnap == null || docSnap.id != lost) {
@@ -3755,6 +3761,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
                     if (_viajeClienteCompletadoParaPostViaje(data)) {
                       _stopClienteUbicacionEnViaje();
+                      ActiveTripService.mantenerOverlayViajeEnShell(
+                        const Duration(seconds: 90),
+                      );
                       _programarFlujoPostViaje(
                         viajeId: v.id,
                         uid: u.uid,

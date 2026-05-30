@@ -13,20 +13,36 @@ import 'package:flygo_nuevo/pantallas/taxista/viaje_disponible.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
 
 /// Shell del taxista: una barra inferior fija; cada pestaña usa un [Navigator] anidado.
-class TaxistaShell extends StatefulWidget {
+class TaxistaShell extends StatelessWidget {
   const TaxistaShell({super.key, this.openDocumentosOnLaunch = false});
 
   /// Abre Cuenta y apila [DocumentosTaxista] (documentos pendientes al entrar).
   final bool openDocumentosOnLaunch;
 
   @override
-  State<TaxistaShell> createState() => _TaxistaShellState();
+  Widget build(BuildContext context) {
+    return BolaPostFacturaListener(
+      child: _TaxistaShellScaffold(
+        openDocumentosOnLaunch: openDocumentosOnLaunch,
+      ),
+    );
+  }
 }
 
-class _TaxistaShellState extends State<TaxistaShell> {
+class _TaxistaShellScaffold extends StatefulWidget {
+  const _TaxistaShellScaffold({this.openDocumentosOnLaunch = false});
+
+  final bool openDocumentosOnLaunch;
+
+  @override
+  State<_TaxistaShellScaffold> createState() => _TaxistaShellScaffoldState();
+}
+
+class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
   int _index = 0;
 
   final GlobalKey _viajeEnCursoTaxistaShellKey = GlobalKey();

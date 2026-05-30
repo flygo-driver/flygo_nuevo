@@ -10,7 +10,6 @@ import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
-import 'package:flygo_nuevo/widgets/auto_trip_router.dart';
 import 'package:flygo_nuevo/widgets/promo_taxi_pista_animation.dart';
 import 'package:flygo_nuevo/widgets/motor_servicio_animation.dart';
 import 'package:flygo_nuevo/widgets/giras_cupos_animation.dart';
@@ -431,11 +430,9 @@ class SeleccionServicio extends StatelessWidget {
     if (!context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => const ClienteTripRouter(
-          child: ProgramarViaje(
-            modoAhora: true,
-            tipoServicio: 'turismo',
-          ),
+        builder: (_) => const ProgramarViaje(
+          modoAhora: true,
+          tipoServicio: 'turismo',
         ),
       ),
     );

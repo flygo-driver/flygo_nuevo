@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/pantallas/cliente/cliente_mis_viajes_hub.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_fidelidad_milestone_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_listener.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
@@ -22,9 +23,11 @@ class ClienteShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const ClientePostViajeListener(
-      child: ClienteFidelidadMilestoneListener(
-        child: _ClienteShellScaffold(),
+    return const BolaPostFacturaListener(
+      child: ClientePostViajeListener(
+        child: ClienteFidelidadMilestoneListener(
+          child: _ClienteShellScaffold(),
+        ),
       ),
     );
   }

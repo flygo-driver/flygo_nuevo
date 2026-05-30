@@ -379,6 +379,24 @@
         { "fieldPath": "comisionPendiente", "order": "ASCENDING" },
         { "fieldPath": "updatedAt", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "bolas_pueblo",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadaEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "bolas_pueblo",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadaEn", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

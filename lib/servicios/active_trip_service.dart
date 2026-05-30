@@ -150,6 +150,11 @@ class ActiveTripService {
         })
         .distinct()
         .asyncMap((_) async {
+          if (debeMantenerOverlayViajeEnShell) {
+            print(
+                '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → true (overlay post-cierre)');
+            return true;
+          }
           final bool ok = await usuarioTieneViajeEnSeguimiento(u);
           print(
               '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → $ok');

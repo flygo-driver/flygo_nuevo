@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
 /// ===== Estados que usaremos =====
@@ -39,6 +40,16 @@ bool _estadoClienteEsActivo(String estado) {
 }
 
 bool _clienteDebeEntrarViajeEnCurso(Map<String, dynamic> v) {
+  final String tipo = (v['tipoServicio'] ?? '').toString().trim().toLowerCase();
+  if (tipo == 'turismo') {
+    final String taxista =
+        (v['uidTaxista'] ?? v['taxistaId'] ?? '').toString().trim();
+    if (taxista.isEmpty) return false;
+    final String estado = EstadosViaje.normalizar((v['estado'] ?? '').toString());
+    return EstadosViaje.activos.contains(estado) ||
+        estado == EstadosViaje.aceptado;
+  }
+
   final String estado = (v['estado'] ?? '').toString().trim();
   if (_estadoClienteEsActivo(estado) && estado != 'pendiente') return true;
 
