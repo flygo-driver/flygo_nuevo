@@ -2,7 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/liquidacion_semanal_viaje.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ResumenPagoTaxista extends StatelessWidget {
@@ -39,7 +42,10 @@ class ResumenPagoTaxista extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             _row('💰 Precio Total del Viaje:', FormatosMoneda.rd(precioTotal)),
-            _row('🧾 Comisión RAI (20%):', FormatosMoneda.rd(comision)),
+            _row(
+              '🧾 ${PlataformaEconomia.etiquetaComisionRai()}:',
+              FormatosMoneda.rd(comision),
+            ),
             _row('🚖 Ganancia del Taxista:', FormatosMoneda.rd(ganancia)),
             const SizedBox(height: 12),
             const Divider(color: Colors.white12),
@@ -92,6 +98,10 @@ class _PendienteDeComision extends StatelessWidget {
       final ids = <String>[];
       for (final d in qs.docs) {
         final data = d.data();
+        if (FinanceConfigService.excluirEfectivoDePagoSemanal &&
+            !LiquidacionSemanalViaje.esElegible(data)) {
+          continue;
+        }
         final cc = data['comision_cents'];
         int c;
         if (cc is int) {

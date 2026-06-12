@@ -22,6 +22,8 @@ class PagoTaxista {
   final String? notaAdmin;
   final int viajesSemana; // Cantidad de viajes en la semana
   final List<String> viajesLiquidados; // IDs de viajes incluidos en la liquidación
+  final List<String> incluyeSoloMetodos; // Auditoría Fase 1 (solo digital)
+  final int viajesEfectivoExcluidosCount; // Auditoría Fase 1
 
   PagoTaxista({
     required this.id,
@@ -42,6 +44,8 @@ class PagoTaxista {
     this.notaAdmin,
     required this.viajesSemana,
     this.viajesLiquidados = const <String>[],
+    this.incluyeSoloMetodos = const <String>[],
+    this.viajesEfectivoExcluidosCount = 0,
   });
 
   factory PagoTaxista.fromMap(String id, Map<String, dynamic> map) {
@@ -68,6 +72,13 @@ class PagoTaxista {
           .map((e) => e.toString())
           .where((e) => e.trim().isNotEmpty)
           .toList(growable: false),
+      incluyeSoloMetodos: ((map['incluyeSoloMetodos'] as List<dynamic>?) ??
+              const <dynamic>[])
+          .map((e) => e.toString())
+          .where((e) => e.trim().isNotEmpty)
+          .toList(growable: false),
+      viajesEfectivoExcluidosCount:
+          (map['viajesEfectivoExcluidosCount'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -91,6 +102,9 @@ class PagoTaxista {
       'notaAdmin': notaAdmin,
       'viajesSemana': viajesSemana,
       'viajesLiquidados': viajesLiquidados,
+      if (incluyeSoloMetodos.isNotEmpty) 'incluyeSoloMetodos': incluyeSoloMetodos,
+      if (viajesEfectivoExcluidosCount > 0)
+        'viajesEfectivoExcluidosCount': viajesEfectivoExcluidosCount,
       'updatedAt': FieldValue.serverTimestamp(),
     };
   }

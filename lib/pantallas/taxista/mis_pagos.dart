@@ -11,32 +11,17 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import '../../config/plataforma_economia.dart';
-import '../../config/recarga_bancaria_config.dart';
+import '../../modelo/liquidacion_semanal.dart';
 import '../../modelo/recarga_comision_taxista.dart';
+import '../../modelo/pago_taxista.dart';
 import '../../servicios/analytics_rai.dart';
+import '../../servicios/finance_config_service.dart';
+import '../../servicios/liquidacion_semanal_repo.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/rai_local_read_cache.dart';
-import '../../modelo/pago_taxista.dart';
 import '../../widgets/configuracion_bancaria.dart';
+import '../../widgets/rai_cuenta_deposito_panel.dart';
 import '../../widgets/rai_offline_banner.dart';
-
-Widget _kvRecarga(ColorScheme cs, String label, String value) {
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 4),
-    child: RichText(
-      text: TextSpan(
-        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13, height: 1.3),
-        children: [
-          TextSpan(text: '$label: '),
-          TextSpan(
-            text: value,
-            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w600),
-          ),
-        ],
-      ),
-    ),
-  );
-}
 
 Widget _pasoRecarga(
   ColorScheme cs, {
@@ -212,6 +197,7 @@ class _MisPagosState extends State<MisPagos> {
   @override
   void initState() {
     super.initState();
+    unawaited(FinanceConfigService.ensureStarted());
     if (widget.scrollToRecargaSection) {
       void tryScroll() {
         if (!mounted || _scrollRecargaAgendado) return;
@@ -257,6 +243,646 @@ class _MisPagosState extends State<MisPagos> {
       });
     }
     return out;
+  }
+
+  Future<void> _mostrarLineasLiquidacionSemanal(LiquidacionSemanal liq) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('liquidaciones_semanales')
+        .doc(liq.id)
+        .collection('lineas')
+        .get();
+    if (!mounted) return;
+    final cs = Theme.of(context).colorScheme;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Viajes ${liq.periodo}'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: snap.docs.isEmpty
+              ? const Text('Sin líneas de detalle')
+              : ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: snap.docs.length,
+                  itemBuilder: (_, i) {
+                    final d = snap.docs[i].data();
+                    final metodo =
+                        (d['metodoPagoNormalizado'] ?? '').toString();
+                    final neto =
+                        ((d['gananciaCents'] as num?)?.toInt() ?? 0) / 100.0;
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        '${metodo.isEmpty ? 'viaje' : metodo} · ${formatter.format(neto)}',
+                        style: TextStyle(color: cs.onSurface, fontSize: 13),
+                      ),
+                      subtitle: Text(
+                        'Estado: ${(d['estadoViajeSnapshot'] ?? '').toString()}',
+                        style: TextStyle(
+                          color: cs.onSurfaceVariant,
+                          fontSize: 11,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cerrar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSeccionPagoSemanal(ColorScheme cs) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('config')
+          .doc('finance')
+          .snapshots(),
+      builder: (context, cfgSnap) {
+        final useLiq =
+            cfgSnap.data?.data()?['useLiquidacionesSemanales'] == true;
+        if (useLiq) {
+          return _buildLiquidacionesSemanalesTaxista(cs);
+        }
+        return _buildPagosTaxistasLegacy(cs);
+      },
+    );
+  }
+
+  Widget _buildLiquidacionesSemanalesTaxista(ColorScheme cs) {
+    return StreamBuilder<List<LiquidacionSemanal>>(
+      stream: LiquidacionSemanalRepo.streamPorTaxista(user!.uid),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            child: Center(
+              child: CircularProgressIndicator(color: cs.primary),
+            ),
+          );
+        }
+        final list = snapshot.data ?? const <LiquidacionSemanal>[];
+        return StreamBuilder<List<RecargaComisionTaxista>>(
+          stream: PagosTaxistaRepo.streamRecargasComisionPorTaxista(user!.uid),
+          builder: (context, recSnapshot) {
+            final recargas = recSnapshot.data ?? <RecargaComisionTaxista>[];
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _detectRecargaAprobadaAnalytics(recargas);
+            });
+            if (list.isEmpty) {
+              return Column(
+                children: [
+                  _buildResumenRapidoRecargas(context, recargas),
+                  _buildRecargasCreditoSection(context, recargas),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        'No tienes liquidaciones semanales registradas',
+                        style: TextStyle(color: cs.onSurfaceVariant),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }
+            final LiquidacionSemanal pendiente = list.firstWhere(
+              (l) => l.esPendiente,
+              orElse: () => list.first,
+            );
+            return Column(
+              children: [
+                _buildResumenRapidoRecargas(context, recargas),
+                _buildRecargasCreditoSection(context, recargas),
+                if (pendiente.esPendiente)
+                  Container(
+                    margin: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: pendiente.estado == 'borrador'
+                          ? Colors.amber.withValues(alpha: 0.12)
+                          : Colors.blue.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: pendiente.estado == 'borrador'
+                            ? Colors.amber
+                            : Colors.blue,
+                        width: 2,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(
+                          pendiente.estado == 'borrador'
+                              ? Icons.account_balance_outlined
+                              : Icons.schedule,
+                          color: pendiente.estado == 'borrador'
+                              ? Colors.amber
+                              : Colors.blue,
+                          size: 48,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          pendiente.estado == 'borrador'
+                              ? 'LIQUIDACIÓN EN BORRADOR'
+                              : 'PAGO SEMANAL PENDIENTE',
+                          style: TextStyle(
+                            color: pendiente.estado == 'borrador'
+                                ? Colors.amber.shade800
+                                : Colors.blue,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text('Periodo: ${pendiente.periodo}',
+                            style: TextStyle(color: cs.onSurfaceVariant)),
+                        Text(
+                          '${dateFormat.format(pendiente.periodoInicio)} - ${dateFormat.format(pendiente.periodoFin)}',
+                          style: TextStyle(color: cs.onSurfaceVariant),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Neto a recibir: ${formatter.format(pendiente.totalNetoRd)}',
+                          style: TextStyle(
+                            color: cs.onSurface,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (pendiente.estado == 'borrador') ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            'Completa tu cuenta bancaria para que admin pueda procesar el ACH.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: cs.onSurfaceVariant,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'HISTORIAL DE LIQUIDACIONES',
+                      style: TextStyle(
+                        color: cs.primary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: list.length,
+                  itemBuilder: (context, index) {
+                    final liq = list[index];
+                    Color estadoColor;
+                    String estadoText;
+                    IconData estadoIcon;
+                    switch (liq.estado) {
+                      case 'pagado':
+                        estadoColor = Colors.green;
+                        estadoText = 'PAGADO';
+                        estadoIcon = Icons.check_circle;
+                        break;
+                      case 'pendiente_pago':
+                        estadoColor = Colors.blue;
+                        estadoText = 'PENDIENTE';
+                        estadoIcon = Icons.schedule;
+                        break;
+                      case 'borrador':
+                        estadoColor = Colors.amber;
+                        estadoText = 'BORRADOR';
+                        estadoIcon = Icons.edit_note;
+                        break;
+                      case 'cancelado':
+                        estadoColor = Colors.red.shade900;
+                        estadoText = 'CANCELADO';
+                        estadoIcon = Icons.cancel;
+                        break;
+                      default:
+                        estadoColor = cs.outline;
+                        estadoText = liq.estado.toUpperCase();
+                        estadoIcon = Icons.help;
+                    }
+                    return Card(
+                      color: cs.surfaceContainerHighest.withValues(
+                        alpha: Theme.of(context).brightness == Brightness.dark
+                            ? 0.55
+                            : 0.65,
+                      ),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              backgroundColor:
+                                  estadoColor.withValues(alpha: 0.2),
+                              radius: 20,
+                              child: Icon(estadoIcon,
+                                  color: estadoColor, size: 20),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Semana ${liq.periodo}',
+                                    style: TextStyle(
+                                      color: cs.onSurface,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    '${liq.viajesCount} viajes · '
+                                    'Transf. ${formatter.format(liq.totalesPorMetodo.transferencia.totalNetoRd)} · '
+                                    'Tarj. ${formatter.format(liq.totalesPorMetodo.tarjeta.totalNetoRd)}',
+                                    style: TextStyle(
+                                      color: cs.onSurfaceVariant,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  if (liq.viajeIds.isNotEmpty)
+                                    OutlinedButton.icon(
+                                      onPressed: () =>
+                                          _mostrarLineasLiquidacionSemanal(liq),
+                                      icon: const Icon(Icons.list_alt, size: 18),
+                                      label: Text(
+                                          'Ver viajes (${liq.viajeIds.length})'),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  formatter.format(liq.totalNetoRd),
+                                  style: TextStyle(
+                                    color: estadoColor,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  estadoText,
+                                  style: TextStyle(
+                                    color: estadoColor,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildPagosTaxistasLegacy(ColorScheme cs) {
+    return StreamBuilder<List<PagoTaxista>>(
+      stream: PagosTaxistaRepo.streamPagosPorTaxista(user!.uid),
+      builder: (BuildContext context, AsyncSnapshot<List<PagoTaxista>> snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            child: Center(
+              child: CircularProgressIndicator(color: cs.primary),
+            ),
+          );
+        }
+
+        final List<PagoTaxista> pagos = snapshot.data ?? [];
+
+        if (pagos.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(
+                'No tienes pagos semanales registrados',
+                style: TextStyle(color: cs.onSurfaceVariant),
+              ),
+            ),
+          );
+        }
+
+        final PagoTaxista pendiente = pagos.firstWhere(
+          (PagoTaxista p) =>
+              p.estado == 'pendiente' || p.estado == 'pendiente_verificacion',
+          orElse: () => pagos.first,
+        );
+
+        return StreamBuilder<List<RecargaComisionTaxista>>(
+          stream:
+              PagosTaxistaRepo.streamRecargasComisionPorTaxista(user!.uid),
+          builder: (context, recSnapshot) {
+            final recargas = recSnapshot.data ?? <RecargaComisionTaxista>[];
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _detectRecargaAprobadaAnalytics(recargas);
+            });
+            return Column(
+              children: <Widget>[
+                _buildResumenRapidoRecargas(context, recargas),
+                _buildRecargasCreditoSection(context, recargas),
+                _buildPagosTaxistasLegacyBody(cs, pagos, pendiente),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildPagosTaxistasLegacyBody(
+    ColorScheme cs,
+    List<PagoTaxista> pagos,
+    PagoTaxista pendiente,
+  ) {
+    return Column(
+      children: <Widget>[
+        if (pendiente.estado == 'pendiente' ||
+            pendiente.estado == 'pendiente_verificacion')
+          Container(
+            margin: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: pendiente.estado == 'pendiente_verificacion'
+                  ? Colors.orange.withValues(alpha: 0.1)
+                  : Colors.red.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: pendiente.estado == 'pendiente_verificacion'
+                    ? Colors.orange
+                    : Colors.red,
+                width: 2,
+              ),
+            ),
+            child: Column(
+              children: <Widget>[
+                Icon(
+                  pendiente.estado == 'pendiente_verificacion'
+                      ? Icons.hourglass_top
+                      : Icons.warning_amber_rounded,
+                  color: pendiente.estado == 'pendiente_verificacion'
+                      ? Colors.orange
+                      : Colors.red,
+                  size: 48,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  pendiente.estado == 'pendiente_verificacion'
+                      ? 'COMPROBANTE EN REVISIÓN'
+                      : 'PAGO PENDIENTE',
+                  style: TextStyle(
+                    color: pendiente.estado == 'pendiente_verificacion'
+                        ? Colors.orange
+                        : Colors.red,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Semana: ${pendiente.semana}',
+                  style: TextStyle(color: cs.onSurfaceVariant),
+                ),
+                Text(
+                  'Período: ${dateFormat.format(pendiente.fechaInicio)} - ${dateFormat.format(pendiente.fechaFin)}',
+                  style: TextStyle(color: cs.onSurfaceVariant),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Total a pagar: ${formatter.format(pendiente.comision)}',
+                  style: TextStyle(
+                    color: cs.onSurface,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (pendiente.estado == 'pendiente')
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => _subirComprobante(pendiente.id),
+                      icon: Icon(Icons.upload_file, color: cs.onPrimary),
+                      label: const Text('SUBIR COMPROBANTE DE PAGO'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: cs.primary,
+                        foregroundColor: cs.onPrimary,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (pendiente.estado == 'pendiente_verificacion')
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        const Icon(Icons.info, color: Colors.orange),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Tu comprobante está siendo revisado por el administrador',
+                            style: TextStyle(color: cs.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'HISTORIAL DE PAGOS',
+              style: TextStyle(
+                color: cs.primary,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+        ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: pagos.length,
+          itemBuilder: (BuildContext context, int index) {
+            final PagoTaxista pago = pagos[index];
+            Color estadoColor;
+            String estadoText;
+            IconData estadoIcon;
+            switch (pago.estado) {
+              case 'pagado':
+                estadoColor = Colors.green;
+                estadoText = 'PAGADO';
+                estadoIcon = Icons.check_circle;
+                break;
+              case 'pendiente_verificacion':
+                estadoColor = Colors.orange;
+                estadoText = 'EN REVISIÓN';
+                estadoIcon = Icons.hourglass_top;
+                break;
+              case 'pendiente':
+                estadoColor = Colors.red;
+                estadoText = 'PENDIENTE';
+                estadoIcon = Icons.warning;
+                break;
+              case 'rechazado':
+                estadoColor = Colors.red.shade900;
+                estadoText = 'RECHAZADO';
+                estadoIcon = Icons.cancel;
+                break;
+              default:
+                estadoColor = cs.outline;
+                estadoText = pago.estado.toUpperCase();
+                estadoIcon = Icons.help;
+            }
+            return Card(
+              color: cs.surfaceContainerHighest.withValues(
+                alpha: Theme.of(context).brightness == Brightness.dark
+                    ? 0.55
+                    : 0.65,
+              ),
+              margin: const EdgeInsets.only(bottom: 8),
+              elevation: Theme.of(context).brightness == Brightness.dark
+                  ? 1
+                  : 0.5,
+              shadowColor: cs.shadow.withValues(alpha: 0.15),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: estadoColor.withValues(alpha: 0.2),
+                      radius: 20,
+                      child:
+                          Icon(estadoIcon, color: estadoColor, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            'Semana ${pago.semana}',
+                            style: TextStyle(
+                              color: cs.onSurface,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${pago.viajesSemana} viajes',
+                            style: TextStyle(
+                              color: cs.onSurfaceVariant,
+                              fontSize: 12,
+                            ),
+                          ),
+                          Text(
+                            '${dateFormat.format(pago.fechaInicio)} - ${dateFormat.format(pago.fechaFin)}',
+                            style: TextStyle(
+                              color: cs.onSurfaceVariant.withValues(alpha: 0.85),
+                              fontSize: 11,
+                            ),
+                          ),
+                          if (pago.viajesLiquidados.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: () => _mostrarViajesLiquidados(pago),
+                              icon: const Icon(Icons.list_alt),
+                              label: Text(
+                                'Ver viajes (${pago.viajesLiquidados.length})',
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: <Widget>[
+                        Text(
+                          formatter.format(pago.comision),
+                          style: TextStyle(
+                            color: estadoColor,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: estadoColor.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            estadoText,
+                            style: TextStyle(
+                              color: estadoColor,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
   }
 
   Future<void> _mostrarViajesLiquidados(PagoTaxista pago) async {
@@ -705,341 +1331,19 @@ class _MisPagosState extends State<MisPagos> {
                       formatter: formatter,
                     ),
                   ),
-                  StreamBuilder<List<PagoTaxista>>(
-                    stream:
-                        PagosTaxistaRepo.streamPagosPorTaxista(user!.uid),
-                    builder: (BuildContext context,
-                        AsyncSnapshot<List<PagoTaxista>> snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 32),
-                          child: Center(
-                            child: CircularProgressIndicator(color: cs.primary),
-                          ),
-                        );
-                      }
-
-                      final List<PagoTaxista> pagos = snapshot.data ?? [];
-
-                      if (pagos.isEmpty) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Center(
-                            child: Text(
-                              'No tienes pagos semanales registrados',
-                              style: TextStyle(color: cs.onSurfaceVariant),
-                            ),
-                          ),
-                        );
-                      }
-
-                      // Buscar pago pendiente (el más reciente)
-                      final PagoTaxista pendiente = pagos.firstWhere(
-                        (PagoTaxista p) =>
-                            p.estado == 'pendiente' ||
-                            p.estado == 'pendiente_verificacion',
-                        orElse: () => pagos.first,
-                      );
-
-                      return StreamBuilder<List<RecargaComisionTaxista>>(
-                        stream: PagosTaxistaRepo
-                            .streamRecargasComisionPorTaxista(user!.uid),
-                        builder: (context, recSnapshot) {
-                          final recargas =
-                              recSnapshot.data ?? <RecargaComisionTaxista>[];
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (!mounted) return;
-                            _detectRecargaAprobadaAnalytics(recargas);
-                          });
-                          return Column(
-                            children: <Widget>[
-                              _buildResumenRapidoRecargas(context, recargas),
-                              _buildRecargasCreditoSection(context, recargas),
-                    // Banner de pago pendiente (si existe)
-                    if (pendiente.estado == 'pendiente' ||
-                        pendiente.estado == 'pendiente_verificacion')
-                      Container(
-                        margin: const EdgeInsets.all(16),
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: pendiente.estado == 'pendiente_verificacion'
-                              ? Colors.orange.withValues(alpha: 0.1)
-                              : Colors.red.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: pendiente.estado == 'pendiente_verificacion'
-                                ? Colors.orange
-                                : Colors.red,
-                            width: 2,
-                          ),
-                        ),
-                        child: Column(
-                          children: <Widget>[
-                            Icon(
-                              pendiente.estado == 'pendiente_verificacion'
-                                  ? Icons.hourglass_top
-                                  : Icons.warning_amber_rounded,
-                              color:
-                                  pendiente.estado == 'pendiente_verificacion'
-                                      ? Colors.orange
-                                      : Colors.red,
-                              size: 48,
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              pendiente.estado == 'pendiente_verificacion'
-                                  ? 'COMPROBANTE EN REVISIÓN'
-                                  : 'PAGO PENDIENTE',
-                              style: TextStyle(
-                                color:
-                                    pendiente.estado == 'pendiente_verificacion'
-                                        ? Colors.orange
-                                        : Colors.red,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Semana: ${pendiente.semana}',
-                              style: TextStyle(color: cs.onSurfaceVariant),
-                            ),
-                            Text(
-                              'Período: ${dateFormat.format(pendiente.fechaInicio)} - ${dateFormat.format(pendiente.fechaFin)}',
-                              style: TextStyle(color: cs.onSurfaceVariant),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Total a pagar: ${formatter.format(pendiente.comision)}',
-                              style: TextStyle(
-                                color: cs.onSurface,
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            if (pendiente.estado == 'pendiente')
-                              SizedBox(
-                                width: double.infinity,
-                                child: FilledButton.icon(
-                                  onPressed: () =>
-                                      _subirComprobante(pendiente.id),
-                                  icon: Icon(Icons.upload_file,
-                                      color: cs.onPrimary),
-                                  label:
-                                      const Text('SUBIR COMPROBANTE DE PAGO'),
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: cs.primary,
-                                    foregroundColor: cs.onPrimary,
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 16),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            if (pendiente.estado == 'pendiente_verificacion')
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  children: <Widget>[
-                                    const Icon(Icons.info,
-                                        color: Colors.orange),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        'Tu comprobante está siendo revisado por el administrador',
-                                        style: TextStyle(
-                                            color: cs.onSurfaceVariant),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-
-                    const SizedBox(height: 8),
-
-                    // Título del historial
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'HISTORIAL DE PAGOS',
-                          style: TextStyle(
-                            color: cs.primary,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: Text(
+                      'Los viajes en efectivo se liquidan por prepago (recarga de comisión). '
+                      'El pago semanal solo incluye transferencias y tarjetas verificadas.',
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontSize: 13,
+                        height: 1.35,
                       ),
                     ),
-
-                    // Lista de pagos (historial): shrinkWrap para que el scroll sea el de la página completa.
-                    ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: pagos.length,
-                        itemBuilder: (BuildContext context, int index) {
-                          final PagoTaxista pago = pagos[index];
-
-                          Color estadoColor;
-                          String estadoText;
-                          IconData estadoIcon;
-
-                          switch (pago.estado) {
-                            case 'pagado':
-                              estadoColor = Colors.green;
-                              estadoText = 'PAGADO';
-                              estadoIcon = Icons.check_circle;
-                              break;
-                            case 'pendiente_verificacion':
-                              estadoColor = Colors.orange;
-                              estadoText = 'EN REVISIÓN';
-                              estadoIcon = Icons.hourglass_top;
-                              break;
-                            case 'pendiente':
-                              estadoColor = Colors.red;
-                              estadoText = 'PENDIENTE';
-                              estadoIcon = Icons.warning;
-                              break;
-                            case 'rechazado':
-                              estadoColor = Colors.red.shade900;
-                              estadoText = 'RECHAZADO';
-                              estadoIcon = Icons.cancel;
-                              break;
-                            default:
-                              estadoColor = cs.outline;
-                              estadoText = pago.estado.toUpperCase();
-                              estadoIcon = Icons.help;
-                          }
-
-                          return Card(
-                            color: cs.surfaceContainerHighest.withValues(
-                              alpha: Theme.of(context).brightness ==
-                                      Brightness.dark
-                                  ? 0.55
-                                  : 0.65,
-                            ),
-                            margin: const EdgeInsets.only(bottom: 8),
-                            elevation:
-                                Theme.of(context).brightness == Brightness.dark
-                                    ? 1
-                                    : 0.5,
-                            shadowColor: cs.shadow.withValues(alpha: 0.15),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Row(
-                                children: [
-                                  CircleAvatar(
-                                    backgroundColor:
-                                        estadoColor.withValues(alpha: 0.2),
-                                    radius: 20,
-                                    child: Icon(estadoIcon,
-                                        color: estadoColor, size: 20),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: <Widget>[
-                                        Text(
-                                          'Semana ${pago.semana}',
-                                          style: TextStyle(
-                                            color: cs.onSurface,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          '${pago.viajesSemana} viajes',
-                                          style: TextStyle(
-                                            color: cs.onSurfaceVariant,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                        Text(
-                                          '${dateFormat.format(pago.fechaInicio)} - ${dateFormat.format(pago.fechaFin)}',
-                                          style: TextStyle(
-                                            color: cs.onSurfaceVariant
-                                                .withValues(alpha: 0.85),
-                                            fontSize: 11,
-                                          ),
-                                        ),
-                                        if (pago.viajesLiquidados.isNotEmpty) ...[
-                                          const SizedBox(height: 8),
-                                          OutlinedButton.icon(
-                                            onPressed: () =>
-                                                _mostrarViajesLiquidados(pago),
-                                            icon: const Icon(Icons.list_alt),
-                                            label: Text(
-                                              'Ver viajes (${pago.viajesLiquidados.length})',
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: <Widget>[
-                                      Text(
-                                        formatter.format(pago.comision),
-                                        style: TextStyle(
-                                          color: estadoColor,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color:
-                                              estadoColor.withValues(alpha: 0.2),
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          estadoText,
-                                          style: TextStyle(
-                                            color: estadoColor,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                      ],
-                    );
-                        },
-                      );
-                    },
                   ),
+                  _buildSeccionPagoSemanal(cs),
               ],
             ),
           );
@@ -1320,7 +1624,7 @@ class _PanelRecargaComisionEfectivoState
             ));
           });
         }
-        const minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
+        final minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
         final primerViajeConsumido =
             PagosTaxistaRepo.primerViajeComisionGratisConsumido(bill);
         final bloqueoOperativo =
@@ -1482,56 +1786,9 @@ class _PanelRecargaComisionEfectivoState
                         color: cs.onSurfaceVariant, fontSize: 12, height: 1.35),
                   ),
                   const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                          color: cs.outlineVariant.withValues(alpha: 0.6)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Cuenta para recargar crédito',
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        _kvRecarga(cs, 'Titular', RecargaBancariaConfig.titular),
-                        _kvRecarga(cs, 'RNC', RecargaBancariaConfig.rnc),
-                        _kvRecarga(cs, 'Banco', RecargaBancariaConfig.banco),
-                        _kvRecarga(cs, 'Tipo', RecargaBancariaConfig.tipoCuenta),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                                child: _kvRecarga(
-                                    cs, 'No. cuenta', RecargaBancariaConfig.numeroCuenta)),
-                            IconButton(
-                              tooltip: 'Copiar número de cuenta',
-                              onPressed: () async {
-                                await Clipboard.setData(const ClipboardData(
-                                    text: RecargaBancariaConfig.numeroCuenta));
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text(
-                                          'Número de cuenta copiado al portapapeles')),
-                                );
-                              },
-                              icon:
-                                  Icon(Icons.copy, color: cs.primary, size: 22),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                  const RaiCuentaDepositoPanel(
+                    titulo: 'Cuenta para recargar crédito',
+                    padding: EdgeInsets.all(12),
                   ),
                   const SizedBox(height: 10),
                   Text(
@@ -1547,7 +1804,7 @@ class _PanelRecargaComisionEfectivoState
                   Text(
                     'Saldo disponible: ${widget.formatter.format(disponible)} '
                     '(de un total de ${widget.formatter.format(saldo)}, '
-                    'tenés ${widget.formatter.format(reservGiras)} reservados para giras activas).',
+                    'tenés ${widget.formatter.format(reservGiras)} reservados para salidas por cupos activas).',
                     style: TextStyle(
                       color: cs.onSurfaceVariant,
                       fontSize: 12.5,

@@ -9,6 +9,12 @@ import { logger } from "firebase-functions";
 import { logAdminAudit } from "./audit.js";
 import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
 import { assertMultiparadaCompletaParaFinalizar } from "./multiparada.js";
+import {
+  elegibleLiquidacionSemanalCache,
+  esElegibleLiquidacionSemanal,
+  metodoPagoNormalizado,
+  metodoPagoNormalizadoDesde,
+} from "./liquidacion_semanal_viaje.js";
 
 const db = () => getFirestore();
 const messaging = () => getMessaging();
@@ -30,6 +36,14 @@ let _cfgCache: {
   loadedAt: number;
   minimoOperativoRd: number;
   umbralPreventivoRd: number;
+} | null = null;
+
+let _financeCfgCache: {
+  loadedAt: number;
+  excluirEfectivoDePagoSemanal: boolean;
+  useLiquidacionesSemanales: boolean;
+  escrituraPagosTaxistasLegacy: boolean;
+  generarLiquidacionesSemanalesAuto: boolean;
 } | null = null;
 
 type AnyMap = Record<string, unknown>;
@@ -116,7 +130,61 @@ function numOr(n: unknown, fallback: number): number {
   return fallback;
 }
 
-async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: number; umbralPreventivoRd: number }> {
+function financeBool(raw: unknown, defaultValue: boolean): boolean {
+  if (raw === undefined || raw === null) return defaultValue;
+  return raw === true;
+}
+
+/** `config/finance` — flags financieros (Fase 1 + PR2). */
+export async function getFinanceConfig(): Promise<{
+  excluirEfectivoDePagoSemanal: boolean;
+  useLiquidacionesSemanales: boolean;
+  escrituraPagosTaxistasLegacy: boolean;
+  generarLiquidacionesSemanalesAuto: boolean;
+}> {
+  const now = Date.now();
+  if (_financeCfgCache && now - _financeCfgCache.loadedAt < COMISION_PREPAGO_CONFIG_TTL_MS) {
+    return {
+      excluirEfectivoDePagoSemanal: _financeCfgCache.excluirEfectivoDePagoSemanal,
+      useLiquidacionesSemanales: _financeCfgCache.useLiquidacionesSemanales,
+      escrituraPagosTaxistasLegacy: _financeCfgCache.escrituraPagosTaxistasLegacy,
+      generarLiquidacionesSemanalesAuto: _financeCfgCache.generarLiquidacionesSemanalesAuto,
+    };
+  }
+  try {
+    const snap = await db().collection("config").doc("finance").get();
+    const data = (snap.data() ?? {}) as AnyMap;
+    const cfg = {
+      excluirEfectivoDePagoSemanal: financeBool(data.excluirEfectivoDePagoSemanal, true),
+      useLiquidacionesSemanales: financeBool(data.useLiquidacionesSemanales, false),
+      escrituraPagosTaxistasLegacy: financeBool(data.escrituraPagosTaxistasLegacy, true),
+      generarLiquidacionesSemanalesAuto: financeBool(data.generarLiquidacionesSemanalesAuto, false),
+    };
+    _financeCfgCache = { loadedAt: now, ...cfg };
+    return cfg;
+  } catch (e) {
+    console.error("[getFinanceConfig]", e);
+    return {
+      excluirEfectivoDePagoSemanal: true,
+      useLiquidacionesSemanales: false,
+      escrituraPagosTaxistasLegacy: true,
+      generarLiquidacionesSemanalesAuto: false,
+    };
+  }
+}
+
+/** PR2: bloquea approve/reject legacy cuando liquidaciones semanales está activo. */
+async function assertLegacyPagosTaxistasFlowsDisabled(): Promise<void> {
+  const { useLiquidacionesSemanales } = await getFinanceConfig();
+  if (useLiquidacionesSemanales) {
+    throw new HttpsError(
+      "failed-precondition",
+      "El flujo legacy pagos_taxistas está deshabilitado. Use aprobarLiquidacionSemanal.",
+    );
+  }
+}
+
+export async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: number; umbralPreventivoRd: number }> {
   const now = Date.now();
   if (_cfgCache && now - _cfgCache.loadedAt < COMISION_PREPAGO_CONFIG_TTL_MS) {
     return {
@@ -146,15 +214,18 @@ async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: number; 
 
 /**
  * Pool / aceptar viaje: deuda legacy ≥ 500; o prepago activo (primer efectivo ya consumido y sin deuda legacy)
- * con **saldo disponible** agotado (prepago − reservado en giras ≤ 0).
+ * con **saldo disponible** por debajo del mínimo operativo (`config/comision_prepago`, default RD$200).
  * Mientras quede `comisionPendiente` legacy (>0 y <500), no exigimos saldo prepago (migración suave).
  */
-function bloqueoOperativoPrepago(data: AnyMap | undefined): boolean {
+function bloqueoOperativoPrepago(
+  data: AnyMap | undefined,
+  minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
+): boolean {
   const pend = comisionPendienteRdFromBilletera(data);
   if (pend + 1e-9 >= UMBRAL_COMISION_LEGACY_RD) return true;
   if (pend > 1e-6) return false;
   if (data?.primerViajeComisionGratisConsumido !== true) return false;
-  return saldoDisponiblePrepagoRdFromBilletera(data) <= 1e-6;
+  return saldoDisponiblePrepagoRdFromBilletera(data) + 1e-9 < minimoOperativoRd;
 }
 
 function comisionPendienteDesdeSnap(snap: DocumentSnapshot | undefined): number {
@@ -340,8 +411,12 @@ async function syncTienePagoPendiente(uidTaxista: string): Promise<boolean> {
     logger.warn("[syncTienePagoPendiente] uid vacío; omitido");
     return false;
   }
+  const prepagoCfg = await getComisionPrepagoConfig();
   const billeSnap = await db().collection("billeteras_taxista").doc(uid).get();
-  const bloqueoComision = bloqueoOperativoPrepago(billeSnap.data() as AnyMap | undefined);
+  const bloqueoComision = bloqueoOperativoPrepago(
+    billeSnap.data() as AnyMap | undefined,
+    prepagoCfg.minimoOperativoRd,
+  );
   // Deuda de pool pendiente de validación admin (acumulada por taxista).
   let deudaPoolPendienteRd = 0;
   try {
@@ -835,7 +910,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
           const fromPend = Math.min(p, comisionRd);
           p = Number.parseFloat((p - fromPend).toFixed(2));
           const rem = Number.parseFloat((comisionRd - fromPend).toFixed(2));
-          const cubiertoPrepago = rem <= saldo ? rem : saldo;
+          const prepagoLibreIni = saldoDisponiblePrepagoRdFromBilletera(bData);
+          const cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
           const faltantePrepago = Number.parseFloat((rem - cubiertoPrepago).toFixed(2));
           saldo = Number.parseFloat((saldo - cubiertoPrepago).toFixed(2));
           p = Number.parseFloat((p + faltantePrepago).toFixed(2));
@@ -879,6 +955,18 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       }
     }
 
+    const metodoNorm = metodoPagoNormalizado(
+      pagoRegistrado ? String(d.metodoPago ?? metodo) : metodo,
+    );
+    const estadoPagoCierre = esEfectivo
+      ? "pagado"
+      : String(d.estadoPago ?? (pagoRegistrado ? d.estadoPago : "pendiente") ?? "pendiente");
+    const elegibilidadSemanal = {
+      metodoPagoNormalizado: metodoNorm,
+      estadoPago: estadoPagoCierre,
+      liquidado: d.liquidado === true,
+    };
+
     tx.update(viajeRef, {
       estado: "completado",
       completado: true,
@@ -894,6 +982,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       finalizadoEn: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
+      metodoPagoNormalizado: metodoNorm,
+      elegibleLiquidacionSemanal: elegibleLiquidacionSemanalCache(elegibilidadSemanal),
       // Snapshot perfil + saldo prepago post-cierre (factura inmutable).
       bancoTaxista: perfilFacturaSnap.bancoTaxista,
       numeroCuentaTaxista: perfilFacturaSnap.numeroCuentaTaxista,
@@ -1026,9 +1116,20 @@ export const confirmarTransferenciaAdminSeguro = onCall(async (request) => {
   if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
 
   const viajeRef = db().collection("viajes").doc(viajeId);
+  const viajeSnap = await viajeRef.get();
+  if (!viajeSnap.exists) throw new HttpsError("not-found", "Viaje no existe");
+  const viajeData = (viajeSnap.data() ?? {}) as AnyMap;
+  const metodoNorm = metodoPagoNormalizadoDesde(viajeData);
+  const elegibilidadSemanal = {
+    metodoPagoNormalizado: metodoNorm,
+    estadoPago: "verificado",
+    liquidado: viajeData.liquidado === true,
+  };
   await viajeRef.set({
     transferenciaConfirmada: true,
     estadoPago: "verificado",
+    metodoPagoNormalizado: metodoNorm,
+    elegibleLiquidacionSemanal: elegibleLiquidacionSemanalCache(elegibilidadSemanal),
     "payment.status": "bank_transfer_validated",
     "payment.provider": "transfer",
     "payment.updatedAt": FieldValue.serverTimestamp(),
@@ -1088,11 +1189,19 @@ export const confirmarTransferenciaTaxistaSeguro = onCall(async (request) => {
       return;
     }
 
+    const metodoNorm = metodoPagoNormalizadoDesde(d);
+    const elegibilidadSemanal = {
+      metodoPagoNormalizado: metodoNorm,
+      estadoPago: "verificado",
+      liquidado: d.liquidado === true,
+    };
     tx.update(viajeRef, {
       transferenciaConfirmada: true,
       transferenciaConfirmadaPor: role === "admin" ? "admin" : "taxista",
       transferenciaConfirmadaAt: FieldValue.serverTimestamp(),
       estadoPago: "verificado",
+      metodoPagoNormalizado: metodoNorm,
+      elegibleLiquidacionSemanal: elegibleLiquidacionSemanalCache(elegibilidadSemanal),
       "payment.status": "bank_transfer_validated",
       "payment.provider": "transfer",
       "payment.updatedAt": FieldValue.serverTimestamp(),
@@ -1136,6 +1245,7 @@ export const approvePayment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uid = request.auth.uid;
   if ((await getRole(uid)) !== "admin") throw new HttpsError("permission-denied", "Solo admin");
+  await assertLegacyPagosTaxistasFlowsDisabled();
 
   const pagoId = typeof request.data?.pagoId === "string" ? request.data.pagoId.trim() : "";
   const notaAdmin = typeof request.data?.notaAdmin === "string" ? request.data.notaAdmin.trim() : "";
@@ -1145,6 +1255,8 @@ export const approvePayment = onCall(async (request) => {
 
   const idem = await ensureIdempotencyStart(idemKey, "approve_payment", uid);
   if (idem.done) return idem.result;
+
+  const { excluirEfectivoDePagoSemanal } = await getFinanceConfig();
 
   const pagoRef = db().collection("pagos_taxistas").doc(pagoId);
   const result = await db().runTransaction(async (tx) => {
@@ -1179,7 +1291,11 @@ export const approvePayment = onCall(async (request) => {
           .orderBy("finalizadoEn", "desc")
           .limit(200),
       );
-      viajesLiquidados = viajesSnap.docs.map((d) => d.id);
+      viajesLiquidados = excluirEfectivoDePagoSemanal
+        ? viajesSnap.docs
+            .filter((doc) => esElegibleLiquidacionSemanal((doc.data() ?? {}) as AnyMap))
+            .map((doc) => doc.id)
+        : viajesSnap.docs.map((doc) => doc.id);
     }
 
     tx.update(pagoRef, {
@@ -1231,6 +1347,7 @@ export const rejectPayment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uid = request.auth.uid;
   if ((await getRole(uid)) !== "admin") throw new HttpsError("permission-denied", "Solo admin");
+  await assertLegacyPagosTaxistasFlowsDisabled();
 
   const pagoId = typeof request.data?.pagoId === "string" ? request.data.pagoId.trim() : "";
   const notaAdminRaw = typeof request.data?.notaAdmin === "string" ? request.data.notaAdmin.trim() : "";
@@ -1285,6 +1402,22 @@ export const rejectPayment = onCall(async (request) => {
   return result;
 });
 
+type PoolModoConductor = "motor" | "vehiculo";
+
+function poolModoConductorFromUser(u: AnyMap): PoolModoConductor {
+  let raw = String(u.tipoServicio ?? "").trim().toLowerCase();
+  if (!raw && u.vehiculo && typeof u.vehiculo === "object") {
+    raw = String((u.vehiculo as AnyMap).tipoServicio ?? "").trim().toLowerCase();
+  }
+  return raw === "motor" ? "motor" : "vehiculo";
+}
+
+function viajeCoincideModoConductor(viajeTipo: string, modo: PoolModoConductor): boolean {
+  const t = viajeTipo.trim().toLowerCase() || "normal";
+  if (modo === "motor") return t === "motor";
+  return t !== "motor" && t !== "turismo";
+}
+
 export const aceptarViajeSeguro = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uidActor = request.auth.uid;
@@ -1304,6 +1437,8 @@ export const aceptarViajeSeguro = onCall(async (request) => {
 
   const idem = await ensureIdempotencyStart(idemKey, "aceptar_viaje_seguro", uidActor);
   if (idem.done) return idem.result;
+
+  const prepagoCfg = await getComisionPrepagoConfig();
 
   const viajeRef = db().collection("viajes").doc(viajeId);
   const userRef = db().collection("usuarios").doc(uidActor);
@@ -1349,11 +1484,17 @@ export const aceptarViajeSeguro = onCall(async (request) => {
       throw new HttpsError("failed-precondition", "bloqueado-pago-semanal");
     }
     const billeSnap = await tx.get(db().collection("billeteras_taxista").doc(uidActor));
-    if (bloqueoOperativoPrepago(billeSnap.data() as AnyMap | undefined)) {
+    if (bloqueoOperativoPrepago(billeSnap.data() as AnyMap | undefined, prepagoCfg.minimoOperativoRd)) {
       throw new HttpsError("failed-precondition", "bloqueado-comision-efectivo");
     }
     const viajeActivoId = String(uData.viajeActivoId ?? "");
     if (viajeActivoId) throw new HttpsError("failed-precondition", "taxista-ocupado");
+
+    const poolModo = poolModoConductorFromUser(uData);
+    const viajeTipo = String(d.tipoServicio ?? "normal");
+    if (!viajeCoincideModoConductor(viajeTipo, poolModo)) {
+      throw new HttpsError("failed-precondition", "tipo-servicio-no-coincide");
+    }
 
     const tel = telefono || String(uData.telefono ?? "");
     const placaFinal = placa || String(uData.placa ?? "");

@@ -5,16 +5,36 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import '../modelo/pago_taxista.dart';
 import '../modelo/recarga_comision_taxista.dart';
 import 'pool_repo.dart';
+import 'package:flygo_nuevo/servicios/comision_prepago_config_service.dart';
+import 'finance_config_service.dart';
 import 'taxista_billetera_gira_prepago.dart';
 import 'taxista_prepago_ledger.dart';
+import '../utils/liquidacion_semanal_viaje.dart';
+import '../utils/metodo_pago_viaje.dart';
 
 class PagosTaxistaRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
   static CollectionReference<Map<String, dynamic>> get _col =>
       _db.collection('pagos_taxistas');
+  /// PR2: rechaza escritura legacy en `pagos_taxistas` cuando la autoridad es semanal.
+  static Future<void> _assertEscrituraLegacyPagosTaxistas() async {
+    await FinanceConfigService.ensureStarted();
+    if (FinanceConfigService.useLiquidacionesSemanales &&
+        !FinanceConfigService.escrituraPagosTaxistasLegacy) {
+      debugPrint(
+        '[PagosTaxistaRepo] pagos_taxistas legacy bloqueado: '
+        'useLiquidacionesSemanales=true, escrituraPagosTaxistasLegacy=false',
+      );
+      throw Exception(
+        'El flujo legacy pagos_taxistas está deshabilitado. Use liquidaciones semanales.',
+      );
+    }
+  }
+
   static const List<String> _estadosDeudaAbierta = <String>[
     'pendiente',
     'vencido',
@@ -69,8 +89,9 @@ class PagosTaxistaRepo {
   /// Deuda legacy en billetera (ya no sube con viajes nuevos): mismo tope que Cloud Functions.
   static const double umbralComisionLegacyBloqueoRd = 500;
 
-  /// Monto sugerido de recarga para operar con holgura.
-  static const double minSaldoPrepagoComisionRd = 200;
+  /// Monto sugerido de recarga para operar con holgura (default; vivo en [ComisionPrepagoConfigService]).
+  static double get minSaldoPrepagoComisionRd =>
+      ComisionPrepagoConfigService.minimoOperativoRd;
 
   /// Alias histórico (UI que hablaba de “tope 500”): hoy es el tope solo de `comisionPendiente` legacy.
   static const double umbralBloqueoComisionEfectivoRd =
@@ -108,9 +129,10 @@ class PagosTaxistaRepo {
     return double.parse(total.clamp(0, 1e9).toStringAsFixed(2));
   }
 
-  /// Textos UX (prepago + comisión 20% en efectivo).
-  static const String mensajeRecargaTomarViajes =
-      'Recarga crédito prepago (mín. RD\$200): el 20% de cada viaje en efectivo se descuenta de tu saldo. '
+  /// Textos UX (prepago + comisión global en efectivo).
+  static String get mensajeRecargaTomarViajes =>
+      'Recarga crédito prepago (mín. RD\$200): el ${PlataformaEconomia.etiquetaPorcentajeComision()} '
+      'de cada viaje en efectivo se descuenta de tu saldo. '
       'Sin saldo suficiente no puedes tomar viajes ni pool.';
 
   static const String mensajeRecargaActivarDisponible =
@@ -151,7 +173,7 @@ class PagosTaxistaRepo {
   static String get mensajeRecargaAccesoPantallaCompleta =>
       'Tu acceso queda suspendido: agotaste tu saldo prepago de comisión en efectivo. '
       'Recarga (sugerido RD\$${minSaldoPrepagoComisionRd.toStringAsFixed(0)} o más) '
-      'para seguir operando; el 20% de cada viaje en efectivo se descuenta del saldo, '
+      'para seguir operando; el ${PlataformaEconomia.etiquetaPorcentajeComision()} de cada viaje en efectivo se descuenta del saldo, '
       'o regularizar comisión legacy ≥ RD\$${umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}. '
       'Recarga desde Mis pagos; al verificar el admin, el monto paga primero el legacy pendiente '
       '(si hay) y el resto suma al prepago.';
@@ -218,12 +240,16 @@ class PagosTaxistaRepo {
 
   /// Misma regla que `bloqueoOperativoPrepago` en Cloud Functions.
   static bool bloqueoOperativoPorComisionEfectivo(
-      Map<String, dynamic>? billeData) {
+    Map<String, dynamic>? billeData, {
+    double? minimoOperativoRd,
+  }) {
     final pend = comisionPendienteDesdeBilletera(billeData);
     if (pend >= umbralComisionLegacyBloqueoRd - 1e-6) return true;
     if (pend > 1e-6) return false;
     if (!primerViajeComisionGratisConsumido(billeData)) return false;
-    return saldoDisponiblePrepagoComisionDesdeBilletera(billeData) <= 1e-6;
+    final minimo = minimoOperativoRd ?? minSaldoPrepagoComisionRd;
+    return saldoDisponiblePrepagoComisionDesdeBilletera(billeData) + 1e-9 <
+        minimo;
   }
 
   /// Una sola fuente para pool, reclamar viaje, encadenar siguiente y asignación turismo:
@@ -512,6 +538,14 @@ class PagosTaxistaRepo {
   // ==============================================================
   static Future<void> generarPagoSemanal(String uidTaxista) async {
     try {
+      await FinanceConfigService.ensureStarted();
+      if (FinanceConfigService.useLiquidacionesSemanales &&
+          !FinanceConfigService.escrituraPagosTaxistasLegacy) {
+        return;
+      }
+      final bool excluirEfectivo =
+          FinanceConfigService.excluirEfectivoDePagoSemanal;
+
       // Calcular fechas de la semana actual
       final now = DateTime.now();
       final fechaFin = DateTime(now.year, now.month, now.day);
@@ -541,17 +575,27 @@ class PagosTaxistaRepo {
 
       double totalGanado = 0; // 80% para taxista
       double totalComision = 0; // 20% para admin
+      int viajesEfectivoExcluidos = 0;
 
-      for (var viaje in viajes.docs) {
+      for (final viaje in viajes.docs) {
         final data = viaje.data();
-        // ✅ USAR LOS CAMPOS CORRECTOS
+        if (excluirEfectivo && !LiquidacionSemanalViaje.esElegible(data)) {
+          if (MetodoPagoViaje.esEfectivo(data['metodoPago']?.toString())) {
+            viajesEfectivoExcluidos++;
+          }
+          continue;
+        }
         totalGanado += (data['gananciaTaxista'] ?? 0).toDouble();
         totalComision += (data['comision'] ?? 0).toDouble();
       }
 
-      final viajesSemana = viajes.docs.length;
+      final viajesSemana = excluirEfectivo
+          ? viajes.docs
+              .where((v) => LiquidacionSemanalViaje.esElegible(v.data()))
+              .length
+          : viajes.docs.length;
 
-      // Si no hay viajes, no generar pago
+      // Si no hay viajes liquidables, no generar pago
       if (viajesSemana == 0) return;
 
       // Crear documento de pago
@@ -574,11 +618,16 @@ class PagosTaxistaRepo {
         if (pagoSnap.exists) {
           return false;
         }
-        tx.set(pagoRef, {
+        final Map<String, dynamic> pagoDoc = {
           ...pago.toMap(),
           'id': pagoId,
           'createdAt': FieldValue.serverTimestamp(),
-        });
+        };
+        if (excluirEfectivo) {
+          pagoDoc['incluyeSoloMetodos'] = const ['transferencia', 'tarjeta'];
+          pagoDoc['viajesEfectivoExcluidosCount'] = viajesEfectivoExcluidos;
+        }
+        tx.set(pagoRef, pagoDoc);
         tx.set(
             _db.collection('usuarios').doc(uidTaxista),
             {
@@ -705,6 +754,7 @@ class PagosTaxistaRepo {
     required String comprobanteUrl,
     required String metodoPago,
   }) async {
+    await _assertEscrituraLegacyPagosTaxistas();
     final ref = _col.doc(pagoId);
     await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
@@ -734,6 +784,7 @@ class PagosTaxistaRepo {
     required bool aprobado,
     String? notaAdmin,
   }) async {
+    await _assertEscrituraLegacyPagosTaxistas();
     final user = FirebaseAuth.instance.currentUser;
     final pagoRef = _col.doc(pagoId);
 

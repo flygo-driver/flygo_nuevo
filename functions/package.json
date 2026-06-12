@@ -2,7 +2,7 @@
   "name": "functions",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build ; node --test test/taxista_cola_promote_logic.test.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
     "serve": "firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions",
     "lint": "eslint --ext .ts src"

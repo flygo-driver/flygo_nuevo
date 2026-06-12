@@ -39,6 +39,13 @@ service cloud.firestore {
       return isAuth() && (myRole() == "taxista");
     }
 
+    /// PR2: sin escritura legacy en pagos_taxistas (solo lectura histórica).
+    function pr2PagosTaxistasEscrituraDeshabilitada() {
+      return exists(/databases/$(database)/documents/config/finance) &&
+        get(/databases/$(database)/documents/config/finance).data.useLiquidacionesSemanales == true &&
+        get(/databases/$(database)/documents/config/finance).data.escrituraPagosTaxistasLegacy == false;
+    }
+
     function isCliente() {
       return isAuth() && (myRole() == "cliente");
     }
@@ -280,8 +287,7 @@ service cloud.firestore {
           "updatedAt", "actualizadoEn",
           "pushToken", "notificaciones",
           "aceptacionTerminos",
-          "phoneVerified", "lastPhoneReauthAt",
-          "girasCreadasUltimoMes", "girasCanceladasAntesDeIniciar", "ultimoReinicioContadorGiras"
+          "phoneVerified", "lastPhoneReauthAt"
         ]);
       // Completar rol vacío al primer login (p. ej. Google); no permite cambiar a admin.
       allow update: if isOwner(uid) &&
@@ -300,6 +306,41 @@ service cloud.firestore {
           "updatedAt",
           "actualizadoEn"
         ]);
+      // Marca cola ADM cuando RAI bloquea por muchas cancelaciones de salidas por cupos.
+      allow update: if isOwner(uid) &&
+        resource.data.rol == "taxista" &&
+        changedOnly([
+          "girasAbusoBloqueado",
+          "girasAbusoBloqueadoEn",
+          "updatedAt",
+          "actualizadoEn"
+        ]) &&
+        request.resource.data.girasAbusoBloqueado == true;
+      // Contadores giras por cupos (publicar / cancelar antes de iniciar; [PoolRepo.crearPool]).
+      allow update: if isOwner(uid) &&
+        resource.data.rol == "taxista" &&
+        changedOnly([
+          "girasCreadasUltimoMes",
+          "girasCanceladasAntesDeIniciar",
+          "ultimoReinicioContadorGiras",
+          "updatedAt",
+          "actualizadoEn"
+        ]);
+      // Completar registro conductor (Google / onboarding): datos + vehículo.
+      allow update: if isOwner(uid) &&
+        resource.data.rol == "taxista" &&
+        changedOnly([
+          "nombre", "telefono", "fotoUrl", "email", "proveedor",
+          "registroTaxistaCompleto",
+          "tipoServicio", "tipoVehiculo", "vehiculoTipo", "tipoVehiculoLabel",
+          "placa", "marca", "modelo", "color", "anio", "vehiculoAnio",
+          "vehiculoModelo", "vehiculoColor", "vehiculoMarca",
+          "fotoVehiculoUrl", "vehiculoPerfilCompleto", "vehiculo",
+          "disponible", "docsEstado", "estadoDocumentos",
+          "documentosCompletos", "puedeRecibirViajes",
+          "docs",
+          "updatedAt", "actualizadoEn"
+        ]);
       allow update: if isAdmin();
       allow delete: if isAdmin();
 
@@ -308,22 +349,35 @@ service cloud.firestore {
         allow read: if isAuth() && (request.auth.uid == uid || isAdmin());
         allow create, update, delete: if false;
       }
+
+      /// Respaldo documentos taxista cuando Storage devuelve 402/unknown (facturación / SHA APK local).
+      match /docs_imagenes/{tipo} {
+        allow read: if isAuth() && (request.auth.uid == uid || isAdmin());
+        allow create, update: if isOwner(uid) &&
+          tipo in ['licencia', 'matricula', 'seguro', 'fotoVehiculo', 'placa'] &&
+          request.resource.data.keys().hasAll(['b64', 'contentType', 'updatedAt']) &&
+          request.resource.data.b64 is string &&
+          request.resource.data.b64.size() > 0 &&
+          request.resource.data.b64.size() < 1200000 &&
+          request.resource.data.contentType == 'image/jpeg';
+        allow delete: if isOwner(uid) || isAdmin();
+      }
     }
 
     match /viajes/{viajeId} {
       allow read: if isAdmin() ||
         // Lectura para taxista (requerida para query/listener del pool disponible).
         isTaxista() ||
-        // Dueños directos del viaje (cliente/taxista asignado)
+        esRolChoferEnSesion() ||
+        // Cliente dueño (uidCliente vacío + clienteId válido: ver esDuenoClienteDelViaje).
+        esDuenoClienteDelViaje() ||
         (isAuth() && (
-          resource.data.uidCliente == request.auth.uid ||
-          resource.data.clienteId == request.auth.uid ||
           resource.data.uidTaxista == request.auth.uid ||
           resource.data.taxistaId == request.auth.uid
         )) ||
         // Pool visible para taxista (no asignado, no turismo/admin)
         (
-          isTaxista() &&
+          (isTaxista() || esRolChoferEnSesion()) &&
           (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
           (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data)) &&
           (
@@ -397,9 +451,25 @@ service cloud.firestore {
             resource.data.estado == "finalizado") &&
           changedOnly([
             "clienteFacturaEfectivoVistaEn",
-            "clienteFacturaEfectivoVistaPorUid"
+            "clienteFacturaEfectivoVistaPorUid",
+            "clientePostViajeVistoEn",
+            "clientePostViajeVistoPorUid",
+            "solicitarCalificacionMutua",
+            "solicitarCalificacionMutuaEn",
+            "solicitarCalificacionMutuaPorUid"
           ]) &&
-          request.resource.data.clienteFacturaEfectivoVistaPorUid == request.auth.uid
+          (
+            !request.resource.data.keys().hasAny(["clienteFacturaEfectivoVistaPorUid"]) ||
+            request.resource.data.clienteFacturaEfectivoVistaPorUid == request.auth.uid
+          ) &&
+          (
+            !request.resource.data.keys().hasAny(["clientePostViajeVistoPorUid"]) ||
+            request.resource.data.clientePostViajeVistoPorUid == request.auth.uid
+          ) &&
+          (
+            !request.resource.data.keys().hasAny(["solicitarCalificacionMutuaPorUid"]) ||
+            request.resource.data.solicitarCalificacionMutuaPorUid == request.auth.uid
+          )
         ) ||
         (
           // Post-viaje: marcar reportado (ReportesViajeData) en viaje ya cerrado.
@@ -531,15 +601,32 @@ service cloud.firestore {
     match /pagos_taxistas/{pagoId} {
       allow read: if isAdmin() ||
         (isAuth() && resource.data.uidTaxista == request.auth.uid);
-      allow create: if isAdmin();
-      allow update: if isAdmin() || (
-        isTaxista() &&
-        resource.data.uidTaxista == request.auth.uid &&
-        changedOnly(["comprobanteUrl", "metodoPago", "estado", "updatedAt"]) &&
-        (resource.data.estado in ["pendiente", "rechazado"]) &&
-        request.resource.data.estado == "pendiente_verificacion"
+      allow create: if !pr2PagosTaxistasEscrituraDeshabilitada() && isAdmin();
+      allow update: if !pr2PagosTaxistasEscrituraDeshabilitada() && (
+        isAdmin() || (
+          isTaxista() &&
+          resource.data.uidTaxista == request.auth.uid &&
+          changedOnly(["comprobanteUrl", "metodoPago", "estado", "updatedAt"]) &&
+          (resource.data.estado in ["pendiente", "rechazado"]) &&
+          request.resource.data.estado == "pendiente_verificacion"
+        )
       );
       allow delete: if false;
+    }
+
+    // Liquidación semanal digital (PR2): solo lectura cliente; escritura vía Cloud Functions.
+    match /liquidaciones_semanales/{liqId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidTaxista == request.auth.uid);
+      allow create, update, delete: if false;
+
+      match /lineas/{viajeId} {
+        allow read: if isAdmin() ||
+          (isAuth() &&
+            get(/databases/$(database)/documents/liquidaciones_semanales/$(liqId))
+              .data.uidTaxista == request.auth.uid);
+        allow create, update, delete: if false;
+      }
     }
 
     // Recarga de comisión por viajes en efectivo: taxista crea con comprobante; solo admin actualiza.
@@ -673,7 +760,7 @@ service cloud.firestore {
         changedOnly([
           "tipo", "sentido", "origenTown", "destino",
           "fechaSalida", "fechaVuelta", "pickupPoints",
-          "capacidad", "minParaConfirmar", "precioPorAsiento",
+          "capacidad", "minParaConfirmar", "cuposComisionRai", "precioPorAsiento",
           "depositPct", "feePct", "estado", "taxistaNombre",
           "asientosReservados", "asientosPagados",
           "montoReservado", "montoPagado",
@@ -926,6 +1013,30 @@ service cloud.firestore {
     match /incidencias/{incidenciaId} {
       allow read, create, update: if isAdmin();
       allow delete: if false;
+    }
+
+    // Alertas operativas in-app (escritura solo Cloud Functions / Admin SDK).
+    match /admin_alertas/{alertaId} {
+      allow read, update: if isAdmin();
+      allow create, delete: if false;
+    }
+
+    // Métricas agregadas del centro de operaciones (escritura solo backend).
+    match /admin_metrics/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Uso diario del asistente RAI (lectura admin; escritura solo CF).
+    match /rai_asistente_usage/{uid} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Destinos turísticos editables desde ADM (catálogo extendido).
+    match /turismo_destinos/{destinoId} {
+      allow read: if isAuth();
+      allow create, update, delete: if isAdmin();
     }
 
     // Auditoría administrativa: solo Cloud Functions (Admin SDK). Clientes nunca leen/escriben.

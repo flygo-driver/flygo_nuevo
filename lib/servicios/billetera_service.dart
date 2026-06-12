@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../modelo/liquidacion.dart';
 import '../utils/calculos/estados.dart';
+import '../utils/liquidacion_semanal_viaje.dart';
+import 'finance_config_service.dart';
 
 /// Servicio de Billetera (cliente)
 /// - Calcula exacto en centavos.
@@ -51,11 +53,18 @@ class BilleteraService {
     return 0.0;
   }
 
+  /// Con `excluirEfectivoDePagoSemanal`, solo cuenta ganancia digital verificada.
+  static bool _cuentaParaSaldoRetirable(Map<String, dynamic> data) {
+    if (!FinanceConfigService.excluirEfectivoDePagoSemanal) return true;
+    return LiquidacionSemanalViaje.esElegible(data);
+  }
+
   // ===================== Futures (compat) =====================
 
   /// Saldo = SUM(ganancia viajes completados del UID) – SUM(liquidaciones {pendiente, aprobado})
   static Future<double> calcularSaldoDisponible(String uidTaxista) async {
     if (uidTaxista.trim().isEmpty) return 0.0;
+    await FinanceConfigService.ensureStarted();
 
     final QuerySnapshot<Map<String, dynamic>> vSnap =
         await _viajes.where('uidTaxista', isEqualTo: uidTaxista).get();
@@ -64,6 +73,7 @@ class BilleteraService {
     for (final d in vSnap.docs) {
       final data = d.data();
       if (!_esCompletado(data)) continue;
+      if (!_cuentaParaSaldoRetirable(data)) continue;
       totalGanadoCents += _gananciaCentsOf(data);
     }
 
@@ -138,6 +148,7 @@ class BilleteraService {
 
   static Stream<double> streamSaldoDisponible(String uidTaxista) {
     if (uidTaxista.trim().isEmpty) return Stream.value(0.0);
+    unawaited(FinanceConfigService.ensureStarted());
 
     final Stream<int> sViajes = _viajes
         .where('uidTaxista', isEqualTo: uidTaxista)
@@ -147,6 +158,7 @@ class BilleteraService {
       for (final d in qs.docs) {
         final data = d.data();
         if (!_esCompletado(data)) continue;
+        if (!_cuentaParaSaldoRetirable(data)) continue;
         totalGanado += _gananciaCentsOf(data);
       }
       return totalGanado;
@@ -242,19 +254,23 @@ class BilleteraService {
       ));
     }
 
-    final Stream<(int, int, int)> sViajes = _viajes
+    unawaited(FinanceConfigService.ensureStarted());
+
+    final Stream<(int, int, int, int)> sViajes = _viajes
         .where('uidTaxista', isEqualTo: uidTaxista)
         .snapshots()
         .map((qs) {
-      int ganC = 0, comC = 0, cnt = 0;
+      int ganC = 0, comC = 0, cnt = 0, ganRetirableC = 0;
       for (final d in qs.docs) {
         final data = d.data();
         if (!_esCompletado(data)) continue;
-        ganC += _gananciaCentsOf(data);
+        final g = _gananciaCentsOf(data);
+        ganC += g;
+        if (_cuentaParaSaldoRetirable(data)) ganRetirableC += g;
         comC += _comisionCentsOf(data);
         cnt++;
       }
-      return (ganC, comC, cnt);
+      return (ganC, comC, cnt, ganRetirableC);
     });
 
     final Stream<int> sLiq = _liquidas
@@ -270,9 +286,9 @@ class BilleteraService {
     });
 
     return Stream<ResumenBilleteraLive>.multi((controller) {
-      (int, int, int)? viajes; // (ganC, comC, cnt)
+      (int, int, int, int)? viajes; // (ganC, comC, cnt, ganRetirableC)
       int? liq; // solicitadoCents
-      late final StreamSubscription<(int, int, int)> subViajes;
+      late final StreamSubscription<(int, int, int, int)> subViajes;
       late final StreamSubscription<int> subLiq;
 
       void emitIfReady() {
@@ -280,7 +296,8 @@ class BilleteraService {
         final ganC = viajes!.$1;
         final comC = viajes!.$2;
         final cnt = viajes!.$3;
-        final saldoC = ganC - liq!;
+        final ganRetirableC = viajes!.$4;
+        final saldoC = ganRetirableC - liq!;
         controller.add(ResumenBilleteraLive(
           saldoDisponible: (saldoC <= 0) ? 0.0 : (saldoC / 100.0),
           gananciaTotal: ganC / 100.0,

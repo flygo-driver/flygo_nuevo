@@ -134,6 +134,31 @@
         { "fieldPath": "fechaHora", "order": "ASCENDING" }
       ]
     },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "esAhora", "order": "ASCENDING" },
+        { "fieldPath": "canalAsignacion", "order": "ASCENDING" },
+        { "fieldPath": "publishAt", "order": "ASCENDING" },
+        { "fieldPath": "acceptAfter", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "esAhora", "order": "ASCENDING" },
+        { "fieldPath": "canalAsignacion", "order": "ASCENDING" },
+        { "fieldPath": "publishAt", "order": "ASCENDING" },
+        { "fieldPath": "acceptAfter", "order": "ASCENDING" },
+        { "fieldPath": "fechaHora", "order": "ASCENDING" }
+      ]
+    },
 
     
     {
@@ -396,6 +421,135 @@
         { "fieldPath": "uidTaxista", "order": "ASCENDING" },
         { "fieldPath": "estado", "order": "ASCENDING" },
         { "fieldPath": "finalizadaEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadoEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "completado", "order": "ASCENDING" },
+        { "fieldPath": "finalizadoEn", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "updatedAt", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "updatedAt", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "admin_alertas",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "leida", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "bolas_pueblo",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "bolas_pueblo",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "metodoPago", "order": "ASCENDING" },
+        { "fieldPath": "transferenciaConfirmada", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "rai_asistente_usage",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "day", "order": "ASCENDING" },
+        { "fieldPath": "count", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "usuarios",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tienePagoPendiente", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "usuarios",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tienePagoPendiente", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "usuarios",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "rol", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "usuarios",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "rol", "order": "ASCENDING" },
+        { "fieldPath": "actualizadoEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "usuarios",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "girasAbusoBloqueado", "order": "ASCENDING" },
+        { "fieldPath": "girasAbusoBloqueadoEn", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "liquidaciones_semanales",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" },
+        { "fieldPath": "periodoFin", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "liquidaciones_semanales",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "periodoFin", "order": "DESCENDING" }
       ]
     }
   ],

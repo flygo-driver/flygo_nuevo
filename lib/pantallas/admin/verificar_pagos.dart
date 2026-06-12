@@ -7,7 +7,10 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../modelo/liquidacion_semanal.dart';
 import '../../modelo/recarga_comision_taxista.dart';
+import '../../config/plataforma_economia.dart';
+import '../../servicios/liquidacion_semanal_repo.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/viajes_repo.dart';
 import '../../modelo/pago_taxista.dart';
@@ -15,7 +18,15 @@ import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
 class VerificarPagos extends StatefulWidget {
-  const VerificarPagos({super.key});
+  /// 0 = recargas prepago, 1 = comisiones semanales, 2/3 = transferencias.
+  const VerificarPagos({
+    super.key,
+    this.initialTabIndex = 0,
+    this.initialFiltroRecarga = 'todos',
+  });
+
+  final int initialTabIndex;
+  final String initialFiltroRecarga;
 
   @override
   State<VerificarPagos> createState() => _VerificarPagosState();
@@ -34,6 +45,16 @@ class _VerificarPagosState extends State<VerificarPagos> {
   String _buscarRecarga = '';
   int _rangoDiasRecarga = 0;
   final TextEditingController _buscarRecargaCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    final int tab = widget.initialTabIndex;
+    _tabIndex = tab < 0 ? 0 : (tab > 3 ? 3 : tab);
+    _filtroEstadoRecarga = widget.initialFiltroRecarga.trim().isEmpty
+        ? 'todos'
+        : widget.initialFiltroRecarga.trim();
+  }
 
   static String _shortDocId(String id) {
     final t = id.trim();
@@ -112,8 +133,8 @@ class _VerificarPagosState extends State<VerificarPagos> {
                 style: TextStyle(color: AdminUi.secondary(ctx))),
             Text('Semana: ${pago.semana}',
                 style: TextStyle(color: AdminUi.secondary(ctx))),
-            // ✅ Mostrar correctamente: comisión 20% para admin
-            Text('Comisión 20%: ${formatter.format(pago.comision)}',
+            Text(
+                'Comisión ${PlataformaEconomia.etiquetaPorcentajeComision()}: ${formatter.format(pago.comision)}',
                 style: const TextStyle(
                     color: Colors.greenAccent, fontWeight: FontWeight.bold)),
             Text('Taxista recibe: ${formatter.format(pago.netoAPagar)}',
@@ -149,6 +170,137 @@ class _VerificarPagosState extends State<VerificarPagos> {
           ),
         );
       });
+    }
+  }
+
+  Future<void> _aprobarLiquidacionSemanal(LiquidacionSemanal liq) async {
+    if (_accionEnCurso) return;
+    final TextEditingController refCtrl = TextEditingController();
+    final TextEditingController notaCtrl = TextEditingController();
+    try {
+      final bool? confirm = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext ctx) => AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text('Aprobar liquidación semanal',
+              style: TextStyle(color: AdminUi.onCard(ctx))),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('Taxista: ${liq.nombreTaxista}',
+                  style: TextStyle(color: AdminUi.secondary(ctx))),
+              Text('Periodo: ${liq.periodo}',
+                  style: TextStyle(color: AdminUi.secondary(ctx))),
+              Text(
+                'Neto conductor: ${formatter.format(liq.totalNetoRd)}',
+                style: const TextStyle(
+                  color: Colors.greenAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: refCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Referencia ACH (opcional)',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: notaCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Nota admin (opcional)',
+                ),
+              ),
+            ],
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              child: const Text('Marcar pagado'),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+      await _ejecutarAccionAdmin(() async {
+        await LiquidacionSemanalRepo.aprobarLiquidacion(
+          liquidacionId: liq.id,
+          referenciaAch: refCtrl.text.trim(),
+          notaAdmin: notaCtrl.text.trim(),
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Liquidación semanal aprobada'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      });
+    } finally {
+      refCtrl.dispose();
+      notaCtrl.dispose();
+    }
+  }
+
+  Future<void> _cancelarLiquidacionSemanal(LiquidacionSemanal liq) async {
+    if (_accionEnCurso) return;
+    final TextEditingController motivoCtrl = TextEditingController();
+    try {
+      final bool? confirm = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext ctx) => AlertDialog(
+          title: const Text('Cancelar liquidación'),
+          content: TextField(
+            controller: motivoCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Motivo (mín. 6 caracteres)',
+            ),
+            maxLines: 3,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Volver'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              child: const Text('Cancelar liquidación'),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+      final motivo = motivoCtrl.text.trim();
+      if (motivo.length < 6) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('El motivo debe tener al menos 6 caracteres'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+      await _ejecutarAccionAdmin(() async {
+        await LiquidacionSemanalRepo.cancelarLiquidacion(
+          liquidacionId: liq.id,
+          motivo: motivo,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Liquidación cancelada')),
+        );
+      });
+    } finally {
+      motivoCtrl.dispose();
     }
   }
 
@@ -296,19 +448,146 @@ class _VerificarPagosState extends State<VerificarPagos> {
         // Refuerzo: misma fórmula que Functions (prepago + deuda pool admin) y reapertura de pools.
         await PagosTaxistaRepo.sincronizarBloqueoOperativo(r.uidTaxista);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Recarga aprobada: saldo prepago actualizado y bandera sincronizada. '
-              'Pool y tomar viajes cuando el saldo alcance al menos '
-              'RD\$${PagosTaxistaRepo.minSaldoPrepagoComisionRd.toStringAsFixed(0)} '
-              '(y sin deuda legacy ni comisión de giras pendiente de admin ≥ '
-              'RD\$${PagosTaxistaRepo.umbralDeudaPoolComisionAdminRd.toStringAsFixed(0)}).',
-            ),
-            backgroundColor: Colors.green,
-          ),
+        await _mostrarDiagnosticoDesbloqueo(
+          uid: r.uidTaxista,
+          nombre: r.nombreTaxista,
         );
       });
+    }
+  }
+
+  /// Tras aprobar recarga: explica si el taxista ya puede operar o qué falta.
+  Future<void> _mostrarDiagnosticoDesbloqueo({
+    required String uid,
+    required String nombre,
+  }) async {
+    if (!mounted) return;
+    try {
+      final fs.DocumentSnapshot<Map<String, dynamic>> bille = await fs
+          .FirebaseFirestore.instance
+          .collection('billeteras_taxista')
+          .doc(uid)
+          .get();
+      final fs.DocumentSnapshot<Map<String, dynamic>> usr = await fs
+          .FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get();
+      final Map<String, dynamic>? bData = bille.data();
+      final Map<String, dynamic>? uData = usr.data();
+      final double prepagoDisp =
+          PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(bData);
+      final double legacy =
+          PagosTaxistaRepo.comisionPendienteDesdeBilletera(bData);
+      final double deudaPool =
+          PagosTaxistaRepo.deudaPoolPendienteRdDesdeUsuario(uData);
+      final bool tieneFlag = uData?['tienePagoPendiente'] == true;
+      final bool deudaSemanal =
+          await PagosTaxistaRepo.tieneDeudaSemanalVencida(uid);
+      final bool puede = await PagosTaxistaRepo.puedeTrabajar(uid);
+      final bool bloqueadoAdmin = uData?['bloqueado'] == true;
+
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext ctx) {
+          final List<String> bloqueos = <String>[];
+          if (deudaSemanal) {
+            bloqueos.add('Pago semanal del servicio vencido (>14 días).');
+          }
+          if (bloqueadoAdmin) {
+            bloqueos.add('Bloqueo administrativo (usuarios.bloqueado).');
+          }
+          if (legacy >= PagosTaxistaRepo.umbralComisionLegacyBloqueoRd - 1e-6) {
+            bloqueos.add(
+              'Comisión legacy ≥ RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)} '
+              '(actual ${formatter.format(legacy)}).',
+            );
+          }
+          if (prepagoDisp + 1e-9 <
+              PagosTaxistaRepo.minSaldoPrepagoComisionRd) {
+            bloqueos.add(
+              'Prepago disponible ${formatter.format(prepagoDisp)} '
+              '< mínimo RD\$${PagosTaxistaRepo.minSaldoPrepagoComisionRd.toStringAsFixed(0)}.',
+            );
+          }
+          if (deudaPool + 1e-9 >=
+              PagosTaxistaRepo.umbralDeudaPoolComisionAdminRd) {
+            bloqueos.add(
+              'Deuda comisión salidas por cupos pendiente admin: ${formatter.format(deudaPool)}.',
+            );
+          }
+          if (tieneFlag && bloqueos.isEmpty) {
+            bloqueos.add('Flag tienePagoPendiente activa (revisar sync).');
+          }
+
+          return AlertDialog(
+            backgroundColor: AdminUi.dialogSurface(ctx),
+            title: Text(
+              puede ? 'Taxista puede operar' : 'Sigue con restricciones',
+              style: TextStyle(
+                color: puede ? Colors.greenAccent : Colors.orangeAccent,
+              ),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    nombre,
+                    style: TextStyle(
+                      color: AdminUi.onCard(ctx),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Prepago disponible: ${formatter.format(prepagoDisp)}\n'
+                    'Legacy pendiente: ${formatter.format(legacy)}\n'
+                    'Deuda pool admin: ${formatter.format(deudaPool)}',
+                    style: TextStyle(color: AdminUi.secondary(ctx)),
+                  ),
+                  if (bloqueos.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Motivos si no opera:',
+                      style: TextStyle(
+                        color: AdminUi.onCard(ctx),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    ...bloqueos.map(
+                      (b) => Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text('• $b',
+                            style: TextStyle(
+                                color: AdminUi.secondary(ctx), fontSize: 13)),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Entendido',
+                    style: TextStyle(color: AdminUi.secondary(ctx))),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Recarga aprobada. No se pudo leer diagnóstico: $e'),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
@@ -420,8 +699,45 @@ class _VerificarPagosState extends State<VerificarPagos> {
     }
   }
 
+  Future<void> _validarComisionGiraTransferencia({
+    required String poolId,
+    required String ownerTaxistaId,
+    required String nombreTaxista,
+  }) async {
+    await _ejecutarAccionAdmin(() async {
+      await fs.FirebaseFirestore.instance
+          .collection('viajes_pool')
+          .doc(poolId)
+          .update({
+        'comisionPendientePagoAdmin': false,
+        'comisionEstado': 'transferencia_validada_admin',
+        'comisionRechazoMotivo': fs.FieldValue.delete(),
+        'comisionTransferenciaValidadaAt': fs.FieldValue.serverTimestamp(),
+        'updatedAt': fs.FieldValue.serverTimestamp(),
+      });
+      final owner = ownerTaxistaId.trim();
+      if (owner.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Comisión validada, pero falta ownerTaxistaId en la salida: '
+              'no se pudo recalcular bloqueo del taxista.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+      await PagosTaxistaRepo.sincronizarBloqueoOperativo(owner);
+      if (!mounted) return;
+      await _mostrarDiagnosticoDesbloqueo(uid: owner, nombre: nombreTaxista);
+    });
+  }
+
   Future<void> _rechazarComisionGira({
     required String poolId,
+    required String ownerTaxistaId,
   }) async {
     final TextEditingController motivoCtrl = TextEditingController();
     try {
@@ -429,7 +745,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AdminUi.dialogSurface(ctx),
-          title: Text('Rechazar transferencia de gira',
+          title: Text('Rechazar transferencia de salida por cupos',
               style: TextStyle(color: AdminUi.onCard(ctx))),
           content: TextField(
             controller: motivoCtrl,
@@ -479,10 +795,14 @@ class _VerificarPagosState extends State<VerificarPagos> {
           'comisionTransferenciaRechazadaAt': fs.FieldValue.serverTimestamp(),
           'updatedAt': fs.FieldValue.serverTimestamp(),
         });
+        final owner = ownerTaxistaId.trim();
+        if (owner.isNotEmpty) {
+          await PagosTaxistaRepo.sincronizarBloqueoOperativo(owner);
+        }
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Comisión de gira rechazada con motivo'),
+            content: Text('Comisión de salida por cupos rechazada con motivo'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -541,10 +861,12 @@ class _VerificarPagosState extends State<VerificarPagos> {
                         '${pago.viajesSemana} viajes'),
                     _detalleItem(sheetContext, 'Total recaudado',
                         formatter.format(pago.totalGanado + pago.comision)),
-                    // ✅ Comisión 20% destacada en verde
-                    _detalleItem(sheetContext, 'Comisión (20%)',
+                    _detalleItem(
+                        sheetContext,
+                        'Comisión (${PlataformaEconomia.etiquetaPorcentajeComision()})',
                         formatter.format(pago.comision),
-                        color: Colors.greenAccent, isBold: true),
+                        color: Colors.greenAccent,
+                        isBold: true),
                     _detalleItem(sheetContext, 'Neto para taxista',
                         formatter.format(pago.netoAPagar)),
                     if (pago.comprobanteUrl != null &&
@@ -710,25 +1032,35 @@ class _VerificarPagosState extends State<VerificarPagos> {
               child: Row(
                 children: [
                   SizedBox(
-                      width: 152, child: _tabButton('Comisiones semanales', 0)),
+                    width: 148,
+                    child: _tabButton('Recargas prepago', 0),
+                  ),
                   const SizedBox(width: 8),
                   SizedBox(
-                      width: 172,
-                      child: _tabButton('Transferencias pendientes', 1)),
+                    width: 152,
+                    child: _tabButton('Comisiones semanales', 1),
+                  ),
                   const SizedBox(width: 8),
                   SizedBox(
-                      width: 168,
-                      child: _tabButton('Transferencias validadas', 2)),
+                    width: 172,
+                    child: _tabButton('Transferencias pendientes', 2),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 168,
+                    child: _tabButton('Transferencias validadas', 3),
+                  ),
                 ],
               ),
             ),
           ),
           Expanded(
-            child: _tabIndex == 0
-                ? _buildComisionesSemanales()
-                : (_tabIndex == 1
-                    ? _buildTransferenciasPendientes()
-                    : _buildPagosATaxistas()),
+            child: switch (_tabIndex) {
+              0 => _buildRecargasPrepago(),
+              1 => _buildComisionesSemanales(),
+              2 => _buildTransferenciasPendientes(),
+              _ => _buildPagosATaxistas(),
+            },
           ),
         ],
       ),
@@ -760,13 +1092,30 @@ class _VerificarPagosState extends State<VerificarPagos> {
     );
   }
 
-  Widget _buildComisionesSemanales() {
+  Widget _buildRecargasPrepago() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Bloque superior (recargas) puede ser alto: scroll propio para no romper el layout.
-        Flexible(
-          flex: 5,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Material(
+            color: Colors.teal.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Desbloqueo prepago: aprobá aquí el comprobante de Mis pagos. '
+                'No confundir con «Comisiones semanales» (cuota del servicio).',
+                style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.only(bottom: 8),
             child: StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
@@ -776,7 +1125,10 @@ class _VerificarPagosState extends State<VerificarPagos> {
               builder: (BuildContext context,
                   AsyncSnapshot<fs.QuerySnapshot<Map<String, dynamic>>> rsnap) {
                 if (rsnap.connectionState == ConnectionState.waiting) {
-                  return const SizedBox.shrink();
+                  return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
                 }
                 if (rsnap.hasError) {
                   return Padding(
@@ -820,7 +1172,19 @@ class _VerificarPagosState extends State<VerificarPagos> {
                   }
                   return true;
                 }).toList();
-                if (recargas.isEmpty) return const SizedBox.shrink();
+                if (recargas.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(
+                      child: Text(
+                        _filtroEstadoRecarga == 'pendiente_verificacion'
+                            ? 'No hay recargas en revisión.'
+                            : 'No hay recargas con este filtro.',
+                        style: TextStyle(color: AdminUi.secondary(context)),
+                      ),
+                    ),
+                  );
+                }
                 return Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   child: Column(
@@ -836,7 +1200,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Filtra, busca y procesa recargas con aprobación/rechazo rápido.',
+                        'Aprobar acredita prepago y puede desbloquear pool/viajes.',
                         style: TextStyle(
                             color: AdminUi.muted(context), fontSize: 12),
                       ),
@@ -1041,8 +1405,222 @@ class _VerificarPagosState extends State<VerificarPagos> {
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildComisionesSemanales() {
+    return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
+      stream: fs.FirebaseFirestore.instance
+          .collection('config')
+          .doc('finance')
+          .snapshots(),
+      builder: (context, cfgSnap) {
+        final useLiq =
+            cfgSnap.data?.data()?['useLiquidacionesSemanales'] == true;
+        if (useLiq) return _buildLiquidacionesSemanalesAdmin();
+        return _buildComisionesSemanalesLegacy();
+      },
+    );
+  }
+
+  Widget _buildLiquidacionesSemanalesAdmin() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Material(
+            color: Colors.blue.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Liquidaciones semanales (PR2): solo transferencia/tarjeta verificadas. '
+                'Aprobar marca viajes liquidado=true vía Cloud Function. '
+                'No acredita prepago: usá «Recargas prepago».',
+                style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ),
+        ),
         Expanded(
-          flex: 6,
+          child: StreamBuilder<List<LiquidacionSemanal>>(
+            stream: LiquidacionSemanalRepo.streamPendientesAdmin(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return Center(
+                  child: CircularProgressIndicator(
+                    color: AdminUi.progressAccent(context),
+                  ),
+                );
+              }
+              if (snapshot.hasError) {
+                return Center(
+                  child: Text(
+                    'Error: ${snapshot.error}',
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                );
+              }
+              final list = snapshot.data ?? const <LiquidacionSemanal>[];
+              if (list.isEmpty) {
+                return Center(
+                  child: Text(
+                    'No hay liquidaciones semanales pendientes',
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                );
+              }
+              final filtradas = list.where((l) {
+                final q = _buscar.trim().toLowerCase();
+                if (q.isNotEmpty) {
+                  final match = l.nombreTaxista.toLowerCase().contains(q) ||
+                      l.uidTaxista.toLowerCase().contains(q) ||
+                      l.periodo.toLowerCase().contains(q);
+                  if (!match) return false;
+                }
+                if (_rangoDias > 0) {
+                  final limite =
+                      DateTime.now().subtract(Duration(days: _rangoDias));
+                  if (l.periodoFin.isBefore(limite)) return false;
+                }
+                if (_filtroEstado == 'borrador') {
+                  return l.estado == 'borrador';
+                }
+                if (_filtroEstado == 'pendiente') {
+                  return l.estado == 'pendiente_pago';
+                }
+                return true;
+              }).toList();
+              if (filtradas.isEmpty) {
+                return Center(
+                  child: Text(
+                    'No hay liquidaciones con el filtro seleccionado',
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                );
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: filtradas.length,
+                itemBuilder: (context, index) {
+                  final liq = filtradas[index];
+                  final esBorrador = liq.estado == 'borrador';
+                  final colorEstado = esBorrador ? Colors.amber : Colors.blue;
+                  return Card(
+                    color: AdminUi.card(context),
+                    margin: const EdgeInsets.only(bottom: 12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            liq.nombreTaxista,
+                            style: TextStyle(
+                              color: AdminUi.onCard(context),
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text('Periodo ${liq.periodo} · ${liq.viajesCount} viajes',
+                              style: TextStyle(color: AdminUi.muted(context))),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Neto: ${formatter.format(liq.totalNetoRd)} · '
+                            'Transf. ${formatter.format(liq.totalesPorMetodo.transferencia.totalNetoRd)} · '
+                            'Tarj. ${formatter.format(liq.totalesPorMetodo.tarjeta.totalNetoRd)}',
+                            style: TextStyle(color: AdminUi.secondary(context)),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: colorEstado.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: colorEstado),
+                            ),
+                            child: Text(
+                              esBorrador ? 'BORRADOR' : 'PENDIENTE PAGO',
+                              style: TextStyle(
+                                color: colorEstado,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: _accionEnCurso || esBorrador
+                                      ? null
+                                      : () => _aprobarLiquidacionSemanal(liq),
+                                  icon: const Icon(Icons.check, size: 18),
+                                  label: const Text('Aprobar pago'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: _accionEnCurso
+                                      ? null
+                                      : () => _cancelarLiquidacionSemanal(liq),
+                                  icon: const Icon(Icons.close, size: 18),
+                                  label: const Text('Cancelar'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildComisionesSemanalesLegacy() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Material(
+            color: Colors.orange.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Pago semanal neto al conductor (pagos_taxistas): solo viajes '
+                'Transferencia/Tarjeta con pago verificado. Efectivo no aplica. '
+                'Aprobar aquí NO acredita prepago ni desbloquea tomar viajes: '
+                'usá la pestaña «Recargas prepago».',
+                style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Expanded(
           child: StreamBuilder<List<PagoTaxista>>(
             stream: PagosTaxistaRepo.streamPagosPendientes(),
             builder: (BuildContext context,
@@ -1306,7 +1884,8 @@ class _VerificarPagosState extends State<VerificarPagos> {
                                     Expanded(
                                       child: _infoChip(
                                         context,
-                                        label: 'Comisión 20%',
+                                        label:
+                                            'Comisión ${PlataformaEconomia.etiquetaPorcentajeComision()}',
                                         value: formatter.format(pago.comision),
                                         color: Colors.greenAccent,
                                       ),
@@ -1801,7 +2380,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
             }),
             const SizedBox(height: 16),
             Text(
-              'Giras por cupos • Comisión empresa (10%)',
+              'Salidas por cupos • Comisión empresa (10%)',
               style: TextStyle(
                   color: AdminUi.progressAccent(context),
                   fontWeight: FontWeight.w800),
@@ -1879,7 +2458,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
             }),
             const SizedBox(height: 16),
             Text(
-              'Giras por cupos • Comisiones validadas',
+              'Salidas por cupos • Comisiones validadas',
               style: TextStyle(
                   color: AdminUi.progressAccent(context),
                   fontWeight: FontWeight.w800),
@@ -1930,7 +2509,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
         if (docs.isEmpty) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text('No hay comisiones de giras pendientes.',
+            child: Text('No hay comisiones de salidas por cupos pendientes.',
                 style: TextStyle(color: AdminUi.secondary(context))),
           );
         }
@@ -1943,6 +2522,8 @@ class _VerificarPagosState extends State<VerificarPagos> {
                 0;
             final comision =
                 (d['montoComision'] as num?)?.toDouble() ?? (totalGira * 0.10);
+            final ownerTaxistaId =
+                (d['ownerTaxistaId'] ?? '').toString().trim();
             final owner =
                 (d['agenciaNombre'] ?? d['taxistaNombre'] ?? 'Taxista')
                     .toString();
@@ -1960,7 +2541,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Gira #${_shortDocId(poolId)} • Comisión 10%: ${formatter.format(comision)}',
+                      'Salida #${_shortDocId(poolId)} • Comisión 10%: ${formatter.format(comision)}',
                       style: TextStyle(
                         color: AdminUi.onCard(context),
                         fontWeight: FontWeight.w700,
@@ -1969,7 +2550,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
                     const SizedBox(height: 6),
                     Text(
                       'Publicado por: $owner • Destino: $destino\n'
-                      'Total gira: ${formatter.format(totalGira)}\n'
+                      'Total salida: ${formatter.format(totalGira)}\n'
                       'Estado transferencia: ${rechazada ? 'RECHAZADA' : 'PENDIENTE'}'
                       '${motivoRechazo.isNotEmpty ? '\nMotivo: $motivoRechazo' : ''}',
                       style: TextStyle(color: AdminUi.secondary(context)),
@@ -1983,38 +2564,20 @@ class _VerificarPagosState extends State<VerificarPagos> {
                         ElevatedButton(
                           onPressed: _accionEnCurso
                               ? null
-                              : () async {
-                                  await _ejecutarAccionAdmin(() async {
-                                    await fs.FirebaseFirestore.instance
-                                        .collection('viajes_pool')
-                                        .doc(poolId)
-                                        .update({
-                                      'comisionPendientePagoAdmin': false,
-                                      'comisionEstado':
-                                          'transferencia_validada_admin',
-                                      'comisionRechazoMotivo':
-                                          fs.FieldValue.delete(),
-                                      'comisionTransferenciaValidadaAt':
-                                          fs.FieldValue.serverTimestamp(),
-                                      'updatedAt':
-                                          fs.FieldValue.serverTimestamp(),
-                                    });
-                                    if (!context.mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                            'Comisión de gira validada (transferencia).'),
-                                        backgroundColor: Colors.green,
-                                      ),
-                                    );
-                                  });
-                                },
+                              : () => _validarComisionGiraTransferencia(
+                                    poolId: poolId,
+                                    ownerTaxistaId: ownerTaxistaId,
+                                    nombreTaxista: owner,
+                                  ),
                           child: const Text('Validar'),
                         ),
                         OutlinedButton(
                           onPressed: _accionEnCurso
                               ? null
-                              : () => _rechazarComisionGira(poolId: poolId),
+                              : () => _rechazarComisionGira(
+                                    poolId: poolId,
+                                    ownerTaxistaId: ownerTaxistaId,
+                                  ),
                           child: const Text('Rechazar'),
                         ),
                       ],
@@ -2067,7 +2630,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
         if (docs.isEmpty) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text('No hay comisiones de giras validadas.',
+            child: Text('No hay comisiones de salidas por cupos validadas.',
                 style: TextStyle(color: AdminUi.secondary(context))),
           );
         }
@@ -2083,7 +2646,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
               color: AdminUi.card(context),
               child: ListTile(
                 title: Text(
-                  'Gira #${_shortDocId(poolId)} • ${formatter.format(comision)}',
+                  'Salida #${_shortDocId(poolId)} • ${formatter.format(comision)}',
                   style: TextStyle(color: AdminUi.onCard(context)),
                 ),
                 subtitle: Text(
