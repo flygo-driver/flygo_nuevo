@@ -24,6 +24,7 @@ class _PoolsClienteDetalleState extends State<PoolsClienteDetalle>
   String _metodo = 'transferencia'; // 'transferencia' | 'efectivo'
   bool _saving = false;
   String? _cancelandoReservaId;
+  bool _yaCerroPorCancelacionGira = false;
   late final AnimationController _marqueeCtrl;
 
   static const String _concepto = 'Deposito reserva de cupos';
@@ -111,7 +112,7 @@ Precio por asiento: RD\$ ${precioTotalPorSeat.toStringAsFixed(0)}
 Cupos disponibles: $left
 Paradas: $paradasTxt
 
-Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
+Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 #RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
 '''
         .trim();
@@ -226,6 +227,33 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                     style: TextStyle(color: textMuted)));
           }
           final d = snap.data!.data()!;
+          final estadoL = (d['estado'] ?? 'abierto').toString().trim().toLowerCase();
+          if (PoolRepo.giraEstadoOcultoEnListados(estadoL) &&
+              (estadoL == 'cancelado' || estadoL == 'cancelado_por_admin')) {
+            if (!_yaCerroPorCancelacionGira) {
+              _yaCerroPorCancelacionGira = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                final nav = Navigator.of(context);
+                if (nav.canPop()) {
+                  nav.pop();
+                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Esta salida fue cancelada por el operador. Ya no está disponible.',
+                    ),
+                  ),
+                );
+              });
+            }
+            return Center(
+              child: Text(
+                'Salida cancelada',
+                style: TextStyle(color: textMuted),
+              ),
+            );
+          }
           final origen = (d['origenTown'] ?? '').toString();
           final destino = (d['destino'] ?? '').toString();
           final fecha =
@@ -239,11 +267,12 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
           final cap = (d['capacidad'] ?? 0) as int;
           final occ = (d['asientosReservados'] ?? 0) as int;
           final minConf = (d['minParaConfirmar'] ?? 0) as int;
-          final estado = (d['estado'] ?? 'abierto')
-              .toString(); // abierto | confirmado | cerrado
-          final estadoL = estado.trim().toLowerCase();
+          final estado = (d['estado'] ?? 'abierto').toString();
+          // estadoL ya calculado arriba (reutilizar para reservable / mensajes)
           final left = (cap - occ).clamp(0, cap);
           final reservable = left > 0 &&
+              estadoL != 'cancelado' &&
+              estadoL != 'cancelado_por_admin' &&
               estadoL != 'lleno' &&
               estadoL != 'en_ruta' &&
               (estadoL == 'abierto' ||
@@ -296,7 +325,7 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
           final publicadoPor =
               agenciaNombre.isNotEmpty ? agenciaNombre : ownerLabel;
           final anuncioTexto =
-              'Gira programada para $fechaAnuncio. No te lo pierdas. Reserva tu asiento ahora. Publicado por: $publicadoPor';
+              'Salida programada para $fechaAnuncio. Reserva tu cupo. Publicado por: $publicadoPor';
 
           // Totales con asientos seleccionados
           final total = (_seats * precioTotalPorSeat).toDouble();
@@ -451,7 +480,7 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                             ElevatedButton.icon(
                               onPressed: () => _openWhatsApp(
                                 choferWhatsApp,
-                                'Hola, vi tu gira/viaje por cupos ($origen → $destino) y quiero confirmar detalles.',
+                                'Hola, vi tu salida por cupos ($origen → $destino) y quiero confirmar detalles.',
                               ),
                               icon: const Icon(Icons.chat, size: 16),
                               label: const Text('WhatsApp chofer'),
@@ -480,7 +509,7 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                               pickupPoints: pickupPoints,
                               poolId: widget.poolId,
                             );
-                            Share.share(texto, subject: 'Gira por cupos');
+                            Share.share(texto, subject: 'Salida por cupos');
                           },
                           icon: const Icon(Icons.share_outlined, size: 16),
                           label: const Text('Publicar en redes'),
@@ -562,6 +591,10 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                     const SizedBox(height: 6),
                     Text('Punto de encuentro: $pickup',
                         style: TextStyle(color: textSecondary)),
+                    Text(
+                      'Pago y recorrido los coordina el operador; RAI solo intermedió tu reserva.',
+                      style: TextStyle(color: textFaint, fontSize: 12),
+                    ),
                     Text('Quedan $left cupos',
                         style: TextStyle(color: textSecondary)),
                     if (minConf > 0)
@@ -571,11 +604,11 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                       const SizedBox(height: 6),
                       Text(
                         estadoL == 'cancelado'
-                            ? 'Este viaje fue cancelado por la agencia/chofer.'
+                            ? 'Esta salida fue cancelada por el operador.'
                             : estadoL == 'finalizado'
-                                ? 'Este viaje ya finalizó.'
+                                ? 'Esta salida ya cerró en RAI.'
                                 : estadoL == 'en_ruta'
-                                    ? 'Este viaje está en curso. Ya no aparece en el listado público de cupos.'
+                                    ? 'El catálogo de cupos en RAI ya cerró. Coordina el día con el operador.'
                                     : estadoL == 'lleno' || left == 0
                                         ? 'Cupos completos. No hay asientos disponibles.'
                                         : 'Este viaje no está disponible para reservas.',
@@ -1105,9 +1138,26 @@ class _MisReservasGiraPanel extends StatelessWidget {
           .snapshots(),
       builder: (context, snap) {
         if (!snap.hasData) return const SizedBox.shrink();
+        if (!PoolRepo.giraPuedeCancelarseAntesDeIniciar(poolData)) {
+          final poolEstado =
+              (poolData['estado'] ?? '').toString().trim().toLowerCase();
+          if (poolEstado == 'cancelado' || poolEstado == 'cancelado_por_admin') {
+            return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Esta salida fue cancelada por el operador. Tus cupos ya no están activos.',
+                style: TextStyle(
+                  color: isDark ? Colors.orangeAccent : Colors.orange.shade800,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            );
+          }
+        }
         final docs = snap.data!.docs.where((d) {
-          final e = (d.data()['estado'] ?? '').toString().trim().toLowerCase();
-          return e == 'reservado' || e == 'pagado';
+          return PoolRepo.reservaPoolActivaParaCliente(
+            (d.data()['estado'] ?? '').toString(),
+          );
         }).toList();
         if (docs.isEmpty) return const SizedBox.shrink();
 

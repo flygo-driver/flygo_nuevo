@@ -48,6 +48,14 @@
 					<string>com.googleusercontent.apps.237301602510-quegdvajgftlg7hl0hc70voqs4665kjv</string>
 				</array>
 			</dict>
+			<dict>
+				<key>CFBundleURLName</key>
+				<string>com.flygo.rd2.pool</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>raidriver</string>
+				</array>
+			</dict>
 		</array>
 		<key>LSApplicationQueriesSchemes</key>
 		<array>

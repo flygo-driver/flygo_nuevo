@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_ui_theme.dart';
+import '../../widgets/admin_drawer.dart';
 
 class IncidenciasAdminPage extends StatefulWidget {
   const IncidenciasAdminPage({super.key});
@@ -158,8 +159,12 @@ class _IncidenciasAdminPageState extends State<IncidenciasAdminPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
+      drawer: const AdminDrawer(),
       appBar: AppBar(
-        title: const Text('Incidencias (soporte)'),
+        backgroundColor: AdminUi.scaffold(context),
+        foregroundColor: AdminUi.appBarFg(context),
+        title: Text('Incidencias (soporte)',
+            style: TextStyle(color: AdminUi.onCard(context))),
         actions: [
           IconButton(
             tooltip: 'Crear incidencia',

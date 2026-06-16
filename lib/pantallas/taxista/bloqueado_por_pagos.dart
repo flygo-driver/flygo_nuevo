@@ -1,38 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../modelo/pago_taxista.dart';
 import '../../widgets/rai_app_bar.dart';
+import '../../widgets/rai_cuenta_deposito_panel.dart';
 import '../../config/plataforma_economia.dart';
-
-/// Datos bancarios de la EMPRESA (Open ASK), iguales a los usados en billetera del taxista.
-const String _empresaBancoNombre = 'Banco Popular';
-const String _empresaTipoCuenta = 'Cuenta Corriente';
-const String _empresaNumeroCuenta = '787726249';
-const String _empresaTitular = 'Open ASK Service SRL';
-const String _empresaRnc = '1320-11767';
-
-Widget _kvBloqueo(String label, String value) {
-  final String v = value.trim().isEmpty ? '—' : value.trim();
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: RichText(
-      text: TextSpan(
-        text: '$label: ',
-        style: const TextStyle(color: Colors.white70),
-        children: [
-          TextSpan(
-              text: v,
-              style: const TextStyle(
-                  color: Colors.white, fontWeight: FontWeight.w600)),
-        ],
-      ),
-    ),
-  );
-}
 
 class BloqueadoPorPagos extends StatefulWidget {
   const BloqueadoPorPagos({super.key});
@@ -291,7 +265,7 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
                                         ),
                                       const SizedBox(height: 6),
                                       Text(
-                                        'Pool/giras: si además tenés comisión de gira pendiente de admin, puede aplicarse otro tope; revisá Mis pagos.',
+                                        'Salidas por cupos: si además tenés comisión de salida pendiente de admin, puede aplicarse otro tope; revisá Mis pagos.',
                                         style: TextStyle(
                                           color: Colors.white.withValues(
                                               alpha: 0.72),
@@ -454,64 +428,8 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
 
                     const SizedBox(height: 24),
 
-                    // Información bancaria de la EMPRESA (no usa datos del taxista ni placeholders).
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blue),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.account_balance, color: Colors.blue),
-                              SizedBox(width: 8),
-                              Text(
-                                'Datos bancarios de la empresa',
-                                style: TextStyle(
-                                  color: Colors.blue,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          _kvBloqueo('Banco', _empresaBancoNombre),
-                          _kvBloqueo('Tipo de cuenta', _empresaTipoCuenta),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                  child: _kvBloqueo('Número de cuenta',
-                                      _empresaNumeroCuenta)),
-                              IconButton(
-                                tooltip: 'Copiar número de cuenta',
-                                onPressed: () async {
-                                  await Clipboard.setData(
-                                    const ClipboardData(
-                                        text: _empresaNumeroCuenta),
-                                  );
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content:
-                                            Text('Número de cuenta copiado')),
-                                  );
-                                },
-                                icon: const Icon(Icons.copy,
-                                    color: Colors.lightBlueAccent),
-                              ),
-                            ],
-                          ),
-                          _kvBloqueo('Titular', _empresaTitular),
-                          _kvBloqueo('RNC', _empresaRnc),
-                        ],
-                      ),
+                    const RaiCuentaDepositoPanel(
+                      titulo: 'Datos bancarios de la empresa',
                     ),
 
                     const SizedBox(height: 24),

@@ -363,11 +363,24 @@ abstract final class BolaPuebloUi {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: c.surfaceRaised.withValues(alpha: c.isDark ? 0.65 : 0.9),
+        color: c.isDark
+            ? c.surfaceRaised.withValues(alpha: 0.65)
+            : Colors.white,
         borderRadius: BorderRadius.circular(radiusSmall + 4),
         border: Border.all(
-          color: c.onSurface.withValues(alpha: c.isDark ? 0.08 : 0.1),
+          color: c.isDark
+              ? c.onSurface.withValues(alpha: 0.08)
+              : const Color(0xFFE4E7EC),
         ),
+        boxShadow: c.isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
       ),
       child: child,
     );
@@ -394,9 +407,9 @@ abstract final class BolaPuebloUi {
   static TextStyle panelBody(BuildContext context) {
     final c = BolaPuebloColors.of(context);
     return TextStyle(
-      color: c.onMuted,
-      fontSize: 13,
-      height: 1.4,
+      color: c.isDark ? c.onMuted : const Color(0xFF475467),
+      fontSize: 13.5,
+      height: 1.45,
       fontWeight: FontWeight.w500,
     );
   }

@@ -16,6 +16,27 @@ class ClientePerfilConductorChip extends StatelessWidget {
   /// En listas del pool: una fila más baja. En detalle / viaje en curso: franja completa.
   final bool compacto;
 
+  static Color _tituloColor(Color ac, bool isDark) {
+    if (isDark) return ac;
+    return Color.lerp(ac, const Color(0xFF101828), 0.42)!;
+  }
+
+  static Color _textoSecundario(bool isDark) {
+    return isDark
+        ? Colors.white.withValues(alpha: 0.88)
+        : const Color(0xFF344054);
+  }
+
+  static Color _textoPrincipal(bool isDark) {
+    return isDark ? Colors.white : const Color(0xFF101828);
+  }
+
+  static Color _textoEtiqueta(bool isDark) {
+    return isDark
+        ? Colors.white.withValues(alpha: 0.55)
+        : const Color(0xFF667085);
+  }
+
   @override
   Widget build(BuildContext context) {
     final String uid = uidCliente.trim();
@@ -32,38 +53,42 @@ class ClientePerfilConductorChip extends StatelessWidget {
           snap.hasData ? snap.data! : null,
         );
         final Color ac = p.colorAcento;
+        final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
         if (compacto) {
-          return _franjaCompacta(p, ac);
+          return _franjaCompacta(context, p, ac, isDark);
         }
-        return _franjaCompleta(p, ac);
+        return _franjaCompleta(context, p, ac, isDark);
       },
     );
   }
 
-  static const Color _onLightText = Colors.white;
-
   Widget _franjaCompacta(
+    BuildContext context,
     ClientePerfilConductorVista p,
     Color ac,
+    bool isDark,
   ) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: ac.withValues(alpha: 0.14),
+        color: ac.withValues(alpha: isDark ? 0.14 : 0.12),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: ac.withValues(alpha: 0.55), width: 1.2),
+        border: Border.all(
+          color: ac.withValues(alpha: isDark ? 0.55 : 0.38),
+          width: 1.2,
+        ),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: ac.withValues(alpha: 0.22),
+              color: ac.withValues(alpha: isDark ? 0.22 : 0.16),
               shape: BoxShape.circle,
             ),
-            child: Icon(p.iconoNivel, color: ac, size: 18),
+            child: Icon(p.iconoNivel, color: _tituloColor(ac, isDark), size: 18),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -73,7 +98,7 @@ class ClientePerfilConductorChip extends StatelessWidget {
                 Text(
                   p.tituloPerfil.toUpperCase(),
                   style: TextStyle(
-                    color: ac,
+                    color: _tituloColor(ac, isDark),
                     fontWeight: FontWeight.w900,
                     fontSize: 11,
                     letterSpacing: 0.4,
@@ -83,7 +108,7 @@ class ClientePerfilConductorChip extends StatelessWidget {
                 Text(
                   p.lineaViajes,
                   style: TextStyle(
-                    color: _onLightText.withValues(alpha: 0.88),
+                    color: _textoSecundario(isDark),
                     fontWeight: FontWeight.w600,
                     fontSize: 12,
                     height: 1.25,
@@ -97,7 +122,7 @@ class ClientePerfilConductorChip extends StatelessWidget {
           if (p.esPremium)
             Padding(
               padding: const EdgeInsets.only(left: 6),
-              child: _pillPremium(ac),
+              child: _pillPremium(ac, isDark),
             ),
         ],
       ),
@@ -105,8 +130,10 @@ class ClientePerfilConductorChip extends StatelessWidget {
   }
 
   Widget _franjaCompleta(
+    BuildContext context,
     ClientePerfilConductorVista p,
     Color ac,
+    bool isDark,
   ) {
     return Container(
       width: double.infinity,
@@ -117,18 +144,23 @@ class ClientePerfilConductorChip extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            ac.withValues(alpha: 0.22),
-            ac.withValues(alpha: 0.06),
+            ac.withValues(alpha: isDark ? 0.22 : 0.14),
+            ac.withValues(alpha: isDark ? 0.06 : 0.04),
           ],
         ),
-        border: Border.all(color: ac.withValues(alpha: 0.5), width: 1.4),
-        boxShadow: [
-          BoxShadow(
-            color: ac.withValues(alpha: 0.12),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        border: Border.all(
+          color: ac.withValues(alpha: isDark ? 0.5 : 0.35),
+          width: 1.4,
+        ),
+        boxShadow: isDark
+            ? [
+                BoxShadow(
+                  color: ac.withValues(alpha: 0.12),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -139,10 +171,14 @@ class ClientePerfilConductorChip extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: ac.withValues(alpha: 0.25),
+                  color: ac.withValues(alpha: isDark ? 0.25 : 0.16),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(p.iconoNivel, color: ac, size: 26),
+                child: Icon(
+                  p.iconoNivel,
+                  color: _tituloColor(ac, isDark),
+                  size: 26,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -152,7 +188,7 @@ class ClientePerfilConductorChip extends StatelessWidget {
                     Text(
                       'PERFIL DEL PASAJERO',
                       style: TextStyle(
-                        color: _onLightText.withValues(alpha: 0.55),
+                        color: _textoEtiqueta(isDark),
                         fontWeight: FontWeight.w800,
                         fontSize: 10,
                         letterSpacing: 1.1,
@@ -161,8 +197,8 @@ class ClientePerfilConductorChip extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       p.tituloPerfil,
-                      style: const TextStyle(
-                        color: _onLightText,
+                      style: TextStyle(
+                        color: _textoPrincipal(isDark),
                         fontWeight: FontWeight.w900,
                         fontSize: 17,
                         height: 1.2,
@@ -172,7 +208,7 @@ class ClientePerfilConductorChip extends StatelessWidget {
                     Text(
                       p.lineaViajes,
                       style: TextStyle(
-                        color: _onLightText.withValues(alpha: 0.9),
+                        color: _textoSecundario(isDark),
                         fontWeight: FontWeight.w600,
                         fontSize: 13.5,
                         height: 1.35,
@@ -181,14 +217,14 @@ class ClientePerfilConductorChip extends StatelessWidget {
                   ],
                 ),
               ),
-              if (p.esPremium) _pillPremium(ac),
+              if (p.esPremium) _pillPremium(ac, isDark),
             ],
           ),
           const SizedBox(height: 10),
           Text(
             p.detalleConductor,
             style: TextStyle(
-              color: _onLightText.withValues(alpha: 0.72),
+              color: _textoSecundario(isDark).withValues(alpha: 0.92),
               fontSize: 12.5,
               height: 1.4,
             ),
@@ -198,18 +234,21 @@ class ClientePerfilConductorChip extends StatelessWidget {
     );
   }
 
-  Widget _pillPremium(Color ac) {
+  Widget _pillPremium(Color ac, bool isDark) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: ac.withValues(alpha: 0.35),
+        color: ac.withValues(alpha: isDark ? 0.35 : 0.18),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: ac, width: 1),
+        border: Border.all(
+          color: ac.withValues(alpha: isDark ? 1 : 0.55),
+          width: 1,
+        ),
       ),
       child: Text(
         'PREMIUM',
         style: TextStyle(
-          color: ac,
+          color: _tituloColor(ac, isDark),
           fontWeight: FontWeight.w900,
           fontSize: 10,
           letterSpacing: 0.6,

@@ -204,8 +204,10 @@ class PagoData {
         final fromPend = p < comisionRd ? p : comisionRd;
         p = _round2(p - fromPend);
         final rem = _round2(comisionRd - fromPend);
-        // Lo que el prepago puede cubrir; el resto vuelve a legacy (no se pierde caja).
-        final cubiertoPrepago = rem <= saldo ? rem : saldo;
+        final prepagoLibreIni =
+            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(b);
+        // Solo prepago libre (no invadir reserva de giras); el resto → legacy.
+        final cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
         final faltantePrepago = _round2(rem - cubiertoPrepago);
         saldo = _round2(saldo - cubiertoPrepago);
         p = _round2(p + faltantePrepago);
@@ -496,7 +498,9 @@ class PagoData {
         final fromPend = p < comisionRd ? p : comisionRd;
         p = _round2(p - fromPend);
         final rem = _round2(comisionRd - fromPend);
-        final cubiertoPrepago = rem <= saldo ? rem : saldo;
+        final prepagoLibreIni =
+            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(b0);
+        final cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
         final faltantePrepago = _round2(rem - cubiertoPrepago);
         saldo = _round2(saldo - cubiertoPrepago);
         p = _round2(p + faltantePrepago);

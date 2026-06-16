@@ -3,9 +3,60 @@ import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
+/// Modo del pool principal (AHORA / PROGRAMADOS) según registro del conductor.
+abstract final class TaxistaPoolModoConductor {
+  static const String motor = 'motor';
+  static const String vehiculo = 'vehiculo';
+}
+
 /// Reglas compartidas: lista «Viajes disponibles» y pantalla detalle (mismo criterio de claim).
 class ViajePoolTaxistaGate {
   ViajePoolTaxistaGate._();
+
+  static String poolModoConductorDesdeUsuario(Map<String, dynamic>? uData) {
+    if (uData == null) return TaxistaPoolModoConductor.vehiculo;
+    String raw = (uData['tipoServicio'] ?? '').toString().trim().toLowerCase();
+    if (raw.isEmpty) {
+      final veh = uData['vehiculo'];
+      if (veh is Map) {
+        raw = (veh['tipoServicio'] ?? '').toString().trim().toLowerCase();
+      }
+    }
+    if (raw == TaxistaPoolModoConductor.motor) {
+      return TaxistaPoolModoConductor.motor;
+    }
+    return TaxistaPoolModoConductor.vehiculo;
+  }
+
+  static String tipoServicioViajeNormalizado(Map<String, dynamic> data) {
+    return (data['tipoServicio'] ?? 'normal').toString().trim().toLowerCase();
+  }
+
+  /// Motor ↔ motor; carro/taxi/multiparada ↔ todo lo que no sea motor ni turismo.
+  static bool viajeCoincideModoConductor(
+    Map<String, dynamic> data,
+    String poolModoConductor,
+  ) {
+    final tipo = tipoServicioViajeNormalizado(data);
+    if (poolModoConductor == TaxistaPoolModoConductor.motor) {
+      return tipo == TaxistaPoolModoConductor.motor;
+    }
+    return tipo != TaxistaPoolModoConductor.motor && tipo != 'turismo';
+  }
+
+  static String etiquetaPoolModo(String poolModoConductor) {
+    if (poolModoConductor == TaxistaPoolModoConductor.motor) {
+      return 'Pool motores';
+    }
+    return 'Pool vehículos';
+  }
+
+  static String descripcionPoolModo(String poolModoConductor) {
+    if (poolModoConductor == TaxistaPoolModoConductor.motor) {
+      return 'Solo viajes de motores. Te avisamos cuando llegue uno.';
+    }
+    return 'Taxi, programados y multiparada. Te avisamos al instante.';
+  }
 
   static DateTime fechaHoraDeViaje(Map<String, dynamic> data) {
     final fh = data['fechaHora'];
@@ -68,7 +119,11 @@ class ViajePoolTaxistaGate {
   }
 
   /// Misma lógica que el filtro de la lista del pool (taxista normal / motor).
-  static bool viajeTomableEnPool(Map<String, dynamic> data, String myUid) {
+  static bool viajeTomableEnPool(
+    Map<String, dynamic> data,
+    String myUid, {
+    String poolModoConductor = TaxistaPoolModoConductor.vehiculo,
+  }) {
     final String bolaPid =
         (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
     if (bolaPid.isNotEmpty && data['bolaNegociacionAbierta'] == true) {
@@ -93,6 +148,8 @@ class ViajePoolTaxistaGate {
     if (!estadoPermiteClaimPool(estadoRaw, estadoNorm)) return false;
 
     if (reservaVigenteBloquea(data)) return false;
+
+    if (!viajeCoincideModoConductor(data, poolModoConductor)) return false;
 
     return ventanaPublicacionYAceptacionOk(data);
   }
@@ -128,6 +185,15 @@ class ViajePoolTaxistaGate {
     if (!estadoPermiteClaimPool(estadoRaw, estadoNorm)) return false;
     if (reservaVigenteBloquea(data)) return false;
     return ventanaPublicacionYAceptacionOk(data);
+  }
+
+  /// Claim pool: turismo_pool (chofer turismo) o coincidencia motor/vehículo normal.
+  static bool conductorPuedeClaimViajeEnPool(
+    Map<String, dynamic> data,
+    String poolModoConductor,
+  ) {
+    if (esTurismoPoolTomable(data)) return true;
+    return viajeCoincideModoConductor(data, poolModoConductor);
   }
 
   /// Viaje espejo Bola Ahorro: negociación y ejecución van por [bolas_pueblo], no por ViajeEnCurso ni auto-router.

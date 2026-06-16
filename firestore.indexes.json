@@ -551,6 +551,55 @@
         { "fieldPath": "estado", "order": "ASCENDING" },
         { "fieldPath": "periodoFin", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "movimientos_banco",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estadoConciliacion", "order": "ASCENDING" },
+        { "fieldPath": "fechaValor", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "movimientos_banco",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estadoConciliacion", "order": "ASCENDING" },
+        { "fieldPath": "tipo", "order": "ASCENDING" },
+        { "fieldPath": "fechaValor", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "movimientos_banco",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "referenciaNormalizada", "order": "ASCENDING" },
+        { "fieldPath": "fechaValor", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "conciliaciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "conciliaciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "viajeId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "referenciaRecaudo", "order": "ASCENDING" },
+        { "fieldPath": "estadoPago", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

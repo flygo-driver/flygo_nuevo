@@ -70,6 +70,7 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
   }
 
   bool _isEstadoVisible(String raw) {
+    if (PoolRepo.giraEstadoOcultoEnListados(raw)) return false;
     final s = raw.trim().toLowerCase();
     // Incluye lleno: sigue visible hasta que el chofer inicie (en_ruta); entonces sale del catálogo.
     return s == 'abierto' ||
@@ -131,7 +132,7 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
     final destino = (d['destino'] ?? '').toString().trim();
     final agencia = (d['agenciaNombre'] ?? '').toString().trim();
     final taxista = (d['taxistaNombre'] ?? '').toString().trim();
-    final badge = (d['servicioBadge'] ?? d['tipo'] ?? 'Gira').toString().trim();
+    final badge = (d['servicioBadge'] ?? d['tipo'] ?? 'Salida').toString().trim();
     final owner = agencia.isNotEmpty
         ? agencia
         : (taxista.isNotEmpty ? taxista : 'RAI Driver');
@@ -147,7 +148,7 @@ Precio por asiento: RD\$ ${precioTotalPorSeat.toStringAsFixed(0)}
 Cupos disponibles: $left
 Paradas: $paradasTxt
 
-Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
+Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 #RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
 '''
         .trim();
@@ -238,7 +239,7 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
         foregroundColor: textPrimary,
         elevation: isDark ? 0 : 0.5,
         title: Text(
-          'Giras y viajes por cupos',
+          'Giras, excursiones y grupos por cupos',
           style: TextStyle(color: accent, fontWeight: FontWeight.w800),
         ),
         centerTitle: true,
@@ -341,7 +342,7 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                 if (snap.hasError) {
                   return Center(
                     child: Text(
-                      'No se pudieron cargar las giras por cupos.',
+                      'No se pudieron cargar las salidas por cupos.',
                       style: TextStyle(color: textMuted),
                     ),
                   );
@@ -724,7 +725,7 @@ Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
                                       poolId: id,
                                     );
                                     Share.share(texto,
-                                        subject: 'Gira por cupos');
+                                        subject: 'Salida por cupos');
                                   },
                                   icon:
                                       Icon(Icons.share_outlined, color: accent),

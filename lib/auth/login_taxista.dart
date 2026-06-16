@@ -42,8 +42,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       if (!mounted || _autoRedirectDone || _suppressAuthRedirect) return;
       if (user != null) {
         _autoRedirectDone = true;
-        Navigator.of(context)
-            .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+        unawaited(_irAuthCheck());
       }
     });
   }
@@ -106,6 +105,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
         'estadoDocumentos': 'pendiente',
         'documentosCompletos': false,
         'puedeRecibirViajes': false,
+        'registroTaxistaCompleto': false,
         'fechaRegistro': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -114,11 +114,15 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       await ViajesRepo.reconciliarActivosTaxista(uid);
       if (!mounted) return;
       _autoRedirectDone = true;
-      Navigator.of(context)
-          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+      await _irAuthCheck();
     } finally {
       _suppressAuthRedirect = false;
     }
+  }
+
+  Future<void> _irAuthCheck() async {
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
   }
 
   Future<void> _loginEmail() async {
@@ -132,7 +136,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       _suppressAuthRedirect = true;
     });
     try {
-      await AuthService().loginUser(email, pass);
+      await AuthService().loginUser(email, pass, rolSiFalta: 'taxista');
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid != null) {
@@ -185,8 +189,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       }
       if (!mounted) return;
       _autoRedirectDone = true;
-      Navigator.of(context)
-          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+      await _irAuthCheck();
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
 
@@ -285,8 +288,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
       }
       if (!mounted) return;
       _autoRedirectDone = true;
-      Navigator.of(context)
-          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+      await _irAuthCheck();
     } on FirebaseAuthException catch (e) {
       if (kDebugMode) {
         debugPrint('[LOGIN_GOOGLE][taxista] code=${e.code} msg=${e.message}');

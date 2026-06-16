@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
 
 /// Publicación de ubicación del taxista. Lectura de permiso: **pasiva**
@@ -145,9 +146,16 @@ class UbicacionTaxista {
       throw Exception('Servicios de ubicación desactivados');
     }
 
-    final LocationPermission permission = snap.permission;
+    var permission = snap.permission;
     if (permission == LocationPermission.denied) {
-      throw Exception('Permisos de ubicación denegados');
+      if (await LocationPermissionService.taxistaUbicacionListaAntes()) {
+        permission = await GpsService.waitUntilPermissionUsable(
+          timeout: const Duration(seconds: 2),
+        );
+      }
+      if (!GpsService.permissionUsable(permission)) {
+        throw Exception('Permisos de ubicación denegados');
+      }
     }
     if (permission == LocationPermission.deniedForever) {
       throw Exception('Permisos de ubicación denegados permanentemente');

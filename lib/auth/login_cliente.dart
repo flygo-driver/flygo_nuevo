@@ -254,7 +254,7 @@ class _LoginClienteState extends State<LoginCliente> {
       _suppressAuthRedirect = true;
     });
     try {
-      await AuthService().loginUser(email, pass);
+      await AuthService().loginUser(email, pass, rolSiFalta: 'cliente');
       await FirebaseAuth.instance.currentUser?.reload();
 
       final uid = FirebaseAuth.instance.currentUser?.uid;

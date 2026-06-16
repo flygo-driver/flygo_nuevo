@@ -4,7 +4,10 @@ import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/text_scale_service.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
-/// Pantalla "Apariencia" del cliente.
+/// Quién abre la pantalla: mismos controles; solo cambian textos de ayuda.
+enum AparienciaAudience { cliente, taxista }
+
+/// Pantalla "Apariencia" (cliente y conductor comparten lógica de tema).
 ///
 /// Permite elegir CUALQUIER color de fondo de la app:
 /// - Una grilla de presets cubriendo el espectro (incluyendo blanco/negro/grises).
@@ -17,7 +20,14 @@ import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 /// Toda la app reacciona inmediatamente porque MaterialApp escucha el
 /// ValueNotifier del servicio.
 class AparienciaScreen extends StatefulWidget {
-  const AparienciaScreen({super.key});
+  const AparienciaScreen({
+    super.key,
+    this.audience = AparienciaAudience.cliente,
+  });
+
+  final AparienciaAudience audience;
+
+  bool get _esTaxista => audience == AparienciaAudience.taxista;
 
   @override
   State<AparienciaScreen> createState() => _AparienciaScreenState();
@@ -132,8 +142,12 @@ class _AparienciaScreenState extends State<AparienciaScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Elige cualquier color. Las letras se ajustan automáticamente '
-            '(blanco o negro) para que siempre se lean bien.',
+            widget._esTaxista
+                ? 'Personaliza RAI Conductor: pool, viaje en curso, Mis pagos y '
+                    'menús. Las letras se ajustan solas (blanco o negro) para '
+                    'leer bien de día o de noche.'
+                : 'Elige cualquier color. Las letras se ajustan automáticamente '
+                    '(blanco o negro) para que siempre se lean bien.',
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
@@ -175,8 +189,12 @@ class _AparienciaScreenState extends State<AparienciaScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'En la pantalla de Programar Viaje, estos colores dejan ver el '
-            'mapa por debajo del panel para un efecto agua / cristal moderno.',
+            widget._esTaxista
+                ? 'En pantallas con mapa (pool, viaje en curso), estos tonos '
+                    'pueden dejar ver el mapa bajo los paneles — útil de noche '
+                    'o con mucho sol.'
+                : 'En la pantalla de Programar Viaje, estos colores dejan ver el '
+                    'mapa por debajo del panel para un efecto agua / cristal moderno.',
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
@@ -208,9 +226,13 @@ class _AparienciaScreenState extends State<AparienciaScreen> {
                       ?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 subtitle: Text(
-                  'En Programar Viaje: sin fondo del panel, solo campos y '
-                  'botones con borde, flotando sobre el mapa (efecto moderno). '
-                  'El resto de la app sigue igual.',
+                  widget._esTaxista
+                      ? 'Opción de la app RAI Pasajero al programar un viaje. '
+                          'En RAI Conductor el pool y el viaje en curso no usan '
+                          'este modo; tu color de fondo sí aplica al resto.'
+                      : 'En Programar Viaje: sin fondo del panel, solo campos y '
+                          'botones con borde, flotando sobre el mapa (efecto moderno). '
+                          'El resto de la app sigue igual.',
                   style: Theme.of(context)
                       .textTheme
                       .bodySmall
@@ -251,15 +273,19 @@ class _AparienciaScreenState extends State<AparienciaScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Ajusta el tamaño de las letras de toda la app. El rango está '
-            'limitado para que ninguna pantalla se desborde.',
+            widget._esTaxista
+                ? 'Ajusta el tamaño del texto en toda la app conductor (ofertas, '
+                    'código de abordo, Mis pagos). El rango está limitado para '
+                    'que no se desborde en pantallas pequeñas.'
+                : 'Ajusta el tamaño de las letras de toda la app. El rango está '
+                    'limitado para que ninguna pantalla se desborde.',
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
                 ?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 12),
-          const _TextScaleSection(),
+          _TextScaleSection(esTaxista: widget._esTaxista),
 
           const SizedBox(height: 24),
 
@@ -530,7 +556,9 @@ class _RgbSliders extends StatelessWidget {
 /// El factor se guarda inmediatamente vía [TextScaleService.setFactor], así
 /// el usuario ve el efecto en toda la app al instante.
 class _TextScaleSection extends StatelessWidget {
-  const _TextScaleSection();
+  const _TextScaleSection({this.esTaxista = false});
+
+  final bool esTaxista;
 
   @override
   Widget build(BuildContext context) {
@@ -564,7 +592,7 @@ class _TextScaleSection extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Pide ahora',
+                    esTaxista ? 'Viaje en curso' : 'Pide ahora',
                     style: TextStyle(
                       color: cs.onSurface,
                       fontSize: 22,
@@ -574,7 +602,9 @@ class _TextScaleSection extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Solicita un viaje en segundos',
+                    esTaxista
+                        ? 'Pool, navegación y datos del pasajero más legibles'
+                        : 'Solicita un viaje en segundos',
                     style: TextStyle(
                       color: cs.onSurfaceVariant,
                       fontSize: 14,

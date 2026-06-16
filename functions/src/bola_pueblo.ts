@@ -697,8 +697,21 @@ export const finalizarBolaPueblo = onCall(async (request) => {
           let p = pend;
           const fromPend = Math.min(p, comision);
           p = Number.parseFloat((p - fromPend).toFixed(2));
-          const rem = comision - fromPend;
-          saldo = Math.max(0, Number.parseFloat((saldo - rem).toFixed(2)));
+          const rem = Number.parseFloat((comision - fromPend).toFixed(2));
+          const rawRes = b0.saldoReservadoParaGiras;
+          const reserv =
+            typeof rawRes === "number" && Number.isFinite(rawRes)
+              ? Math.max(0, rawRes)
+              : typeof rawRes === "string"
+                ? Math.max(0, Number.parseFloat(rawRes) || 0)
+                : 0;
+          const prepagoLibreIni = Math.max(0, Number.parseFloat((saldoIni - reserv).toFixed(2)));
+          const cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
+          const faltantePrepago = Number.parseFloat(
+            (rem - cubiertoPrepago).toFixed(2),
+          );
+          saldo = Number.parseFloat((saldo - cubiertoPrepago).toFixed(2));
+          p = Number.parseFloat((p + faltantePrepago).toFixed(2));
           await ledgerComisionBolaPuebloCf(tx, {
             uidTaxista: uidTx,
             bolaId,

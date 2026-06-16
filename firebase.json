@@ -18,8 +18,28 @@
   ],
   "hosting": {
     "public": "build/web",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "ignore": ["firebase.json", "**/node_modules/**", "**/.git/**"],
+    "predeploy": ["node scripts/prepare-hosting.js"],
+    "headers": [
+      {
+        "source": "/.well-known/assetlinks.json",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      }
+    ],
     "rewrites": [
+      {
+        "source": "/pool",
+        "destination": "/pool/index.html"
+      },
+      {
+        "source": "/pool/**",
+        "destination": "/pool/index.html"
+      },
       {
         "source": "**",
         "destination": "/index.html"

@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:flygo_nuevo/keys.dart' show kAppDisplayName;
 import 'package:flygo_nuevo/legal/terms_data.dart' show kTermsContactEmail;
+import 'package:flygo_nuevo/widgets/rai_asistente_launcher.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
@@ -89,6 +90,31 @@ class Soporte extends StatelessWidget {
         body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _card(
+            context,
+            title: 'Asistente RAI (IA)',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Pregunta cómo funciona la app, pide ayuda con direcciones '
+                  'difíciles o usa el micrófono para dictar un destino. '
+                  'Gratis y conectado a la misma lógica de viajes.',
+                  style: TextStyle(color: Colors.white70, height: 1.35),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => RaiAsistenteLauncher.abrirAsistente(context),
+                    icon: const Icon(Icons.auto_awesome_rounded),
+                    label: const Text('Abrir asistente inteligente'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
           // Contacto rápido
           _card(
             context,

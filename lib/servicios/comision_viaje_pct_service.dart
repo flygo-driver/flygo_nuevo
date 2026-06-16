@@ -3,9 +3,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
-import 'package:flygo_nuevo/servicios/configuracion_globals_service.dart';
-
 /// Lee `config/comision.porcentaje` y actualiza [PlataformaEconomia] (TTL 60s).
+/// El mismo valor alimenta giras por cupos (antes `comision_gira_porcentaje` aparte).
 class ComisionViajePctService {
   ComisionViajePctService._();
 
@@ -23,13 +22,15 @@ class ComisionViajePctService {
       final data = snap.data();
       final raw = data?['porcentaje'];
       final double p = raw is num ? raw.toDouble() : 20.0;
-      PlataformaEconomia.syncComisionViajePorcentajeFromRemote(p.clamp(0.0, 100.0));
-      await ConfiguracionGlobalsService.refreshGiraComision(force: true);
+      final double pct = p.clamp(0.0, 100.0);
+      PlataformaEconomia.syncComisionViajePorcentajeFromRemote(pct);
+      // Giras por cupos usan el mismo % global (config/comision).
+      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(pct);
       _lastFetch = DateTime.now();
     } catch (_) {
-      PlataformaEconomia.syncComisionViajePorcentajeFromRemote(20.0);
-      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(10.0);
-      await ConfiguracionGlobalsService.refreshGiraComision(force: true);
+      const double fallback = 20.0;
+      PlataformaEconomia.syncComisionViajePorcentajeFromRemote(fallback);
+      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(fallback);
       _lastFetch = DateTime.now();
     }
   }
@@ -42,5 +43,22 @@ class ComisionViajePctService {
   static void stopPeriodicRefresh() {
     _timer?.cancel();
     _timer = null;
+  }
+
+  static double _parsePorcentajeDoc(Map<String, dynamic>? data) {
+    final raw = data?['porcentaje'];
+    final double p = raw is num ? raw.toDouble() : 20.0;
+    return p.clamp(0.0, 100.0);
+  }
+
+  /// Stream en vivo de `config/comision.porcentaje` (sincroniza [PlataformaEconomia]).
+  static Stream<double> streamPorcentajeVigente() {
+    return _db.collection('config').doc('comision').snapshots().map((snap) {
+      final p = _parsePorcentajeDoc(snap.data());
+      PlataformaEconomia.syncComisionViajePorcentajeFromRemote(p);
+      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(p);
+      _lastFetch = DateTime.now();
+      return p;
+    });
   }
 }

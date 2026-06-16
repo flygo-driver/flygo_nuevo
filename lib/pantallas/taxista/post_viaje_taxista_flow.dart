@@ -1,8 +1,7 @@
-// Flujo post-viaje taxista: calificar cliente + reportar → cola / shell.
+// Flujo post-viaje taxista: resumen (monto grande) → calificación (throttle) → cola.
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/data/viaje_data.dart';
@@ -10,6 +9,8 @@ import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/taxista/reportar_cliente_viaje.dart';
 import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/post_viaje_rating_throttle.dart';
 
 class PostViajeTaxistaFlow extends StatefulWidget {
   const PostViajeTaxistaFlow({
@@ -28,11 +29,15 @@ class PostViajeTaxistaFlow extends StatefulWidget {
 }
 
 class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
+  int _step = 0;
   double _calificacion = 5;
   final TextEditingController _comentario = TextEditingController();
   bool _cargandoRating = false;
   bool _salioDeCalificacion = false;
+  bool _omitioCalificacionPorThrottle = false;
+  bool _regresoColaProgramado = false;
   static const int _maxComentario = 280;
+  static const Duration _delayRegresoCola = Duration(milliseconds: 900);
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeSub;
   DocumentSnapshot<Map<String, dynamic>>? _viajeSnap;
@@ -72,12 +77,60 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     return _viajeDatosUi;
   }
 
+  String _money(num? n) => FormatosMoneda.rd((n ?? 0).toDouble());
+
+  double _scrollBottomPad(BuildContext context) {
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double sys = mq.viewPadding.bottom > mq.padding.bottom
+        ? mq.viewPadding.bottom
+        : mq.padding.bottom;
+    return sys + 48;
+  }
+
+  double _totalRd(Map<String, dynamic> d, Viaje v) {
+    if (d['precioFinal'] is num) {
+      return (d['precioFinal'] as num).toDouble();
+    }
+    return v.precio;
+  }
+
   Future<void> _finalizarFlujo() async {
     if (!mounted) return;
     await TaxistaColaPostCompletar.navegarTrasCompletar(
       context: context,
       uidTaxista: widget.uidTaxista,
     );
+  }
+
+  void _programarRegresoCola() {
+    if (_regresoColaProgramado) return;
+    _regresoColaProgramado = true;
+    Future<void>.delayed(_delayRegresoCola, () {
+      if (!mounted) return;
+      unawaited(_finalizarFlujo());
+    });
+  }
+
+  Future<void> _continuarDesdeResumen(Viaje v, Map<String, dynamic> d) async {
+    final bool yaCalificado =
+        d['clienteCalificado'] == true || _salioDeCalificacion;
+    final bool puedeRate =
+        !yaCalificado && v.uidCliente.trim().isNotEmpty;
+    final bool mostrarCalificacion = puedeRate &&
+        PostViajeRatingThrottle.viajeSolicitaCalificacionMutua(d);
+    if (puedeRate && !mostrarCalificacion) {
+      _omitioCalificacionPorThrottle = true;
+    }
+    if (!mounted) return;
+    if (!mostrarCalificacion || !puedeRate) {
+      setState(() {
+        _salioDeCalificacion = true;
+        _step = 2;
+      });
+      _programarRegresoCola();
+      return;
+    }
+    setState(() => _step = 1);
   }
 
   Future<void> _enviarCalificacion(Viaje v) async {
@@ -96,8 +149,11 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Calificación enviada.')),
       );
-      setState(() => _salioDeCalificacion = true);
-      await _finalizarFlujo();
+      setState(() {
+        _salioDeCalificacion = true;
+        _step = 2;
+      });
+      _programarRegresoCola();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -106,6 +162,313 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     } finally {
       if (mounted) setState(() => _cargandoRating = false);
     }
+  }
+
+  Widget _kv(String k, String v) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(k,
+                style: const TextStyle(color: Colors.white54, fontSize: 13)),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              v.isEmpty ? '—' : v,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepResumen(Viaje v, Map<String, dynamic> d) {
+    final double total = _totalRd(d, v);
+    final bool esEfectivo = MetodoPagoViaje.esEfectivo(v.metodoPago);
+    final bool esTransfer = MetodoPagoViaje.esTransferencia(v.metodoPago);
+
+    final double bottomPad = _scrollBottomPad(context);
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(24, 8, 24, bottomPad),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Recibo del viaje',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${v.origen} → ${v.destino}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white70, height: 1.35),
+          ),
+          const SizedBox(height: 24),
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: const Color(0xFF141414),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _kv('Método', MetodoPagoViaje.etiquetaDocumento(v.metodoPago)),
+                if ((d['nombreCliente'] ?? d['clienteNombre'] ?? '')
+                    .toString()
+                    .trim()
+                    .isNotEmpty)
+                  _kv(
+                    'Pasajero',
+                    (d['nombreCliente'] ?? d['clienteNombre'] ?? '')
+                        .toString()
+                        .trim(),
+                  ),
+                const Divider(height: 28, color: Colors.white24),
+                const Text(
+                  'Monto del servicio',
+                  style: TextStyle(color: Colors.white54, fontSize: 13),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _money(total),
+                  style: const TextStyle(
+                    color: Colors.greenAccent,
+                    fontSize: 42,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.5,
+                    height: 1.05,
+                  ),
+                ),
+                if (esEfectivo) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Cobraste ${_money(total)} en efectivo al pasajero.',
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 13,
+                      height: 1.35,
+                    ),
+                  ),
+                ] else if (esTransfer) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'En transferencia, el pasajero paga el total acordado a tu cuenta.',
+                    style: TextStyle(
+                      color: Colors.white60,
+                      fontSize: 13,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 28),
+          FilledButton(
+            onPressed: () => _continuarDesdeResumen(v, d),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.greenAccent,
+              foregroundColor: Colors.black87,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+            child: const Text(
+              'Continuar',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepCalificar(Viaje v, Map<String, dynamic> d) {
+    final bool ya =
+        d['clienteCalificado'] == true || _salioDeCalificacion;
+
+    final double bottomPad = _scrollBottomPad(context);
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(24, 8, 24, bottomPad),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Califica al pasajero',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${v.origen} → ${v.destino}',
+            style: const TextStyle(color: Colors.white60, fontSize: 14),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(5, (int i) {
+              final bool filled = _calificacion >= i + 1;
+              return GestureDetector(
+                onTap: ya
+                    ? null
+                    : () => setState(() => _calificacion = (i + 1).toDouble()),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  child: Icon(
+                    filled ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: Colors.amber,
+                    size: 44,
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 16),
+          Slider(
+            value: _calificacion,
+            min: 1,
+            max: 5,
+            divisions: 4,
+            activeColor: Colors.greenAccent,
+            onChanged:
+                ya ? null : (double x) => setState(() => _calificacion = x),
+          ),
+          TextField(
+            controller: _comentario,
+            enabled: !ya,
+            maxLines: 3,
+            maxLength: _maxComentario,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: const Color(0xFF1A1A1A),
+              labelText: 'Comentario (opcional)',
+              labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          if (_cargandoRating)
+            const Center(
+              child: CircularProgressIndicator(color: Colors.greenAccent),
+            )
+          else
+            FilledButton(
+              onPressed: ya ? null : () => _enviarCalificacion(v),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.greenAccent,
+                foregroundColor: Colors.black87,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: Text(
+                ya ? 'Ya calificaste' : 'Enviar calificación',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Navigator.of(context, rootNavigator: true).push<void>(
+                MaterialPageRoute<void>(
+                  fullscreenDialog: true,
+                  builder: (_) => ReportarClienteViaje(viaje: v),
+                ),
+              );
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.orangeAccent,
+              side: const BorderSide(color: Colors.orangeAccent),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            icon: const Icon(Icons.flag_outlined, size: 20),
+            label: const Text('Reportar problema con el pasajero'),
+          ),
+          TextButton(
+            onPressed: () => setState(() => _step = 0),
+            child: const Text('Volver al resumen',
+                style: TextStyle(color: Colors.white54)),
+          ),
+          if (!ya)
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _salioDeCalificacion = true;
+                  _step = 2;
+                });
+                _programarRegresoCola();
+              },
+              child: const Text('Ahora no',
+                  style: TextStyle(color: Colors.white38)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepCierre() {
+    final String subtitulo = _salioDeCalificacion
+        ? 'Tu calificación fue registrada. Volviendo al inicio…'
+        : _omitioCalificacionPorThrottle
+            ? 'Listo para seguir recibiendo viajes. Volviendo al inicio…'
+            : 'Volviendo al inicio…';
+    if (!_regresoColaProgramado) {
+      _programarRegresoCola();
+    }
+    final double bottomPad = _scrollBottomPad(context);
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(24, 40, 24, bottomPad),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.check_circle_rounded,
+              color: Colors.greenAccent, size: 56),
+          const SizedBox(height: 20),
+          const Text(
+            '¡Listo!',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            subtitulo,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 28),
+          const CircularProgressIndicator(color: Colors.greenAccent),
+        ],
+      ),
+    );
   }
 
   @override
@@ -123,9 +486,10 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     final Viaje v = Viaje.fromMap(widget.viajeId, d);
     final bool yaCalificado =
         d['clienteCalificado'] == true || _salioDeCalificacion;
-    final double precio = (d['precioFinal'] is num)
-        ? (d['precioFinal'] as num).toDouble()
-        : v.precio;
+
+    final int stepUi = _salioDeCalificacion
+        ? (_step < 2 ? 2 : _step).clamp(0, 2)
+        : ((_step == 1 && yaCalificado) ? 2 : _step.clamp(0, 2));
 
     return PopScope(
       canPop: false,
@@ -138,127 +502,19 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
         appBar: AppBar(
           backgroundColor: const Color(0xFF141414),
           foregroundColor: Colors.white,
-          title: const Text('Calificar pasajero'),
-        ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                '${v.origen} → ${v.destino}',
-                style: const TextStyle(color: Colors.white70, fontSize: 14),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Total: ${FormatosMoneda.rd(precio)}',
-                style: const TextStyle(
-                  color: Colors.greenAccent,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                '¿Cómo fue el pasajero?',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(5, (int i) {
-                  final bool filled = _calificacion >= i + 1;
-                  return GestureDetector(
-                    onTap: yaCalificado
-                        ? null
-                        : () => setState(() => _calificacion = (i + 1).toDouble()),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 5),
-                      child: Icon(
-                        filled ? Icons.star_rounded : Icons.star_border_rounded,
-                        color: Colors.amber,
-                        size: 44,
-                      ),
-                    ),
-                  );
-                }),
-              ),
-              const SizedBox(height: 12),
-              Slider(
-                value: _calificacion,
-                min: 1,
-                max: 5,
-                divisions: 4,
-                activeColor: Colors.greenAccent,
-                onChanged:
-                    yaCalificado ? null : (double x) => setState(() => _calificacion = x),
-              ),
-              TextField(
-                controller: _comentario,
-                enabled: !yaCalificado,
-                maxLines: 3,
-                maxLength: _maxComentario,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: const Color(0xFF1A1A1A),
-                  labelText: 'Comentario (opcional)',
-                  labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              if (_cargandoRating)
-                const Center(
-                  child: CircularProgressIndicator(color: Colors.greenAccent),
-                )
-              else
-                FilledButton(
-                  onPressed: yaCalificado ? null : () => _enviarCalificacion(v),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.greenAccent,
-                    foregroundColor: Colors.black87,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: Text(
-                    yaCalificado ? 'Ya calificaste' : 'Enviar calificación',
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  await Navigator.of(context, rootNavigator: true).push<void>(
-                    MaterialPageRoute<void>(
-                      fullscreenDialog: true,
-                      builder: (_) => ReportarClienteViaje(viaje: v),
-                    ),
-                  );
-                },
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.orangeAccent,
-                  side: const BorderSide(color: Colors.orangeAccent),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                icon: const Icon(Icons.flag_outlined, size: 20),
-                label: const Text('Reportar problema con el pasajero'),
-              ),
-              TextButton(
-                onPressed: _finalizarFlujo,
-                child: const Text(
-                  'Omitir y continuar',
-                  style: TextStyle(color: Colors.white54),
-                ),
-              ),
-            ],
+          title: Text(
+            stepUi == 0
+                ? 'Recibo'
+                : stepUi == 1
+                    ? 'Calificar pasajero'
+                    : 'Listo',
           ),
         ),
+        body: switch (stepUi) {
+          0 => _stepResumen(v, d),
+          1 => _stepCalificar(v, d),
+          _ => _stepCierre(),
+        },
       ),
     );
   }

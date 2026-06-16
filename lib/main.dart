@@ -35,13 +35,11 @@ import 'package:flygo_nuevo/servicios/text_scale_service.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
-
 // 🔐 Auth / Gates
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/auth/login_admin.dart';
-import 'package:flygo_nuevo/widgets/verify_email_gate.dart';
+import 'package:flygo_nuevo/auth/rai_identity_router.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
-import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 
 // 🧭 Cliente
@@ -65,8 +63,8 @@ import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_a_pueblo.dart';
 
 // 🧭 Taxista
+import 'package:flygo_nuevo/pantallas/taxista/completar_registro_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
-import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/historial_viajes_taxista.dart';
 
@@ -74,7 +72,6 @@ import 'package:flygo_nuevo/pantallas/taxista/historial_viajes_taxista.dart';
 import 'package:flygo_nuevo/auth/registro_taxista.dart';
 
 // 🔴 NUEVOS IMPORTS PARA PAGOS
-import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/pantallas/taxista/bloqueado_por_pagos.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
 import 'package:flygo_nuevo/pantallas/admin/verificar_pagos.dart';
@@ -131,105 +128,8 @@ Future<void> _conectarEmuladores() async {
 }
 
 // ================== SPLASH EN FLUTTER (tras el nativo) ==================
-/// Splash unificado: barra lineal de borde a borde + logo. [subtitle] solo si hace falta copy explícito.
-Widget _raiSplashScaffold({String? subtitle}) {
-  return Scaffold(
-    backgroundColor: Colors.black,
-    body: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          width: double.infinity,
-          height: 3,
-          child: LinearProgressIndicator(
-            minHeight: 3,
-            backgroundColor: Colors.white.withValues(alpha: 0.10),
-            color: Colors.greenAccent,
-          ),
-        ),
-        Expanded(
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Image.asset(
-                  'assets/icon/logo_rai_vertical.png',
-                  width: 150,
-                  height: 150,
-                ),
-                if (subtitle != null && subtitle.isNotEmpty) ...[
-                  const SizedBox(height: 24),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Text(
-                      subtitle,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 15),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-/// En escritorio (Windows/macOS) solo permitimos cuentas de administración.
-class _DesktopNonAdminWall extends StatelessWidget {
-  const _DesktopNonAdminWall();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(Icons.desktop_windows_outlined,
-                  size: 56, color: Colors.white54),
-              const SizedBox(height: 24),
-              Text(
-                'RAI en escritorio: solo administración',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Pasajero y conductor deben usar teléfono o tablet.\n'
-                'Cierra sesión e inicia con una cuenta de admin.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.72),
-                  height: 1.45,
-                  fontSize: 15,
-                ),
-              ),
-              const Spacer(),
-              ElevatedButton.icon(
-                onPressed: () async {
-                  await FirebaseAuth.instance.signOut();
-                },
-                icon: const Icon(Icons.logout),
-                label: const Text('Cerrar sesión'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+Widget _raiSplashScaffold({String? subtitle}) =>
+    RaiIdentitySplash.scaffold(subtitle: subtitle);
 
 void _installErrorHandlers() {
   ErrorWidget.builder = (details) => Material(
@@ -657,8 +557,14 @@ class _RaiAppState extends State<RaiApp> {
               const BolaConductoresEnRutaClientePage(),
 
           // taxista
-          '/taxista_entry': (_) => const TaxistaEntry(),
-          '/viaje_disponible': (_) => const TaxistaShell(),
+          '/taxista_entry': (_) => const RaiTaxistaAccessGate(
+                child: TaxistaEntry(),
+              ),
+          '/completar_registro_taxista': (_) =>
+              const CompletarRegistroTaxista(),
+          '/viaje_disponible': (_) => const RaiTaxistaAccessGate(
+                child: TaxistaEntry(),
+              ),
           '/viaje_en_curso_taxista': (_) => const ViajeEnCursoTaxista(),
           '/historial_viajes_taxista': (_) => const HistorialViajesTaxista(),
 
@@ -667,6 +573,7 @@ class _RaiAppState extends State<RaiApp> {
           '/bloqueado_por_pagos': (_) => const BloqueadoPorPagos(),
           '/verificar_pagos': (_) => const VerificarPagos(),
           '/terminos_politica': (_) => const TermsPolicyScreen(),
+          '/login_admin': (_) => const LoginAdmin(),
           '/admin': (_) => const AdminGate(),
         },
         onGenerateRoute: (settings) => null,
@@ -826,73 +733,5 @@ Widget _buildGateForUsuarioData(
   User user,
   Map<String, dynamic> data,
 ) {
-  // Sin rol en Firestore (carrera Google / upsert parcial) antes caía en splash infinito.
-  var rol = (data['rol'] ?? '').toString().toLowerCase().trim();
-  if (rol.isEmpty) {
-    rol = 'cliente';
-  }
-
-  final bool isDesktop =
-      defaultTargetPlatform == TargetPlatform.windows ||
-          defaultTargetPlatform == TargetPlatform.macOS;
-
-  return FutureBuilder<bool>(
-    future: LegalAcceptanceService.hasAccepted(user.uid),
-    builder: (context, legalSnap) {
-      if (legalSnap.connectionState == ConnectionState.waiting) {
-        return _raiSplashScaffold();
-      }
-
-      final hasAccepted = legalSnap.data ?? false;
-      if (!hasAccepted) {
-        return TermsPolicyScreen(
-          requireAcceptance: true,
-          onAccepted: () {
-            Navigator.of(context)
-                .pushNamedAndRemoveUntil('/auth_check', (r) => false);
-          },
-        );
-      }
-
-      final bool esAdmin = rol == 'admin' || rol == 'administrador';
-      if (isDesktop && !esAdmin) {
-        return const _DesktopNonAdminWall();
-      }
-
-      if (esAdmin) {
-        return const AdminGate();
-      }
-
-      if (rol == 'taxista' || rol == 'driver') {
-        return FutureBuilder<bool>(
-          future: PagosTaxistaRepo.puedeTrabajar(user.uid),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return _raiSplashScaffold();
-            }
-
-            // Fail-closed: solo entra al pool si la verificación respondió true.
-            final bool puedeTrabajar =
-                !snapshot.hasError && snapshot.data == true;
-
-            if (!puedeTrabajar) {
-              return const BloqueadoPorPagos();
-            }
-
-            return const VerifyEmailGate(
-              childWhenVerified: TaxistaEntry(),
-            );
-          },
-        );
-      }
-
-      if (rol == 'cliente' || rol == 'user') {
-        return const VerifyEmailGate(
-          childWhenVerified: ClienteShell(),
-        );
-      }
-
-      return _raiSplashScaffold();
-    },
-  );
+  return RaiIdentityRouter.buildGateForUsuarioData(context, user, data);
 }

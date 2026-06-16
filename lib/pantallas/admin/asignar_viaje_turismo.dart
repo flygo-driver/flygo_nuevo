@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
+import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
 class AsignarViajeTurismo extends StatefulWidget {
@@ -127,6 +128,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
+      drawer: const AdminDrawer(),
       appBar: AppBar(
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),

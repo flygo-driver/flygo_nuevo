@@ -1,9 +1,9 @@
 // lib/servicios/location_permission_service.dart
 // Gestión central de permisos y frescura de ubicación (GPS + permisos).
 //
-// Política: [checkAndRequestBasicPermission] con requestIfDenied:false en arranque
-// pasivo; con requestIfDenied:true (default) solo en flujos explícitos (solicitar
-// viaje, programar, ensureLocationReady). Ver contrato en [GpsService].
+// Política: lectura pasiva ([requestIfDenied:false] por defecto). El diálogo del SO
+// solo desde [RaiUbicacionClienteBanner] / [RaiUbicacionTaxistaBanner] vía
+// [GpsService.requestPermissionExplicitUser]. Ver [deboPedirPermisoAlSistemaAhora].
 //
 // ignore_for_file: avoid_print
 
@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 
@@ -63,11 +64,105 @@ class LocationReadiness {
       !staleOrInvalid;
 
   static const String kMsgEsperandoUbicacion =
-      'Esperando ubicación precisa. Asegúrate de tener el GPS activo y la app con permiso de ubicación.';
+      'Aún no tienes ubicación activa. Activa el GPS y permite ubicación '
+      'en el banner superior (Permitir → Al usar la app).';
 }
 
 class LocationPermissionService {
   LocationPermissionService._();
+
+  /// Misma clave que [RaiUbicacionClienteService] — permiso concedido alguna vez.
+  static const String prefsClienteUbicacionListo = 'rai_cliente_ubicacion_listo_v1';
+
+  /// Taxista: permiso «al usar la app» ya concedido (no repetir diálogo del SO).
+  static const String prefsTaxistaUbicacionListo = 'rai_taxista_ubicacion_listo_v1';
+
+  /// Diálogo in-app «Permitir siempre» ya mostrado (taxista o cliente).
+  static const String prefsAlwaysPromptHandled = 'rai_ubicacion_always_prompt_v1';
+
+  /// Cliente: el banner del shell ya guía; no duplicar SnackBars al cotizar.
+  static bool clienteBannerManejaUi = false;
+
+  /// Taxista: mismo patrón que cliente ([RaiUbicacionTaxistaBanner]).
+  static bool taxistaBannerManejaUi = false;
+
+  /// Si el banner del shell está activo, no pedir permiso al SO desde cotizar/confirmar.
+  static bool get clienteEvitaRequestPermisoAlSo => clienteBannerManejaUi;
+
+  static bool get taxistaEvitaRequestPermisoAlSo => taxistaBannerManejaUi;
+
+  /// Siempre false: el diálogo del SO solo desde el banner «Permitir».
+  static bool get clienteRequestIfDeniedAlSo => false;
+
+  static bool get taxistaRequestIfDeniedAlSo => false;
+
+  /// Cliente o taxista ya concedió «al usar la app» en esta instalación.
+  static Future<bool> ubicacionConcedidaAntesEnPrefs() async {
+    return (await _clienteConcedioUbicacionAntes()) ||
+        (await taxistaUbicacionListaAntes());
+  }
+
+  /// ¿Mostrar [Geolocator.requestPermission] ahora? Solo toque «Permitir» en banner
+  /// ([GpsService.requestPermissionExplicitUser]). Flujos pasivos: siempre false.
+  static Future<bool> deboPedirPermisoAlSistemaAhora({
+    required LocationPermission permission,
+  }) async {
+    if (GpsService.permissionUsable(permission)) return false;
+    if (permission != LocationPermission.denied) return false;
+    if (clienteEvitaRequestPermisoAlSo || taxistaEvitaRequestPermisoAlSo) {
+      return false;
+    }
+    if (await ubicacionConcedidaAntesEnPrefs()) return false;
+    return false;
+  }
+
+  static Future<bool> _clienteConcedioUbicacionAntes() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getBool(prefsClienteUbicacionListo) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> _marcarClienteUbicacionListoEnPrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(prefsClienteUbicacionListo, true);
+    } catch (_) {}
+  }
+
+  static Future<bool> taxistaUbicacionListaAntes() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getBool(prefsTaxistaUbicacionListo) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> marcarTaxistaUbicacionListoEnPrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(prefsTaxistaUbicacionListo, true);
+    } catch (_) {}
+  }
+
+  static Future<bool> _alwaysPromptHandledBefore() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getBool(prefsAlwaysPromptHandled) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> _markAlwaysPromptHandled() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(prefsAlwaysPromptHandled, true);
+    } catch (_) {}
+  }
 
   static bool _alwaysDialogShownThisSession = false;
   static Timer? _gentleRetryTimer;
@@ -75,11 +170,10 @@ class LocationPermissionService {
   static bool get _nativeMobile =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-  /// [requestIfDenied] en false: solo lectura estabilizada (p. ej. arranque de app);
-  /// no llama a [Geolocator.requestPermission] aunque siga [denied] (estilo inDrive:
-  /// el permiso se pide en flujos explícitos: solicitar viaje, disponibilidad, etc.).
+  /// Lectura pasiva (+ espera corta si prefs indican permiso ya concedido).
+  /// [requestIfDenied] debe ser false en producción; el diálogo del SO solo desde el banner.
   static Future<LocationBasicResult> checkAndRequestBasicPermission({
-    bool requestIfDenied = true,
+    bool requestIfDenied = false,
   }) async {
     print('[LOCATION] checkAndRequestBasicPermission requestIfDenied=$requestIfDenied');
     if (!_nativeMobile) {
@@ -97,6 +191,8 @@ class LocationPermissionService {
     );
 
     if (GpsService.permissionUsable(snap.permission)) {
+      unawaited(_marcarClienteUbicacionListoEnPrefs());
+      unawaited(marcarTaxistaUbicacionListoEnPrefs());
       return LocationBasicResult(
         serviceEnabled: snap.serviceEnabled,
         permission: snap.permission,
@@ -108,25 +204,71 @@ class LocationPermissionService {
         permission: snap.permission,
       );
     }
-    if (snap.permission == LocationPermission.denied && requestIfDenied) {
-      final LocationPermission p =
-          await GpsService.requestPermissionIfDeniedThrottled();
-      final bool se = await Geolocator.isLocationServiceEnabled();
+    if (snap.permission == LocationPermission.denied) {
+      var p = snap.permission;
+      if (await ubicacionConcedidaAntesEnPrefs()) {
+        p = await GpsService.waitUntilPermissionUsable(
+          timeout: const Duration(seconds: 2),
+        );
+        if (GpsService.permissionUsable(p)) {
+          unawaited(_marcarClienteUbicacionListoEnPrefs());
+          unawaited(marcarTaxistaUbicacionListoEnPrefs());
+        }
+        print('[LOCATION] denied + prefs listo → wait sin request SO → $p');
+        return LocationBasicResult(
+          serviceEnabled: snap.serviceEnabled,
+          permission: p,
+        );
+      }
+      if (requestIfDenied &&
+          await deboPedirPermisoAlSistemaAhora(permission: snap.permission)) {
+        final LocationPermission pReq =
+            await GpsService.requestPermissionIfDeniedThrottled();
+        final bool se = await Geolocator.isLocationServiceEnabled();
+        if (GpsService.permissionUsable(pReq)) {
+          unawaited(_marcarClienteUbicacionListoEnPrefs());
+          unawaited(marcarTaxistaUbicacionListoEnPrefs());
+        }
+        print(
+          '[LOCATION] tras request throttled serviceEnabled=$se permission=$pReq',
+        );
+        return LocationBasicResult(serviceEnabled: se, permission: pReq);
+      }
       print(
-        '[LOCATION] tras request throttled serviceEnabled=$se permission=$p',
+        '[LOCATION] denied → sin Geolocator.requestPermission (banner / sin prefs)',
       );
-      return LocationBasicResult(serviceEnabled: se, permission: p);
-    }
-
-    if (snap.permission == LocationPermission.denied && !requestIfDenied) {
-      print(
-        '[LOCATION] denied pero requestIfDenied=false → sin Geolocator.requestPermission',
+      return LocationBasicResult(
+        serviceEnabled: snap.serviceEnabled,
+        permission: p,
       );
     }
 
     return LocationBasicResult(
       serviceEnabled: snap.serviceEnabled,
       permission: snap.permission,
+    );
+  }
+
+  /// GPS + permiso para cotizar turismo / multiparada / widgets cliente.
+  /// Respeta [clienteEvitaRequestPermisoAlSo]: no repite el diálogo del SO si el
+  /// banner ya guía al usuario o ya concedió ubicación antes.
+  static Future<({bool serviceEnabled, LocationPermission permission})>
+      checkServiceThenRequestIfNeeded({
+    bool requestIfDenied = false,
+  }) async {
+    final snap =
+        await GpsService.readServiceAndPermissionStabilizedNoRequest();
+    if (GpsService.permissionUsable(snap.permission) ||
+        !snap.serviceEnabled ||
+        snap.permission != LocationPermission.denied) {
+      return snap;
+    }
+    final basic = await checkAndRequestBasicPermission(
+      requestIfDenied: requestIfDenied,
+    );
+    return (
+      serviceEnabled: basic.serviceEnabled,
+      permission: basic.permission,
     );
   }
 
@@ -171,6 +313,7 @@ class LocationPermissionService {
       return;
     }
     if (_alwaysDialogShownThisSession) return;
+    if (await _alwaysPromptHandledBefore()) return;
 
     final perm = await Geolocator.checkPermission();
     if (!context.mounted) return;
@@ -187,6 +330,7 @@ class LocationPermissionService {
     if (!context.mounted) return;
 
     _alwaysDialogShownThisSession = true;
+    await _markAlwaysPromptHandled();
     print('[LOCATION] mostrar diálogo permiso always (isTaxista=$isTaxista)');
 
     final String body = isTaxista
@@ -252,13 +396,20 @@ class LocationPermissionService {
     BuildContext? context,
     Duration maxAge = const Duration(seconds: 10),
     Duration timeout = const Duration(seconds: 14),
+    bool? requestIfDenied,
   }) async {
-    print('[LOCATION] ensureLocationReady maxAge=${maxAge.inSeconds}s');
+    final bool req = requestIfDenied ?? false;
+    print(
+      '[LOCATION] ensureLocationReady maxAge=${maxAge.inSeconds}s '
+      'requestIfDenied=$req',
+    );
     if (!_nativeMobile) {
       return const LocationReadiness(permissionDenied: true);
     }
 
-    final basic = await checkAndRequestBasicPermission();
+    final basic = await checkAndRequestBasicPermission(
+      requestIfDenied: req,
+    );
     if (!basic.serviceEnabled) {
       print('[LOCATION] ensureLocationReady: GPS apagado');
       if (context?.mounted == true) {
@@ -281,14 +432,27 @@ class LocationPermissionService {
     }
     if (!basic.canUseLocation) {
       print('[LOCATION] ensureLocationReady: sin permiso usable');
+      final bool yaListo = await ubicacionConcedidaAntesEnPrefs();
       if (context?.mounted == true) {
-        _snackOpenAppSettings(
-          context!,
-          'RAI necesita permiso de ubicación para calcular la tarifa.',
-        );
+        if (yaListo || clienteBannerManejaUi || taxistaBannerManejaUi) {
+          ScaffoldMessenger.maybeOf(context!)?.showSnackBar(
+            const SnackBar(
+              content: Text(LocationReadiness.kMsgEsperandoUbicacion),
+              duration: Duration(seconds: 6),
+            ),
+          );
+        } else {
+          _snackOpenAppSettings(
+            context!,
+            'RAI necesita permiso de ubicación. Toca «Permitir» en el banner superior.',
+          );
+        }
       }
       return const LocationReadiness(permissionDenied: true);
     }
+
+    unawaited(marcarTaxistaUbicacionListoEnPrefs());
+    unawaited(_marcarClienteUbicacionListoEnPrefs());
 
     Position? pos;
     try {
@@ -345,6 +509,7 @@ class LocationPermissionService {
 
   static void _snackOpenLocationSettings(
       BuildContext context, String message) {
+    if (clienteBannerManejaUi) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(
         content: Text(message),
@@ -361,6 +526,7 @@ class LocationPermissionService {
   }
 
   static void _snackOpenAppSettings(BuildContext context, String message) {
+    if (clienteBannerManejaUi) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(
         content: Text(message),

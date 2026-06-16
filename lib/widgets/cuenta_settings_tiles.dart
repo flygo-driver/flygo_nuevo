@@ -1,12 +1,23 @@
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/pantallas/cliente/apariencia.dart';
+import 'package:flygo_nuevo/pantallas/cliente/apariencia.dart'
+    show AparienciaAudience, AparienciaScreen;
+
+export 'package:flygo_nuevo/pantallas/cliente/apariencia.dart'
+    show AparienciaAudience;
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/logout.dart';
 
 /// Entrada destacada a la pantalla de color / tamaño de texto.
 class CuentaAparienciaTile extends StatelessWidget {
-  const CuentaAparienciaTile({super.key});
+  const CuentaAparienciaTile({
+    super.key,
+    this.audience = AparienciaAudience.cliente,
+  });
+
+  final AparienciaAudience audience;
+
+  bool get _esTaxista => audience == AparienciaAudience.taxista;
 
   @override
   Widget build(BuildContext context) {
@@ -23,7 +34,9 @@ class CuentaAparienciaTile extends StatelessWidget {
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const AparienciaScreen()),
+              MaterialPageRoute(
+                builder: (_) => AparienciaScreen(audience: audience),
+              ),
             );
           },
           child: Container(
@@ -46,7 +59,9 @@ class CuentaAparienciaTile extends StatelessWidget {
                 ),
               ),
               subtitle: Text(
-                'Color de fondo y tamaño del texto',
+                _esTaxista
+                    ? 'Color y texto en pool, viajes y menú conductor'
+                    : 'Color de fondo y tamaño del texto',
                 style: TextStyle(color: cs.onSurfaceVariant),
               ),
               trailing: Icon(Icons.chevron_right, color: cs.primary),

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
@@ -31,11 +32,7 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
 
   double _calcularGanancia(Viaje v) {
     if (v.gananciaTaxista > 0) return v.gananciaTaxista;
-
-    if (v.tipoServicio == 'turismo') {
-      return v.precio * 0.85;
-    }
-    return v.precio * 0.80;
+    return PlataformaEconomia.gananciaTaxistaRdDesdeTotal(v.precio);
   }
 
   Color _getColorForTipo(BuildContext context, String tipo) {

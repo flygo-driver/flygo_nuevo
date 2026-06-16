@@ -6,6 +6,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'package:flygo_nuevo/keys.dart';
+import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
+import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 
 class GoogleAuthService {
@@ -132,6 +134,12 @@ class GoogleAuthService {
       }
 
       return cred;
+    } on FirebaseAuthException catch (e) {
+      _pendingEntradaRol = null;
+      if (e.code == 'role-mismatch') {
+        await AppFlavorRolGuard.cerrarSesionTrasRechazo();
+      }
+      rethrow;
     } catch (e) {
       _pendingEntradaRol = null;
       if (kDebugMode) {
@@ -254,6 +262,7 @@ class GoogleAuthService {
           'estadoDocumentos': 'pendiente',
           'documentosCompletos': false,
           'puedeRecibirViajes': false,
+          'registroTaxistaCompleto': false,
           'fechaRegistro': nowTs,
           'actualizadoEn': nowTs,
           'updatedAt': nowTs,
@@ -275,14 +284,33 @@ class GoogleAuthService {
       return;
     }
 
-    if (!esAdmin) {
-      final rolActual = rolUsuarios;
-      if (rolActual.isEmpty) {
-        await refUsuario.set(
-          {'rol': rolEntrada, 'updatedAt': nowTs, 'actualizadoEn': nowTs},
-          SetOptions(merge: true),
+    final rolActual = AppFlavorRolGuard.rolCanonicoDesdeMaps(
+      usuario: dataUsuario,
+      roles: dataRol,
+    );
+
+    if (!esAdmin && AppFlavorRolGuard.esRolOperativo(rolActual)) {
+      AppFlavorRolGuard.assertRolEntradaPermitida(
+        rolFirestore: rolActual,
+        entradaRol: rolEntrada,
+        email: user.email,
+      );
+      if (!AppFlavorRolGuard.rolCompatibleConFlavor(rolActual)) {
+        throw FirebaseAuthException(
+          code: 'role-mismatch',
+          message: AppFlavorRolGuard.mensajeMismatch(
+            rolFirestore: rolActual,
+            email: user.email,
+          ),
         );
       }
+    }
+
+    if (!esAdmin && rolActual.isEmpty) {
+      await refUsuario.set(
+        {'rol': rolEntrada, 'updatedAt': nowTs, 'actualizadoEn': nowTs},
+        SetOptions(merge: true),
+      );
     }
 
     String preferirFirestore(String? firestoreVal, String? googleVal) {
@@ -291,27 +319,30 @@ class GoogleAuthService {
       return (googleVal ?? '').toString();
     }
 
-    await refUsuario.set(
-      {
-        'email': (user.email ?? (dataUsuario['email'] ?? '')).toString(),
-        'nombre': preferirFirestore(
-          dataUsuario['nombre']?.toString(),
-          user.displayName,
-        ),
-        'telefono': preferirFirestore(
-          dataUsuario['telefono']?.toString(),
-          user.phoneNumber,
-        ),
-        'fotoUrl': preferirFirestore(
-          dataUsuario['fotoUrl']?.toString(),
-          user.photoURL,
-        ),
-        'proveedor': 'google',
-        'updatedAt': nowTs,
-        'actualizadoEn': nowTs,
-      },
-      SetOptions(merge: true),
-    );
+    final patch = <String, dynamic>{
+      'email': (user.email ?? (dataUsuario['email'] ?? '')).toString(),
+      'nombre': preferirFirestore(
+        dataUsuario['nombre']?.toString(),
+        user.displayName,
+      ),
+      'telefono': preferirFirestore(
+        dataUsuario['telefono']?.toString(),
+        user.phoneNumber,
+      ),
+      'fotoUrl': preferirFirestore(
+        dataUsuario['fotoUrl']?.toString(),
+        user.photoURL,
+      ),
+      'proveedor': 'google',
+      'updatedAt': nowTs,
+      'actualizadoEn': nowTs,
+    };
+    if (!esAdmin &&
+        rolEntrada == 'taxista' &&
+        !TaxistaRegistroPerfilData.taxistaRegistroPerfilCompleto(dataUsuario)) {
+      patch['registroTaxistaCompleto'] = false;
+    }
+    await refUsuario.set(patch, SetOptions(merge: true));
   }
 
   static Future<void> signOut() async {

@@ -10,7 +10,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_ui_theme.dart';
+import '../../servicios/admin_dashboard_service.dart';
 import '../../servicios/admin_reportes_service.dart';
+import '../../widgets/admin_drawer.dart';
 
 class ReportesAdmin extends StatefulWidget {
   const ReportesAdmin({super.key});
@@ -56,14 +58,52 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Future<({AdminStatsResumen stats, List<QueryDocumentSnapshot<Map<String, dynamic>>> docs})>
+      _loadReportesData() async {
+    final stats =
+        await AdminDashboardService.fetchStatsResumen(dias: _dias);
     final Timestamp desde = Timestamp.fromDate(
       DateTime.now().subtract(Duration(days: _dias)),
     );
+    try {
+      final snap = await _db
+          .collection('viajes')
+          .where('updatedAt', isGreaterThanOrEqualTo: desde)
+          .orderBy('updatedAt', descending: true)
+          .limit(400)
+          .get();
+      return (stats: stats, docs: snap.docs);
+    } catch (_) {
+      try {
+        final snap = await _db
+            .collection('viajes')
+            .where('updatedAt', isGreaterThanOrEqualTo: desde)
+            .limit(600)
+            .get();
+        final docs = snap.docs.toList()
+          ..sort((a, b) {
+            final ta = a.data()['updatedAt'];
+            final tb = b.data()['updatedAt'];
+            if (ta is Timestamp && tb is Timestamp) {
+              return tb.compareTo(ta);
+            }
+            return 0;
+          });
+        return (stats: stats, docs: docs.take(400).toList());
+      } catch (_) {
+        final local = await AdminDashboardService.computeStatsResumenLocal(
+          dias: _dias,
+        );
+        return (stats: local, docs: const <QueryDocumentSnapshot<Map<String, dynamic>>>[]);
+      }
+    }
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
+      drawer: const AdminDrawer(),
       appBar: AppBar(
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),
@@ -87,11 +127,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
           ),
         ],
       ),
-      body: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        future: _db
-            .collection('viajes')
-            .where('updatedAt', isGreaterThanOrEqualTo: desde)
-            .get(),
+      body: FutureBuilder<
+          ({AdminStatsResumen stats, List<QueryDocumentSnapshot<Map<String, dynamic>>> docs})>(
+        future: _loadReportesData(),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return Center(
@@ -107,29 +145,19 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             );
           }
 
+          final stats = snap.data!.stats;
           final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
-              snap.data?.docs ??
-                  <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+              snap.data!.docs;
 
-          final int total = docs.length;
-
-          int completados = 0;
-          int cancelados = 0;
+          final int total = stats.total;
+          final int completados = stats.completados;
+          final int cancelados = stats.cancelados;
 
           double sumaPrecio = 0.0;
           double sumaComision = 0.0;
 
           for (final doc in docs) {
             final Map<String, dynamic> m = doc.data();
-            final String estado = (m['estado'] ?? '').toString();
-
-            if (_esCompletado(estado)) {
-              completados++;
-            }
-            if (_esCancelado(estado)) {
-              cancelados++;
-            }
-
             sumaPrecio += _toDouble(m['precio']);
             sumaComision += _toDouble(m['comision']);
           }
@@ -146,6 +174,9 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               _cardNumero(context, 'Completados', completados.toString()),
               const SizedBox(height: 10),
               _cardNumero(context, 'Cancelados', cancelados.toString()),
+              const SizedBox(height: 10),
+              _cardNumero(
+                  context, 'Activos ahora', stats.activosAhora.toString()),
               const SizedBox(height: 14),
               _cardMoney(context, 'Suma precios (aprox)', sumaPrecio),
               const SizedBox(height: 10),
@@ -170,7 +201,7 @@ class _ReportesAdminState extends State<ReportesAdmin> {
               _reportesQuejasCard(context),
               const SizedBox(height: 16),
               Text(
-                'Nota: esto calcula leyendo viajes recientes. Para producción grande, lo ideal es guardar stats agregadas.',
+                'Totales vía servidor (escala). Montos aprox. en muestra de ${docs.length} viajes recientes. Export CSV para datos completos.',
                 style: TextStyle(
                     color: AdminUi.muted(context).withValues(alpha: 0.85)),
               ),
@@ -1296,11 +1327,23 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     );
   }
 
-  Widget _reportesQuejasCard(BuildContext context) {
+  static const int _limiteReportesViaje = 400;
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _reportesViajeStream() {
     final DateTime limite =
         DateTime.now().subtract(Duration(days: _diasReportes));
+    return _db
+        .collection('reportes_viaje')
+        .where('creadoEn',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(limite))
+        .orderBy('creadoEn', descending: true)
+        .limit(_limiteReportesViaje)
+        .snapshots();
+  }
+
+  Widget _reportesQuejasCard(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _db.collection('reportes_viaje').snapshots(),
+      stream: _reportesViajeStream(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return _cardNumero(context, 'Reportes de clientes', 'Cargando...');
@@ -1311,10 +1354,6 @@ class _ReportesAdminState extends State<ReportesAdmin> {
         final allDocs =
             snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
         final docs = allDocs.where((d) {
-          final creadoEn = d.data()['creadoEn'];
-          if (creadoEn is Timestamp) {
-            if (creadoEn.toDate().isBefore(limite)) return false;
-          }
           if (_estadoReporte == 'todos') return true;
           final e = (d.data()['estado'] ?? 'pendiente')
               .toString()
@@ -1344,10 +1383,7 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             return tb.compareTo(ta);
           });
 
-        final docsEnRango = allDocs.where((d) {
-          final creadoEn = d.data()['creadoEn'];
-          return creadoEn is Timestamp && !creadoEn.toDate().isBefore(limite);
-        });
+        final docsEnRango = allDocs;
         final Map<String, int> abiertosPorTaxista = <String, int>{};
         final Map<String, int> abiertosPorCliente = <String, int>{};
         for (final d in docsEnRango) {

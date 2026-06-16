@@ -1,5 +1,5 @@
 // lib/pantallas/taxista/login_chofer_turismo.dart
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -26,9 +26,9 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
   final ImagePicker _picker = ImagePicker();
 
   final List<VehiculoTurismo> _vehiculos = [];
-  File? _licenciaFile;
-  File? _seguroFile;
-  File? _fotoVehiculoFile;
+  Uint8List? _licenciaBytes;
+  Uint8List? _seguroBytes;
+  Uint8List? _fotoVehiculoBytes;
 
   bool _cargando = false;
   bool _cargandoEstado = true;
@@ -91,27 +91,43 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
   }
 
   Future<void> _seleccionarDocumento(String tipo) async {
-    final XFile? picked = await _picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      maxHeight: 1600,
-      imageQuality: 85,
-    );
-    if (picked == null || !mounted) return;
-    setState(() {
-      final File f = File(picked.path);
-      switch (tipo) {
-        case 'licencia':
-          _licenciaFile = f;
-          break;
-        case 'seguro':
-          _seguroFile = f;
-          break;
-        case 'fotoVehiculo':
-          _fotoVehiculoFile = f;
-          break;
+    try {
+      final XFile? picked = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 85,
+      );
+      if (picked == null || !mounted) return;
+      // Leer ya: en Android la ruta en cache (scaled_*.jpg) puede borrarse antes de enviar.
+      final Uint8List bytes = await picked.readAsBytes();
+      if (bytes.isEmpty) {
+        throw Exception('No se pudo leer la imagen seleccionada.');
       }
-    });
+      if (bytes.length > 10 * 1024 * 1024) {
+        throw Exception('La imagen excede 10 MB. Elige otra más liviana.');
+      }
+      if (!mounted) return;
+      setState(() {
+        switch (tipo) {
+          case 'licencia':
+            _licenciaBytes = bytes;
+            break;
+          case 'seguro':
+            _seguroBytes = bytes;
+            break;
+          case 'fotoVehiculo':
+            _fotoVehiculoBytes = bytes;
+            break;
+        }
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
   }
 
   void _agregarVehiculo() {
@@ -137,7 +153,9 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
       setState(() => _error = 'Debes agregar al menos un vehículo turístico');
       return;
     }
-    if (_licenciaFile == null || _seguroFile == null || _fotoVehiculoFile == null) {
+    if (_licenciaBytes == null ||
+        _seguroBytes == null ||
+        _fotoVehiculoBytes == null) {
       setState(() => _error = 'Sube licencia, seguro y foto del vehículo');
       return;
     }
@@ -151,20 +169,21 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw Exception('No hay sesión');
 
-      final String urlLicencia = await SolicitudTurismoRepo.subirArchivoDocumento(
+      final String urlLicencia =
+          await SolicitudTurismoRepo.subirBytesDocumento(
         uid: user.uid,
         tipo: 'licencia',
-        file: _licenciaFile!,
+        bytes: _licenciaBytes!,
       );
-      final String urlSeguro = await SolicitudTurismoRepo.subirArchivoDocumento(
+      final String urlSeguro = await SolicitudTurismoRepo.subirBytesDocumento(
         uid: user.uid,
         tipo: 'seguro',
-        file: _seguroFile!,
+        bytes: _seguroBytes!,
       );
-      final String urlFoto = await SolicitudTurismoRepo.subirArchivoDocumento(
+      final String urlFoto = await SolicitudTurismoRepo.subirBytesDocumento(
         uid: user.uid,
         tipo: 'foto_vehiculo',
-        file: _fotoVehiculoFile!,
+        bytes: _fotoVehiculoBytes!,
       );
 
       await SolicitudTurismoRepo.enviarSolicitud(
@@ -258,7 +277,7 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
     return const SizedBox.shrink();
   }
 
-  Widget _docPicker(String label, File? file, String tipo) {
+  Widget _docPicker(String label, bool listo, String tipo) {
     return InkWell(
       onTap: _cargando ? null : () => _seleccionarDocumento(tipo),
       child: Container(
@@ -266,20 +285,20 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
         decoration: BoxDecoration(
           color: const Color(0xFF1E1E1E),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: file != null ? Colors.green : Colors.grey),
+          border: Border.all(color: listo ? Colors.green : Colors.grey),
         ),
         child: Row(
           children: [
             Icon(
-              file != null ? Icons.check_circle : Icons.upload_file,
-              color: file != null ? Colors.green : Colors.white70,
+              listo ? Icons.check_circle : Icons.upload_file,
+              color: listo ? Colors.green : Colors.white70,
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                file != null ? '$label (listo)' : label,
+                listo ? '$label (listo)' : label,
                 style: TextStyle(
-                  color: file != null ? Colors.green : Colors.white70,
+                  color: listo ? Colors.green : Colors.white70,
                 ),
               ),
             ),
@@ -400,11 +419,11 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  _docPicker('Licencia de conducir', _licenciaFile, 'licencia'),
+                  _docPicker('Licencia de conducir', _licenciaBytes != null, 'licencia'),
                   const SizedBox(height: 10),
-                  _docPicker('Seguro del vehículo', _seguroFile, 'seguro'),
+                  _docPicker('Seguro del vehículo', _seguroBytes != null, 'seguro'),
                   const SizedBox(height: 10),
-                  _docPicker('Foto del vehículo', _fotoVehiculoFile, 'fotoVehiculo'),
+                  _docPicker('Foto del vehículo', _fotoVehiculoBytes != null, 'fotoVehiculo'),
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _notasCtrl,

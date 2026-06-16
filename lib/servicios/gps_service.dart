@@ -13,6 +13,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class GpsService {
   /// Evita llamadas repetidas a [Geolocator.requestPermission] (p. ej. cada
@@ -43,6 +44,46 @@ class GpsService {
     final String stack = _kGpsStackHead(StackTrace.current);
     debugPrint('[GPS] GpsService.requestPermission() directo — stack:\n$stack');
     return Geolocator.requestPermission();
+  }
+
+  /// Toque explícito del usuario (banner «Permitir»). Sin throttle de 90 s.
+  static Future<LocationPermission> requestPermissionExplicitUser() async {
+    final bool se = await Geolocator.isLocationServiceEnabled();
+    if (!se) {
+      debugPrint('[GPS] requestPermissionExplicitUser: GPS apagado');
+      return Geolocator.checkPermission();
+    }
+
+    var p = await Geolocator.checkPermission();
+    if (permissionUsable(p)) {
+      debugPrint('[GPS] requestPermissionExplicitUser: ya usable ($p)');
+      return p;
+    }
+    if (p == LocationPermission.deniedForever) {
+      debugPrint('[GPS] requestPermissionExplicitUser: deniedForever');
+      return p;
+    }
+
+    _lastGeolocatorRequestPermissionAt = DateTime.now();
+    debugPrint(
+        '[GPS] requestPermissionExplicitUser → Geolocator.requestPermission()');
+    p = await Geolocator.requestPermission();
+    debugPrint('[GPS] requestPermissionExplicitUser resultado=$p');
+    return p;
+  }
+
+  /// Tras el diálogo del SO, Android a veces tarda en reflejar whileInUse.
+  static Future<LocationPermission> waitUntilPermissionUsable({
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final p = await Geolocator.checkPermission();
+      if (permissionUsable(p)) return p;
+      if (p == LocationPermission.deniedForever) return p;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    return Geolocator.checkPermission();
   }
 
   static String _kGpsStackHead(StackTrace st, {int maxFrames = 18}) {
@@ -119,6 +160,16 @@ class GpsService {
   static bool permissionUsable(LocationPermission p) =>
       p == LocationPermission.whileInUse || p == LocationPermission.always;
 
+  static Future<bool> _ubicacionListaEnPrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return (p.getBool('rai_cliente_ubicacion_listo_v1') ?? false) ||
+          (p.getBool('rai_taxista_ubicacion_listo_v1') ?? false);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Solo lectura + estabilización. **Nunca** invoca [Geolocator.requestPermission].
   /// Uso típico: [AppLifecycleState.resumed] (volver de Waze / ajustes) y
   /// pantallas que no deben volver a mostrar el diálogo del SO.
@@ -193,14 +244,20 @@ class GpsService {
       return snap;
     }
     if (snap.permission == LocationPermission.denied) {
+      if (await _ubicacionListaEnPrefs()) {
+        final LocationPermission p = await waitUntilPermissionUsable(
+          timeout: const Duration(seconds: 2),
+        );
+        final bool se = await Geolocator.isLocationServiceEnabled();
+        debugPrint(
+          '[GPS] checkServiceThenRequest: prefs listo → wait sin request → $p',
+        );
+        return (serviceEnabled: se, permission: p);
+      }
       debugPrint(
-        '[GPS] checkServiceThenRequest: denied estable + GPS on → '
-        'requestPermissionIfDeniedThrottled',
+        '[GPS] checkServiceThenRequest: denied sin prefs → sin request SO',
       );
-      final LocationPermission p =
-          await requestPermissionIfDeniedThrottled(minInterval: minInterval);
-      final bool se = await Geolocator.isLocationServiceEnabled();
-      return (serviceEnabled: se, permission: p);
+      return snap;
     }
     return snap;
   }

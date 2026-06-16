@@ -5,7 +5,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 
 // 🔰 PANTALLAS DE ADMIN
+import 'package:flygo_nuevo/pantallas/admin/admin_alertas.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_auditoria.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_bola_pueblo_ops.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_config_empresa.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_giras_tours_cupos.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_regularizar_giras_taxista.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_rai_monitor.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_torre_control.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_turismo_destinos.dart';
 import 'package:flygo_nuevo/pantallas/admin/viajes_turismo_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/taxistas_turismo_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/aprobar_choferes_turismo.dart';
@@ -18,6 +26,9 @@ import 'package:flygo_nuevo/pantallas/admin/resumen_comisiones_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_promos_mxk.dart';
 
 // ✅ Documentos / Usuarios / Reportes / Tarifas
+import 'package:flygo_nuevo/pantallas/admin/admin_centro_operaciones.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_home.dart';
+import 'package:flygo_nuevo/pantallas/admin/panel_finanzas.dart';
 import 'package:flygo_nuevo/pantallas/admin/revision_documentos_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/gestionar_usuarios_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/reportes_admin.dart';
@@ -85,30 +96,104 @@ class AdminDrawer extends StatelessWidget {
             ),
             Divider(color: dividerColor),
             ListTile(
-              leading: Icon(Icons.home, color: iconNeutral),
-              title: Text('Inicio Admin',
+              leading: Icon(Icons.dashboard_outlined, color: iconNeutral),
+              title: Text('Centro de operaciones',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w600)),
+              subtitle: Text('Colas pendientes del día', style: subtleStyle),
+              onTap: () => _push(context, const AdminCentroOperaciones()),
+            ),
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4),
+              child: Text(
+                'TIEMPO REAL',
+                style: TextStyle(
+                  color: isLight
+                      ? Colors.blue.shade800
+                      : Colors.lightBlueAccent,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.radar,
+                  color: isLight ? Colors.blue.shade700 : Colors.lightBlueAccent),
+              title: Text('Torre de control',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w600)),
+              subtitle: Text('Viajes en vivo y buscando chofer', style: subtleStyle),
+              onTap: () => _push(context, const AdminTorreControl()),
+            ),
+            ListTile(
+              leading: Icon(Icons.notifications_active,
+                  color: isLight ? Colors.red.shade700 : Colors.redAccent),
+              title: Text('Alertas operativas',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).popUntil((r) => r.isFirst);
-              },
+              subtitle: Text('Resumen horario y umbrales', style: subtleStyle),
+              onTap: () => _push(context, const AdminAlertasPage()),
+            ),
+            ListTile(
+              leading: Icon(Icons.hub_outlined, color: iconNeutral),
+              title: Text('Bola Pueblo',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Publicaciones, rutas y transferencias', style: subtleStyle),
+              onTap: () => _push(context, const AdminBolaPuebloOps()),
+            ),
+            ListTile(
+              leading: Icon(Icons.smart_toy_outlined,
+                  color: isLight ? Colors.deepPurple : Colors.purpleAccent),
+              title: Text('Asistente RAI',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Uso diario y cuotas', style: subtleStyle),
+              onTap: () => _push(context, const AdminRaiMonitor()),
+            ),
+            Divider(color: dividerColor),
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4),
+              child: Text(
+                'FINANZAS',
+                style: TextStyle(
+                  color: isLight
+                      ? Colors.deepOrange.shade800
+                      : Colors.orangeAccent,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.verified,
+                  color: isLight ? Colors.deepOrange : Colors.orangeAccent),
+              title: Text('Verificar pagos',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                'Recargas prepago · comisiones · transferencias',
+                style: subtleStyle,
+              ),
+              onTap: () => _push(context, const VerificarPagos()),
+            ),
+            ListTile(
+              leading: Icon(Icons.account_balance_wallet_outlined,
+                  color: isLight ? Colors.teal.shade700 : Colors.tealAccent),
+              title: Text('Finanzas en vivo',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Panel financiero agregado', style: subtleStyle),
+              onTap: () => _push(context, const PanelFinanzasAdmin()),
+            ),
+            ListTile(
+              leading: Icon(Icons.home, color: iconNeutral),
+              title: Text('Liquidaciones',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Comisiones semanales', style: subtleStyle),
+              onTap: () => _push(context, const AdminHome()),
             ),
             ListTile(
               leading: Icon(Icons.analytics,
                   color:
                       isLight ? const Color(0xFF0F9D58) : Colors.greenAccent),
-              title: Text('Resumen de Comisiones',
+              title: Text('Resumen de comisiones',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               subtitle: Text('Estadísticas diarias', style: subtleStyle),
               onTap: () => _push(context, const ResumenComisionesAdmin()),
-            ),
-            ListTile(
-              leading: Icon(Icons.verified,
-                  color: isLight ? Colors.deepOrange : Colors.orangeAccent),
-              title: Text('Verificar Pagos',
-                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              subtitle: Text('Pendientes de revisión', style: subtleStyle),
-              onTap: () => _push(context, const VerificarPagos()),
             ),
             ListTile(
               leading: Icon(Icons.percent, color: iconNeutral),
@@ -128,18 +213,6 @@ class AdminDrawer extends StatelessWidget {
               title: Text('Promociones',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const AdminPromosMxK()),
-            ),
-            ListTile(
-              leading: Icon(Icons.verified_user, color: iconNeutral),
-              title: Text('Revisar Documentos',
-                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              onTap: () => _push(context, const RevisionDocumentosAdmin()),
-            ),
-            ListTile(
-              leading: Icon(Icons.manage_accounts, color: iconNeutral),
-              title: Text('Gestionar Usuarios',
-                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              onTap: () => _push(context, const GestionarUsuariosAdmin()),
             ),
             ListTile(
               leading: Icon(Icons.bar_chart, color: iconNeutral),
@@ -165,11 +238,19 @@ class AdminDrawer extends StatelessWidget {
               leading: Icon(Icons.history,
                   color:
                       isLight ? Colors.blue.shade700 : Colors.lightBlueAccent),
-              title: Text('Histórico Promo MxK',
+              title: Text('Auditoría e historial',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              subtitle: Text('Auditorías guardadas', style: subtleStyle),
-              onTap: () => _push(context, const ReportesAdmin()),
+              subtitle: Text('Cambios config y log sistema', style: subtleStyle),
+              onTap: () => _push(context, const AdminAuditoriaPage()),
             ),
+            ListTile(
+              leading: Icon(Icons.account_balance_outlined, color: iconNeutral),
+              title: Text('Configuración RAI',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Cuenta bancaria y prepago', style: subtleStyle),
+              onTap: () => _push(context, const AdminConfigEmpresa()),
+            ),
+            Divider(color: dividerColor),
             ValueListenableBuilder<ThemeMode>(
               valueListenable: ThemeModeService.mode,
               builder: (context, mode, _) {
@@ -202,7 +283,39 @@ class AdminDrawer extends StatelessWidget {
               padding:
                   const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4),
               child: Text(
-                'TURISMO',
+                'CONDUCTORES',
+                style: TextStyle(
+                  color:
+                      isLight ? Colors.green.shade800 : Colors.greenAccent,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.folder_shared_outlined,
+                  color: isLight ? Colors.green.shade700 : Colors.greenAccent),
+              title: Text('Expedientes choferes',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle:
+                  Text('Normal · Motor · Bola Ahorro', style: subtleStyle),
+              onTap: () => _push(context, const RevisionDocumentosAdmin()),
+            ),
+            ListTile(
+              leading: Icon(Icons.manage_accounts, color: iconNeutral),
+              title: Text('Gestionar Usuarios',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                'Bloqueos prepago · roles · movimientos',
+                style: subtleStyle,
+              ),
+              onTap: () => _push(context, const GestionarUsuariosAdmin()),
+            ),
+            Divider(color: dividerColor),
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4),
+              child: Text(
+                'SALIDAS POR CUPOS · TURISMO',
                 style: TextStyle(
                   color: isLight
                       ? Colors.deepPurple.shade700
@@ -214,9 +327,9 @@ class AdminDrawer extends StatelessWidget {
             ListTile(
               leading: Icon(Icons.pending_actions,
                   color: isLight ? Colors.deepOrange : Colors.orangeAccent),
-              title: Text('Aprobar Solicitudes',
+              title: Text('Aprobar solicitudes turismo',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-              subtitle: Text('Pendientes de revisión', style: subtleStyle),
+              subtitle: Text('Registro y documentos turísticos', style: subtleStyle),
               onTap: () => _push(context, const AprobarChoferesTurismo()),
             ),
             ListTile(
@@ -230,17 +343,37 @@ class AdminDrawer extends StatelessWidget {
                   color: isLight
                       ? const Color(0xFF2E7D32)
                       : Colors.lightGreenAccent),
-              title: Text('Giras / tours por cupos',
+              title: Text('Salidas por cupos (giras, excursiones, grupos)',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               subtitle:
                   Text('viajes_pool — estados y reservas', style: subtleStyle),
               onTap: () => _push(context, const AdminGirasToursCupos()),
             ),
             ListTile(
+              leading: Icon(Icons.lock_open,
+                  color: isLight
+                      ? const Color(0xFF2E7D32)
+                      : Colors.lightGreenAccent),
+              title: Text('Desbloquear salidas por cupos',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                'Cola automática · bloqueados por RAI',
+                style: subtleStyle,
+              ),
+              onTap: () => _push(context, const AdminRegularizarGirasTaxista()),
+            ),
+            ListTile(
               leading: Icon(Icons.tour, color: iconNeutral),
               title: Text('Choferes Turismo',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               onTap: () => _push(context, const TaxistasTurismoAdmin()),
+            ),
+            ListTile(
+              leading: Icon(Icons.place_outlined, color: iconNeutral),
+              title: Text('Destinos turismo',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Catálogo extendido Firestore', style: subtleStyle),
+              onTap: () => _push(context, const AdminTurismoDestinos()),
             ),
             Divider(color: dividerColor),
             ListTile(

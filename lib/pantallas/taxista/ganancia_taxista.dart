@@ -447,8 +447,9 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                 // 🔥 NUEVO: Nota sobre comisiones
                 const SizedBox(height: 8),
                 Text(
-                  '• Viajes normales/motor: 80% para taxista, 20% comisión\n'
-                  '• Viajes turismo: 85% para taxista, 15% comisión',
+                  '• Viajes normales/motor/turismo: ${PlataformaEconomia.etiquetaPorcentajeGananciaTaxista()} '
+                  'para taxista, ${PlataformaEconomia.etiquetaPorcentajeComision()} comisión RAI\n'
+                  '• Salidas por cupos (gira, excursión o grupo): comisión aparte (config. en ADM)',
                   style: TextStyle(
                     color: cs.onSurfaceVariant.withValues(alpha: 0.85),
                     fontSize: 12,

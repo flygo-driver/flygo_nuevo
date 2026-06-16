@@ -1,6 +1,8 @@
 // lib/servicios/app_config_service.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../config/recarga_bancaria_config.dart';
+
 class DatosBancarios {
   final String bancoNombre;
   final String tipoCuenta; // "Corriente" | "Ahorros"
@@ -58,6 +60,27 @@ class AppConfigService {
 
   static DocumentReference<Map<String, dynamic>> _refPagos() =>
       _db.collection('app_config').doc('pagos');
+
+  /// Valores por defecto si ADM aún no guardó en Firestore (misma base que env).
+  static DatosBancarios get datosBancariosPorDefecto => DatosBancarios(
+        bancoNombre: RecargaBancariaConfig.banco,
+        tipoCuenta: RecargaBancariaConfig.tipoCuenta,
+        numeroCuenta: RecargaBancariaConfig.numeroCuenta,
+        titular: RecargaBancariaConfig.titular,
+        rnc: RecargaBancariaConfig.rnc,
+        alias: '',
+        nota: '',
+        qrUrl: '',
+        whatsappSoporte: '',
+      );
+
+  /// Lo que debe ver el taxista: Firestore (`app_config/pagos`) o fallback local.
+  static DatosBancarios efectivos(DatosBancarios? remoto) {
+    if (remoto != null && remoto.numeroCuenta.trim().isNotEmpty) {
+      return remoto;
+    }
+    return datosBancariosPorDefecto;
+  }
 
   /// Lee 1 sola vez la config bancaria (null si no existe).
   static Future<DatosBancarios?> obtenerDatosBancarios() async {

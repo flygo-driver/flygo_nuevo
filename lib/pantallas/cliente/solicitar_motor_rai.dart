@@ -16,11 +16,12 @@ import 'package:geolocator/geolocator.dart';
 
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
-
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/rai_asistente_destino_pendiente.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
-import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
+import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
@@ -28,6 +29,7 @@ import 'package:flygo_nuevo/servicios/pay_config.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
+import 'package:flygo_nuevo/widgets/rai_cotizacion_offline_hint.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart'; // DetalleLugar
 
 // ===== Flags =====
@@ -78,6 +80,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
   // Precios
   double precioCalculado = 0.0;
+  bool _precioEsEstimadoOffline = false;
 
   // Mapa
   GoogleMapController? _map;
@@ -172,7 +175,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     super.initState();
     _initUbicacionParaMapa();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) => _expandSheet());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _expandSheet();
+      unawaited(_aplicarDestinoPendienteAsistente());
+    });
     _nudgeCtrl.repeat(reverse: true);
     _nudgeTimer = Timer(const Duration(seconds: 5), () {
       if (mounted) _nudgeCtrl.stop();
@@ -187,6 +193,41 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     _motorMapGestureEndDebounce?.cancel();
     LocationPermissionService.stopGentleRetry();
     super.dispose();
+  }
+
+  Future<void> _aplicarDestinoPendienteAsistente() async {
+    final det = RaiAsistenteDestinoPendiente.consumir();
+    if (det == null || !mounted) return;
+
+    _destinoDet = det;
+    latDestino = det.lat;
+    lonDestino = det.lon;
+    destino = det.displayLabel;
+    destinoTexto = det.displayLabel;
+
+    _markers.removeWhere((m) => m.markerId.value == 'destino');
+    _markers.add(
+      Marker(
+        markerId: const MarkerId('destino'),
+        position: LatLng(det.lat, det.lon),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        infoWindow: InfoWindow(title: det.displayLabel),
+        zIndexInt: 1,
+      ),
+    );
+
+    if (_origenMap != null) {
+      await _dibujarRutaReal(
+        oLat: _origenMap!.latitude,
+        oLon: _origenMap!.longitude,
+        dLat: det.lat,
+        dLon: det.lon,
+        previewOnly: true,
+      );
+    }
+    if (!mounted) return;
+    setState(() {});
+    await _obtenerUbicacionYCalcularPrecio();
   }
 
   Future<void> _expandSheet() async {
@@ -239,8 +280,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   Future<void> _initUbicacionParaMapa() async {
     setState(() => _cargandoUbicacion = true);
 
-    // Flujo explícito (solicitar viaje): puede mostrar diálogo del SO si aún denied.
-    final basic = await LocationPermissionService.checkAndRequestBasicPermission();
+    final basic = await LocationPermissionService.checkAndRequestBasicPermission(
+      requestIfDenied: false,
+    );
     if (!basic.serviceEnabled) {
       if (mounted) {
         setState(() => _cargandoUbicacion = false);
@@ -283,6 +325,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
       _updateOrigenMarker(here);
 
       setState(() => _cargandoUbicacion = false);
+      unawaited(RaiUbicacionClienteService.instance.refrescar());
 
       await _motorMapAnimate(
         (c) => c.animateCamera(
@@ -339,6 +382,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   void _invalidarCotizacionMotor() {
     _cotizacionSeq++;
     precioCalculado = 0;
+    _precioEsEstimadoOffline = false;
     ubicacionObtenida = false;
     distanciaKm = 0;
     _cargando = false;
@@ -590,18 +634,14 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     try {
       final ready = await LocationPermissionService.ensureLocationReady(
         context: context,
+        requestIfDenied: false,
       );
       if (!ready.isUsable) {
         _snack(LocationReadiness.kMsgEsperandoUbicacion);
         setState(() => _cargando = false);
         return;
       }
-      if (mounted) {
-        await LocationPermissionService.maybePromptAlwaysForCriticalFlow(
-          context,
-          isTaxista: false,
-        );
-      }
+      unawaited(RaiUbicacionClienteService.instance.refrescar());
 
       final posicion = ready.position!;
       final origenLat = posicion.latitude;
@@ -644,27 +684,22 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
             dPM.isNotEmpty ? _direccionBonitaRD(dPM.first) : destino;
       }
 
-      // Distancia base + Directions
-      double dist =
-          DistanciaService.calcularDistancia(origenLat, origenLon, dLat, dLon);
-
-      DirectionsResult? dir;
-      if (kUseDirectionsForDistance) {
-        dir = await DirectionsService.drivingDistanceKm(
-          originLat: origenLat,
-          originLon: origenLon,
-          destLat: dLat,
-          destLon: dLon,
-          withTraffic: true,
-          region: 'do',
-        );
-        if (dir != null && dir.km > 0) dist = dir.km;
-      }
-
-      if (dist <= 0) {
+      // Distancia base + Directions (offline → estimado local)
+      final RaiDistanciaCotizacion? distRes =
+          await RaiOfflineCotizacionService.resolverDistancia(
+        originLat: origenLat,
+        originLon: origenLon,
+        destLat: dLat,
+        destLon: dLon,
+        useDirections: kUseDirectionsForDistance,
+      );
+      if (distRes == null || distRes.km <= 0) {
         _snack("❌ No se pudo calcular una distancia válida.");
         return;
       }
+      final double dist = distRes.km;
+      final DirectionsResult? dir = distRes.directions;
+      final bool estimadoOffline = distRes.estimadoOffline;
 
       // ✅ 1. Calcular distancia FINAL (si es ida y vuelta)
       final double distanciaFinal = idaYVuelta ? dist * 2 : dist;
@@ -690,6 +725,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
         distanciaKm = dist; // Guardamos la distancia original
         precioCalculado = precioDouble;
+        _precioEsEstimadoOffline = estimadoOffline;
         ubicacionObtenida = true;
 
         _markers
@@ -781,6 +817,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
       _snack(kMsgLogin);
       return;
     }
+    if (RaiOfflineCotizacionService.estaOffline) {
+      _snack(RaiOfflineCotizacionService.mensajeNoConfirmar);
+      return;
+    }
 
     if (!ubicacionObtenida ||
         latCliente == null ||
@@ -793,15 +833,17 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     }
 
     setState(() => _cargando = true);
+    NavigatorState? navAntesDeCrear =
+        NavigationService.navigatorKey.currentState;
+    if (navAntesDeCrear == null && mounted) {
+      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
+    }
     try {
       await u.getIdToken(true);
 
       final DateTime nowUtc = DateTime.now().toUtc();
 
-      // ✅ extras SIN romper índices (mismo patrón)
       final extras = <String, dynamic>{
-        'tipoServicio': 'NORMAL',
-        'canalAsignacion': 'pool',
         'modoSolicitud': 'AHORA',
         'aceptableDesdeUtc': nowUtc
             .subtract(const Duration(minutes: kAcceptLeadMinutes))
@@ -820,20 +862,19 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         fechaHora: nowUtc,
         precio: precioCalculado,
         metodoPago: metodoPago,
-        tipoVehiculo: kVehiculoMotor, // ✅ Motor fijo
+        tipoVehiculo: kVehiculoMotor,
         idaYVuelta: idaYVuelta,
         distanciaKm: distanciaKm > 0 ? distanciaKm : null,
+        tipoServicio: 'motor',
+        canalAsignacion: 'pool',
         extras: extras,
       );
 
       _snack("✅ Motor solicitado — #${id.substring(0, 6)}");
 
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
-        );
-      }
+      await NavigationService.clearAndGoViajeEnCursoCliente(
+        preNav: navAntesDeCrear,
+      );
     } on fs.FirebaseException catch (e) {
       _snack('❌ Firestore (${e.code}): ${e.message ?? e}');
     } catch (e) {
@@ -1014,6 +1055,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                     ),
                   ),
                 ),
+                RaiCotizacionOfflineHint(visible: _precioEsEstimadoOffline),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
@@ -1050,7 +1092,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: (ubicacionObtenida && precioCalculado > 0)
+                    onPressed: (ubicacionObtenida &&
+                            precioCalculado > 0 &&
+                            !RaiOfflineCotizacionService.estaOffline)
                         ? _confirmarMotor
                         : null,
                     style: ElevatedButton.styleFrom(
@@ -1398,6 +1442,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                       child: kUsePlacesAutocomplete
                                           ? CampoLugarAutocomplete(
                                               label: '',
+                                              asistenteDireccionHabilitado:
+                                                  true,
+                                              biasLat: _origenMap?.latitude,
+                                              biasLon: _origenMap?.longitude,
                                               hint: '¿A dónde vamos?',
                                               onPlaceSelected: (det) async {
                                                 _destinoDet = det;
@@ -1436,6 +1484,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                                     dLon: det.lon,
                                                     previewOnly: true,
                                                   );
+                                                }
+                                                if (mounted) {
+                                                  await _obtenerUbicacionYCalcularPrecio();
                                                 }
                                               },
                                               onTextChanged: (t) {
@@ -1554,7 +1605,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                       width: double.infinity,
                                       child: ElevatedButton(
                                         onPressed: (ubicacionObtenida &&
-                                                precioCalculado > 0)
+                                                precioCalculado > 0 &&
+                                                !RaiOfflineCotizacionService
+                                                    .estaOffline)
                                             ? _confirmarMotor
                                             : null,
                                         style: _motoCtaStyle(context),

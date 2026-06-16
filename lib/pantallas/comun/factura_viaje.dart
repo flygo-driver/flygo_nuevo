@@ -11,6 +11,8 @@ import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
+import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
+import 'package:flygo_nuevo/widgets/rai_pago_tarjeta_panel.dart';
 
 /// Pantalla de factura visual del viaje.
 ///
@@ -63,12 +65,13 @@ class FacturaViaje extends StatelessWidget {
         title: const Text('RAI — Comprobante de viaje'),
         centerTitle: true,
       ),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('viajes')
-            .doc(viajeId)
-            .snapshots(),
-        builder: (context, snap) {
+      body: SafeArea(
+        child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(viajeId)
+              .snapshots(),
+          builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting &&
               !snap.hasData) {
             return const Center(child: CircularProgressIndicator());
@@ -86,12 +89,13 @@ class FacturaViaje extends StatelessWidget {
             );
           }
           final data = snap.data!.data() ?? <String, dynamic>{};
-          return _FacturaContent(
-            viajeId: viajeId,
-            data: data,
-            role: role,
-          );
-        },
+            return _FacturaContent(
+              viajeId: viajeId,
+              data: data,
+              role: role,
+            );
+          },
+        ),
       ),
     );
   }
@@ -254,6 +258,8 @@ class _FacturaContent extends StatelessWidget {
     final String metodoPago = (data['metodoPago'] ?? 'Efectivo').toString();
     final bool esTransferencia = MetodoPagoViaje.esTransferencia(metodoPago);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoPago);
+    final bool esTarjeta = MetodoPagoViaje.esTarjeta(metodoPago);
+    final bool usaRecaudoRai = TransferenciaRecaudoUi.viajeUsaRecaudoEnCuentaRai(data);
     final double total = totalRdDesdeDocViaje(data);
     final bool montoPendienteServidor =
         viajeDocCompletado(data) && total <= 1e-6;
@@ -278,6 +284,7 @@ class _FacturaContent extends StatelessWidget {
     final _EstadoPagoUI estadoUI = _calcularEstadoPagoUI(
       esEfectivo: esEfectivo,
       esTransferencia: esTransferencia,
+      esTarjeta: esTarjeta,
       transferenciaConfirmada: transferenciaConfirmada,
       estadoPago: estadoPago,
       paymentStatus: paymentStatus,
@@ -321,7 +328,7 @@ class _FacturaContent extends StatelessWidget {
     final double sysBottom = mq.viewPadding.bottom > mq.padding.bottom
         ? mq.viewPadding.bottom
         : mq.padding.bottom;
-    final double bottomScrollPad = sysBottom + 56;
+    final double bottomScrollPad = sysBottom + 72;
 
     return ListView(
       padding: EdgeInsets.fromLTRB(20, 12, 20, bottomScrollPad),
@@ -410,6 +417,28 @@ class _FacturaContent extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               _SelloEstado(estado: estadoUI),
+              if (!montoPendienteServidor && total > 1e-6) ...[
+                const SizedBox(height: 20),
+                Text(
+                  FormatosMoneda.rd(total),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        color: cs.primary,
+                        letterSpacing: -0.5,
+                        height: 1.05,
+                      ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Total del servicio',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ],
             ],
           ),
         ),
@@ -566,18 +595,44 @@ class _FacturaContent extends StatelessWidget {
         ],
         if (esTransferencia) ...[
           const SizedBox(height: 12),
-          _SectionTransferencia(
-            viajeId: viajeId,
-            role: role,
-            total: total,
-            montoPendienteServidor: montoPendienteServidor,
-            uidTaxista: uidTaxista,
-            snap: snapBancario,
-            comprobanteUrl: comprobanteUrl,
-            transferenciaConfirmada: transferenciaConfirmada,
-            estadoPago: estadoPago,
-            paymentStatus: paymentStatus,
-            motivoRechazo: motivoRechazo,
+          if (usaRecaudoRai)
+            _FacturaSectionRecaudoRai(
+              viajeId: viajeId,
+              role: role,
+              data: data,
+              total: total,
+              transferenciaConfirmada: transferenciaConfirmada,
+              estadoPago: estadoPago,
+              comprobanteUrl: comprobanteUrl,
+              uidTaxista: uidTaxista,
+            )
+          else
+            _SectionTransferencia(
+              viajeId: viajeId,
+              role: role,
+              total: total,
+              montoPendienteServidor: montoPendienteServidor,
+              uidTaxista: uidTaxista,
+              snap: snapBancario,
+              comprobanteUrl: comprobanteUrl,
+              transferenciaConfirmada: transferenciaConfirmada,
+              estadoPago: estadoPago,
+              paymentStatus: paymentStatus,
+              motivoRechazo: motivoRechazo,
+            ),
+        ],
+        if (esTarjeta) ...[
+          const SizedBox(height: 12),
+          _SectionCard(
+            title: 'Pago con tarjeta',
+            children: [
+              RaiPagoTarjetaPanel(
+                viajeId: viajeId,
+                viajeData: data,
+                montoRd: total,
+                role: role,
+              ),
+            ],
           ),
         ],
         if (esTaxista) ...[
@@ -625,6 +680,7 @@ class _FacturaContent extends StatelessWidget {
   static _EstadoPagoUI _calcularEstadoPagoUI({
     required bool esEfectivo,
     required bool esTransferencia,
+    required bool esTarjeta,
     required bool transferenciaConfirmada,
     required String estadoPago,
     required String paymentStatus,
@@ -636,6 +692,22 @@ class _FacturaContent extends StatelessWidget {
         color: Colors.green,
         icon: Icons.attach_money_rounded,
       );
+    }
+    if (esTarjeta) {
+      if (estadoPago == 'verificado' || paymentStatus == 'captured') {
+        return const _EstadoPagoUI(
+          label: 'TARJETA PAGADA',
+          color: Colors.green,
+          icon: Icons.verified_rounded,
+        );
+      }
+      if (paymentStatus == 'pending') {
+        return const _EstadoPagoUI(
+          label: 'TARJETA PENDIENTE',
+          color: Colors.orange,
+          icon: Icons.credit_card,
+        );
+      }
     }
     if (transferenciaConfirmada || estadoPago == 'verificado') {
       return const _EstadoPagoUI(
@@ -771,7 +843,7 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
                     uData?['tienePagoPendiente'] == true;
             final bool legacyTope =
                 PagosTaxistaRepo.bloqueoPorComisionLegacyTope(bill);
-            const double minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
+            final double minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
             final bool riesgoPrepago = !bloqueoPrepago &&
                 !bloqueoPool &&
                 pend <= 1e-6 &&
@@ -939,6 +1011,58 @@ class _FacturaViajeDocBanner extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Transferencia a cuenta RAI (referencia + QR cableado).
+class _FacturaSectionRecaudoRai extends StatelessWidget {
+  const _FacturaSectionRecaudoRai({
+    required this.viajeId,
+    required this.role,
+    required this.data,
+    required this.total,
+    required this.transferenciaConfirmada,
+    required this.estadoPago,
+    required this.comprobanteUrl,
+    required this.uidTaxista,
+  });
+
+  final String viajeId;
+  final String role;
+  final Map<String, dynamic> data;
+  final double total;
+  final bool transferenciaConfirmada;
+  final String estadoPago;
+  final String comprobanteUrl;
+  final String uidTaxista;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool pagado =
+        transferenciaConfirmada || estadoPago == 'verificado';
+    return _SectionCard(
+      title: 'Pago a cuenta RAI (transferencia)',
+      children: [
+        TransferenciaRecaudoUi.panel(
+          viajeData: data,
+          uidTaxista: uidTaxista,
+          montoRd: total,
+          tituloRai: 'PAGAR A RAI — COMPROBANTE DE VIAJE',
+        ),
+        if (!pagado && role == 'cliente' && comprobanteUrl.isEmpty) ...[
+          const SizedBox(height: 12),
+          _BotonSubirComprobante(viajeId: viajeId),
+        ],
+        if (pagado) ...[
+          const SizedBox(height: 8),
+          const _InfoBanner(
+            icon: Icons.verified_rounded,
+            color: Colors.green,
+            text: 'Transferencia verificada por RAI.',
+          ),
+        ],
+      ],
     );
   }
 }

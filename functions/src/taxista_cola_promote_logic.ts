@@ -5,6 +5,8 @@
 export type AnyMap = Record<string, unknown>;
 
 export const UMBRAL_COMISION_LEGACY_RD = 500;
+/** Tras el 1.er viaje en efectivo gratis: saldo prepago disponible mínimo para operar (default; ADM en `config/comision_prepago`). */
+export const MIN_SALDO_PREPAGO_COMISION_RD = 200;
 
 export function comisionPendienteRdFromBilletera(data: AnyMap | undefined): number {
   if (!data) return 0;
@@ -46,20 +48,24 @@ export function saldoDisponiblePrepagoRdFromBilletera(data: AnyMap | undefined):
 }
 
 /** Igual que `PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo` / `bloqueoOperativoPrepago` en finance.ts */
-export function bloqueoOperativoPorComisionEfectivo(billeData: AnyMap | undefined): boolean {
+export function bloqueoOperativoPorComisionEfectivo(
+  billeData: AnyMap | undefined,
+  minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
+): boolean {
   const pend = comisionPendienteRdFromBilletera(billeData);
   if (pend + 1e-9 >= UMBRAL_COMISION_LEGACY_RD) return true;
   if (pend > 1e-6) return false;
   if (billeData?.primerViajeComisionGratisConsumido !== true) return false;
-  return saldoDisponiblePrepagoRdFromBilletera(billeData) <= 1e-6;
+  return saldoDisponiblePrepagoRdFromBilletera(billeData) + 1e-9 < minimoOperativoRd;
 }
 
 export function taxistaSinBloqueoPrepagoOperativo(
   uData: AnyMap | undefined,
   billeData: AnyMap | undefined,
+  minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
 ): boolean {
   if (uData?.tienePagoPendiente === true) return false;
-  if (bloqueoOperativoPorComisionEfectivo(billeData)) return false;
+  if (bloqueoOperativoPorComisionEfectivo(billeData, minimoOperativoRd)) return false;
   return true;
 }
 

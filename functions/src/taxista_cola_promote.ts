@@ -8,6 +8,7 @@ import {
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 import { logAdminAudit } from "./audit.js";
+import { getComisionPrepagoConfig } from "./finance.js";
 import {
   mensajeBloqueoOperativo,
   sortColaCandidates,
@@ -210,6 +211,7 @@ async function tryPromoteOne(
   uidTaxista: string,
   viajeId: string,
   slot: number,
+  minimoOperativoRd: number,
 ): Promise<string | null | typeof TX_BLOCKED> {
   const uRef = usuarios().doc(uidTaxista);
   const vRef = viajes().doc(viajeId);
@@ -219,7 +221,7 @@ async function tryPromoteOne(
     const uSnap = await tx.get(uRef);
     const bSnap = await tx.get(billeteras().doc(uidTaxista));
     const uData = (uSnap.data() ?? {}) as AnyMap;
-    if (!taxistaSinBloqueoPrepagoOperativo(uData, bSnap.data() as AnyMap | undefined)) {
+    if (!taxistaSinBloqueoPrepagoOperativo(uData, bSnap.data() as AnyMap | undefined, minimoOperativoRd)) {
       return TX_BLOCKED;
     }
 
@@ -300,12 +302,15 @@ export type PromoverSiguienteViajeResult = {
 };
 
 export async function ejecutarPromoverSiguienteViaje(uidTaxista: string): Promise<PromoverSiguienteViajeResult> {
+  const prepagoCfg = await getComisionPrepagoConfig();
+  const minimoOperativoRd = prepagoCfg.minimoOperativoRd;
+
   const uRef = usuarios().doc(uidTaxista);
   const uSnap = await uRef.get();
   const uData = (uSnap.data() ?? {}) as AnyMap;
   const bSnap = await billeteras().doc(uidTaxista).get();
 
-  if (!taxistaSinBloqueoPrepagoOperativo(uData, bSnap.data() as AnyMap | undefined)) {
+  if (!taxistaSinBloqueoPrepagoOperativo(uData, bSnap.data() as AnyMap | undefined, minimoOperativoRd)) {
     return {
       ok: false,
       promotedViajeId: null,
@@ -332,7 +337,7 @@ export async function ejecutarPromoverSiguienteViaje(uidTaxista: string): Promis
   keys.sort(sortColaCandidates);
 
   for (const k of keys) {
-    const promoted = await tryPromoteOne(uidTaxista, k.id, k.slot);
+    const promoted = await tryPromoteOne(uidTaxista, k.id, k.slot, minimoOperativoRd);
     if (promoted === TX_BLOCKED) {
       return {
         ok: false,

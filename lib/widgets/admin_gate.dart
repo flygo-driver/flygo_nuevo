@@ -4,9 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 // Importa el panel admin desde donde realmente está en tu proyecto.
-// Si tu AdminHome vive en lib/pantallas/admin/admin_home.dart,
-// este import relativo es correcto:
-import '../pantallas/admin/admin_home.dart';
+import '../pantallas/admin/admin_centro_operaciones.dart';
 import '../servicios/roles_service.dart';
 
 class AdminGate extends StatelessWidget {
@@ -38,7 +36,7 @@ class AdminGate extends StatelessWidget {
             .toLowerCase();
 
         if (RolesService.esRolAdmin(rolUsuario)) {
-          return const AdminHome();
+          return const AdminCentroOperaciones();
         }
 
         // 2do stream (fallback): roles/{uid}
@@ -57,7 +55,7 @@ class AdminGate extends StatelessWidget {
                 .trim()
                 .toLowerCase();
             if (RolesService.esRolAdmin(rolDoc)) {
-              return const AdminHome();
+              return const AdminCentroOperaciones();
             }
 
             // Ninguna fuente dijo admin

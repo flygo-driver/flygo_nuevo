@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   bloqueoOperativoPorComisionEfectivo,
+  MIN_SALDO_PREPAGO_COMISION_RD,
   sortColaCandidates,
   taxistaSinBloqueoPrepagoOperativo,
   UMBRAL_COMISION_LEGACY_RD,
@@ -37,4 +38,32 @@ test("bloqueoOperativoPorComisionEfectivo: comisión legacy >= umbral", () => {
 
 test("taxistaSinBloqueoPrepagoOperativo: libre con billetera vacía", () => {
   assert.equal(taxistaSinBloqueoPrepagoOperativo({}, undefined), true);
+});
+
+test("bloqueoOperativoPorComisionEfectivo: prepago bajo mínimo tras 1.er efectivo", () => {
+  assert.equal(
+    bloqueoOperativoPorComisionEfectivo(
+      {
+        primerViajeComisionGratisConsumido: true,
+        saldoPrepagoComisionRd: 50,
+        comisionPendiente: 0,
+      },
+      MIN_SALDO_PREPAGO_COMISION_RD,
+    ),
+    true,
+  );
+});
+
+test("bloqueoOperativoPorComisionEfectivo: prepago >= mínimo no bloquea", () => {
+  assert.equal(
+    bloqueoOperativoPorComisionEfectivo(
+      {
+        primerViajeComisionGratisConsumido: true,
+        saldoPrepagoComisionRd: MIN_SALDO_PREPAGO_COMISION_RD,
+        comisionPendiente: 0,
+      },
+      MIN_SALDO_PREPAGO_COMISION_RD,
+    ),
+    false,
+  );
 });

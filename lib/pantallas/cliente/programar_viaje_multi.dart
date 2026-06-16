@@ -10,17 +10,19 @@ import 'package:cloud_firestore/cloud_firestore.dart' as fs;
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
-import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
+import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
@@ -139,6 +141,33 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         curve: Curves.easeOutCubic,
       );
     });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_precargarOrigenGpsSiListo());
+  }
+
+  /// Origen desde GPS sin pedir permiso al SO (solo lectura; el banner del shell guía).
+  Future<void> _precargarOrigenGpsSiListo() async {
+    if (_origen != null) return;
+    try {
+      final pos = await GpsService.obtenerUbicacionActual(
+        timeout: const Duration(seconds: 10),
+        maxEdadUltima: const Duration(minutes: 30),
+      );
+      if (pos == null || !mounted) return;
+      setState(() {
+        _origen = _LugarSel(
+          label: 'Mi ubicación actual',
+          lat: pos.latitude,
+          lon: pos.longitude,
+        );
+      });
+      _programarCalculoAutomatico();
+      unawaited(RaiUbicacionClienteService.instance.refrescar());
+    } catch (_) {}
   }
 
   @override
@@ -770,17 +799,37 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       navegoFuera = true;
       if (irAViajeEnCurso) {
         if (tipoSrv == 'turismo') {
-          await NavigationService.clearAndGo(
-            EsperaAsignacionTurismo(viajeId: id),
-          );
+          final fs.DocumentSnapshot<Map<String, dynamic>> turismoSnap =
+              await fs.FirebaseFirestore.instance
+                  .collection('viajes')
+                  .doc(id)
+                  .get();
+          final Map<String, dynamic> turismoData =
+              turismoSnap.data() ?? <String, dynamic>{};
+          final bool choferAsignado = (turismoData['uidTaxista'] ??
+                  turismoData['taxistaId'] ??
+                  '')
+              .toString()
+              .trim()
+              .isNotEmpty;
+          if (choferAsignado) {
+            await NavigationService.clearAndGoViajeEnCursoCliente(
+              preNav: navAntesDeCrear,
+            );
+          } else {
+            await NavigationService.clearAndGoPage(
+              preNav: navAntesDeCrear,
+              page: EsperaAsignacionTurismo(viajeId: id),
+            );
+          }
         } else {
           await NavigationService.clearAndGoViajeEnCursoCliente(
             preNav: navAntesDeCrear,
           );
         }
       } else {
-        final NavigatorState? nav =
-            NavigationService.navigatorKey.currentState ?? navAntesDeCrear;
+        final NavigatorState? nav = navAntesDeCrear ??
+            NavigationService.navigatorKey.currentState;
         if (nav != null && nav.mounted) {
           await nav.pushAndRemoveUntil<void>(
             MaterialPageRoute<void>(
@@ -2276,173 +2325,18 @@ class DestinoSeleccionado {
   });
 }
 
-// ---------- BottomSheet de búsqueda ----------
-class _BuscarLugarSheet extends StatefulWidget {
+// ---------- BottomSheet de búsqueda (mic + RAI vía CampoLugarAutocomplete) ----------
+class _BuscarLugarSheet extends StatelessWidget {
   final String titulo;
   const _BuscarLugarSheet({required this.titulo});
 
   @override
-  State<_BuscarLugarSheet> createState() => _BuscarLugarSheetState();
-}
-
-class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
-  final TextEditingController _ctrl = TextEditingController();
-  final LugaresService _lugares = LugaresService.instance;
-  Timer? _deb;
-  bool _loading = false;
-  List<PrediccionLugar> _preds = const <PrediccionLugar>[];
-  List<RecienteLugar> _recientes = const <RecienteLugar>[];
-
-  int _autocompleteSeq = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _cargarRecientes();
-  }
-
-  @override
-  void dispose() {
-    _deb?.cancel();
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _cargarRecientes() async {
-    final list = await _lugares.cargarRecientes();
-    if (!mounted) return;
-    setState(() => _recientes = list);
-  }
-
-  List<PrediccionLugar> _recientesComoPredicciones(String q) {
-    final nq = q.trim().toLowerCase();
-    final out = <PrediccionLugar>[];
-    for (final e in _recientes) {
-      if (nq.isNotEmpty && !e.label.toLowerCase().contains(nq)) continue;
-      out.add(
-        PrediccionLugar(
-          placeId: e.placeId.isNotEmpty ? e.placeId : 'recent:${e.label}',
-          primary: e.label,
-          secondary: 'Reciente',
-        ),
-      );
-    }
-    return out;
-  }
-
-  bool _esReciente(PrediccionLugar p) =>
-      p.secondary == 'Reciente' || p.placeId.startsWith('recent:');
-
-  String _displayPrediccion(PrediccionLugar p) {
-    final sec = (p.secondary ?? '').trim();
-    if (sec.isNotEmpty && sec != 'Reciente') {
-      return '$sec — ${p.primary}';
-    }
-    return p.primary;
-  }
-
-  void _onChanged(String v) {
-    _deb?.cancel();
-    _deb = Timer(const Duration(milliseconds: 110), () async {
-      if (!mounted) return;
-      final String q = v.trim();
-      if (q.isEmpty) {
-        setState(() => _preds = _recientesComoPredicciones(''));
-        return;
-      }
-
-      final int seq = ++_autocompleteSeq;
-      setState(() => _loading = true);
-      try {
-        final remotas = await _lugares.autocompletar(q, country: 'DO');
-        if (!mounted || seq != _autocompleteSeq) return;
-        if (_ctrl.text.trim() != q) return;
-
-        final recientes = _recientesComoPredicciones(q);
-        final seen = <String>{};
-        final merged = <PrediccionLugar>[...recientes, ...remotas]
-            .where((p) {
-              final k = '${p.placeId}|${p.primary.toLowerCase()}';
-              if (seen.contains(k)) return false;
-              seen.add(k);
-              return true;
-            })
-            .toList(growable: false);
-
-        setState(() => _preds = _lugares.rankearPredicciones(merged, q));
-      } catch (e) {
-        if (!mounted || seq != _autocompleteSeq) return;
-        if (_ctrl.text.trim() != q) return;
-        setState(() => _preds = _recientesComoPredicciones(q));
-      } finally {
-        if (mounted && seq == _autocompleteSeq && _ctrl.text.trim() == q) {
-          setState(() => _loading = false);
-        }
-      }
-    });
-  }
-
-  Future<void> _selectPlace(PrediccionLugar p) async {
-    if (!mounted) return;
-    setState(() => _loading = true);
-    try {
-      if (_esReciente(p)) {
-        final idx = _recientes.indexWhere((e) => e.label == p.primary);
-        if (idx >= 0 && _recientes[idx].placeId.isNotEmpty) {
-          final det = await _lugares.detalle(_recientes[idx].placeId);
-          if (!mounted || det == null) return;
-          await _lugares.guardarReciente(det);
-          if (!mounted) return;
-          Navigator.pop(
-            context,
-            _LugarSel(
-              label: det.displayLabel,
-              lat: det.lat,
-              lon: det.lon,
-            ),
-          );
-          return;
-        }
-      }
-
-      final det = await _lugares.detalle(p.placeId);
-      if (!mounted || det == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No se pudo obtener el lugar')),
-          );
-        }
-        return;
-      }
-      await _lugares.guardarReciente(det);
-      if (!mounted) return;
-      Navigator.pop(
-        context,
-        _LugarSel(
-          label: det.displayLabel,
-          lat: det.lat,
-          lon: det.lon,
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final isDestino = widget.titulo.contains('Destino');
+    final isDestino = titulo.contains('Destino');
     final mq = MediaQuery.of(context);
     final kb = mq.viewInsets.bottom;
     final sh = mq.size.height;
     final pad = mq.padding;
-    // Altura del panel: se reduce cuando el teclado está abierto para que la lista siga siendo scrollable arriba del teclado.
     final panelH = math
         .min(
           sh * 0.62,
@@ -2465,84 +2359,36 @@ class _BuscarLugarSheetState extends State<_BuscarLugarSheet> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Text(
-                  widget.titulo,
+                  titulo,
                   style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.w800),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-                child: TextField(
-                  controller: _ctrl,
-                  style: const TextStyle(color: Colors.white),
-                  scrollPadding:
-                      EdgeInsets.only(bottom: math.max(200.0, sh * 0.28)),
-                  keyboardType: TextInputType.streetAddress,
-                  textInputAction: TextInputAction.search,
-                  decoration: InputDecoration(
-                    hintText: isDestino
-                        ? 'Escribe barrio, calle, hotel, aeropuerto…'
-                        : 'Escribe dirección o referencia…',
-                    filled: true,
-                    fillColor: const Color(0xFF1A1A1A),
-                    prefixIcon: const Icon(Icons.search, color: Colors.white54),
-                    suffixIcon: _ctrl.text.isNotEmpty
-                        ? IconButton(
-                            icon:
-                                const Icon(Icons.clear, color: Colors.white54),
-                            onPressed: () {
-                              _ctrl.clear();
-                              _onChanged('');
-                              setState(() {});
-                            },
-                          )
-                        : null,
-                  ),
-                  onChanged: (v) {
-                    setState(() {});
-                    _onChanged(v);
-                  },
-                ),
-              ),
-              if (_loading)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Center(
-                    child: SizedBox(
-                      width: 26,
-                      height: 26,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.2,
-                        color: Colors.greenAccent,
-                      ),
-                    ),
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
+              ),
               Expanded(
-                child: Scrollbar(
-                  thumbVisibility: true,
-                  child: ListView.separated(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-                    itemCount: _preds.length,
-                    separatorBuilder: (_, __) =>
-                        const Divider(color: Colors.white12, height: 1),
-                    itemBuilder: (_, int i) {
-                      final PrediccionLugar p = _preds[i];
-                      final esReciente = _esReciente(p);
-                      return ListTile(
-                        leading: Icon(
-                          esReciente ? Icons.history : Icons.location_on,
-                          color: esReciente ? Colors.amber : Colors.greenAccent,
-                          size: 20,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                  child: CampoLugarAutocomplete(
+                    label: isDestino ? 'Buscar destino' : 'Buscar origen',
+                    hint: isDestino
+                        ? 'Barrio, calle, hotel, aeropuerto…'
+                        : 'Dirección o referencia…',
+                    country: 'DO',
+                    asistenteDireccionHabilitado: true,
+                    fieldAccent: Colors.greenAccent,
+                    fieldFill: const Color(0xFF1A1A1A),
+                    fieldTextColor: Colors.white,
+                    fieldHintColor: Colors.white54,
+                    fieldLabelColor: Colors.white70,
+                    onPlaceSelected: (det) {
+                      Navigator.pop(
+                        context,
+                        _LugarSel(
+                          label: det.displayLabel,
+                          lat: det.lat,
+                          lon: det.lon,
                         ),
-                        title: Text(
-                          _displayPrediccion(p),
-                          style: const TextStyle(color: Colors.white),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () => _selectPlace(p),
                       );
                     },
                   ),

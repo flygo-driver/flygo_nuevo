@@ -3,11 +3,18 @@ import 'dart:async';
 import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
+import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
+import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
+import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -125,6 +132,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
   int _capacidad = 15;
   int _minConf = 8;
+  int _cuposComisionRai = 5;
 
   double _precio = 1000;
   double _deposit = 0.30; // 0..1
@@ -148,6 +156,13 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   bool _subiendoBannerVideo = false;
 
   bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ajustarCuposComisionRaiPorDefecto();
+    unawaited(ComisionViajePctService.refresh(force: true));
+  }
 
   @override
   void dispose() {
@@ -176,6 +191,24 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   void _snack(String m) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  void _ajustarCuposComisionRaiPorDefecto() {
+    _cuposComisionRai = PoolRepo.defaultCuposComisionRai(
+      capacidad: _capacidad,
+      minParaConfirmar: _minConf,
+    );
+  }
+
+  double _prepagoApartadoEstimadoRd() {
+    final cupos = PoolRepo.cuposReservaComision(
+      cuposComisionRai: _cuposComisionRai,
+      minParaConfirmar: _minConf,
+      capacidad: _capacidad,
+    );
+    final mult = _sentido == 'ida_y_vuelta' ? 2.0 : 1.0;
+    final pct = PlataformaEconomia.comisionViajePorcentaje / 100.0;
+    return cupos * _precio * mult * pct;
   }
 
   Future<void> _pickFecha({required bool esVuelta}) async {
@@ -242,7 +275,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     }
 
     if (_bannerUrl.trim().isEmpty && _bannerVideoUrl.trim().isEmpty) {
-      _snack('Sube al menos una imagen o video banner para publicar la gira.');
+      _snack(
+        'Sube al menos una imagen o video banner para publicar la salida.',
+      );
       return;
     }
     if (_agenciaNombre.trim().isEmpty) {
@@ -271,6 +306,10 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         return;
       }
     }
+    if (_cuposComisionRai < 1 || _cuposComisionRai > _capacidad) {
+      _snack('Cupos RAI para comisión: entre 1 y $_capacidad.');
+      return;
+    }
 
     // Porcentajes (aseguramos fracción 0..1 aunque vengan como 30..100)
     final double dep = _deposit > 1 ? _deposit / 100.0 : _deposit;
@@ -289,7 +328,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
       final tipoInput = _tipo.trim();
       final tipoCanon = _tipoCanonico(tipoInput);
-      final String id = await PoolRepo.crearPool(
+      final CrearPoolResult creado = await PoolRepo.crearPool(
         tipo: tipoCanon,
         sentido: _sentido,
         origenTown: _origenTown.trim(),
@@ -298,6 +337,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         fechaVuelta: _sentido == 'ida_y_vuelta' ? _fechaVuelta : null,
         capacidad: _capacidad,
         minParaConfirmar: _minConf,
+        cuposComisionRai: _cuposComisionRai,
         precioPorAsiento: _precio.toDouble(),
         pickupPoints: pickups.isEmpty ? null : pickups,
         depositPct: dep,
@@ -335,13 +375,64 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       );
 
       if (!mounted) return;
-      _snack('✅ Viaje creado (#$id)');
+      final aviso = creado.aviso?.trim();
+      if (aviso != null && aviso.isNotEmpty) {
+        _snack('✅ Viaje creado (#${creado.poolId}). $aviso');
+      } else {
+        _snack('✅ Viaje creado (#${creado.poolId})');
+      }
+      _snack(PoolsProductoCopy.avisoTrasPublicar);
+      _snack(
+        'Para cancelar si hace falta: ${PoolsProductoCopy.salidasMis} → Cancelar salida.',
+      );
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const PoolsTaxistaLista()),
         (route) => false,
       );
+    } on PoolGiraAbusoBloqueo catch (b) {
+      if (!mounted) return;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        unawaited(GirasAbusoAdminService.marcarBloqueado(uid));
+      }
+      _snack('❌ ${b.mensajeUsuario}');
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('No puedes publicar otra salida'),
+          content: Text(b.mensajeUsuario),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Entendido'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const Soporte()),
+                );
+              },
+              child: const Text('Contactar soporte'),
+            ),
+          ],
+        ),
+      );
     } catch (e) {
-      if (mounted) _snack('❌ ${e.toString()}');
+      if (kDebugMode) {
+        debugPrint('[PoolsTaxistaCrear] crearPool error: $e');
+      }
+      if (!mounted) return;
+      if (e is FirebaseException && e.code == 'permission-denied') {
+        _snack(
+          '❌ No se pudo publicar la salida (permisos). '
+          'Actualiza la app o contacta soporte.',
+        );
+        return;
+      }
+      final String msg = e.toString().replaceFirst('Exception: ', '');
+      _snack('❌ $msg');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -359,7 +450,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         foregroundColor: p.foreground,
         elevation: p.isDark ? 0 : 0.5,
         title: Text(
-          'Crear viaje por cupos 🏝️',
+          PoolsProductoCopy.publicarTitulo,
           style: TextStyle(
             color: p.accent,
             fontWeight: FontWeight.w800,
@@ -404,7 +495,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                   _textFieldCtrl(
                     controller: _servicioBadgeCtrl,
                     label: 'Etiqueta corta del viaje (opcional)',
-                    hint: 'Ej: VIP, Gira Especial, Promo Semana Santa...',
+                    hint:
+                        'Ej: VIP, Excursión Saona, Viaje grupal Santiago, Promo…',
                     onChanged: (v) => _servicioBadge = v.trim(),
                   ),
                   _textFieldCtrl(
@@ -421,6 +513,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     hint: 'Busca punto de encuentro/salida',
                     initialText: _puntoSalida.isEmpty ? null : _puntoSalida,
                     country: 'DO',
+                    asistenteDireccionHabilitado: true,
                     onTextChanged: (v) {
                       _puntoSalida = v.trim();
                     },
@@ -436,6 +529,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     hint: 'Busca destino',
                     initialText: _destino,
                     country: 'DO',
+                    asistenteDireccionHabilitado: true,
                     onTextChanged: (v) => _destino = v.trim(),
                     onPlaceSelected: (det) {
                       _destino = det.displayLabel.trim();
@@ -500,6 +594,39 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
             _sectionTitle(
                 'Capacidad y finanzas', Icons.account_balance_wallet_outlined),
             _card(
+              child: Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 8),
+                  title: Text(
+                    '¿Cómo cobra comisión RAI?',
+                    style: TextStyle(
+                      color: context._poolsCrearPalette.inputText,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  leading: Icon(
+                    Icons.help_outline,
+                    color: context._poolsCrearPalette.accent,
+                    size: 22,
+                  ),
+                  children: [
+                    Text(
+                      PoolsProductoCopy.ayudaFinanzas,
+                      style: TextStyle(
+                        color: context._poolsCrearPalette.subtitleMuted,
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _card(
               child: Wrap(
                 runSpacing: 12,
                 children: [
@@ -507,17 +634,95 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     left: _num(
                       label: 'Capacidad',
                       initial: _capacidad.toString(),
-                      onSaved: (v) => _capacidad = int.parse(v),
+                      onSaved: (v) {
+                        _capacidad = int.parse(v);
+                        _ajustarCuposComisionRaiPorDefecto();
+                      },
                       min: 1,
                       max: 60,
                     ),
                     right: _num(
                       label: 'Mín. para confirmar',
                       initial: _minConf.toString(),
-                      onSaved: (v) => _minConf = int.parse(v),
+                      onSaved: (v) {
+                        _minConf = int.parse(v);
+                        _ajustarCuposComisionRaiPorDefecto();
+                      },
                       min: 0,
                       max: 60,
                     ),
+                  ),
+                  _num(
+                    label: 'Cupos que venderá RAI (tope comisión)',
+                    initial: _cuposComisionRai.toString(),
+                    onSaved: (v) => _cuposComisionRai = int.parse(v),
+                    onChanged: (v) {
+                      final n = int.tryParse(v.trim());
+                      if (n == null) return;
+                      setState(
+                        () => _cuposComisionRai = n.clamp(1, _capacidad),
+                      );
+                    },
+                    min: 1,
+                    max: 60,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      PoolsProductoCopy.comisionRaiFormula(
+                        PlataformaEconomia.comisionViajePorcentaje,
+                      ),
+                      style: TextStyle(
+                        color: context._poolsCrearPalette.subtitleMuted,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Al publicar solo se aparta prepago por el tope de cupos RAI. '
+                      'Al confirmar comisión se ajusta a lo vendido en la app y se devuelve el exceso.',
+                      style: TextStyle(
+                        color: context._poolsCrearPalette.subtitleMuted,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  Builder(
+                    builder: (ctx) {
+                      final cupos = PoolRepo.cuposReservaComision(
+                        cuposComisionRai: _cuposComisionRai,
+                        minParaConfirmar: _minConf,
+                        capacidad: _capacidad,
+                      );
+                      final prep = _prepagoApartadoEstimadoRd();
+                      final pct = PlataformaEconomia.comisionViajePorcentaje;
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: context._poolsCrearPalette.chipBg,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: context._poolsCrearPalette.cardBorder,
+                          ),
+                        ),
+                        child: Text(
+                          'Prepago apartado al publicar (tope, aprox.): RD\$ ${prep.toStringAsFixed(0)} '
+                          '($cupos cupos × RD\$ ${_precio.toStringAsFixed(0)} × $pct% máx. en app). '
+                          'Al confirmar comisión se cobra solo lo vendido en RAI.',
+                          style: TextStyle(
+                            color: context._poolsCrearPalette.inputText,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                   _row(
                     left: _num(
@@ -652,7 +857,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
           SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Crea una gira inolvidable: define ruta, paradas y cupos.',
+              'Publica tu salida (${PoolsProductoCopy.tipos}): ruta, paradas y cupos.',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w800,
@@ -974,6 +1179,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     required String label,
     required String initial,
     required void Function(String) onSaved,
+    void Function(String)? onChanged,
     double? min,
     double? max,
   }) {
@@ -981,6 +1187,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     return TextFormField(
       initialValue: initial,
       keyboardType: TextInputType.number,
+      onChanged: onChanged,
       style: TextStyle(color: p.inputText),
       decoration: InputDecoration(
         labelText: label,
@@ -1208,6 +1415,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
           label: 'Agregar parada',
           hint: 'Busca una parada (ej: Boca Chica, Juan Dolio...)',
           country: 'DO',
+          asistenteDireccionHabilitado: true,
           initialText: _paradaDraft.isEmpty ? null : _paradaDraft,
           onTextChanged: (v) => _paradaDraft = v,
           onPlaceSelected: (det) {

@@ -5,7 +5,10 @@ import 'package:flutter/services.dart';
 
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
-import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
+import 'package:flygo_nuevo/pantallas/cliente/apariencia.dart'
+    show AparienciaAudience;
+import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
+import 'package:flygo_nuevo/widgets/rai_cuenta_deposito_panel.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
@@ -20,7 +23,6 @@ import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/configuracion_bancaria.dart';
-import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
 
 String _pctLabel(double p) =>
     p == p.roundToDouble() ? p.round().toString() : p.toStringAsFixed(1);
@@ -188,7 +190,7 @@ class TaxistaCuentaTab extends StatelessWidget {
                     PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
                 final bloqueado =
                     PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(data);
-                const minimo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
+                final minimo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
                 const metaVisual = 500.0;
                 final progreso = (saldo / metaVisual).clamp(0.0, 1.0);
                 final faltante = (minimo - saldo).clamp(0.0, double.infinity);
@@ -288,71 +290,8 @@ class TaxistaCuentaTab extends StatelessWidget {
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: cs.outlineVariant.withValues(alpha: 0.7),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.account_balance, color: cs.primary),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Cuenta para depositar recarga',
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  const Text('Titular: ${RecargaBancariaConfig.titular}'),
-                  const Text('RNC: ${RecargaBancariaConfig.rnc}'),
-                  const Text('Banco: ${RecargaBancariaConfig.banco}'),
-                  const Text('Tipo: ${RecargaBancariaConfig.tipoCuenta}'),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'No. cuenta: ${RecargaBancariaConfig.numeroCuenta}',
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Copiar cuenta',
-                        onPressed: () async {
-                          await Clipboard.setData(
-                            const ClipboardData(
-                                text: RecargaBancariaConfig.numeroCuenta),
-                          );
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Número de cuenta copiado'),
-                            ),
-                          );
-                        },
-                        icon: Icon(Icons.copy, color: cs.primary),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+            child: const RaiCuentaDepositoPanel(
+              titulo: 'Cuenta para depositar recarga',
             ),
           ),
           _tile(
@@ -438,7 +377,7 @@ class TaxistaCuentaTab extends StatelessWidget {
               );
             },
           ),
-          const CuentaAparienciaTile(),
+          const CuentaAparienciaTile(audience: AparienciaAudience.taxista),
           if (uid != null) CuentaCerrarSesionTile(onTap: () => _logout(context)),
         ],
       ),

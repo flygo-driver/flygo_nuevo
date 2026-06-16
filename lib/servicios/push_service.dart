@@ -3,10 +3,9 @@ import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/servicios/fcm_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
@@ -58,6 +57,8 @@ class PushService {
     final String viajeId = (data['viajeId'] ?? '').toString().trim();
     if (viajeId.isEmpty) return;
 
+    final NavigatorState? preNav = NavigationService.navigatorKey.currentState;
+
     User? u = _auth.currentUser;
     if (u == null) {
       await Future<void>.delayed(const Duration(milliseconds: 1200));
@@ -82,15 +83,7 @@ class PushService {
       SetOptions(merge: true),
     );
 
-    final nav = NavigationService.navigatorKey.currentState;
-    if (nav == null || !nav.mounted) return;
-
-    nav.push(
-      MaterialPageRoute<void>(
-        fullscreenDialog: false,
-        builder: (_) => const ViajeEnCursoCliente(),
-      ),
-    );
+    await NavigationService.clearAndGoViajeEnCursoCliente(preNav: preNav);
   }
 
   /// Compat con tu código viejo:

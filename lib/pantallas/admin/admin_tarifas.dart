@@ -5,6 +5,7 @@ import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 
 import 'admin_ui_theme.dart';
+import '../../widgets/admin_drawer.dart';
 
 class AdminTarifas extends StatefulWidget {
   const AdminTarifas({super.key});
@@ -488,6 +489,7 @@ class _AdminTarifasState extends State<AdminTarifas> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
+      drawer: const AdminDrawer(),
       appBar: AppBar(
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),

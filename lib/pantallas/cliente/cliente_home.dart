@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/seleccion_servicio.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
 class ClienteHome extends StatefulWidget {
   const ClienteHome({super.key});
@@ -22,7 +23,16 @@ class _ClienteHomeState extends State<ClienteHome> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(ViajeSolicitadoActivo.redirigirSiHayViajeActivo(context));
+      NavigatorState? preNav = NavigationService.navigatorKey.currentState;
+      if (preNav == null) {
+        preNav = Navigator.of(context, rootNavigator: true);
+      }
+      unawaited(
+        ViajeSolicitadoActivo.redirigirSiHayViajeActivo(
+          context,
+          preNav: preNav,
+        ),
+      );
     });
   }
 

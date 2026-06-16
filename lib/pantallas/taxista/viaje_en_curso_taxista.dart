@@ -103,6 +103,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   // ===== Remoción / cancelación remota =====
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _cancelSub;
   bool _procesandoRemocion = false;
+  DateTime? _cancelListenerIniciadoEn;
 
   // ===== Controlador para código de verificación =====
   final TextEditingController _codigoCtrl = TextEditingController();
@@ -1318,7 +1319,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         now.difference(_lastNavResumeSnackAt!) < const Duration(seconds: 6)) {
       return;
     }
-    if (enPickup && !_navegacionIniciada && !_clienteCerca) return;
+    if (enPickup && !_navegacionIniciada) return;
 
     _lastNavResumeSnackAt = now;
     if (enPickup) {
@@ -1454,10 +1455,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         return;
       }
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _navegacionIniciada = true);
-      });
-
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (!yaEnCaminoPickup) {
         if (uid != null) {
@@ -1549,6 +1546,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
       if (mounted && eligioAppExterna) {
         unawaited(_persistNavPickupFlag(v.id, true));
+        setState(() => _navegacionIniciada = true);
       }
 
       if (mounted && !eligioAppExterna) {
@@ -1558,7 +1556,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         });
       }
 
-      if (mounted && _navegacionIniciada) {
+      if (mounted && eligioAppExterna) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -2083,7 +2081,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             .toLowerCase()
             .trim();
 
-        await retryPago();
+        if (data['pagoRegistrado'] == true) {
+          print('[FINALIZAR] pagoRegistrado=true → omitir PagoData legacy');
+        } else {
+          await retryPago();
+        }
       } catch (e, st) {
         await ErrorReporting.reportError(
           e,
@@ -3027,6 +3029,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   void _escucharCancelacionRemota(String viajeId) {
     _cancelSub?.cancel();
+    _cancelListenerIniciadoEn = DateTime.now();
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
     final navigator = Navigator.of(context, rootNavigator: true);
@@ -3073,6 +3076,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             'state id=$viajeId estado=$estN taxistaDoc=$taxistaId me=$uid teRemovieron=$teRemovieron');
 
         if (estN == EstadosViaje.cancelado || teRemovieron) {
+          // Tras aceptar, el primer snapshot puede llegar sin taxista asignado aún.
+          final DateTime? desde = _cancelListenerIniciadoEn;
+          if (teRemovieron &&
+              estN != EstadosViaje.cancelado &&
+              desde != null &&
+              DateTime.now().difference(desde) <
+                  const Duration(seconds: 5)) {
+            return;
+          }
           // Evita flicker por estados transitorios/reconciliaciones rápidas.
           if (_procesandoRemocion) return;
           _procesandoRemocion = true;
@@ -3712,8 +3724,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                                   _tarjetaVehiculoVisibleAlCliente(v),
                                   const SizedBox(height: 16),
                                   _actionBar(v, estadoBase),
-                                  const SizedBox(height: 8),
-                                  _botonRescate(v.id),
                                 ],
                               ),
                             ),
@@ -3774,14 +3784,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
     if (EstadosViaje.esAceptado(estadoBase) ||
         EstadosViaje.esEnCaminoPickup(estadoBase)) {
-      final bool puedeMarcarAbordo = _navegacionIniciada || _clienteCerca;
+      final bool puedeMarcarAbordo = _navegacionIniciada;
 
       return [
         _estadoProfesionalCard(
           icon: Icons.directions_car_filled_rounded,
           color: Colors.lightBlueAccent,
           titulo: 'Paso actual: ir al punto de recogida',
-          detalle: 'Siguiente acción esperada: confirmar "Cliente a bordo".',
+          detalle: _navegacionIniciada
+              ? 'Siguiente acción: confirmar "Cliente a bordo" y el código.'
+              : 'Primero abre Waze/Maps con «Navegar hacia el cliente».',
         ),
         const SizedBox(height: 12),
         const Text(
@@ -3839,7 +3851,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '✅ ¡Estás muy cerca del cliente! Ya puedes marcarlo como a bordo.',
+                          'Estás cerca del punto de recogida.',
                           style: TextStyle(
                               color: Colors.green, fontWeight: FontWeight.w500),
                         ),
@@ -3852,54 +3864,26 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ),
         ),
         const SizedBox(height: 16),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed:
-                _navegacionIniciada ? null : () => _iniciarNavegacionPickup(v),
-            icon: Icon(
-                _navegacionIniciada ? Icons.check_circle : Icons.navigation,
-                size: 24),
-            label: Text(
-              _navegacionIniciada
-                  ? 'YA ABRIÓ NAVEGACIÓN — VE HACIA EL CLIENTE'
-                  : 'NAVEGAR HACIA EL CLIENTE',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _navegacionIniciada ? Colors.green : Colors.blue,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 56),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
+        if (!_navegacionIniciada) ...[
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _iniciarNavegacionPickup(v),
+              icon: const Icon(Icons.navigation, size: 24),
+              label: const Text(
+                'NAVEGAR HACIA EL CLIENTE',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 56),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
             ),
           ),
-        ),
-        if (_navegacionIniciada) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blue.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.blue, size: 20),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Abriste Maps/Waze hacia el cliente. Al llegar y subir al pasajero, usa «Cliente a bordo» y luego el código.',
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-        if (!_navegacionIniciada && !_clienteCerca) ...[
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(12),
@@ -3913,7 +3897,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'Toca «Navegar hacia el cliente» para abrir Waze/Maps al punto de recogida, o acércate (~100 m) para habilitar abordo.',
+                    'Toca el botón para abrir Waze o Maps. Al volver a RAI podrás marcar «Cliente a bordo» y el código.',
                     style: TextStyle(color: Colors.white70, fontSize: 13),
                   ),
                 ),
@@ -3921,26 +3905,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           ),
         ],
-        if (!_navegacionIniciada && _clienteCerca) ...[
-          const SizedBox(height: 12),
+        if (_navegacionIniciada) ...[
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.green.withValues(alpha: 0.1),
+              color: Colors.blue.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.green.withValues(alpha: 0.5)),
+              border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
             ),
             child: const Row(
               children: [
-                Icon(Icons.check_circle, color: Colors.green, size: 20),
+                Icon(Icons.info_outline, color: Colors.blue, size: 20),
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    '✅ ¡Excelente! Estás en el punto de recogida. Ya puedes marcar "Cliente a bordo".',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500),
+                    'Navegación abierta hacia el cliente. Al llegar, confirma «Cliente a bordo» y luego el código de verificación.',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
                   ),
                 ),
               ],
@@ -4554,41 +4534,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
-  Widget _botonRescate(String viajeId) {
-    return TextButton.icon(
-      onPressed: () async {
-        final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-        _stopGps();
-        if (uid.isNotEmpty) {
-          try {
-            await FirebaseFirestore.instance
-                .collection('usuarios')
-                .doc(uid)
-                .set({
-              'viajeActivoId': '',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-          } catch (e, st) {
-            await ErrorReporting.reportError(
-              e,
-              stack: st,
-              context: 'viaje_en_curso_taxista: set viajeActivoId (rescate)',
-            );
-          }
-        }
-        if (mounted) {
-          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const TaxistaShell()),
-            (route) => false,
-          );
-        }
-      },
-      icon: const Icon(Icons.exit_to_app, color: Colors.white70),
-      label: const Text('Salir a disponibles (rescate)',
-          style: TextStyle(color: Colors.white70)),
-    );
-  }
 }
 
 /// Botón "Confirmar pago recibido" que aparece SOLO cuando:

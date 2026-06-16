@@ -10,8 +10,8 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
 /// Al montar [child] (p. ej. [ClienteHome] en la pestaña Inicio), redirige a
 /// [ClientePantallaViajeActivo] si el servidor reporta un viaje activo.
@@ -39,18 +39,18 @@ class _ViajeSolicitadoActivoBootstrapState
     if (!mounted) return;
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) return;
+    NavigatorState? preNav = NavigationService.navigatorKey.currentState;
+    if (preNav == null && mounted) {
+      preNav = Navigator.of(context, rootNavigator: true);
+    }
     print(
         '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap init uid=$uid → comprobar activo');
     try {
       final bool ok = await ActiveTripService.tieneViajeActivo(uid);
       if (!mounted || !ok) return;
       print(
-          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → pushReplacement ClientePantallaViajeActivo');
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => const ClientePantallaViajeActivo(),
-        ),
-      );
+          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → clearAndGoViajeEnCursoCliente');
+      await NavigationService.clearAndGoViajeEnCursoCliente(preNav: preNav);
     } catch (e) {
       print('[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap error: $e');
     }
@@ -65,20 +65,23 @@ class ViajeSolicitadoActivo {
 
   /// Si hay viaje activo para el usuario autenticado, reemplaza la ruta actual
   /// por la pantalla de viaje en curso (usa [addPostFrameCallback] desde el caller).
-  static Future<void> redirigirSiHayViajeActivo(BuildContext context) async {
+  static Future<void> redirigirSiHayViajeActivo(
+    BuildContext context, {
+    NavigatorState? preNav,
+  }) async {
     if (!context.mounted) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
+    NavigatorState? nav = preNav ?? NavigationService.navigatorKey.currentState;
+    if (nav == null && context.mounted) {
+      nav = Navigator.of(context, rootNavigator: true);
+    }
     print('[VIAJE_ACTIVO] ViajeSolicitadoActivo.redirigirSiHayViajeActivo uid=$uid');
     try {
       final snap = await ActiveTripService.obtenerDocumentoViajeActivo(uid);
-      if (snap == null || !snap.exists || !context.mounted) return;
-      print('[VIAJE_ACTIVO] ViajeSolicitadoActivo → ClientePantallaViajeActivo');
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => const ClientePantallaViajeActivo(),
-        ),
-      );
+      if (snap == null || !snap.exists) return;
+      print('[VIAJE_ACTIVO] ViajeSolicitadoActivo → clearAndGoViajeEnCursoCliente');
+      await NavigationService.clearAndGoViajeEnCursoCliente(preNav: nav);
     } catch (e) {
       print('[VIAJE_ACTIVO] ViajeSolicitadoActivo error: $e');
     }

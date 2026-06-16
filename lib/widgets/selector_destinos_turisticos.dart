@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
+import 'package:flygo_nuevo/servicios/turismo_destinos_repo.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
@@ -11,7 +12,11 @@ import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/widgets/rai_direccion_inteligente_sheet.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flygo_nuevo/servicios/rai_speech_busqueda_direccion.dart';
+import 'package:flygo_nuevo/utils/rai_aplicar_destino_desde_voz.dart';
 
 class DestinoSeleccionado {
   final TurismoLugar lugar;
@@ -64,6 +69,11 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   List<Map<String, dynamic>> _resultadosGoogle = [];
   bool _buscandoGoogle = false;
   Timer? _debounceTimer;
+
+  final TextEditingController _searchCtrl = TextEditingController();
+  final RaiSpeechBusquedaDireccion _voz = RaiSpeechBusquedaDireccion();
+  bool _vozOk = false;
+  bool _escuchando = false;
 
   final Map<String, List<TurismoLugar>> _destinosPorSubtipo = {};
 
@@ -165,17 +175,118 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     }
   }
 
+  List<TurismoLugar> _catalogoBase = TurismoCatalogoRD.lugares;
+
   @override
   void initState() {
     super.initState();
     _tipoVehiculoSeleccionado = widget.tipoVehiculoInicial ?? 'carro';
+    _organizarCatalogo(_catalogoBase, initTabs: true);
+    _cargarDestinosFirestore();
+    unawaited(_initVoz());
+  }
 
-    // Organizar destinos por subtipo
-    for (var lugar in TurismoCatalogoRD.lugares) {
-      _destinosPorSubtipo.putIfAbsent(lugar.subtipo, () => []).add(lugar);
+  Future<void> _initVoz() async {
+    try {
+      final ok = await _voz.initialize();
+      if (mounted) setState(() => _vozOk = ok);
+    } catch (_) {}
+  }
+
+  Future<void> _resolverYAplicarTrasVoz(String texto) async {
+    if (!mounted || texto.trim().length < 2) return;
+
+    final res = await RaiAplicarDestinoDesdeVoz.resolver(
+      textoReconocido: texto,
+      biasLat: widget.latOrigen,
+      biasLon: widget.lonOrigen,
+      desdeVoz: true,
+    );
+    if (!mounted) return;
+
+    final det = res.lugarConfiable ??
+        (res.candidatos.isNotEmpty ? res.candidatos.first : null);
+    if (det != null) {
+      _searchCtrl.text = det.displayLabel;
+      setState(() => _searchQuery = det.displayLabel);
+      await _seleccionarDestinoGoogle(<String, dynamic>{
+        'placeId': det.placeId,
+        'nombre': det.name,
+        'direccion': det.displayLabel,
+        'lat': det.lat,
+        'lon': det.lon,
+      });
+      return;
     }
 
-    // Ordenar subtipos
+    _onSearchChanged(texto);
+    if (texto.trim().length >= 3) {
+      await _buscarEnGoogle(texto.trim());
+    }
+  }
+
+  Future<void> _toggleVoz() async {
+    if (!_vozOk || _buscandoGoogle || _calculando) return;
+    if (_escuchando) {
+      await _voz.stop();
+      if (mounted) setState(() => _escuchando = false);
+      return;
+    }
+    await _voz.toggleListen(
+      onListeningChanged: (active) {
+        if (mounted) setState(() => _escuchando = active);
+      },
+      onResult: (words, isFinal) {
+        if (!mounted) return;
+        _searchCtrl.text = words;
+        _onSearchChanged(words);
+        if (isFinal) {
+          final texto = words.trim();
+          if (texto.length >= 2) {
+            unawaited(_resolverYAplicarTrasVoz(texto));
+          }
+        }
+      },
+    );
+  }
+
+  Future<void> _abrirBusquedaRai() async {
+    final det = await RaiDireccionInteligenteSheet.mostrar(
+      context,
+      textoInicial: _searchQuery.trim(),
+      biasLat: widget.latOrigen,
+      biasLon: widget.lonOrigen,
+    );
+    if (det == null || !mounted) return;
+    await _seleccionarDestinoGoogle(<String, dynamic>{
+      'placeId': det.placeId,
+      'nombre': det.name,
+      'direccion': det.displayLabel,
+      'lat': det.lat,
+      'lon': det.lon,
+    });
+  }
+
+  Future<void> _cargarDestinosFirestore() async {
+    try {
+      final fusion = await TurismoDestinosRepo.catalogoFusionado();
+      if (!mounted) return;
+      setState(() {
+        _catalogoBase = fusion;
+        _destinosPorSubtipo.clear();
+        _organizarCatalogo(fusion);
+      });
+    } catch (_) {
+      /* catálogo estático sigue funcionando */
+    }
+  }
+
+  void _organizarCatalogo(List<TurismoLugar> lugares, {bool initTabs = false}) {
+    for (var lugar in lugares) {
+      _destinosPorSubtipo.putIfAbsent(lugar.subtipo, () => []).add(lugar);
+    }
+    if (!initTabs) return;
+
     final subtiposOrdenados = [
       TurismoCatalogoRD.aeropuerto,
       TurismoCatalogoRD.muelle,
@@ -202,14 +313,16 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    if (_voz.isListening) unawaited(_voz.stop());
+    _searchCtrl.dispose();
     _tabController.dispose();
     super.dispose();
   }
 
   List<TurismoLugar> get _destinosFiltrados {
-    if (_searchQuery.isEmpty) return TurismoCatalogoRD.lugares;
+    if (_searchQuery.isEmpty) return _catalogoBase;
     final query = _searchQuery.toLowerCase();
-    return TurismoCatalogoRD.lugares.where((lugar) {
+    return _catalogoBase.where((lugar) {
       return lugar.nombre.toLowerCase().contains(query) ||
           lugar.ciudad.toLowerCase().contains(query);
     }).toList();
@@ -233,7 +346,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       final resultadosLimitados = resultados.take(5).toList();
 
       for (var pred in resultadosLimitados) {
-        final detalle = await service.detalle(pred.placeId);
+        final detalle = await service.detalleDesdePrediccion(pred);
         if (detalle != null && mounted) {
           detalles.add({
             'nombre': detalle.name,
@@ -322,7 +435,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
     try {
       final ({bool serviceEnabled, LocationPermission permission}) snap =
-          await GpsService.checkServiceThenRequestPermissionIfNeeded();
+          await LocationPermissionService.checkServiceThenRequestIfNeeded();
       if (snap.serviceEnabled && GpsService.permissionUsable(snap.permission)) {
         final Position? pos = await GpsService.obtenerUbicacionActual(
           timeout: const Duration(seconds: 12),
@@ -346,6 +459,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
   void _mostrarErrorUbicacion() {
     if (!mounted) return;
+    if (LocationPermissionService.clienteEvitaRequestPermisoAlSo) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text(
@@ -701,6 +815,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: TextField(
+                      controller: _searchCtrl,
                       style: TextStyle(color: textPrimary),
                       scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 280),
                       decoration: InputDecoration(
@@ -718,16 +833,46 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                                       CircularProgressIndicator(strokeWidth: 2),
                                 ),
                               )
-                            : (_searchQuery.isNotEmpty
-                                ? IconButton(
-                                    icon: Icon(Icons.clear,
-                                        color: textSubtle),
-                                    onPressed: () {
-                                      _onSearchChanged('');
-                                      FocusScope.of(context).unfocus();
-                                    },
-                                  )
-                                : null),
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_vozOk)
+                                    IconButton(
+                                      tooltip: _escuchando
+                                          ? 'Detener dictado'
+                                          : 'Dictar destino',
+                                      icon: Icon(
+                                        _escuchando
+                                            ? Icons.mic_rounded
+                                            : Icons.mic_none_rounded,
+                                        color: _escuchando
+                                            ? Colors.redAccent
+                                            : accent,
+                                        size: 22,
+                                      ),
+                                      onPressed: _toggleVoz,
+                                    ),
+                                  IconButton(
+                                    tooltip: 'Búsqueda inteligente RAI',
+                                    icon: Icon(
+                                      Icons.auto_awesome_rounded,
+                                      color: accent,
+                                      size: 22,
+                                    ),
+                                    onPressed: _abrirBusquedaRai,
+                                  ),
+                                  if (_searchQuery.isNotEmpty)
+                                    IconButton(
+                                      icon: Icon(Icons.clear,
+                                          color: textSubtle),
+                                      onPressed: () {
+                                        _searchCtrl.clear();
+                                        _onSearchChanged('');
+                                        FocusScope.of(context).unfocus();
+                                      },
+                                    ),
+                                ],
+                              ),
                         filled: true,
                         fillColor: surfaceRaised,
                         enabledBorder: OutlineInputBorder(

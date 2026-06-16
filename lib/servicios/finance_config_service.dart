@@ -15,6 +15,21 @@ class FinanceConfigService {
   /// Si false con useLiquidacionesSemanales, no escribe en pagos_taxistas.
   static bool escrituraPagosTaxistasLegacy = true;
 
+  /// Fase 5: cliente paga transferencia a cuenta RAI con [referenciaRecaudo] (default off).
+  static bool transferenciaRecaudoEnCuentaRai = false;
+
+  /// Fase 4: job/callable propone matches movimiento ↔ viaje (default off).
+  static bool conciliacionAutomaticaHabilitada = false;
+
+  /// Fase 4: bloquea finalizar transferencia RAI sin estadoPago verificado (default off).
+  static bool transferenciaExigeVerificadoParaFinalizar = false;
+
+  /// Fase 5c: muestra QR recaudo Popular en panel/factura (default off).
+  static bool qrRecaudoPopularHabilitado = false;
+
+  /// Fase 6: tarjeta AZUL en UI + callables (default off).
+  static bool pagosConTarjetaAzulHabilitados = false;
+
   static StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
   static bool _started = false;
 
@@ -43,6 +58,16 @@ class FinanceConfigService {
         _boolOr(data['useLiquidacionesSemanales'], false);
     escrituraPagosTaxistasLegacy =
         _boolOr(data['escrituraPagosTaxistasLegacy'], true);
+    transferenciaRecaudoEnCuentaRai =
+        _boolOr(data['transferenciaRecaudoEnCuentaRai'], false);
+    conciliacionAutomaticaHabilitada =
+        _boolOr(data['conciliacionAutomaticaHabilitada'], false);
+    transferenciaExigeVerificadoParaFinalizar =
+        _boolOr(data['transferenciaExigeVerificadoParaFinalizar'], false);
+    qrRecaudoPopularHabilitado =
+        _boolOr(data['qrRecaudoPopularHabilitado'], false);
+    pagosConTarjetaAzulHabilitados =
+        _boolOr(data['pagosConTarjetaAzulHabilitados'], false);
   }
 
   static bool _boolOr(dynamic raw, bool defaultValue) {

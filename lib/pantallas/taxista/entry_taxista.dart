@@ -2,11 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
+import 'package:flygo_nuevo/pantallas/taxista/completar_registro_taxista.dart';
+import 'package:flygo_nuevo/pantallas/taxista/completar_vehiculo_taxista.dart';
+import 'package:flygo_nuevo/pantallas/taxista/taxista_entry_error.dart';
 
 import 'contrato_taxista_firma.dart';
+import 'documentos_taxista.dart';
 import 'package:flygo_nuevo/shell/taxista_shell.dart';
-import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import '../../servicios/pool_repo.dart';
 
 class TaxistaEntry extends StatefulWidget {
@@ -27,13 +33,34 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
   void _go(Widget page) {
     if (_navigated || !mounted) return;
     _navigated = true;
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => page));
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute<void>(builder: (_) => page),
+    );
+  }
+
+  Widget _destinoTaxista(Map<String, dynamic> data) {
+    if (taxistaDebeCompletarDocumentosAhora(data)) {
+      return const DocumentosTaxista(onboardingObligatorio: true);
+    }
+    final bool poolOk = taxistaAprobadoParaOperarPool(data);
+    final bool contratoOk = taxistaContratoFirmado(data);
+    if (poolOk && contratoOk) {
+      return const TaxistaShell();
+    }
+    if (poolOk && !contratoOk) {
+      return const ContratoTaxistaFirma();
+    }
+    return const TaxistaShell();
   }
 
   Future<void> _decidirRuta() async {
     final u = FirebaseAuth.instance.currentUser;
-    if (!mounted || u == null) {
-      _go(const ClienteShell());
+    if (!mounted) return;
+
+    if (u == null) {
+      debugPrint('[TAXISTA_ENTRY] sin sesión -> auth_check');
+      Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
       return;
     }
 
@@ -44,17 +71,21 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
           .get();
 
       final data = usrDoc.data() ?? {};
-      final rol = (data['rol'] as String?)?.toLowerCase() ?? 'cliente';
+      final rol = (data['rol'] as String?)?.toLowerCase() ?? '';
 
-      if (rol != 'taxista') {
+      if (rol != 'taxista' && rol != 'driver') {
         debugPrint(
-          '[TAXISTA_ENTRY] uid=${u.uid} rol=$rol -> redirigiendo a ClienteHome',
+          '[TAXISTA_ENTRY] uid=${u.uid} rol=$rol -> selección (no cliente shell)',
         );
-        _go(const ClienteShell());
+        if (isConductorFlavor) {
+          _go(const SeleccionUsuario());
+        } else {
+          if (!mounted) return;
+          Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
+        }
         return;
       }
 
-      // Cierre/reapertura de pools según bandera vigente en usuario.
       try {
         final tienePagoPendiente = data['tienePagoPendiente'] == true;
         await PoolRepo.syncPoolsPorPagoSemanal(
@@ -65,34 +96,49 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
         debugPrint('[TAXISTA_ENTRY] syncPoolsPorPagoSemanal error=$e');
       }
 
+      if (!TaxistaRegistroPerfilData.taxistaRegistroPerfilCompleto(data)) {
+        debugPrint(
+          '[TAXISTA_ENTRY] uid=${u.uid} registro incompleto -> onboarding',
+        );
+        _go(const CompletarRegistroTaxista());
+        return;
+      }
+
       final estado = taxistaDocsEstadoDesdeUsuario(data);
+      final bool vehiculoOk = taxistaVehiculoPerfilCompleto(data);
       final bool poolOk = taxistaAprobadoParaOperarPool(data);
       final bool contratoOk = taxistaContratoFirmado(data);
       debugPrint(
-        '[TAXISTA_ENTRY] uid=${u.uid} rol=taxista docsEstado=$estado poolOk=$poolOk contratoOk=$contratoOk',
+        '[TAXISTA_ENTRY] uid=${u.uid} docsEstado=$estado vehiculoOk=$vehiculoOk '
+        'poolOk=$poolOk contratoOk=$contratoOk',
       );
 
-      // 1) Sin docs aprobados → subir fotos. 2) Docs OK pero sin contrato → firma una sola vez (versión).
-      // 3) Ya firmó → siempre al pool (incl. tras pagar comisión/deuda: no vuelve al contrato).
-      final Widget destino;
-      if (!poolOk) {
-        destino = const TaxistaShell(openDocumentosOnLaunch: true);
-      } else if (contratoOk) {
-        destino = const TaxistaShell();
-      } else {
-        destino = const ContratoTaxistaFirma();
+      if (!vehiculoOk) {
+        _go(
+          CompletarVehiculoTaxista(
+            onCompletado: () {
+              if (!mounted) return;
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const TaxistaEntry(),
+                ),
+              );
+            },
+          ),
+        );
+        return;
       }
 
-      _go(destino);
+      _go(_destinoTaxista(data));
     } catch (e) {
       debugPrint('[TAXISTA_ENTRY] error=$e');
-      _go(const ClienteShell());
+      _go(TaxistaEntryErrorPage(message: e.toString()));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Mismo lenguaje visual que el splash de [main] (entrada limpia al pool).
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(

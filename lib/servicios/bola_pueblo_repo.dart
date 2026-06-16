@@ -71,7 +71,7 @@ class BolaPuebloRepo {
     );
   }
 
-  static Future<void> crearPublicacion({
+  static Future<String> crearPublicacion({
     required String uid,
     required String rol,
     required String nombre,
@@ -207,6 +207,7 @@ class BolaPuebloRepo {
         );
       }
     }
+    return ref.id;
   }
 
   static CollectionReference<Map<String, dynamic>> _ofertasCol(String bolaId) =>

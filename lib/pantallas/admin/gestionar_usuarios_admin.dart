@@ -1,9 +1,16 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../servicios/admin_usuarios_lista_service.dart';
+import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/configuracion_globals_service.dart';
+import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
+import 'admin_regularizar_giras_taxista.dart';
+
+enum _TipoBusqueda { ninguna, uid, email, telefono, textoLocal }
 
 class GestionarUsuariosAdmin extends StatefulWidget {
   const GestionarUsuariosAdmin({super.key});
@@ -16,6 +23,9 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
   final _db = FirebaseFirestore.instance;
   final _qCtrl = TextEditingController();
   final Set<String> _uidsProcesando = <String>{};
+  String _modoLista = 'recientes';
+  int _limiteVisible = AdminUsuariosListaService.limiteInicial;
+  int _ordenIdx = 0;
 
   @override
   void dispose() {
@@ -120,10 +130,20 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
       }, SetOptions(merge: true));
 
       if (!mounted) return;
+      String msg = bloqueado ? '🚫 Usuario bloqueado' : '✅ Usuario desbloqueado';
+      if (!bloqueado && bloqueoOperativoComision) {
+        msg =
+            'Desbloqueado en lista, pero sigue con bloqueo prepago/deuda '
+            '(tienePagoPendiente). Aprobá la recarga en Verificar pagos → Recargas prepago.';
+      } else if (!bloqueado && !puedeOperarAlDesbloquear && !docsAprobados) {
+        msg =
+            'Desbloqueado en lista; faltan documentos aprobados para operar en pool.';
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(
-                bloqueado ? '🚫 Usuario bloqueado' : '✅ Usuario desbloqueado')),
+          content: Text(msg),
+          duration: Duration(seconds: bloqueoOperativoComision ? 8 : 4),
+        ),
       );
     } on FirebaseException catch (e) {
       if (mounted) {
@@ -451,11 +471,106 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     );
   }
 
+  String get _campoOrden =>
+      AdminUsuariosListaService.camposOrdenFallback[
+          _ordenIdx.clamp(0, AdminUsuariosListaService.camposOrdenFallback.length - 1)];
+
+  void _resetLista({String? modo}) {
+    setState(() {
+      if (modo != null) _modoLista = modo;
+      _limiteVisible = AdminUsuariosListaService.limiteInicial;
+      _ordenIdx = 0;
+    });
+  }
+
+  void _cargarMasUsuarios() {
+    if (_limiteVisible >= AdminUsuariosListaService.limiteMaximo) return;
+    setState(() {
+      _limiteVisible = (_limiteVisible + AdminUsuariosListaService.pasoCargarMas)
+          .clamp(0, AdminUsuariosListaService.limiteMaximo);
+    });
+  }
+
+  void _avanzarFallbackOrden() {
+    if (_ordenIdx >= AdminUsuariosListaService.camposOrdenFallback.length - 1) {
+      return;
+    }
+    setState(() => _ordenIdx++);
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _usuariosListaStream() {
+    final limite = _modoLista == 'bloqueados'
+        ? AdminUsuariosListaService.limiteBloqueados
+        : _limiteVisible;
+    return AdminUsuariosListaService.streamLista(
+      modo: _modoLista,
+      campoOrden: _campoOrden,
+      limite: limite,
+    );
+  }
+
+  _TipoBusqueda _tipoBusqueda(String raw) {
+    final q = raw.trim();
+    if (q.isEmpty) return _TipoBusqueda.ninguna;
+    if (q.length >= 20) return _TipoBusqueda.uid;
+    if (q.contains('@') && q.length >= 5) return _TipoBusqueda.email;
+    final digits = q.replaceAll(RegExp(r'\D'), '');
+    if (digits.length >= 7 && digits.length == q.replaceAll(' ', '').length) {
+      return _TipoBusqueda.telefono;
+    }
+    if (digits.length >= 7 && RegExp(r'^[\d\s+\-()]+$').hasMatch(q)) {
+      return _TipoBusqueda.telefono;
+    }
+    return _TipoBusqueda.textoLocal;
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _filtrarUsuarios(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final q = _qCtrl.text.trim().toLowerCase();
+    final filtrados = docs.where((d) {
+      if (q.isEmpty) return true;
+      final m = d.data();
+      final uid = d.id.toLowerCase();
+      final nombre = _s(m['nombre']).toLowerCase();
+      final email = _s(m['email']).toLowerCase();
+      final telefono = _s(m['telefono']).toLowerCase();
+      return uid.contains(q) ||
+          nombre.contains(q) ||
+          email.contains(q) ||
+          telefono.contains(q);
+    }).toList()
+      ..sort((a, b) {
+        final ma = a.data();
+        final mb = b.data();
+        final ta = (ma['actualizadoEn'] as Timestamp?)?.toDate() ??
+            (ma['updatedAt'] as Timestamp?)?.toDate() ??
+            (ma['creadoEn'] as Timestamp?)?.toDate() ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final tb = (mb['actualizadoEn'] as Timestamp?)?.toDate() ??
+            (mb['updatedAt'] as Timestamp?)?.toDate() ??
+            (mb['creadoEn'] as Timestamp?)?.toDate() ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return tb.compareTo(ta);
+      });
+    return filtrados;
+  }
+
+  Widget _modoChip(String label, String value) {
+    final active = _modoLista == value;
+    return FilterChip(
+      label: Text(label),
+      selected: active,
+      onSelected: (_) => _resetLista(modo: value),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
+      drawer: const AdminDrawer(),
       appBar: AppBar(
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),
@@ -500,6 +615,26 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                   onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    _modoChip('Recientes', 'recientes'),
+                    _modoChip('Taxistas', 'taxistas'),
+                    _modoChip('Clientes', 'clientes'),
+                    _modoChip('Bloqueados prepago', 'bloqueados'),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  AdminUsuariosListaService.descripcionModo(
+                      _modoLista, _limiteVisible),
+                  style: TextStyle(
+                      color: AdminUi.muted(context),
+                      fontSize: 11.5,
+                      height: 1.35),
+                ),
+                const SizedBox(height: 4),
                 Text(
                   'Taxistas: la bandera (tienePagoPendiente) bloquea pool y tomar viajes si falta saldo prepago '
                   '(mín. RD\$${PagosTaxistaRepo.minSaldoPrepagoComisionRd.toStringAsFixed(0)} tras el 1.er viaje en efectivo) '
@@ -514,196 +649,382 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
             ),
           ),
           Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _db.collection('usuarios').snapshots(),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return Center(
-                      child: CircularProgressIndicator(
-                          color: AdminUi.progressAccent(context)));
-                }
-                if (snap.hasError) {
-                  return Center(
-                    child: Text('Error: ${snap.error}',
-                        style: TextStyle(color: AdminUi.secondary(context))),
-                  );
-                }
+            child: _buildUsuariosBody(),
+          ),
+        ],
+      ),
+    );
+  }
 
-                final q = _qCtrl.text.trim().toLowerCase();
-                final docs = (snap.data?.docs ?? []).where((d) {
-                  if (q.isEmpty) return true;
-                  final m = d.data();
-                  final uid = d.id.toLowerCase();
-                  final nombre = _s(m['nombre']).toLowerCase();
-                  final email = _s(m['email']).toLowerCase();
-                  final telefono = _s(m['telefono']).toLowerCase();
-                  return uid.contains(q) ||
-                      nombre.contains(q) ||
-                      email.contains(q) ||
-                      telefono.contains(q);
-                }).toList()
-                  ..sort((a, b) {
-                    final ma = a.data();
-                    final mb = b.data();
-                    final ta = (ma['actualizadoEn'] as Timestamp?)?.toDate() ??
-                        (ma['updatedAt'] as Timestamp?)?.toDate() ??
-                        (ma['creadoEn'] as Timestamp?)?.toDate() ??
-                        DateTime.fromMillisecondsSinceEpoch(0);
-                    final tb = (mb['actualizadoEn'] as Timestamp?)?.toDate() ??
-                        (mb['updatedAt'] as Timestamp?)?.toDate() ??
-                        (mb['creadoEn'] as Timestamp?)?.toDate() ??
-                        DateTime.fromMillisecondsSinceEpoch(0);
-                    return tb.compareTo(ta);
-                  });
+  Widget _buildUsuariosBody() {
+    final q = _qCtrl.text.trim();
+    final tipo = _tipoBusqueda(q);
 
-                if (docs.isEmpty) {
-                  return Center(
-                    child: Text('Sin resultados',
-                        style: TextStyle(color: AdminUi.secondary(context))),
-                  );
-                }
+    if (tipo == _TipoBusqueda.uid) {
+      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: AdminUsuariosListaService.streamPorUid(q),
+        builder: (context, snap) => _wrapEstadoStream(
+          snap.connectionState,
+          snap.hasError,
+          snap.error,
+          onRetryFallback: null,
+          child: () {
+            if (!snap.hasData || !snap.data!.exists) {
+              return Center(
+                child: Text('Usuario no encontrado: $q',
+                    style: TextStyle(color: AdminUi.secondary(context))),
+              );
+            }
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              children: [_buildUsuarioTile(snap.data!)],
+            );
+          },
+        ),
+      );
+    }
 
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (_, i) {
-                    final doc = docs[i];
-                    final m = doc.data();
-                    final uid = doc.id;
+    if (tipo == _TipoBusqueda.email) {
+      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: AdminUsuariosListaService.streamPorEmail(q),
+        builder: (context, snap) => _wrapEstadoStream(
+          snap.connectionState,
+          snap.hasError,
+          snap.error,
+          onRetryFallback: null,
+          child: () {
+            final docs = snap.data?.docs ?? const [];
+            if (docs.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    'Sin usuario con email «$q».\nPrueba UID completo o teléfono.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                ),
+              );
+            }
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              itemCount: docs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (_, i) => _buildUsuarioTile(docs[i]),
+            );
+          },
+        ),
+      );
+    }
 
-                    final nombre = _s(m['nombre']).trim();
-                    final email = _s(m['email']).trim();
-                    final rol = _normalizarRolUi(_s(m['rol']));
-                    final bloqueado = _b(m['bloqueado']);
-                    final procesando = _uidsProcesando.contains(uid);
+    if (tipo == _TipoBusqueda.telefono) {
+      final digits = q.replaceAll(RegExp(r'\D'), '');
+      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: AdminUsuariosListaService.streamPorTelefono(digits),
+        builder: (context, snap) => _wrapEstadoStream(
+          snap.connectionState,
+          snap.hasError,
+          snap.error,
+          onRetryFallback: null,
+          child: () {
+            final docs = snap.data?.docs ?? const [];
+            if (docs.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    'Sin usuario con teléfono «$digits».\nPrueba email o UID.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                ),
+              );
+            }
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              itemCount: docs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (_, i) => _buildUsuarioTile(docs[i]),
+            );
+          },
+        ),
+      );
+    }
 
-                    return Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AdminUi.card(context),
-                        borderRadius: BorderRadius.circular(14),
-                        border:
-                            Border.all(color: AdminUi.borderSubtle(context)),
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _usuariosListaStream(),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          final puedeFallback = _ordenIdx <
+              AdminUsuariosListaService.camposOrdenFallback.length - 1;
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Consulta usuarios ($_campoOrden): ${snap.error}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                  if (puedeFallback) ...[
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: _avanzarFallbackOrden,
+                      icon: const Icon(Icons.swap_horiz),
+                      label: Text(
+                        'Reintentar con ${AdminUsuariosListaService.camposOrdenFallback[_ordenIdx + 1]}',
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      nombre.isNotEmpty ? nombre : uid,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: AdminUi.onCard(context),
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      email.isNotEmpty ? email : 'UID: $uid',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                          color: AdminUi.muted(context),
-                                          fontSize: 12),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: bloqueado
-                                      ? Colors.red.withValues(alpha: 0.15)
-                                      : Colors.green.withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(999),
-                                  border: Border.all(
-                                    color: bloqueado
-                                        ? Colors.redAccent
-                                            .withValues(alpha: 0.5)
-                                        : Colors.greenAccent
-                                            .withValues(alpha: 0.4),
-                                  ),
-                                ),
-                                child: Text(
-                                  bloqueado ? 'BLOQUEADO' : 'OK',
-                                  style: TextStyle(
-                                    color: bloqueado
-                                        ? Colors.redAccent
-                                        : Colors.greenAccent,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Text('Rol: ${rol.isEmpty ? "—" : rol}',
-                              style:
-                                  TextStyle(color: AdminUi.secondary(context))),
-                          if (rol == Roles.taxista &&
-                              _b(m['tienePagoPendiente'])) ...[
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.amber.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                    color: Colors.amberAccent
-                                        .withValues(alpha: 0.45)),
-                              ),
-                              child: Text(
-                                'Bloqueo automático (pool/viajes): prepago bajo o comisión legacy ≥ RD\$'
-                                '${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}',
-                                style: TextStyle(
-                                  color: AdminUi.onCard(context),
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.3,
-                                ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              _rolBtn(uid, 'cliente', rol, procesando),
-                              _rolBtn(uid, 'taxista', rol, procesando),
-                              _rolBtn(uid, 'admin', rol, procesando),
-                              _bloqueoBtn(uid, bloqueado, procesando),
-                              if (rol == Roles.taxista)
-                                _liquidarComisionBtn(
-                                  uid,
-                                  nombre.isNotEmpty ? nombre : uid,
-                                  procesando,
-                                ),
-                              if (rol == Roles.taxista)
-                                _movimientosPrepagoBtn(
-                                  uid,
-                                  nombre.isNotEmpty ? nombre : uid,
-                                  procesando,
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
+                    ),
+                  ],
+                ],
+              ),
             ),
+          );
+        }
+
+        if (snap.connectionState == ConnectionState.waiting &&
+            !snap.hasData) {
+          return Center(
+              child: CircularProgressIndicator(
+                  color: AdminUi.progressAccent(context)));
+        }
+
+        final rawDocs = snap.data?.docs ?? const [];
+        final docs = _filtrarUsuarios(rawDocs);
+        final puedeMas = _modoLista != 'bloqueados' &&
+            _limiteVisible < AdminUsuariosListaService.limiteMaximo &&
+            rawDocs.length >= _limiteVisible;
+
+        if (docs.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(
+                tipo == _TipoBusqueda.textoLocal && q.isNotEmpty
+                    ? 'Sin coincidencias en este lote ($_limiteVisible usuarios).\n'
+                        'Prueba email exacto, teléfono o UID, o pulsa «Cargar más».'
+                    : 'Sin resultados',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AdminUi.secondary(context)),
+              ),
+            ),
+          );
+        }
+
+        return Column(
+          children: [
+            if (_campoOrden != 'updatedAt')
+              Material(
+                color: Colors.amber.withValues(alpha: 0.12),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline,
+                          size: 18, color: Colors.amber),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Orden por $_campoOrden (fallback automático).',
+                          style: TextStyle(
+                              color: AdminUi.onCard(context), fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                itemCount: docs.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (_, i) => _buildUsuarioTile(docs[i]),
+              ),
+            ),
+            if (puedeMas)
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _cargarMasUsuarios,
+                      icon: const Icon(Icons.expand_more),
+                      label: Text(
+                        'Cargar más (${_limiteVisible + AdminUsuariosListaService.pasoCargarMas} máx. ${AdminUsuariosListaService.limiteMaximo})',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (_modoLista != 'bloqueados')
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Mostrando ${docs.length} en lote de $_limiteVisible · en vivo',
+                  style: TextStyle(
+                      color: AdminUi.muted(context), fontSize: 11),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _wrapEstadoStream(
+    ConnectionState state,
+    bool hasError,
+    Object? error, {
+    required VoidCallback? onRetryFallback,
+    required Widget Function() child,
+  }) {
+    if (hasError) {
+      return Center(
+        child: Text('Error: $error',
+            style: TextStyle(color: AdminUi.secondary(context))),
+      );
+    }
+    if (state == ConnectionState.waiting) {
+      return Center(
+        child: CircularProgressIndicator(color: AdminUi.progressAccent(context)),
+      );
+    }
+    return child();
+  }
+
+  Widget _buildUsuarioTile(
+      DocumentSnapshot<Map<String, dynamic>> doc) {
+    final m = doc.data() ?? const <String, dynamic>{};
+    final uid = doc.id;
+
+    final nombre = _s(m['nombre']).trim();
+    final email = _s(m['email']).trim();
+    final rol = _normalizarRolUi(_s(m['rol']));
+    final bloqueado = _b(m['bloqueado']);
+    final procesando = _uidsProcesando.contains(uid);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AdminUi.card(context),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AdminUi.borderSubtle(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      nombre.isNotEmpty ? nombre : uid,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AdminUi.onCard(context),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      email.isNotEmpty ? email : 'UID: $uid',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: AdminUi.muted(context), fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: bloqueado
+                      ? Colors.red.withValues(alpha: 0.15)
+                      : Colors.green.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: bloqueado
+                        ? Colors.redAccent.withValues(alpha: 0.5)
+                        : Colors.greenAccent.withValues(alpha: 0.4),
+                  ),
+                ),
+                child: Text(
+                  bloqueado ? 'BLOQUEADO' : 'OK',
+                  style: TextStyle(
+                    color:
+                        bloqueado ? Colors.redAccent : Colors.greenAccent,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text('Rol: ${rol.isEmpty ? "—" : rol}',
+              style: TextStyle(color: AdminUi.secondary(context))),
+          if (rol == Roles.taxista && _b(m['tienePagoPendiente'])) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: Colors.amberAccent.withValues(alpha: 0.45)),
+              ),
+              child: Text(
+                'Bloqueo automático (pool/viajes): prepago bajo o comisión legacy ≥ RD\$'
+                '${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}',
+                style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _rolBtn(uid, 'cliente', rol, procesando),
+              _rolBtn(uid, 'taxista', rol, procesando),
+              _rolBtn(uid, 'admin', rol, procesando),
+              _bloqueoBtn(uid, bloqueado, procesando),
+              if (rol == Roles.taxista)
+                _liquidarComisionBtn(
+                  uid,
+                  nombre.isNotEmpty ? nombre : uid,
+                  procesando,
+                ),
+              if (rol == Roles.taxista)
+                _movimientosPrepagoBtn(
+                  uid,
+                  nombre.isNotEmpty ? nombre : uid,
+                  procesando,
+                ),
+              if (rol == Roles.taxista)
+                _regularizarSalidasBtn(
+                  uid,
+                  nombre.isNotEmpty ? nombre : uid,
+                  procesando,
+                ),
+            ],
           ),
         ],
       ),
@@ -753,6 +1074,56 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
           'Recarga comisión (efectivo)',
           style:
               TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _abrirDesbloquearSalidas(
+    String uid,
+    String nombreMostrar,
+  ) async {
+    final data = await FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(uid)
+        .get();
+    final m = data.data() ?? <String, dynamic>{};
+    final abuso = await ConfiguracionGlobalsService.fetchGiraAbusoUmbral();
+    if (GirasAbusoAdminService.bloqueadoPorRatioEnDatos(m, abuso) ||
+        m[GirasAbusoAdminService.kCampoBloqueado] == true) {
+      await GirasAbusoAdminService.marcarBloqueado(uid);
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => AdminRegularizarGirasTaxista(
+          uidTaxistaInicial: uid,
+          nombreTaxistaInicial: nombreMostrar,
+        ),
+      ),
+    );
+  }
+
+  Widget _regularizarSalidasBtn(
+      String uid, String nombreMostrar, bool deshabilitado) {
+    return InkWell(
+      onTap: deshabilitado ? null : () => _abrirDesbloquearSalidas(uid, nombreMostrar),
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: AdminUi.card(context),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: Colors.lightGreenAccent.withValues(alpha: 0.55),
+          ),
+        ),
+        child: const Text(
+          'Desbloquear salidas',
+          style: TextStyle(
+            color: Colors.lightGreenAccent,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );

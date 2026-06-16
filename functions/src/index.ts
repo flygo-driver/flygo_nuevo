@@ -32,3 +32,7 @@ export * from "./admin_dashboard.js";
 export * from "./pool_share_preview.js";
 export * from "./admin_reset_gira_abuso.js";
 export * from "./taxista_documentos.js";
+export * from "./banco_movimientos.js";
+export * from "./conciliacion.js";
+export * from "./recaudo_qr.js";
+export * from "./azul.js";

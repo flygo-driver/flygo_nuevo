@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
@@ -221,8 +221,10 @@ class _ViajeProgramadoConfirmacionState
     _navegoAlMapa = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(builder: (_) => const ViajeEnCursoCliente()),
+      unawaited(
+        NavigationService.clearAndGoViajeEnCursoCliente(
+          preNav: Navigator.of(context, rootNavigator: true),
+        ),
       );
     });
   }

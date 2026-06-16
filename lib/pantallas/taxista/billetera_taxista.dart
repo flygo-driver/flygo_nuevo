@@ -1,6 +1,8 @@
 // Pega este archivo COMPLETO si aún no tienes la versión con avatar + cuenta.
 // Si ya pegaste mi versión anterior, no hace falta cambiar nada.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
@@ -9,11 +11,13 @@ import 'package:flutter/services.dart';
 
 import 'package:flygo_nuevo/utils/estilos.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/billetera_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/modelo/liquidacion.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
+import 'package:flygo_nuevo/widgets/rai_cuenta_deposito_panel.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
 
 class BilleteraTaxista extends StatefulWidget {
@@ -24,6 +28,17 @@ class BilleteraTaxista extends StatefulWidget {
 
 class _BilleteraTaxistaState extends State<BilleteraTaxista> {
   bool _enviando = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(ComisionViajePctService.refresh(force: true));
+  }
+
+  Future<void> _refrescarPantalla() async {
+    await ComisionViajePctService.refresh(force: true);
+    if (mounted) setState(() {});
+  }
 
   Color _chipColor(String estado) {
     switch (estado) {
@@ -125,7 +140,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
         actions: [
           const SaldoGananciasChip(),
           IconButton(
-            onPressed: _enviando ? null : () => setState(() {}),
+            onPressed: _enviando ? null : () => unawaited(_refrescarPantalla()),
             icon: const Icon(Icons.refresh, color: EstilosRai.textoBlanco),
             tooltip: 'Actualizar',
           ),
@@ -136,10 +151,14 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
               child: Text('Inicia sesión',
                   style: TextStyle(color: EstilosRai.textoBlanco)))
           : RefreshIndicator(
-              onRefresh: () async => setState(() {}),
+              onRefresh: _refrescarPantalla,
               color: EstilosRai.textoVerde,
               backgroundColor: EstilosRai.fondoOscuro,
-              child: ListView(
+              child: StreamBuilder<double>(
+                stream: ComisionViajePctService.streamPorcentajeVigente(),
+                initialData: PlataformaEconomia.comisionViajePorcentaje,
+                builder: (context, pctSnap) {
+                  return ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
                   _HeaderTaxista(uid: u.uid),
@@ -178,7 +197,7 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                               FormatosMoneda.rd(r.gananciaTotal), Colors.green),
                           const SizedBox(height: 16),
                           _infoBox(
-                              "Comisión RAI en tus viajes (20 %, histórico)",
+                              _tituloComisionRaiHistorico(),
                               FormatosMoneda.rd(r.comisionTotal),
                               Colors.deepOrangeAccent),
                           const SizedBox(height: 16),
@@ -219,7 +238,11 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                   _OperativaPrepagoCard(uid: u.uid),
 
                   const SizedBox(height: 24),
-                  const _CuentaEmpresaCard(), // datos bancarios empresa
+                  const RaiCuentaDepositoPanel(
+                    titulo: 'Cuenta para recargar prepago (transferencia a RAI)',
+                    subtitulo:
+                        'No es tu cuenta personal para cobrar viajes; sirve para depositar y verificar recargas de comisión.',
+                  ),
 
                   const SizedBox(height: 28),
                   const Text("Historial de liquidaciones",
@@ -328,6 +351,8 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
                         color: Colors.white70, fontSize: 16, height: 1.35),
                   ),
                 ],
+              );
+                },
               ),
             ),
     );
@@ -565,87 +590,6 @@ class _HeaderTaxista extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-class _CuentaEmpresaCard extends StatelessWidget {
-  const _CuentaEmpresaCard();
-
-  @override
-  Widget build(BuildContext context) {
-    // Valores fijos para que el taxista tenga siempre los datos correctos
-    // de transferencia (independiente de `config/empresa`).
-    const String titular = 'Open ASK Service SRL';
-    const String banco = 'Banco Popular';
-    const String tipo = 'Cuenta Corriente';
-    const String cuenta = '787726249';
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white24),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Cuenta para recargar prepago (transferencia a RAI)',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-                fontSize: 16,
-              )),
-          const SizedBox(height: 6),
-          Text(
-            'No es tu cuenta personal para cobrar viajes; sirve para depositar y verificar recargas de comisión.',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.65),
-              fontSize: 12,
-              height: 1.35,
-            ),
-          ),
-          const SizedBox(height: 10),
-          _kv('Titular', titular),
-          _kv('Banco', banco),
-          _kv('Tipo', tipo),
-          Row(
-            children: [
-              Expanded(child: _kv('Cuenta', cuenta)),
-              IconButton(
-                tooltip: 'Copiar cuenta',
-                onPressed: () async {
-                  await Clipboard.setData(const ClipboardData(text: cuenta));
-                  // ignore: use_build_context_synchronously
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Número de cuenta copiado')),
-                  );
-                },
-                icon: const Icon(Icons.copy, color: Colors.greenAccent),
-              )
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _kv(String k, String v) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: RichText(
-        text: TextSpan(
-          text: '$k: ',
-          style: const TextStyle(color: Colors.white70),
-          children: [
-            TextSpan(
-                text: v,
-                style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w600)),
-          ],
-        ),
-      ),
     );
   }
 }

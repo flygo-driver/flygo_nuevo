@@ -1,0 +1,38 @@
+---
+description: Decisiones y reglas para implementar arquitectura financiera RAI (Fases 1-7). Usar al tocar pagos, liquidaciones, Popular o AZUL.
+globs:
+  - lib/servicios/pagos_taxista_repo.dart
+  - lib/data/pago_data.dart
+  - lib/servicios/pay_config.dart
+  - functions/src/finance.ts
+  - functions/src/recarga_admin.ts
+  - lib/pantallas/taxista/mis_pagos.dart
+  - lib/pantallas/admin/verificar_pagos.dart
+  - lib/pantallas/comun/factura_viaje.dart
+  - docs/PLAN_ARQUITECTURA_FINANCIERA_RAI_FASES.md
+alwaysApply: false
+---
+
+# RAI — Finanzas (decisiones aprobadas)
+
+Leer `docs/CURSOR_INSTRUCCIONES_FINANZAS_RAI.md` y `docs/PLAN_ARQUITECTURA_FINANCIERA_RAI_FASES.md` antes de implementar.
+
+## Decisiones obligatorias
+
+1. **Efectivo NUNCA en liquidación semanal** — comisión solo prepago.
+2. **Transferencia:** no finalizar sin `estadoPago=verificado` (conciliación o admin).
+3. **Deprecar `pagos_taxistas`** cuando `liquidaciones_semanales` esté en prod.
+4. **Tarjeta AZUL:** cobrar al finalizar o justo antes — no al crear/aceptar viaje.
+
+## Dos cajas
+
+- Prepago = solo comisión efectivo.
+- Recaudo digital (transferencia/tarjeta) = liquidación semanal ACH; no alimenta prepago.
+
+## No romper
+
+Navegación, timbre, pool/claim, `finalizarViajeSeguro`, bloqueo prepago, `approveRecargaComision`.
+
+## Implementación
+
+Una fase por PR; feature flags en `config/finance`; sin código hasta que el usuario pida implementar explícitamente.

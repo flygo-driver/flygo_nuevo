@@ -6,6 +6,13 @@ service firebase.storage {
     function signedIn() { return request.auth != null; }
     function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
 
+    // Imagen, PDF u octet-stream (putData Android sin MIME explícito).
+    function esImagenOPdfSubida() {
+      return request.resource.contentType.matches('image/.*')
+        || request.resource.contentType == 'application/pdf'
+        || request.resource.contentType == 'application/octet-stream';
+    }
+
     /* ========= AVATARES =========
        Ruta: perfiles/{uid}/avatar_*.jpg
        Lectura: cualquiera autenticado
@@ -19,19 +26,17 @@ service firebase.storage {
                    && request.resource.contentType.matches('image/.*');
     }
 
-    /* ========= DOCUMENTOS TAXISTA (naming antiguo) =========
-       Ruta: documentos_taxista/{uid}/{fileName}
-       Lectura/Escritura: solo el dueño, máx 10MB, imagen o PDF
+    /* ========= DOCUMENTOS TAXISTA =========
+       Ruta app: documentos_taxista/{uid}/{tipo}_{timestamp}.jpg
+       Solo el taxista autenticado escribe en SU carpeta (uid == auth.uid).
     */
     match /documentos_taxista/{uid}/{fileName} {
       allow read: if isOwner(uid);
       allow write: if isOwner(uid)
                    && request.resource != null
+                   && request.resource.size > 0
                    && request.resource.size < 10 * 1024 * 1024
-                   && (
-                        request.resource.contentType.matches('image/.*') ||
-                        request.resource.contentType == 'application/pdf'
-                      );
+                   && esImagenOPdfSubida();
     }
 
     /* ========= RUTAS NUEVAS USADAS POR LA APP =========

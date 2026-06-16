@@ -612,7 +612,135 @@ class LugaresService {
     }
   }
 
-  Future<DetalleLugar?> detalle(String placeId) async {
+  /// Resuelve coordenadas a partir de una sugerencia del autocomplete (texto + placeId).
+  Future<DetalleLugar?> detalleDesdePrediccion(PrediccionLugar p) {
+    return detalle(p.placeId, hintDireccion: _hintDesdePrediccion(p));
+  }
+
+  String _hintDesdePrediccion(PrediccionLugar p) {
+    final pri = p.primary.trim();
+    final sec = (p.secondary ?? '').trim();
+    if (sec.isEmpty ||
+        sec == 'Reciente' ||
+        sec == 'Sugerencia por voz' ||
+        sec == 'DO' ||
+        sec == 'República Dominicana') {
+      return pri;
+    }
+    if (sec.toLowerCase().contains(pri.toLowerCase())) return sec;
+    return '$pri, $sec';
+  }
+
+  bool _esPlaceIdGoogle(String pid) {
+    if (pid.startsWith('local:poi:') ||
+        pid.startsWith('geocoded:') ||
+        pid.startsWith('recent:') ||
+        pid == '__rai_inteligente__') {
+      return false;
+    }
+    if (pid.contains(' ') || pid.contains(',')) return false;
+    return pid.length >= 10;
+  }
+
+  Future<DetalleLugar?> _geocodeComoDetalle(
+    String texto, {
+    String? placeId,
+  }) async {
+    final base = texto.trim();
+    if (base.length < 2) return null;
+
+    final intentos = <String>{
+      base,
+      '$base, República Dominicana',
+      '$base, Dominican Republic',
+    }.where((e) => e.trim().length >= 3).toList();
+
+    for (final q in intentos) {
+      try {
+        final locs = await geocoding.locationFromAddress(q);
+        if (locs.isEmpty) continue;
+        final loc = locs.first;
+        if (loc.latitude.abs() < 0.000001 && loc.longitude.abs() < 0.000001) {
+          continue;
+        }
+
+        String name = base;
+        String? addr;
+        try {
+          final marks = await geocoding.placemarkFromCoordinates(
+            loc.latitude,
+            loc.longitude,
+          );
+          if (marks.isNotEmpty) {
+            final fm = _formatearPlacemarkRD(marks.first);
+            name = fm.titulo;
+            addr = fm.resto;
+          }
+        } catch (_) {}
+
+        return DetalleLugar(
+          placeId: placeId ?? 'geocoded:${_norm(base)}',
+          name: name,
+          address: addr ?? q,
+          lat: loc.latitude,
+          lon: loc.longitude,
+        );
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Future<DetalleLugar?> _detalleGoogle(String pid) async {
+    try {
+      final params = <String, String>{
+        'place_id': pid,
+        'fields': 'name,formatted_address,geometry,address_components',
+        'language': 'es',
+        'key': app_keys.kGooglePlacesApiKey,
+      };
+      // Mismo session token que autocomplete (requerido tras el cambio a sesiones Places).
+      if (_sessionToken != null && _sessionToken!.trim().isNotEmpty) {
+        params['sessiontoken'] = _sessionToken!;
+      }
+      final uri = Uri.https(
+        'maps.googleapis.com',
+        '/maps/api/place/details/json',
+        params,
+      );
+      final json = await _getJson(uri);
+      if (json == null) return null;
+      final status = (json['status'] ?? '').toString();
+      if (status != 'OK') return null;
+
+      final r = json['result'] as Map<String, dynamic>?;
+      if (r == null) return null;
+
+      final geometry = r['geometry'] as Map<String, dynamic>?;
+      final loc = geometry?['location'] as Map<String, dynamic>?;
+      final lat = (loc?['lat'] as num?)?.toDouble();
+      final lon = (loc?['lng'] as num?)?.toDouble();
+      if (lat == null || lon == null) return null;
+
+      final formatted = (r['formatted_address'] ?? '').toString().trim();
+      final name = (r['name'] ?? '').toString().trim();
+
+      cerrarSesionPlaces();
+      return DetalleLugar(
+        placeId: pid,
+        name: name.isNotEmpty ? name : formatted,
+        address: formatted.isNotEmpty ? formatted : null,
+        lat: lat,
+        lon: lon,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<DetalleLugar?> detalle(
+    String placeId, {
+    String? hintDireccion,
+  }) async {
     final pid = placeId.trim();
     if (pid.isEmpty) {
       return null;
@@ -632,79 +760,22 @@ class LugaresService {
       }
     }
 
+    final hint = (hintDireccion ?? pid).trim();
+
+    if (pid.startsWith('geocoded:') || pid.startsWith('recent:')) {
+      return _geocodeComoDetalle(hint, placeId: pid);
+    }
+
     if (!_placesEnabled) {
-      try {
-        final locs = await geocoding.locationFromAddress(pid);
-        if (locs.isEmpty) {
-          return null;
-        }
-        final loc = locs.first;
-
-        final marks = await geocoding.placemarkFromCoordinates(
-            loc.latitude, loc.longitude);
-
-        String name = pid;
-        String? addr;
-        if (marks.isNotEmpty) {
-          final fm = _formatearPlacemarkRD(marks.first);
-          name = fm.titulo;
-          addr = fm.resto;
-        }
-        return DetalleLugar(
-            placeId: pid,
-            name: name,
-            address: addr,
-            lat: loc.latitude,
-            lon: loc.longitude);
-      } catch (_) {
-        return null;
-      }
+      return _geocodeComoDetalle(hint, placeId: pid);
     }
 
-    try {
-      final uri = Uri.https('maps.googleapis.com',
-          '/maps/api/place/details/json', <String, String>{
-        'place_id': pid,
-        'fields': 'name,formatted_address,geometry,address_components',
-        'language': 'es',
-        'key': app_keys.kGooglePlacesApiKey,
-      });
-      final json = await _getJson(uri);
-      if (json == null) {
-        return null;
-      }
-      final status = (json['status'] ?? '').toString();
-      if (status != 'OK') {
-        return null;
-      }
-
-      final r = json['result'] as Map<String, dynamic>?;
-      if (r == null) {
-        return null;
-      }
-
-      final geometry = r['geometry'] as Map<String, dynamic>?;
-      final loc = geometry?['location'] as Map<String, dynamic>?;
-      final lat = (loc?['lat'] as num?)?.toDouble();
-      final lon = (loc?['lng'] as num?)?.toDouble();
-      if (lat == null || lon == null) {
-        return null;
-      }
-
-      final formatted = (r['formatted_address'] ?? '').toString().trim();
-      final name = (r['name'] ?? '').toString().trim();
-
-      cerrarSesionPlaces();
-      return DetalleLugar(
-        placeId: pid,
-        name: name.isNotEmpty ? name : formatted,
-        address: formatted.isNotEmpty ? formatted : null,
-        lat: lat,
-        lon: lon,
-      );
-    } catch (_) {
-      return null;
+    if (_esPlaceIdGoogle(pid)) {
+      final fromGoogle = await _detalleGoogle(pid);
+      if (fromGoogle != null) return fromGoogle;
     }
+
+    return _geocodeComoDetalle(hint, placeId: pid);
   }
 
   Future<Map<String, dynamic>?> _getJson(Uri uri) async {

@@ -81,13 +81,26 @@ class SolicitudTurismoRepo {
     return ref.getDownloadURL();
   }
 
+  static Future<String> subirBytesDocumento({
+    required String uid,
+    required String tipo,
+    required Uint8List bytes,
+  }) async {
+    return _subirImagen(uid: uid, nombre: tipo, bytes: bytes);
+  }
+
   static Future<String> subirArchivoDocumento({
     required String uid,
     required String tipo,
     required File file,
   }) async {
+    if (!await file.exists()) {
+      throw Exception(
+        'El archivo ya no está disponible. Vuelve a seleccionar la foto.',
+      );
+    }
     final Uint8List bytes = await file.readAsBytes();
-    return _subirImagen(uid: uid, nombre: tipo, bytes: bytes);
+    return subirBytesDocumento(uid: uid, tipo: tipo, bytes: bytes);
   }
 
   /// Sincroniza `choferes_turismo.disponible` con el toggle general del taxista.

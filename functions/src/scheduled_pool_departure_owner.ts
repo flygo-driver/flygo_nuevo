@@ -98,8 +98,9 @@ export const scheduledNotifyPoolOwnerDepartureDay = onSchedule(
           continue;
         }
 
-        const title = "Hoy es tu gira por cupos";
-        const body = `${origen} → ${destino}. Iniciá el viaje en «Mis viajes por cupos» para que salga del catálogo público.`;
+        const title = "Hoy es tu salida por cupos";
+        const body =
+          `Hoy es tu salida ${origen} → ${destino} (gira, excursión o grupo). Si vendiste cupos por RAI, confirmá la comisión en la app (solo esos asientos). ¡Buen viaje!`;
 
         const res = await messaging().sendEachForMulticast({
           tokens,

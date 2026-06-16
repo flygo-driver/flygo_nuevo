@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart' show kTermsContactEmail;
 
 class TerminosCondicionesPage extends StatelessWidget {
@@ -36,7 +37,8 @@ class TerminosCondicionesPage extends StatelessWidget {
           ]),
           _h('4. Alcance del servicio'),
           _p('RAI DRIVER permite solicitar viajes **AHORA** o **PROGRAMADOS** (especialmente en aeropuertos, hoteles, zonas turísticas y traslados interurbanos). '
-              'Los viajes los ejecutan **conductores independientes** habilitados tras verificación de documentos. RAI DRIVER cobra al conductor una comisión (por defecto 20%) y ofrece herramientas de billetera y liquidación.'),
+              'Los viajes los ejecutan **conductores independientes** habilitados tras verificación de documentos. RAI DRIVER cobra al conductor una comisión '
+              '(vigente ${PlataformaEconomia.etiquetaPorcentajeComision()}, configurable en la plataforma) y ofrece herramientas de billetera y liquidación.'),
           _h('5. Conductores: requisitos y obligaciones'),
           _b([
             'Documentación vigente (licencia, matrícula/seguro, etc.).',
@@ -69,7 +71,7 @@ class TerminosCondicionesPage extends StatelessWidget {
           _h('10. Pagos, comisiones y billetera'),
           _b([
             'El pasajero paga el viaje conforme a las opciones habilitadas en la app.',
-            'El conductor autoriza la retención de la comisión de RAI DRIVER (por defecto 20%).',
+            'El conductor autoriza la retención de la comisión de RAI DRIVER (vigente ${PlataformaEconomia.etiquetaPorcentajeComision()}).',
             'RAI DRIVER podrá requerir saldo mínimo operativo en la billetera del conductor.',
           ]),
           _h('11. Viajes programados y liberación'),

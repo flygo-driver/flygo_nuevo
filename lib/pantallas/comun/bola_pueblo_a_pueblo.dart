@@ -72,9 +72,13 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
   }
 
   void _abrirModoViajeBola(String bolaId) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => BolaPuebloViajeActivoPage(bolaId: bolaId),
+    final NavigatorState? nav =
+        NavigationService.navigatorKey.currentState ??
+            Navigator.of(context, rootNavigator: true);
+    unawaited(
+      NavigationService.clearAndGoPage(
+        preNav: nav,
+        page: BolaPuebloViajeActivoPage(bolaId: bolaId),
       ),
     );
   }

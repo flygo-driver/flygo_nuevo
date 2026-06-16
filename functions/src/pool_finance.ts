@@ -1,8 +1,13 @@
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
+import { getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import {
+  fetchGiraAbusoUmbral,
+  mergeGiraAbusoBloqueadoSiAplica,
+} from "./gira_abuso_util.js";
 
 const db = () => getFirestore();
 
@@ -40,11 +45,13 @@ async function getRole(uid: string): Promise<string> {
   const snap = await db().collection("usuarios").doc(uid).get();
   let rolUsuario = roleFromUserDoc(snap.data() as AnyMap | undefined).trim().toLowerCase();
   if (rolUsuario === "administrador") rolUsuario = "admin";
+  if (rolUsuario === "driver") rolUsuario = "taxista";
   if (rolUsuario) return rolUsuario;
 
   const rolSnap = await db().collection("roles").doc(uid).get();
-  const rolRaw = String((rolSnap.data() as AnyMap | undefined)?.rol ?? "").trim().toLowerCase();
-  if (rolRaw === "administrador") return "admin";
+  let rolRaw = String((rolSnap.data() as AnyMap | undefined)?.rol ?? "").trim().toLowerCase();
+  if (rolRaw === "administrador") rolRaw = "admin";
+  if (rolRaw === "driver") rolRaw = "taxista";
   return rolRaw;
 }
 
@@ -98,20 +105,55 @@ function ensurePoolOwnerOrAdmin(role: string, uidActor: string, ownerTaxistaId: 
   }
 }
 
+/** Marca reservas activas al cancelar la gira completa (chofer/admin). Devuelve cantidad cancelada. */
+function marcarReservasCanceladasPorGiraTx(
+  tx: Transaction,
+  reservaDocs: QueryDocumentSnapshot[],
+  motivo: string,
+): number {
+  let n = 0;
+  const motivoTxt = motivo.trim() || "cancelacion";
+  for (const doc of reservaDocs) {
+    const r = (doc.data() ?? {}) as AnyMap;
+    const estadoRes = String(r.estado ?? "").trim().toLowerCase();
+    if (estadoRes === "cancelado" || estadoRes === "cancelado_cliente" || estadoRes === "cancelado_gira") {
+      continue;
+    }
+    if (estadoRes !== "reservado" && estadoRes !== "pagado") continue;
+    tx.update(doc.ref, {
+      estado: "cancelado_gira",
+      canceladoPor: "chofer",
+      canceladoEn: FieldValue.serverTimestamp(),
+      motivoCancelacion: motivoTxt,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    n += 1;
+  }
+  return n;
+}
+
+/** Contadores del pool a cero cuando la gira se cancela por completo. */
+function patchPoolCanceladoGira(motivo: string): AnyMap {
+  return {
+    estado: "cancelado",
+    asientosReservados: 0,
+    asientosPagados: 0,
+    montoReservado: 0,
+    montoPagado: 0,
+    asientosFirmesSalida: 0,
+    canceladoAt: FieldValue.serverTimestamp(),
+    motivoCancelacion: motivo.trim() || "cancelacion",
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Mismo % que viajes en efectivo (`config/comision`). */
 async function getComisionGiraPorcientoFromRemote(): Promise<number> {
-  try {
-    const snap = await db().collection("configuracion_globals").doc("app").get();
-    const v = (snap.data() ?? {})["comision_gira_porcentaje"];
-    let n = typeof v === "number" && Number.isFinite(v) ? v : 0.1;
-    if (n > 0 && n <= 1.001) n *= 100;
-    return Math.min(100, Math.max(0, n));
-  } catch {
-    return 10;
-  }
+  return getComisionViajePorcentajeCached();
 }
 
 function priceMultSentido(sentido: unknown): number {
@@ -455,22 +497,11 @@ export const startPoolTrip = onCall(async (request) => {
     }
 
     const cap = Number(pool.capacidad ?? 0);
-    const duRaw = pool.asientosConfirmadosPorDueno;
-    let duVal = 0;
-    if (typeof duRaw === "number" && Number.isFinite(duRaw)) {
-      duVal = duRaw;
-    } else if (typeof duRaw === "string") {
-      const p = Number.parseFloat(String(duRaw).trim());
-      if (Number.isFinite(p)) duVal = p;
-    }
-    const duenoProvided = duVal > 0;
-
+    // Comisión solo sobre cupos firmes en RAI al iniciar (pagado + efectivo reservado en app).
+    // cuposComisionRai limita el prepago apartado al publicar, no las ventas reales en app.
     let asientosReales = firmSalida;
-    if (duenoProvided) {
-      asientosReales = Math.min(firmSalida, Math.max(1, Math.trunc(duVal)));
-    }
     if (Number.isFinite(cap) && cap > 0) {
-      asientosReales = Math.min(asientosReales, cap);
+      asientosReales = Math.min(asientosReales, Math.trunc(cap));
     }
 
     const reserved = round2(Math.max(0, numOr0(pool.comisionGiraEstimadaRd)));
@@ -478,19 +509,40 @@ export const startPoolTrip = onCall(async (request) => {
     const pct = pctPool > 1e-6 ? pctPool : pctRemote;
     const comisionReal = comisionRealRdFromAsientos(pool, asientosReales, pct);
 
-    if (comisionReal - reserved > 1e-6) {
-      logger.error("[GIRA_PREPAGO] start comisionReal > reservada", { poolId, comisionReal, reserved });
-      throw new HttpsError(
-        "failed-precondition",
-        "La comisión calculada supera la reserva de prepago; contactá soporte.",
-      );
-    }
-    const excess = round2(reserved - comisionReal);
     const billeRef = db().collection("billeteras_taxista").doc(ownerTaxistaId);
     const billeSnap = await tx.get(billeRef);
     const bille = (billeSnap.data() ?? {}) as AnyMap;
-    const prep = Math.max(0, numOr0(bille.saldoPrepagoComisionRd));
+    let prep = Math.max(0, numOr0(bille.saldoPrepagoComisionRd));
     const reservWallet = Math.max(0, numOr0(bille.saldoReservadoParaGiras));
+
+    let reservedEfectiva = reserved;
+    const faltanteInicio = round2(comisionReal - reserved);
+    if (faltanteInicio > 1e-6) {
+      if (prep + 1e-9 < faltanteInicio) {
+        const recargarMin = round2(faltanteInicio - prep);
+        throw new HttpsError(
+          "failed-precondition",
+          `Para iniciar esta gira faltan RD$${faltanteInicio.toFixed(2)} de prepago libre. ` +
+            `Tienes RD$${prep.toFixed(2)} disponible. Recarga al menos RD$${recargarMin.toFixed(2)} ` +
+            `en Mis pagos → Recarga comisión.`,
+        );
+      }
+      prep = round2(prep - faltanteInicio);
+      reservedEfectiva = comisionReal;
+      tx.update(poolRef, {
+        comisionGiraEstimadaRd: comisionReal,
+        prepagoComisionTopUpInicioRd: faltanteInicio,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      logger.info("[GIRA_PREPAGO] start top-up prepago libre", {
+        poolId,
+        faltanteInicio,
+        comisionReal,
+        reserved,
+      });
+    }
+
+    const excess = round2(reservedEfectiva - comisionReal);
     logger.info("[PRE_TEST] startPoolTrip saldos antes", {
       uidActor,
       poolId,
@@ -591,6 +643,7 @@ export const finalizePoolTrip = onCall(async (request) => {
 
   const pctRemote = await getComisionGiraPorcientoFromRemote();
   const poolRef = db().collection("viajes_pool").doc(poolId);
+  const abuseCfgFinalize = await fetchGiraAbusoUmbral();
   const result = await db().runTransaction(async (tx) => {
     const snap = await tx.get(poolRef);
     if (!snap.exists) throw new HttpsError("not-found", "Pool no existe");
@@ -629,14 +682,13 @@ export const finalizePoolTrip = onCall(async (request) => {
         const us = await tx.get(uref);
         const ud = (us.data() ?? {}) as AnyMap;
         const canceladas = Math.max(0, Math.trunc(numOr0(ud.girasCanceladasAntesDeIniciar))) + 1;
-        tx.set(
-          uref,
-          {
-            girasCanceladasAntesDeIniciar: canceladas,
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true },
-        );
+        const creadasFin = Math.max(0, Math.trunc(numOr0(ud.girasCreadasUltimoMes)));
+        const userCancelPatchFin: AnyMap = {
+          girasCanceladasAntesDeIniciar: canceladas,
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+        mergeGiraAbusoBloqueadoSiAplica(userCancelPatchFin, creadasFin, canceladas, abuseCfgFinalize);
+        tx.set(uref, userCancelPatchFin, { merge: true });
         tx.update(poolRef, {
           estado: "cancelado",
           prepagoComisionEtapa: "devuelta_finalize_sin_inicio",
@@ -774,6 +826,7 @@ export const cancelPoolTrip = onCall(async (request) => {
   });
 
   const poolRef = db().collection("viajes_pool").doc(poolId);
+  const abuseCfg = await fetchGiraAbusoUmbral();
   const result = await db().runTransaction(async (tx) => {
     const snap = await tx.get(poolRef);
     if (!snap.exists) throw new HttpsError("not-found", "Pool no existe");
@@ -795,13 +848,25 @@ export const cancelPoolTrip = onCall(async (request) => {
 
     const reserved = Math.max(0, numOr0(pool.comisionGiraEstimadaRd));
     const etapa = String(pool.prepagoComisionEtapa ?? "").trim().toLowerCase();
+    const reservasSnap = await tx.get(poolRef.collection("reservas"));
+    const reservasCanceladas = marcarReservasCanceladasPorGiraTx(tx, reservasSnap.docs, motivo);
 
     if (reserved > 1e-9 && etapa === "reservada_creacion" && ownerTaxistaId) {
       const billeRef = db().collection("billeteras_taxista").doc(ownerTaxistaId);
+      const uref = db().collection("usuarios").doc(ownerTaxistaId);
       const billeSnap = await tx.get(billeRef);
+      const us = await tx.get(uref);
       const bille = (billeSnap.data() ?? {}) as AnyMap;
+      const ud = (us.data() ?? {}) as AnyMap;
       const prep = Math.max(0, numOr0(bille.saldoPrepagoComisionRd));
       const reservWallet = Math.max(0, numOr0(bille.saldoReservadoParaGiras));
+      const canceladas = Math.max(0, Math.trunc(numOr0(ud.girasCanceladasAntesDeIniciar))) + 1;
+      const creadas = Math.max(0, Math.trunc(numOr0(ud.girasCreadasUltimoMes)));
+      const userCancelPatch: AnyMap = {
+        girasCanceladasAntesDeIniciar: canceladas,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      mergeGiraAbusoBloqueadoSiAplica(userCancelPatch, creadas, canceladas, abuseCfg);
       logger.info("[PRE_TEST] cancelPoolTrip saldos antes devolución", {
         uidActor,
         poolId,
@@ -822,19 +887,7 @@ export const cancelPoolTrip = onCall(async (request) => {
         },
         { merge: true },
       );
-
-      const uref = db().collection("usuarios").doc(ownerTaxistaId);
-      const us = await tx.get(uref);
-      const ud = (us.data() ?? {}) as AnyMap;
-      const canceladas = Math.max(0, Math.trunc(numOr0(ud.girasCanceladasAntesDeIniciar))) + 1;
-      tx.set(
-        uref,
-        {
-          girasCanceladasAntesDeIniciar: canceladas,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
+      tx.set(uref, userCancelPatch, { merge: true });
 
       const led = db().collection("ledger_giras").doc();
       tx.set(led, {
@@ -847,14 +900,15 @@ export const cancelPoolTrip = onCall(async (request) => {
       });
 
       tx.update(poolRef, {
-        estado: "cancelado",
+        ...patchPoolCanceladoGira(motivo),
         prepagoComisionEtapa: "devuelta_cancelacion",
         comisionGiraEstimadaRd: 0,
-        canceladoAt: FieldValue.serverTimestamp(),
-        motivoCancelacion: motivo,
-        updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.info("[GIRA_PREPAGO] cancelPoolTrip devolución reserva", { poolId, reserved });
+      logger.info("[GIRA_PREPAGO] cancelPoolTrip devolución reserva", {
+        poolId,
+        reserved,
+        reservasCanceladas,
+      });
       const prepDespues = Number((prep + reserved).toFixed(2));
       const reservDespues = Number((reservWallet - reserved).toFixed(2));
       logger.info("[PRE_TEST] cancelPoolTrip saldos después devolución", {
@@ -862,18 +916,34 @@ export const cancelPoolTrip = onCall(async (request) => {
         poolId,
         prepDespues,
         reservWalletDespues: reservDespues,
+        reservasCanceladas,
       });
-      return { ok: true, poolId, alreadyCanceled: false, comisionDevuelta: reserved };
+      return {
+        ok: true,
+        poolId,
+        alreadyCanceled: false,
+        comisionDevuelta: reserved,
+        reservasCanceladas,
+      };
     }
 
-    tx.update(poolRef, {
-      estado: "cancelado",
-      canceladoAt: FieldValue.serverTimestamp(),
-      motivoCancelacion: motivo,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    logger.info("[GIRA_PREPAGO] cancelPoolTrip sin reserva prepago", { poolId });
-    return { ok: true, poolId, alreadyCanceled: false, comisionDevuelta: 0 };
+    if (ownerTaxistaId) {
+      const uref = db().collection("usuarios").doc(ownerTaxistaId);
+      const us = await tx.get(uref);
+      const ud = (us.data() ?? {}) as AnyMap;
+      const canceladas = Math.max(0, Math.trunc(numOr0(ud.girasCanceladasAntesDeIniciar))) + 1;
+      const creadas = Math.max(0, Math.trunc(numOr0(ud.girasCreadasUltimoMes)));
+      const userCancelPatch: AnyMap = {
+        girasCanceladasAntesDeIniciar: canceladas,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      mergeGiraAbusoBloqueadoSiAplica(userCancelPatch, creadas, canceladas, abuseCfg);
+      tx.set(uref, userCancelPatch, { merge: true });
+    }
+
+    tx.update(poolRef, patchPoolCanceladoGira(motivo));
+    logger.info("[GIRA_PREPAGO] cancelPoolTrip sin reserva prepago", { poolId, reservasCanceladas });
+    return { ok: true, poolId, alreadyCanceled: false, comisionDevuelta: 0, reservasCanceladas };
   });
 
   await markIdempotencyDone(idem.ref, result);

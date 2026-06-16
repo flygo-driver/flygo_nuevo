@@ -13,6 +13,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
     required this.user,
     required this.disponible,
     required this.disponibilidadCargando,
+    this.nestedScrollChild = false,
   });
 
   final User user;
@@ -20,6 +21,9 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
   /// Mismo criterio que pestañas AHORA / PROGRAMADOS del pool.
   final bool disponible;
   final bool disponibilidadCargando;
+
+  /// Cuando el pool usa [NestedScrollView], las listas internas no deben ser primary.
+  final bool nestedScrollChild;
 
   static Widget _paso(BuildContext context, String n, String texto) {
     final cs = Theme.of(context).colorScheme;
@@ -179,10 +183,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
             child: Text(
               'TABLERO EN VIVO',
               style: TextStyle(
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.75),
+                color: BolaPuebloColors.of(context).onMuted,
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1.1,
@@ -196,9 +197,15 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
           stream: BolaPuebloRepo.streamTablero(),
           builder: (context, snap) {
             final bottomPad = BolaPuebloUi.safeBottomInset(context, base: 24);
+            final scrollPrimary = !nestedScrollChild;
+            final scrollPhysics = nestedScrollChild
+                ? const ClampingScrollPhysics()
+                : null;
             if (snap.connectionState == ConnectionState.waiting) {
               final cs = Theme.of(context).colorScheme;
               return ListView(
+                primary: scrollPrimary,
+                physics: scrollPhysics,
                 padding: EdgeInsets.only(bottom: bottomPad),
                 children: [
                   ...head,
@@ -234,6 +241,8 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
 
             if (docs.isEmpty) {
               return ListView(
+                primary: scrollPrimary,
+                physics: scrollPhysics,
                 padding: EdgeInsets.only(bottom: bottomPad),
                 children: [
                   ...head,
@@ -248,6 +257,8 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
             }
 
             return ListView.builder(
+              primary: scrollPrimary,
+              physics: scrollPhysics,
               padding: BolaPuebloUi.listScrollPadding(
                 context,
                 base: 24,

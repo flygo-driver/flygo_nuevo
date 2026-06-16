@@ -1,24 +1,23 @@
 // lib/servicios/pay_config.dart
 //
 // Datos bancarios de depósito a RAI: [RecargaBancariaConfig] es la fuente única.
-// Override opcional en CI con --dart-define=RAI_PAY_* (si el define está vacío, usa recarga).
-//
-//   --dart-define=RAI_PAY_BANK_NAME=...
-//   --dart-define=RAI_PAY_ACCOUNT_TYPE=...
-//   --dart-define=RAI_PAY_ACCOUNT_NUMBER=...
-//   --dart-define=RAI_PAY_ACCOUNT_HOLDER=...
-//   --dart-define=RAI_PAY_RNC=...
+// Métodos visibles y flags de pasarela: [FinanceConfigService] (config/finance).
 
 import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
+import 'package:flygo_nuevo/servicios/finance_config_service.dart';
+import 'package:flygo_nuevo/utils/viaje_referencia_recaudo.dart';
 
 class PayConfig {
-  /// Cuando la pasarela de tarjeta esté lista, pon `true` y aparecerá "Tarjeta".
+  /// Legacy compile-time; preferir [tarjetaHabilitada] (remote flag).
   static const bool pagosConTarjetaHabilitados = false;
+
+  static bool get tarjetaHabilitada =>
+      FinanceConfigService.pagosConTarjetaAzulHabilitados;
 
   static List<String> get metodosReservaVisibles => <String>[
         'Efectivo',
         'Transferencia',
-        if (pagosConTarjetaHabilitados) 'Tarjeta',
+        if (tarjetaHabilitada) 'Tarjeta',
       ];
 
   static const metodos = ['Transferencia', 'Efectivo'];
@@ -50,4 +49,8 @@ class PayConfig {
 
   static String referenciaSugerida(String poolId, String uid) =>
       'RAI-${poolId.substring(0, 6)}-${uid.substring(0, 6)}';
+
+  /// Referencia única por viaje (generada en servidor cuando flag ON).
+  static String referenciaViaje(String viajeId) =>
+      ViajeReferenciaRecaudo.generar(viajeId);
 }

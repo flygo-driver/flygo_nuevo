@@ -5,7 +5,7 @@ import 'package:flygo_nuevo/servicios/gps_service.dart';
 
 /// Ubicación actual **sin** solicitar permiso al SO (lectura pasiva).
 /// Para pedir permiso explícitamente, usar [LocationPermissionService.ensureLocationReady]
-/// o [GpsService.checkServiceThenRequestPermissionIfNeeded] desde un flujo de producto.
+/// o [LocationPermissionService.checkServiceThenRequestIfNeeded] desde un flujo de producto.
 Future<Position> getPositionConPermiso() async {
   final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest();
   if (!snap.serviceEnabled) {

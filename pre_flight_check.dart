@@ -58,9 +58,30 @@ Future<void> main() async {
 
   final db = FirebaseFirestore.instance;
 
+  final comCfg = await db.collection('config').doc('comision').get();
   final appCfg = await db.collection('configuracion_globals').doc('app').get();
+  final comViaje = comCfg.data()?['porcentaje'];
   final comGira = appCfg.data()?['comision_gira_porcentaje'];
+  print('[PRE_FLIGHT] config/comision.porcentaje → $comViaje');
   print('[PRE_FLIGHT] configuracion_globals/app.comision_gira_porcentaje → $comGira');
+  double norm(dynamic raw) {
+    if (raw is! num || !raw.isFinite) return double.nan;
+    var n = raw.toDouble();
+    if (n > 0 && n <= 1.001) n *= 100;
+    return n.clamp(0.0, 100.0);
+  }
+  final v = norm(comViaje);
+  final g = norm(comGira);
+  if (v.isNaN && g.isNaN) {
+    print('[PRE_FLIGHT] ALINEACION: sin % en Firestore (default código 20%)');
+  } else if (!v.isNaN && !g.isNaN && (v - g).abs() < 0.05) {
+    print('[PRE_FLIGHT] ALINEACION: OK ($v% / $g%)');
+  } else if (!v.isNaN && (g.isNaN || (v - g).abs() >= 0.05)) {
+    print(
+      '[PRE_FLIGHT] ALINEACION: revisar (viaje=$v% gira=${g.isNaN ? "—" : g}%). '
+      'Espejo: configuracion_globals/app.comision_gira_porcentaje = $v',
+    );
+  }
 
   final pruebas = await db.collection('configuracion_globals').doc('pruebas').get();
   print('[PRE_FLIGHT] configuracion_globals/pruebas → ${pruebas.data()}');

@@ -15,6 +15,7 @@ import {
   metodoPagoNormalizado,
   metodoPagoNormalizadoDesde,
 } from "./liquidacion_semanal_viaje.js";
+import { assertTaxistaAptoParaClaimPool } from "./taxista_operacion_gate.js";
 
 const db = () => getFirestore();
 const messaging = () => getMessaging();
@@ -44,6 +45,11 @@ let _financeCfgCache: {
   useLiquidacionesSemanales: boolean;
   escrituraPagosTaxistasLegacy: boolean;
   generarLiquidacionesSemanalesAuto: boolean;
+  transferenciaRecaudoEnCuentaRai: boolean;
+  conciliacionAutomaticaHabilitada: boolean;
+  transferenciaExigeVerificadoParaFinalizar: boolean;
+  qrRecaudoPopularHabilitado: boolean;
+  pagosConTarjetaAzulHabilitados: boolean;
 } | null = null;
 
 type AnyMap = Record<string, unknown>;
@@ -141,6 +147,11 @@ export async function getFinanceConfig(): Promise<{
   useLiquidacionesSemanales: boolean;
   escrituraPagosTaxistasLegacy: boolean;
   generarLiquidacionesSemanalesAuto: boolean;
+  transferenciaRecaudoEnCuentaRai: boolean;
+  conciliacionAutomaticaHabilitada: boolean;
+  transferenciaExigeVerificadoParaFinalizar: boolean;
+  qrRecaudoPopularHabilitado: boolean;
+  pagosConTarjetaAzulHabilitados: boolean;
 }> {
   const now = Date.now();
   if (_financeCfgCache && now - _financeCfgCache.loadedAt < COMISION_PREPAGO_CONFIG_TTL_MS) {
@@ -149,6 +160,12 @@ export async function getFinanceConfig(): Promise<{
       useLiquidacionesSemanales: _financeCfgCache.useLiquidacionesSemanales,
       escrituraPagosTaxistasLegacy: _financeCfgCache.escrituraPagosTaxistasLegacy,
       generarLiquidacionesSemanalesAuto: _financeCfgCache.generarLiquidacionesSemanalesAuto,
+      transferenciaRecaudoEnCuentaRai: _financeCfgCache.transferenciaRecaudoEnCuentaRai,
+      conciliacionAutomaticaHabilitada: _financeCfgCache.conciliacionAutomaticaHabilitada,
+      transferenciaExigeVerificadoParaFinalizar:
+        _financeCfgCache.transferenciaExigeVerificadoParaFinalizar,
+      qrRecaudoPopularHabilitado: _financeCfgCache.qrRecaudoPopularHabilitado,
+      pagosConTarjetaAzulHabilitados: _financeCfgCache.pagosConTarjetaAzulHabilitados,
     };
   }
   try {
@@ -159,6 +176,14 @@ export async function getFinanceConfig(): Promise<{
       useLiquidacionesSemanales: financeBool(data.useLiquidacionesSemanales, false),
       escrituraPagosTaxistasLegacy: financeBool(data.escrituraPagosTaxistasLegacy, true),
       generarLiquidacionesSemanalesAuto: financeBool(data.generarLiquidacionesSemanalesAuto, false),
+      transferenciaRecaudoEnCuentaRai: financeBool(data.transferenciaRecaudoEnCuentaRai, false),
+      conciliacionAutomaticaHabilitada: financeBool(data.conciliacionAutomaticaHabilitada, false),
+      transferenciaExigeVerificadoParaFinalizar: financeBool(
+        data.transferenciaExigeVerificadoParaFinalizar,
+        false,
+      ),
+      qrRecaudoPopularHabilitado: financeBool(data.qrRecaudoPopularHabilitado, false),
+      pagosConTarjetaAzulHabilitados: financeBool(data.pagosConTarjetaAzulHabilitados, false),
     };
     _financeCfgCache = { loadedAt: now, ...cfg };
     return cfg;
@@ -169,6 +194,11 @@ export async function getFinanceConfig(): Promise<{
       useLiquidacionesSemanales: false,
       escrituraPagosTaxistasLegacy: true,
       generarLiquidacionesSemanalesAuto: false,
+      transferenciaRecaudoEnCuentaRai: false,
+      conciliacionAutomaticaHabilitada: false,
+      transferenciaExigeVerificadoParaFinalizar: false,
+      qrRecaudoPopularHabilitado: false,
+      pagosConTarjetaAzulHabilitados: false,
     };
   }
 }
@@ -781,6 +811,40 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       return { ok: true, viajeId, alreadyCompleted: true, uidTaxista };
     }
     assertMultiparadaCompletaParaFinalizar(d);
+
+    const financeCfg = await getFinanceConfig();
+    const metodoPre = String(d.metodoPago ?? "").toLowerCase().trim();
+    const esTransferPre = metodoPre.includes("transfer");
+    const usaRecaudoRai =
+      String(d.referenciaRecaudo ?? "").trim().length > 0 ||
+      String(d.recaudoDestino ?? "").trim().toLowerCase() === "rai";
+    if (
+      financeCfg.transferenciaExigeVerificadoParaFinalizar &&
+      esTransferPre &&
+      usaRecaudoRai
+    ) {
+      const ep = String(d.estadoPago ?? "").trim().toLowerCase();
+      if (ep !== "verificado" && d.transferenciaConfirmada !== true) {
+        throw new HttpsError(
+          "failed-precondition",
+          "No se puede finalizar: la transferencia a cuenta RAI aún no está verificada por conciliación bancaria.",
+        );
+      }
+    }
+
+    const esTarjetaPre =
+      metodoPre.includes("tarjeta") || metodoPre.includes("card");
+    if (financeCfg.pagosConTarjetaAzulHabilitados && esTarjetaPre) {
+      const paymentObj = (d.payment ?? {}) as AnyMap;
+      const payStatus = String(paymentObj.status ?? "").trim().toLowerCase();
+      const ep = String(d.estadoPago ?? "").trim().toLowerCase();
+      if (ep !== "verificado" && payStatus !== "captured") {
+        throw new HttpsError(
+          "failed-precondition",
+          "No se puede finalizar: el pago con tarjeta (AZUL) aún no está capturado.",
+        );
+      }
+    }
 
     if (!estadoPermiteFinalizarTaxista(estado)) {
       const rawEst = String(d.estado ?? "");
@@ -1418,6 +1482,30 @@ function viajeCoincideModoConductor(viajeTipo: string, modo: PoolModoConductor):
   return t !== "motor" && t !== "turismo";
 }
 
+const CANAL_TURISMO_POOL = "turismo_pool";
+
+function esTurismoPoolTomable(d: AnyMap): boolean {
+  const tipo = String(d.tipoServicio ?? "").trim().toLowerCase();
+  const canal = String(d.canalAsignacion ?? "").trim().toLowerCase();
+  if (tipo !== "turismo" || canal !== CANAL_TURISMO_POOL) return false;
+  if (String(d.uidTaxista ?? d.taxistaId ?? "").trim()) return false;
+  const estado = String(d.estado ?? "").trim().toLowerCase();
+  const estadosOk = new Set([
+    "pendiente",
+    "pendiente_pago",
+    "pendiente_admin",
+    "pendienteadmin",
+    "buscando",
+    "disponible",
+  ]);
+  return estadosOk.has(estado);
+}
+
+function choferTurismoEstadoOperativo(estadoRaw: unknown): boolean {
+  const e = String(estadoRaw ?? "").trim().toLowerCase();
+  return e === "aprobado" || e === "activo";
+}
+
 export const aceptarViajeSeguro = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uidActor = request.auth.uid;
@@ -1480,6 +1568,7 @@ export const aceptarViajeSeguro = onCall(async (request) => {
 
     const uSnap = await tx.get(userRef);
     const uData = (uSnap.data() ?? {}) as AnyMap;
+    assertTaxistaAptoParaClaimPool(uData);
     if (uData.tienePagoPendiente === true) {
       throw new HttpsError("failed-precondition", "bloqueado-pago-semanal");
     }
@@ -1492,7 +1581,13 @@ export const aceptarViajeSeguro = onCall(async (request) => {
 
     const poolModo = poolModoConductorFromUser(uData);
     const viajeTipo = String(d.tipoServicio ?? "normal");
-    if (!viajeCoincideModoConductor(viajeTipo, poolModo)) {
+    const esTurismoPool = esTurismoPoolTomable(d);
+    if (esTurismoPool) {
+      const choferSnap = await tx.get(db().collection("choferes_turismo").doc(uidActor));
+      if (!choferTurismoEstadoOperativo((choferSnap.data() as AnyMap | undefined)?.estado)) {
+        throw new HttpsError("failed-precondition", "chofer-turismo-no-aprobado");
+      }
+    } else if (!viajeCoincideModoConductor(viajeTipo, poolModo)) {
       throw new HttpsError("failed-precondition", "tipo-servicio-no-coincide");
     }
 

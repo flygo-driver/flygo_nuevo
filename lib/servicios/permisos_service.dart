@@ -8,7 +8,9 @@ class PermisosService {
   static Future<bool> ensureUbicacion(BuildContext context) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
 
-    final r = await LocationPermissionService.checkAndRequestBasicPermission();
+    final r = await LocationPermissionService.checkAndRequestBasicPermission(
+      requestIfDenied: false,
+    );
     if (!r.serviceEnabled) {
       messenger?.showSnackBar(
         SnackBar(

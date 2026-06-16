@@ -62,5 +62,18 @@ class AdminConfigService {
       'motivo': motivo,
     });
   }
+
+  static Future<void> updateComisionPrepagoConfig({
+    required double minimoOperativoRd,
+    required double umbralPreventivoRd,
+    required String motivo,
+  }) async {
+    final c = _fx.httpsCallable('updateComisionPrepagoConfig');
+    await c.call(<String, dynamic>{
+      'minimoOperativoRd': minimoOperativoRd,
+      'umbralPreventivoRd': umbralPreventivoRd,
+      'motivo': motivo,
+    });
+  }
 }
 

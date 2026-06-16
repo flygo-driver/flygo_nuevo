@@ -80,6 +80,25 @@ service cloud.firestore {
         !(userDoc(uid).data.tienePagoPendiente == true);
     }
 
+    function taxistaDocsEstadoDe(uid) {
+      let u = userDoc(uid).data;
+      let e = u.docsEstado is string ? u.docsEstado : "";
+      if (e == "") {
+        e = u.estadoDocumentos is string ? u.estadoDocumentos : "pendiente";
+      }
+      return e;
+    }
+
+    /// Claim pool: registro + docs aprobados + contrato + puedeRecibirViajes.
+    function taxistaAptoParaClaimPool(uid) {
+      let u = userDoc(uid).data;
+      return u.registroTaxistaCompleto == true &&
+        u.documentosCompletos == true &&
+        taxistaDocsEstadoDe(uid) == "aprobado" &&
+        u.puedeRecibirViajes == true &&
+        u.contratoTaxistaAceptado == true;
+    }
+
     function changedOnly(allowed) {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly(allowed);
     }
@@ -106,7 +125,19 @@ service cloud.firestore {
         "comisionCalculada",
         "comisionCalculadaEn",
         "estadoPago",
-        "confirmacionTransferencia"
+        "confirmacionTransferencia",
+        "referenciaRecaudo",
+        "recaudoDestino",
+        "qrRecaudoPayload",
+        "qrRecaudoTipo",
+        "qrRecaudoVersion",
+        "qrRecaudoGeneradoEn",
+        "qrRecaudoEstado",
+        "pagoAzulId",
+        "conciliacionId",
+        "conciliacionEstado",
+        "movimientoBancoEntradaId",
+        "elegibleLiquidacionSemanal"
       ];
     }
 
@@ -281,7 +312,6 @@ service cloud.firestore {
           "nombre", "telefono", "fotoUrl", "direccion",
           "email", "proveedor", "lastLogin",
           "banco", "numeroCuenta", "titularCuenta",
-          "disponible",
           "ultimaActivacion",
           "viajeActivoId", "siguienteViajeId",
           "updatedAt", "actualizadoEn",
@@ -289,23 +319,33 @@ service cloud.firestore {
           "aceptacionTerminos",
           "phoneVerified", "lastPhoneReauthAt"
         ]);
+      // Disponibilidad operativa (toggle): aislado de campos de aprobación documental.
+      allow update: if isOwner(uid) &&
+        changedOnly([
+          "disponible", "ultimaActivacion",
+          "updatedAt", "actualizadoEn"
+        ]);
       // Completar rol vacío al primer login (p. ej. Google); no permite cambiar a admin.
       allow update: if isOwner(uid) &&
         (!("rol" in resource.data) || resource.data.rol == "") &&
         changedOnly(["rol", "updatedAt", "actualizadoEn"]) &&
         request.resource.data.rol is string &&
         request.resource.data.rol in ["cliente", "taxista"];
-      // Expediente de documentos de taxista (dueño).
+      // Expediente: solo URLs de documentos (sin tocar estado de aprobación).
       allow update: if isOwner(uid) &&
         changedOnly([
           "docs",
-          "docsEstado",
-          "estadoDocumentos",
-          "docsEnviadosEn",
-          "docsComentarioAdmin",
-          "updatedAt",
-          "actualizadoEn"
+          "updatedAt", "actualizadoEn"
         ]);
+      // Enviar a revisión o marcar pendiente tras re-subida (nunca "aprobado").
+      allow update: if isOwner(uid) &&
+        changedOnly([
+          "docs",
+          "docsEstado", "estadoDocumentos", "docsEnviadosEn",
+          "updatedAt", "actualizadoEn"
+        ]) &&
+        request.resource.data.docsEstado in ["pendiente", "en_revision"] &&
+        request.resource.data.estadoDocumentos in ["pendiente", "en_revision"];
       // Marca cola ADM cuando RAI bloquea por muchas cancelaciones de salidas por cupos.
       allow update: if isOwner(uid) &&
         resource.data.rol == "taxista" &&
@@ -336,11 +376,18 @@ service cloud.firestore {
           "placa", "marca", "modelo", "color", "anio", "vehiculoAnio",
           "vehiculoModelo", "vehiculoColor", "vehiculoMarca",
           "fotoVehiculoUrl", "vehiculoPerfilCompleto", "vehiculo",
-          "disponible", "docsEstado", "estadoDocumentos",
-          "documentosCompletos", "puedeRecibirViajes",
           "docs",
           "updatedAt", "actualizadoEn"
         ]);
+      // Firma de contrato conductor (solo aceptación; no revocación desde cliente).
+      allow update: if isOwner(uid) &&
+        resource.data.rol == "taxista" &&
+        changedOnly([
+          "contratoTaxistaAceptado", "contratoTaxistaVersion",
+          "contratoTaxistaAceptadoEn", "contratoTaxistaFirmaTipo",
+          "updatedAt", "actualizadoEn"
+        ]) &&
+        request.resource.data.contratoTaxistaAceptado == true;
       allow update: if isAdmin();
       allow delete: if isAdmin();
 
@@ -403,6 +450,11 @@ service cloud.firestore {
         request.resource.data.clienteId == request.auth.uid &&
         request.resource.data.uidTaxista == "" &&
         request.resource.data.taxistaId == "" &&
+        !request.resource.data.keys().hasAny(["referenciaRecaudo", "recaudoDestino"]) &&
+        !request.resource.data.keys().hasAny([
+          "qrRecaudoPayload", "qrRecaudoTipo", "qrRecaudoVersion",
+          "qrRecaudoGeneradoEn", "qrRecaudoEstado", "pagoAzulId"
+        ]) &&
         viajeCreateClienteFlagsPagoInicialesOk() &&
         // Creación cliente: sin cerrar finanzas ni validar pagos.
         !request.resource.data.keys().hasAny(viajeCamposFinancierosProtegidosEnCreateCliente()) &&
@@ -413,9 +465,10 @@ service cloud.firestore {
 
       allow update: if (isAdmin() && viajeNoTocaCamposFinancierosProtegidos()) ||
         (
-          // CLAIM explícito y tolerante para viajes legacy del pool
-          isTaxista() &&
+          // CLAIM pool (motor / vehículo): mismo rol que lectura del pool (taxista | driver).
+          esRolChoferEnSesion() &&
           taxistaSinDeuda(request.auth.uid) &&
+          taxistaAptoParaClaimPool(request.auth.uid) &&
           (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
           (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data)) &&
           request.resource.data.uidTaxista == request.auth.uid &&
@@ -490,11 +543,12 @@ service cloud.firestore {
           request.resource.data.reportado == true
         ) ||
         (
-          isTaxista() &&
+          esRolChoferEnSesion() &&
           (
             // Toma de viaje desde pool: requiere estar al día.
             (
               taxistaSinDeuda(request.auth.uid) &&
+              taxistaAptoParaClaimPool(request.auth.uid) &&
               (
                 (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
                 (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data))
@@ -508,7 +562,8 @@ service cloud.firestore {
                 "latTaxista", "lonTaxista", "driverLat", "driverLon",
                 "estado", "aceptado", "rechazado", "activo",
                 "aceptadoEn", "updatedAt", "actualizadoEn",
-                "reservadoPor", "reservadoHasta", "ignoradosPor"
+                "reservadoPor", "reservadoHasta", "ignoradosPor",
+                "bolaNegociacionAbierta"
               ])
             ) ||
             // Operación de viaje ya asignado (GPS/estado): NO bloquear por deuda.
@@ -576,25 +631,13 @@ service cloud.firestore {
     match /billeteras_taxista/{uidTaxista} {
       allow read: if isAdmin() || isOwner(uidTaxista);
       allow create: if isAdmin() || (isOwner(uidTaxista) && isTaxista());
-      allow update: if isAdmin() || (
-        isOwner(uidTaxista) && isTaxista() &&
-        changedOnly([
-          "comisionPendiente", "saldoPrepagoComisionRd", "primerViajeComisionGratisConsumido",
-          "saldoReservadoParaGiras", "comisionesDescontadas",
-          "ultimaComisionGiraPoolId", "ultimaComisionGiraRd",
-          "saldoAcumulado",
-          "ultimoViajeId", "ultimaComisionCents", "ultimaGananciaCents",
-          "ultimaBolaFinalizadaId", "ultimaComisionBolaRd",
-          "updatedAt"
-        ])
-      );
+      allow update: if isAdmin();
       allow delete: if false;
 
-      // Auditoría prepago comisión (solo escritura inicial; sin update/delete).
+      // Auditoría prepago comisión: solo Admin SDK / admin app.
       match /movimientos_prepago/{movId} {
         allow read: if isAdmin() || isOwner(uidTaxista);
-        allow create: if isAdmin() || (isOwner(uidTaxista) && isTaxista());
-        allow update, delete: if false;
+        allow create, update, delete: if isAdmin();
       }
     }
 
@@ -612,6 +655,34 @@ service cloud.firestore {
         )
       );
       allow delete: if false;
+    }
+
+    // Fase 3 — extracto Banco Popular (solo Admin SDK / callables admin).
+    match /movimientos_banco/{movId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /import_batches_banco/{batchId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // Fase 4 — conciliaciones banco ↔ viaje (solo Admin SDK / callables admin).
+    match /conciliaciones/{concId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // Fase 6 — pagos AZUL (solo Cloud Functions).
+    match /pagos_azul/{pagoAzulId} {
+      allow read: if isAdmin() ||
+        (isAuth() && (
+          resource.data.uidCliente == request.auth.uid ||
+          get(/databases/$(database)/documents/viajes/$(resource.data.viajeId)).data.uidTaxista == request.auth.uid ||
+          get(/databases/$(database)/documents/viajes/$(resource.data.viajeId)).data.taxistaId == request.auth.uid
+        ));
+      allow create, update, delete: if false;
     }
 
     // Liquidación semanal digital (PR2): solo lectura cliente; escritura vía Cloud Functions.

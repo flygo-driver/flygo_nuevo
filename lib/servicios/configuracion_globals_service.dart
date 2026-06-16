@@ -18,7 +18,8 @@ class GiraAbusoRemote {
   final bool disabled;
 }
 
-/// Lee `configuracion_globals/app.comision_gira_porcentaje` (0.10 = 10 % o 10 = 10 %).
+/// Giras: prioriza `config/comision.porcentaje` (mismo % que viajes estándar).
+/// Si falta, lee `configuracion_globals/app.comision_gira_porcentaje` (legacy).
 class ConfiguracionGlobalsService {
   ConfiguracionGlobalsService._();
 
@@ -38,14 +39,23 @@ class ConfiguracionGlobalsService {
       if (DateTime.now().difference(_lastFetch!) < _ttl) return;
     }
     try {
+      final comSnap = await _db.collection('config').doc('comision').get();
+      final rawCom = comSnap.data()?['porcentaje'];
+      if (rawCom is num && rawCom.isFinite) {
+        PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(
+          rawCom.toDouble().clamp(0.0, 100.0),
+        );
+        _lastFetch = DateTime.now();
+        return;
+      }
       final snap =
           await _db.collection('configuracion_globals').doc('app').get();
       final raw = snap.data()?['comision_gira_porcentaje'];
-      final double g = raw is num ? _normalizeGiraPct(raw) : 10.0;
+      final double g = raw is num ? _normalizeGiraPct(raw) : 20.0;
       PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(g);
       _lastFetch = DateTime.now();
     } catch (_) {
-      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(10.0);
+      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(20.0);
       _lastFetch = DateTime.now();
     }
   }

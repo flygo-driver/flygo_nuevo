@@ -1,8 +1,10 @@
-// lib/widgets/campo_lugar_autocomplete.dart
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../servicios/lugares_service.dart';
+import '../servicios/rai_speech_busqueda_direccion.dart';
+import '../utils/rai_aplicar_destino_desde_voz.dart';
+import 'rai_direccion_inteligente_sheet.dart';
 
 class CampoLugarAutocomplete extends StatefulWidget {
   final String label;
@@ -33,6 +35,9 @@ class CampoLugarAutocomplete extends StatefulWidget {
   final Color? fieldHintColor;
   final Color? fieldLabelColor;
 
+  /// Botón RAI: búsqueda inteligente (IA + Places) para destinos difíciles.
+  final bool asistenteDireccionHabilitado;
+
   const CampoLugarAutocomplete({
     super.key,
     required this.label,
@@ -52,13 +57,14 @@ class CampoLugarAutocomplete extends StatefulWidget {
     this.fieldTextColor,
     this.fieldHintColor,
     this.fieldLabelColor,
+    this.asistenteDireccionHabilitado = true,
   });
 
   @override
-  State<CampoLugarAutocomplete> createState() => _CampoLugarAutocompleteState();
+  State<CampoLugarAutocomplete> createState() => CampoLugarAutocompleteState();
 }
 
-class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
+class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     with WidgetsBindingObserver {
   final _controller = TextEditingController();
   final _focus = FocusNode();
@@ -81,6 +87,11 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   bool _applyingResolvedPlace = false;
 
   List<RecienteLugar> _recientes = [];
+  List<DetalleLugar> _candidatosVozResueltos = const [];
+
+  final RaiSpeechBusquedaDireccion _voz = RaiSpeechBusquedaDireccion();
+  bool _vozOk = false;
+  bool _escuchando = false;
 
   @override
   void initState() {
@@ -88,6 +99,10 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     WidgetsBinding.instance.addObserver(this);
     final init = (widget.initialText ?? '').trim();
     if (init.isNotEmpty) _controller.text = init;
+
+    if (widget.asistenteDireccionHabilitado) {
+      unawaited(_initVoz());
+    }
 
     _focus.addListener(() {
       if (!_focus.hasFocus) {
@@ -105,6 +120,102 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     if (!mounted) return;
     setState(() {});
     if (_entry != null) _refreshOverlay();
+  }
+
+  Future<void> _initVoz() async {
+    try {
+      final ok = await _voz.initialize();
+      if (mounted) setState(() => _vozOk = ok);
+    } catch (_) {}
+  }
+
+  void _onVozListeningChanged(bool active) {
+    if (!mounted) return;
+    setState(() => _escuchando = active);
+  }
+
+  Future<void> _toggleVoz() async {
+    // Misma guarda que el asistente FAB (_vozDisponible + no enviar mientras carga).
+    if (!_vozOk || _loading) return;
+    if (_escuchando) {
+      await _voz.stop();
+      if (mounted) setState(() => _escuchando = false);
+      return;
+    }
+    _focus.requestFocus();
+    await _voz.toggleListen(
+      onListeningChanged: _onVozListeningChanged,
+      onResult: (words, isFinal) {
+        if (!mounted) return;
+        _applyingResolvedPlace = true;
+        try {
+          _controller.text = words;
+          widget.onTextChanged?.call(words);
+        } finally {
+          _applyingResolvedPlace = false;
+        }
+        _onChanged(words);
+        if (isFinal && words.trim().length >= 2) {
+          unawaited(_resolverYAplicarTrasVoz(words.trim()));
+        }
+      },
+    );
+  }
+
+  /// Dictado terminado → resolver dirección → [onPlaceSelected] → cotización en el padre.
+  Future<void> _resolverYAplicarTrasVoz(String texto) async {
+    if (!mounted || texto.trim().length < 2) return;
+
+    setState(() => _loading = true);
+    final res = await RaiAplicarDestinoDesdeVoz.resolver(
+      textoReconocido: texto,
+      biasLat: widget.biasLat,
+      biasLon: widget.biasLon,
+      desdeVoz: true,
+    );
+    if (!mounted) return;
+
+    final confiable = res.lugarConfiable;
+    if (confiable != null) {
+      setState(() => _loading = false);
+      await _finalizePlaceSelection(confiable);
+      return;
+    }
+
+    if (res.candidatos.isNotEmpty) {
+      setState(() {
+        _loading = false;
+        _candidatosVozResueltos = res.candidatos;
+        _sugs = res.candidatos
+            .map(
+              (d) => PrediccionLugar(
+                placeId: d.placeId,
+                primary: d.displayLabel,
+                secondary: 'Sugerencia por voz',
+              ),
+            )
+            .toList(growable: false);
+      });
+      _focus.requestFocus();
+      if (_entry == null) {
+        _showOverlay();
+      } else {
+        _refreshOverlay();
+      }
+      return;
+    }
+
+    setState(() => _loading = false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No encontramos ese lugar. Prueba con más detalle o usa RAI (✨).',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> _cargarRecientes() async {
@@ -143,6 +254,7 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
+    if (_voz.isListening) unawaited(_voz.stop());
     _removeOverlay();
     _controller.dispose();
     _focus.dispose();
@@ -259,13 +371,20 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                         itemBuilder: (_, i) {
                           final p = _sugs[i];
                           final esReciente = _esPrediccionReciente(p);
-                          final subtitle = esReciente
-                              ? null
-                              : (p.secondary ?? '').trim();
+                          final esRai = p.placeId == '__rai_inteligente__';
+                          final subtitle = esRai
+                              ? (p.secondary ?? '').trim()
+                              : esReciente
+                                  ? null
+                                  : (p.secondary ?? '').trim();
                           return ListTile(
                             dense: true,
                             leading: Icon(
-                              esReciente ? Icons.history : Icons.place,
+                              esRai
+                                  ? Icons.auto_awesome_rounded
+                                  : esReciente
+                                      ? Icons.history
+                                      : Icons.place,
                               color: esReciente
                                   ? (isDark
                                       ? Colors.amber.shade200
@@ -278,6 +397,12 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                                 ? Text(subtitle, style: subtitleStyle)
                                 : null,
                             onTap: () {
+                              if (p.placeId == '__rai_inteligente__') {
+                                _focus.unfocus();
+                                _clearSugsAndOverlay();
+                                unawaited(abrirBusquedaInteligenteRai());
+                                return;
+                              }
                               if (esReciente) {
                                 final idx = _recientes.indexWhere(
                                   (e) =>
@@ -444,6 +569,22 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
 
       if (_sugs.isEmpty) {
         _removeOverlay();
+        if (widget.asistenteDireccionHabilitado &&
+            q.length >= 3 &&
+            remotas.isEmpty) {
+          if (mounted) {
+            setState(() {
+              _sugs = [
+                PrediccionLugar(
+                  placeId: '__rai_inteligente__',
+                  primary: 'Buscar con RAI (IA + Google)',
+                  secondary: 'Para direcciones difíciles',
+                ),
+              ];
+            });
+            _showOverlay();
+          }
+        }
       } else if (_focus.hasFocus) {
         if (_entry == null) {
           _showOverlay();
@@ -454,7 +595,25 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     });
   }
 
+  Future<void> aplicarDetalleExterno(DetalleLugar det) async {
+    await _finalizePlaceSelection(det);
+  }
+
+  Future<void> abrirBusquedaInteligenteRai() async {
+    final det = await RaiDireccionInteligenteSheet.mostrar(
+      context,
+      textoInicial: _controller.text.trim(),
+      biasLat: widget.biasLat,
+      biasLon: widget.biasLon,
+    );
+    if (det != null && mounted) {
+      await _finalizePlaceSelection(det);
+    }
+  }
+
   Future<void> _finalizePlaceSelection(DetalleLugar det) async {
+    await _voz.stop();
+    if (mounted) setState(() => _escuchando = false);
     _debounce?.cancel();
     _autocompleteSeq++;
     _applyingResolvedPlace = true;
@@ -471,16 +630,32 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   }
 
   Future<void> _selectPrediction(PrediccionLugar p) async {
+    await _voz.stop();
+    if (mounted) setState(() => _escuchando = false);
     if (mounted) setState(() => _loading = true);
     _removeOverlay();
 
-    final det = await _svc.detalle(p.placeId);
+    if (p.secondary == 'Sugerencia por voz') {
+      for (final d in _candidatosVozResueltos) {
+        if (d.placeId == p.placeId ||
+            d.displayLabel.trim() == p.primary.trim()) {
+          if (!mounted) return;
+          setState(() => _loading = false);
+          await _finalizePlaceSelection(d);
+          return;
+        }
+      }
+    }
+
+    final det = await _svc.detalleDesdePrediccion(p);
 
     if (!mounted) return;
     setState(() => _loading = false);
 
     if (det != null) {
       await _finalizePlaceSelection(det);
+    } else if (widget.asistenteDireccionHabilitado) {
+      await abrirBusquedaInteligenteRai();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -495,7 +670,10 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     if (entry.placeId.isNotEmpty) {
       if (mounted) setState(() => _loading = true);
       _removeOverlay();
-      final det = await _svc.detalle(entry.placeId);
+      final det = await _svc.detalle(
+        entry.placeId,
+        hintDireccion: entry.label,
+      );
       if (!mounted) return;
       setState(() => _loading = false);
       if (det != null) {
@@ -540,6 +718,8 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     if (sugs.isNotEmpty) {
       final ranked = _svc.rankearPredicciones(sugs, lugar);
       await _selectPrediction(ranked.first);
+    } else if (widget.asistenteDireccionHabilitado) {
+      await abrirBusquedaInteligenteRai();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -633,19 +813,49 @@ class _CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                           ),
                         ),
                       )
-                    : (_controller.text.isNotEmpty
-                        ? IconButton(
-                            icon: Icon(
-                              Icons.clear_rounded,
-                              color: iconoLimpiar,
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (widget.asistenteDireccionHabilitado && _vozOk)
+                            IconButton(
+                              tooltip: _escuchando
+                                  ? 'Detener dictado'
+                                  : 'Dictar destino',
+                              icon: Icon(
+                                _escuchando
+                                    ? Icons.mic_rounded
+                                    : Icons.mic_none_rounded,
+                                color: _escuchando
+                                    ? Colors.redAccent
+                                    : accent,
+                                size: 22,
+                              ),
+                              onPressed: _toggleVoz,
                             ),
-                            onPressed: () {
-                              _controller.clear();
-                              widget.onTextChanged?.call('');
-                              _clearSugsAndOverlay();
-                            },
-                          )
-                        : null),
+                          if (widget.asistenteDireccionHabilitado)
+                            IconButton(
+                              tooltip: 'Búsqueda inteligente RAI',
+                              icon: Icon(
+                                Icons.auto_awesome_rounded,
+                                color: accent,
+                                size: 22,
+                              ),
+                              onPressed: abrirBusquedaInteligenteRai,
+                            ),
+                          if (_controller.text.isNotEmpty)
+                            IconButton(
+                              icon: Icon(
+                                Icons.clear_rounded,
+                                color: iconoLimpiar,
+                              ),
+                              onPressed: () {
+                                _controller.clear();
+                                widget.onTextChanged?.call('');
+                                _clearSugsAndOverlay();
+                              },
+                            ),
+                        ],
+                      ),
                 border: border,
                 enabledBorder: border,
                 focusedBorder: border.copyWith(

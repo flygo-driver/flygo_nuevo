@@ -118,7 +118,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
                 style: TextStyle(color: Colors.white70),
               ),
             ),
-            if (PayConfig.pagosConTarjetaHabilitados) ...[
+            if (PayConfig.tarjetaHabilitada) ...[
               const SizedBox(height: 8),
               RadioListTile<String>(
                 value: 'Tarjeta',

@@ -1,8 +1,7 @@
 // lib/widgets/cliente_post_viaje_listener.dart
 //
 // Si el viaje termina mientras el cliente está en el flujo principal (home visible),
-// abre factura (paridad con [ViajeEnCursoCliente]) y luego [PostViajeClienteFlow]
-// de inmediato al detectar el cierre.
+// Abre [PostViajeClienteFlow] (recibo único + calificación) al detectar el cierre.
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -11,10 +10,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
-import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 
 class ClientePostViajeListener extends StatefulWidget {
@@ -38,12 +37,19 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
   @override
   void initState() {
     super.initState();
-    _arrancar();
+    unawaited(_arrancarCuandoAuthListo());
   }
 
-  void _arrancar() {
-    final User? u = FirebaseAuth.instance.currentUser;
-    if (u == null) return;
+  Future<void> _arrancarCuandoAuthListo() async {
+    await ClientePostViajeReopenGuard.hydrateFromPrefs();
+    final User? u = await resolveFirebaseUser(
+      timeout: const Duration(seconds: 8),
+    );
+    if (!mounted || u == null) return;
+    _arrancar(u);
+  }
+
+  void _arrancar(User u) {
 
     final Query<Map<String, dynamic>> q = FirebaseFirestore.instance
         .collection('viajes')
@@ -109,7 +115,7 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
       if (!mounted || !vSnap.exists) return;
       final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
       if (!_viajeCompletado(d)) return;
-      _ofrecerFacturaSiCorresponde(lost, d);
+      _ofrecerPostViajeSiCorresponde(lost, d);
     } catch (_) {}
   }
 
@@ -121,10 +127,8 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
       if (snap.docs.isNotEmpty) {
         final QueryDocumentSnapshot<Map<String, dynamic>> doc = snap.docs.first;
         final Map<String, dynamic> d = doc.data();
-        if (_viajeCompletado(d) &&
-            _finalizacionHaceSegundos(d) &&
-            !ClientePostViajeReopenGuard.shouldSuppressListenerPush(doc.id)) {
-          _ofrecerFacturaSiCorresponde(doc.id, d);
+        if (_viajeCompletado(d) && _finalizacionHaceSegundos(d)) {
+          unawaited(_ofrecerPostViajeSiCorresponde(doc.id, d));
         }
       }
       return;
@@ -139,49 +143,46 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
       if (raw == null) continue;
       final Map<String, dynamic> d = raw;
       if (!_viajeCompletado(d)) continue;
-      _ofrecerFacturaSiCorresponde(change.doc.id, d);
+      unawaited(_ofrecerPostViajeSiCorresponde(change.doc.id, d));
     }
   }
 
-  void _ofrecerFacturaSiCorresponde(String id, Map<String, dynamic> d) {
-    if (ClientePostViajeReopenGuard.shouldSuppressListenerPush(id)) {
+  Future<void> _ofrecerPostViajeSiCorresponde(
+    String id,
+    Map<String, dynamic> d,
+  ) async {
+    if (await ClientePostViajeReopenGuard.shouldSuppressAsync(id, viajeData: d)) {
       return;
     }
+    if (!mounted) return;
     if (_ultimoViajeOfrecido == id || _flujoPostViajeEnCurso) return;
-
-    // ViajeEnCursoCliente ya está mostrando factura en overlay.
-    if (ActiveTripService.debeMantenerOverlayViajeEnShell) {
-      return;
-    }
 
     _ultimoViajeOfrecido = id;
     _flujoPostViajeEnCurso = true;
-    ClientePostViajeReopenGuard.markOpened(id);
-    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
 
     SchedulerBinding.instance.addPostFrameCallback((_) {
-      unawaited(_abrirFacturaYPostViaje(id, d));
+      unawaited(_abrirPostViaje(id, d));
     });
   }
 
-  Future<void> _abrirFacturaYPostViaje(
+  Future<void> _abrirPostViaje(
     String viajeId,
     Map<String, dynamic> data,
   ) async {
     try {
       if (!mounted) return;
+      if (await ClientePostViajeReopenGuard.shouldSuppressAsync(
+        viajeId,
+        viajeData: data,
+      )) {
+        return;
+      }
       final NavigatorState? nav = NavigationService.navigatorKey.currentState;
       if (nav == null) return;
 
-      try {
-        await FacturaViaje.mostrar(
-          nav.context,
-          viajeId: viajeId,
-          role: 'cliente',
-        );
-      } catch (_) {}
-
       if (!nav.mounted) return;
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+      ClientePostViajeReopenGuard.markOpened(viajeId);
       await nav.push<void>(
         MaterialPageRoute<void>(
           fullscreenDialog: true,
@@ -190,6 +191,11 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
             viajeDataSemilla: Map<String, dynamic>.from(data),
           ),
         ),
+      );
+      final String? uid = FirebaseAuth.instance.currentUser?.uid;
+      await ClientePostViajeReopenGuard.markCompleted(
+        viajeId: viajeId,
+        uidCliente: uid,
       );
     } finally {
       ActiveTripService.cancelarMantenimientoOverlayViaje();

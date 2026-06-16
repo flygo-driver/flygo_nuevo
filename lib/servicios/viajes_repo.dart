@@ -19,6 +19,9 @@ import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/utils/ux_log.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
+import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 
 /// Diagnóstico solo en debug: en release no expone UIDs ni estado interno por logcat.
 void _viajesRepoDebugLog(String message) {
@@ -181,6 +184,13 @@ class ViajesRepo {
     }
 
     final int precioCents = (precio * 100).round();
+    await ComisionViajePctService.refresh();
+    final double pctComision = (comisionPorcentajeViaje != null &&
+            comisionPorcentajeViaje.isFinite &&
+            comisionPorcentajeViaje > 0 &&
+            comisionPorcentajeViaje <= 100)
+        ? comisionPorcentajeViaje
+        : PlataformaEconomia.comisionViajePorcentaje;
 
     final DateTime now = DateTime.now();
     final bool esAhora =
@@ -218,19 +228,25 @@ class ViajesRepo {
     final String codigoVerificacion =
         (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
 
+    final String tipoSrvFinal =
+        (tipoServicio ?? '').trim().isEmpty ? 'normal' : tipoServicio!.trim();
+    final String canalFinal = (canalAsignacion ?? '').trim().isEmpty
+        ? (tipoSrvFinal == 'turismo' ? 'admin' : 'pool')
+        : canalAsignacion!.trim();
+
     String tipoVehiculoFormateado = tipoVehiculo;
-    if (tipoServicio == 'motor') {
+    if (tipoSrvFinal == 'motor') {
       tipoVehiculoFormateado = '🛵 MOTOR 🛵';
-    } else if (tipoServicio == 'turismo') {
+    } else if (tipoSrvFinal == 'turismo') {
       tipoVehiculoFormateado = '🏝️ TURISMO 🏝️';
-    } else if (tipoServicio == 'normal') {
+    } else if (tipoSrvFinal == 'normal') {
       tipoVehiculoFormateado = '🚗 NORMAL';
-    } else if (tipoServicio == 'bola_ahorro') {
+    } else if (tipoSrvFinal == 'bola_ahorro') {
       tipoVehiculoFormateado = '💚 BOLA AHORRO';
     }
 
     String estadoInicial;
-    if (tipoServicio == 'turismo') {
+    if (tipoSrvFinal == 'turismo') {
       estadoInicial = 'pendiente_admin';
     } else {
       // Tarjeta: `pendiente_pago` hasta pasarela (cuando PayConfig active UI de tarjeta).
@@ -286,18 +302,17 @@ class ViajesRepo {
       'reservadoHasta': null,
       'precio': precioCents / 100.0,
       'precio_cents': precioCents,
+      'comisionPorcentaje': pctComision,
       'latTaxista': 0.0,
       'lonTaxista': 0.0,
       'driverLat': 0.0,
       'driverLon': 0.0,
-      if (tipoServicio != null && tipoServicio.isNotEmpty)
-        'tipoServicio': tipoServicio,
+      'tipoServicio': tipoSrvFinal,
       if (subtipoTurismo != null && subtipoTurismo.isNotEmpty)
         'subtipoTurismo': subtipoTurismo,
       if (catalogoTurismoId != null && catalogoTurismoId.isNotEmpty)
         'catalogoTurismoId': catalogoTurismoId,
-      if (canalAsignacion != null && canalAsignacion.isNotEmpty)
-        'canalAsignacion': canalAsignacion,
+      'canalAsignacion': canalFinal,
       if (categoria != null && categoria.isNotEmpty) 'categoria': categoria,
       if (distanciaKm != null && distanciaKm.isFinite && distanciaKm > 0)
         'distanciaKm': distanciaKm,
@@ -324,17 +339,13 @@ class ViajesRepo {
     }
     if (extras != null && extras.isNotEmpty) data['extras'] = extras;
 
-    final double? comPct = comisionPorcentajeViaje;
-    if (comPct != null && comPct.isFinite && comPct > 0 && comPct <= 100) {
-      data['comisionPorcentaje'] = comPct;
-    }
-
     final String? bolaTrim = bolaPuebloId?.trim();
     if (bolaTrim != null && bolaTrim.isNotEmpty) {
       data['bolaPuebloId'] = bolaTrim;
       data['bolaNegociacionAbierta'] = true;
     }
 
+    // referenciaRecaudo: solo Cloud Function onViajeCreatedAsignarReferenciaRecaudo (flag ON).
     await doc.set(data);
 
     await _db.collection('usuarios').doc(uidCliente).set({
@@ -344,7 +355,7 @@ class ViajesRepo {
       'actualizadoEn': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    if (tipoServicio == 'turismo' && turismoIntentarAsignacionAutomatica) {
+    if (tipoSrvFinal == 'turismo' && turismoIntentarAsignacionAutomatica) {
       try {
         final String? uidChofer =
             await AsignacionTurismoRepo.intentarAsignacionAutomatica(
@@ -414,29 +425,55 @@ class ViajesRepo {
     try {
       final userDoc = await _db.collection('usuarios').doc(uidTaxista).get();
       final String viajeActivoId =
-          (userDoc.data()?['viajeActivoId'] ?? '').toString();
+          (userDoc.data()?['viajeActivoId'] ?? '').toString().trim();
       _viajesRepoDebugLog('📄 ensureTaxistaLibre - viajeActivoId: $viajeActivoId');
 
-      final hasActive = await _col
-          .where('uidTaxista', isEqualTo: uidTaxista)
-          .where('activo', isEqualTo: true)
-          .limit(1)
-          .get()
-          .then((q) => q.docs.isNotEmpty);
-      _viajesRepoDebugLog('📄 ensureTaxistaLibre - hasActiveQuery: $hasActive');
-
-      if (!hasActive) {
-        await _db.collection('usuarios').doc(uidTaxista).set({
-          'viajeActivoId': '',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+      if (viajeActivoId.isEmpty) {
+        _viajesRepoDebugLog('✅ ensureTaxistaLibre - OK (sin viajeActivoId)');
+        return;
       }
-      _viajesRepoDebugLog('✅ ensureTaxistaLibre - OK');
+
+      final tripDoc = await _col.doc(viajeActivoId).get();
+      if (!tripDoc.exists) {
+        await _limpiarViajeActivoIdTaxista(uidTaxista);
+        _viajesRepoDebugLog('✅ ensureTaxistaLibre - limpiado (viaje inexistente)');
+        return;
+      }
+
+      final d = tripDoc.data() ?? <String, dynamic>{};
+      final assignedUid =
+          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+      if (assignedUid != uidTaxista) {
+        await _limpiarViajeActivoIdTaxista(uidTaxista);
+        _viajesRepoDebugLog('✅ ensureTaxistaLibre - limpiado (viaje de otro taxista)');
+        return;
+      }
+
+      final bool activo = d['activo'] == true;
+      final String estado =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final bool terminal =
+          d['completado'] == true || EstadosViaje.esTerminal(estado);
+
+      if (!activo || terminal) {
+        await _limpiarViajeActivoIdTaxista(uidTaxista);
+        _viajesRepoDebugLog('✅ ensureTaxistaLibre - limpiado (viaje inactivo/terminal)');
+        return;
+      }
+
+      _viajesRepoDebugLog('✅ ensureTaxistaLibre - OK (viaje activo vigente)');
     } catch (e) {
       _viajesRepoDebugLog('❌ ensureTaxistaLibre error: $e');
       rethrow;
     }
+  }
+
+  static Future<void> _limpiarViajeActivoIdTaxista(String uidTaxista) async {
+    await _db.collection('usuarios').doc(uidTaxista).set({
+      'viajeActivoId': '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   static Future<void> ensureSiguienteCoherente(String uidTaxista) async {
@@ -567,6 +604,8 @@ class ViajesRepo {
 
       final uSnap = await tx.get(uRef);
       final uData = uSnap.data() ?? <String, dynamic>{};
+      final rechazoClaim = taxistaRechazoAceptarViajePool(uData);
+      if (rechazoClaim != null) return false;
       final bSnap =
           await tx.get(_db.collection('billeteras_taxista').doc(uidTaxista));
       if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
@@ -713,10 +752,13 @@ class ViajesRepo {
       _viajesRepoDebugLog('❌ aceptarViajeSeguro: ${e.code} ${e.message}');
       if (e.code == 'failed-precondition') {
         final m = (e.message ?? '').trim();
-        if (m == 'bloqueado-pago-semanal') return 'bloqueado-pago-semanal';
-        if (m == 'bloqueado-comision-efectivo') {
-          return 'bloqueado-comision-efectivo';
-        }
+        if (m.isNotEmpty) return m;
+      }
+      if (e.code == 'permission-denied') {
+        return 'permiso:${e.code}';
+      }
+      if (e.code == 'unauthenticated') {
+        return 'permiso:${e.code}';
       }
     } catch (cfErr) {
       _viajesRepoDebugLog('❌ aceptarViajeSeguro fallback error: $cfErr');
@@ -734,6 +776,19 @@ class ViajesRepo {
   }) async {
     _viajesRepoDebugLog(
         '🟡 INICIO claimTripWithReason - viajeId: $viajeId, taxista: $uidTaxista');
+
+    // Cloud Function (Admin SDK): evita permission-denied en claim pool motor/vehículo.
+    final cfPrimero = await _claimViajePorCallable(
+      viajeId: viajeId,
+      uidTaxista: uidTaxista,
+      nombreTaxista: nombreTaxista,
+      telefono: telefono,
+      placa: placa,
+      tipoVehiculo: tipoVehiculo,
+    );
+    if (cfPrimero == 'ok') return 'ok';
+    if (cfPrimero != null && cfPrimero.isNotEmpty) return cfPrimero;
+
     final vRef = _col.doc(viajeId);
     final uRef = _db.collection('usuarios').doc(uidTaxista);
 
@@ -794,6 +849,11 @@ class ViajesRepo {
 
         final uSnap = await tx.get(uRef);
         final uData = uSnap.data() ?? const <String, dynamic>{};
+        final rechazoClaim = taxistaRechazoAceptarViajePool(uData);
+        if (rechazoClaim != null) {
+          _viajesRepoDebugLog('❌ Taxista no apto para claim: $rechazoClaim');
+          throw rechazoClaim;
+        }
         final bSnap =
             await tx.get(_db.collection('billeteras_taxista').doc(uidTaxista));
         if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
@@ -810,6 +870,15 @@ class ViajesRepo {
         if (viajeActivoId.isNotEmpty) {
           _viajesRepoDebugLog('❌ Taxista ocupado con viajeActivoId=$viajeActivoId');
           throw 'taxista-ocupado';
+        }
+
+        final String poolModo =
+            ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(uData);
+        if (!ViajePoolTaxistaGate.conductorPuedeClaimViajeEnPool(d, poolModo)) {
+          _viajesRepoDebugLog(
+            '❌ tipo servicio viaje=${d['tipoServicio']} vs conductor=$poolModo',
+          );
+          throw 'tipo-servicio-no-coincide';
         }
 
         final String _tel =
@@ -922,6 +991,9 @@ class ViajesRepo {
       return 'permiso:${e.code}';
     } catch (e) {
       _viajesRepoDebugLog('❌ ERROR GENERAL en claimTripWithReason: $e');
+      if (e == 'tipo-servicio-no-coincide') {
+        return 'tipo-servicio-no-coincide';
+      }
       final String msg = e.toString().toLowerCase();
       if (msg.contains('permission-denied') ||
           msg.contains('permission_denied')) {
@@ -1926,6 +1998,43 @@ class ViajesRepo {
     return controller.stream;
   }
 
+  /// Tras el claim, `viajeActivoId` puede actualizarse antes que `uidTaxista` en el doc.
+  static Future<void> _reintentarEmitViajeTaxistaEnCurso({
+    required StreamController<Viaje?> controller,
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    for (int i = 0; i < 12; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> snap = await _db
+            .collection('viajes')
+            .doc(viajeId)
+            .get(const GetOptions(source: Source.server));
+        if (!snap.exists) continue;
+        final Map<String, dynamic> data = snap.data() ?? <String, dynamic>{};
+        final String uidTxDoc =
+            (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
+        final String estado =
+            EstadosViaje.normalizar((data['estado'] ?? '').toString());
+        final bool activo = data['activo'] == true;
+        final bool estadoActivo = estado == EstadosViaje.aceptado ||
+            estado == EstadosViaje.enCaminoPickup ||
+            estado == EstadosViaje.aBordo ||
+            estado == EstadosViaje.enCurso;
+        if (uidTxDoc == uidTaxista && activo && estadoActivo) {
+          if (!controller.isClosed) {
+            controller.add(Viaje.fromMap(snap.id, data));
+          }
+          return;
+        }
+      } catch (_) {}
+    }
+    if (!controller.isClosed) {
+      controller.add(null);
+    }
+  }
+
   static Stream<Viaje?> streamViajeEnCursoPorTaxista(String uidTaxista) {
     // Fuente de verdad:
     // - En flows "correctos" el taxista guarda el viaje actual en `usuarios/{uid}.viajeActivoId`.
@@ -2017,8 +2126,12 @@ class ViajesRepo {
               estado == EstadosViaje.enCurso;
           if (uidTxDoc != uidTaxista || !activo || !estadoActivo) {
             _diag(
-                'taxista stream hide doc=$id uidDoc=$uidTxDoc activo=$activo estadoActivo=$estadoActivo');
-            controller.add(null);
+                'taxista stream hide doc=$id uidDoc=$uidTxDoc activo=$activo estadoActivo=$estadoActivo → retry');
+            unawaited(_reintentarEmitViajeTaxistaEnCurso(
+              controller: controller,
+              viajeId: id,
+              uidTaxista: uidTaxista,
+            ));
             return;
           }
           _diag('taxista stream emit doc=$id');

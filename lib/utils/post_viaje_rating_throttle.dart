@@ -1,51 +1,64 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Limita cuánto se insiste con la pantalla de **calificación** post-viaje
-/// (estilo Uber: no spamear en cada carrera).
+/// Limita cuánto se insiste con la pantalla de **calificación mutua** post-viaje
+/// (estilo Uber: no en cada carrera).
 ///
-/// El resumen de viaje (totales, transferencia) **no** se ve afectado; solo
-/// el paso de estrellas/comentario.
+/// Solo cuenta viajes **completados del cliente** (SharedPreferences).
+/// El taxista no lleva contador: lee `solicitarCalificacionMutua` en el doc del viaje.
 class PostViajeRatingThrottle {
   PostViajeRatingThrottle._();
 
-  static const String _kLastPromptMs = 'post_viaje_rating_last_prompt_ms';
   static const String _kTripsSincePrompt = 'post_viaje_rating_trips_since_prompt';
 
-  /// Volver a pedir calificación si pasaron al menos estos días desde la última vez
-  /// que se **mostró** el paso (aunque el usuario omitiera).
-  static const int minDiasEntrePrompts = 5;
+  /// Pedir calificación cada [minViajesEntrePrompts] viajes del cliente (3 o 5).
+  static const int minViajesEntrePrompts = 5;
 
-  /// O bien, cada tantos viajes completados sin haber visto el prompt de calificación.
-  static const int minViajesEntrePrompts = 4;
+  /// Campo en `viajes/{id}` para que el taxista muestre calificación el mismo viaje.
+  static const String viajeCampoSolicitarMutua = 'solicitarCalificacionMutua';
 
   static Future<bool> shouldShowRatingPrompt() async {
     final SharedPreferences p = await SharedPreferences.getInstance();
-    final int? lastMs = p.getInt(_kLastPromptMs);
     final int viajes = p.getInt(_kTripsSincePrompt) ?? 0;
-
-    if (lastMs == null) {
-      return true;
-    }
-    final double dias =
-        (DateTime.now().millisecondsSinceEpoch - lastMs) / 86400000.0;
-    if (dias + 1e-9 >= minDiasEntrePrompts) {
-      return true;
-    }
-    if (viajes >= minViajesEntrePrompts) {
-      return true;
-    }
-    return false;
+    return viajes >= minViajesEntrePrompts;
   }
 
-  /// Llamar cuando el cliente **ve** el paso de calificación (al pulsar Continuar en resumen).
+  /// Publica en Firestore si este viaje dispara calificación mutua (cliente + taxista).
+  static Future<bool> publicarBanderaCalificacionMutuaEnViaje({
+    required String viajeId,
+    required String uidCliente,
+  }) async {
+    final bool mostrar = await shouldShowRatingPrompt();
+    try {
+      await FirebaseFirestore.instance.collection('viajes').doc(viajeId).set(
+        <String, dynamic>{
+          viajeCampoSolicitarMutua: mostrar,
+          'solicitarCalificacionMutuaEn': FieldValue.serverTimestamp(),
+          'solicitarCalificacionMutuaPorUid': uidCliente,
+        },
+        SetOptions(merge: true),
+      );
+    } catch (_) {
+      // El flujo local sigue; el taxista puede no ver calificación si falla la red.
+    }
+    if (!mostrar) {
+      await recordViajeSinPromptCalificacion();
+    }
+    return mostrar;
+  }
+
+  /// Lee la bandera ya publicada en el viaje (sincronización con taxista).
+  static bool viajeSolicitaCalificacionMutua(Map<String, dynamic> d) {
+    return d[viajeCampoSolicitarMutua] == true;
+  }
+
+  /// Llamar al entrar al paso de calificación del cliente.
   static Future<void> recordPromptShown() async {
     final SharedPreferences p = await SharedPreferences.getInstance();
-    await p.setInt(
-        _kLastPromptMs, DateTime.now().millisecondsSinceEpoch);
     await p.setInt(_kTripsSincePrompt, 0);
   }
 
-  /// Un viaje terminó y **no** mostramos calificación (throttle): sube el contador.
+  /// Un viaje terminó y **no** mostramos calificación: sube el contador local.
   static Future<void> recordViajeSinPromptCalificacion() async {
     final SharedPreferences p = await SharedPreferences.getInstance();
     final int n = p.getInt(_kTripsSincePrompt) ?? 0;

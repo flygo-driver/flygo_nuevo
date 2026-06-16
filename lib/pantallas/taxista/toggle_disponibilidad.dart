@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
@@ -91,27 +92,39 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
         }
 
         if (!mounted) return;
-        final ready = await LocationPermissionService.ensureLocationReady(
-          context: context,
-        );
-        if (!ready.isUsable) {
-          if (mounted) {
-            if (ready.staleOrInvalid) {
+        if (!RaiUbicacionTaxistaService.instance.ubicacionLista) {
+          final ready = await LocationPermissionService.ensureLocationReady(
+            requestIfDenied: false,
+          );
+          if (!ready.isUsable) {
+            if (mounted) {
               messenger.showSnackBar(
                 const SnackBar(
-                  content: Text(LocationReadiness.kMsgEsperandoUbicacion),
+                  content: Text(RaiUbicacionTaxistaService.kMsgActivarDesdeBanner),
                   duration: Duration(seconds: 6),
                 ),
               );
             }
+            return;
+          }
+        }
+        final billeSnap = await FirebaseFirestore.instance
+            .collection('billeteras_taxista')
+            .doc(u.uid)
+            .get();
+        if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+          data,
+          billeSnap.data(),
+        )) {
+          if (mounted) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text(PagosTaxistaRepo.mensajeRecargaActivarDisponible),
+                duration: Duration(seconds: 6),
+              ),
+            );
           }
           return;
-        }
-        if (mounted) {
-          await LocationPermissionService.maybePromptAlwaysForCriticalFlow(
-            context,
-            isTaxista: true,
-          );
         }
       }
       await RolesService.setDisponibilidad(u.uid, v);

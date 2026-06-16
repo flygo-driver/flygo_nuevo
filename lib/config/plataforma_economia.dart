@@ -6,13 +6,13 @@ class PlataformaEconomia {
   PlataformaEconomia._();
 
   static double _comisionViajePct = 20;
-  static double _comisionGiraPct = 10;
+  static double _comisionGiraPct = 20;
 
   /// Porcentaje global (0–100) usado en cotización y comisión en efectivo estándar.
   static double get comisionViajePorcentaje => _comisionViajePct;
 
-  /// Comisión RAI sobre ventas de **Giras por cupos** (`viajes_pool`), 0–100.
-  /// Cliente: [ComisionViajePctService] + `configuracion_globals/app.comision_gira_porcentaje`.
+  /// Comisión RAI sobre **Giras por cupos** (`viajes_pool`): mismo % que [comisionViajePorcentaje]
+  /// (`config/comision`; legacy `comision_gira_porcentaje` solo si falta config/comision).
   static double get comisionGiraPorcentaje => _comisionGiraPct;
 
   static double get factorComisionGira => _comisionGiraPct / 100.0;
@@ -37,6 +37,23 @@ class PlataformaEconomia {
 
   static double get factorComision => _comisionViajePct / 100.0;
 
+  /// Etiqueta UI: `20%` o `10.5%`.
+  static String etiquetaPorcentajeComision() {
+    final p = _comisionViajePct;
+    if (p == p.roundToDouble()) return '${p.round()}%';
+    return '${p.toStringAsFixed(1)}%';
+  }
+
+  /// Etiqueta UI ganancia del conductor (100 − comisión plataforma).
+  static String etiquetaPorcentajeGananciaTaxista() {
+    final g = (100.0 - _comisionViajePct).clamp(0.0, 100.0);
+    if (g == g.roundToDouble()) return '${g.round()}%';
+    return '${g.toStringAsFixed(1)}%';
+  }
+
+  static String etiquetaComisionRai({String prefijo = 'Comisión RAI'}) =>
+      '$prefijo (${etiquetaPorcentajeComision()})';
+
   /// Redondeo half-up en centavos: comisión desde precio en centavos y % entero (legacy).
   static int comisionCentsDesdePrecioCents(
     int precioCents,
@@ -46,16 +63,28 @@ class PlataformaEconomia {
 
   /// Comisión nominal en centavos alineada con backend: `round2(totalRd * pct/100)`.
   static int comisionViajeCentsDesdePrecioCents(int precioCents) {
+    return comisionViajeCentsDesdePrecioCentsConPct(
+      precioCents,
+      _comisionViajePct,
+    );
+  }
+
+  static int comisionViajeCentsDesdePrecioCentsConPct(
+    int precioCents,
+    double pct,
+  ) {
     final totalRd = precioCents / 100.0;
     final comisionRd = double.parse(
-      (totalRd * (_comisionViajePct / 100.0)).toStringAsFixed(2),
+      (totalRd * (pct / 100.0)).toStringAsFixed(2),
     );
     return (comisionRd * 100).round();
   }
 
-  static double comisionRdDesdeTotal(double total) => double.parse(
-        (total * (_comisionViajePct / 100.0)).toStringAsFixed(2),
-      );
+  static double comisionRdDesdeTotal(double total) =>
+      comisionRdDesdeTotalConPct(total, _comisionViajePct);
+
+  static double comisionRdDesdeTotalConPct(double total, double pct) =>
+      double.parse((total * (pct / 100.0)).toStringAsFixed(2));
 
   static double gananciaTaxistaRdDesdeTotal(double total) =>
       double.parse((total - comisionRdDesdeTotal(total)).toStringAsFixed(2));

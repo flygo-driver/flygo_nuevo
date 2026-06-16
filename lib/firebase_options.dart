@@ -41,10 +41,19 @@ class DefaultFirebaseOptions {
     measurementId: 'G-Q3YEXEKHX4',
   );
 
-  // 🤖 ANDROID — flygo-rd / com.flygo.rd2
+  // 🤖 ANDROID — flygo-rd / com.flygo.rd2 (RAI Pasajero)
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w',
     appId: '1:237301602510:android:abf9f6fb3992a51259589f',
+    messagingSenderId: '237301602510',
+    projectId: 'flygo-rd',
+    storageBucket: 'flygo-rd.firebasestorage.app',
+  );
+
+  // 🤖 ANDROID — flygo-rd / com.flygo.rd2.conductor (RAI Conductor)
+  static const FirebaseOptions androidConductor = FirebaseOptions(
+    apiKey: 'AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w',
+    appId: '1:237301602510:android:252fd2fa5e84a57c59589f',
     messagingSenderId: '237301602510',
     projectId: 'flygo-rd',
     storageBucket: 'flygo-rd.firebasestorage.app',

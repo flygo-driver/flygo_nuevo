@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/widgets/promo_taxi_pista_animation.dart';
 import 'package:flygo_nuevo/widgets/motor_servicio_animation.dart';
 import 'package:flygo_nuevo/widgets/giras_cupos_animation.dart';
 import 'package:flygo_nuevo/widgets/turismo_servicio_animation.dart';
+import 'package:flygo_nuevo/widgets/rai_direccion_inteligente_sheet.dart';
 import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
 /// Colores del inicio derivados del fondo real (Apariencia + claro/oscuro).
@@ -464,6 +465,23 @@ class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
     }
   }
 
+  Future<void> _abrirDestinoConVoz() async {
+    final det = await RaiDireccionInteligenteSheet.mostrar(context);
+    if (det == null || !mounted) return;
+    if (!context.mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProgramarViaje(
+          modoAhora: !_programar,
+          destinoPrecargado: det.displayLabel,
+          latDestinoPrecargado: det.lat,
+          lonDestinoPrecargado: det.lon,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final _HomePalette p = _HomePalette.of(context);
@@ -576,6 +594,21 @@ class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
+                            ),
+                            IconButton(
+                              tooltip: 'Dictar destino con RAI',
+                              visualDensity: VisualDensity.compact,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 36,
+                                minHeight: 36,
+                              ),
+                              icon: Icon(
+                                Icons.mic_none_rounded,
+                                color: p.accentGreen,
+                                size: 22,
+                              ),
+                              onPressed: _abrirDestinoConVoz,
                             ),
                             Icon(Icons.arrow_forward_ios_rounded,
                                 size: 14, color: p.textMutedCard),

@@ -1,14 +1,35 @@
-// lib/widgets/verify_email_gate.dart
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/servicios/email_verification_policy.dart';
+import 'package:flygo_nuevo/widgets/verifica_correo_screen.dart';
 
-class VerifyEmailGate extends StatelessWidget {
-  final Widget childWhenVerified;
+/// Bloquea solo cuentas email/password sin [User.emailVerified].
+/// Google entra directo al [childWhenVerified].
+class VerifyEmailGate extends StatefulWidget {
   const VerifyEmailGate({super.key, required this.childWhenVerified});
 
+  final Widget childWhenVerified;
+
+  @override
+  State<VerifyEmailGate> createState() => _VerifyEmailGateState();
+}
+
+class _VerifyEmailGateState extends State<VerifyEmailGate> {
   @override
   Widget build(BuildContext context) {
-    // 🔥 DESACTIVADO TOTAL
-    // Entra SIEMPRE, debug y release
-    return childWhenVerified;
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, _) {
+        final user = FirebaseAuth.instance.currentUser;
+        if (!EmailVerificationPolicy.needsVerification(user)) {
+          return widget.childWhenVerified;
+        }
+        return VerificaCorreoScreen(
+          onVerified: () {
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
   }
 }

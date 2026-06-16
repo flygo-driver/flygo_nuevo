@@ -5,65 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/modelo/vehiculo_turismo.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../widgets/admin_drawer.dart';
+import 'admin_expediente_chofer_utils.dart';
+import 'admin_solicitud_turismo_utils.dart';
 import 'admin_ui_theme.dart';
-
-/// La solicitud (`solicitar_turismo`) guarda códigos en `vehiculosSolicitados`;
-/// la asignación admin filtra por `vehiculos[].tipo`. Unificamos aquí sin nuevos campos.
-List<Map<String, dynamic>> _vehiculosDesdeSolicitud(Map<String, dynamic> data) {
-  const Map<String, String> labels = <String, String>{
-    'carro': 'Carro Turismo',
-    'jeepeta': 'Jeepeta Turismo',
-    'minivan': 'Minivan Turismo',
-    'bus': 'Bus Turismo',
-  };
-
-  final List<dynamic> vehiculosRaw = data['vehiculos'] as List? ?? [];
-  if (vehiculosRaw.isNotEmpty) {
-    return vehiculosRaw.map((dynamic v) {
-      if (v is Map) {
-        final String t = (v['tipo'] ?? '').toString().toLowerCase();
-        return {
-          'tipo': t,
-          'tipoLabel': (v['tipoLabel'] ?? '').toString().isNotEmpty
-              ? v['tipoLabel']
-              : (labels[t] ?? v['tipo'] ?? t),
-          'marca': v['marca'] ?? '',
-          'modelo': v['modelo'] ?? '',
-          'color': v['color'] ?? '',
-          'placa': v['placa'] ?? '',
-          'anio': v['anio'] ?? 0,
-          'fotoUrl': v['fotoUrl'],
-        };
-      }
-      return {
-        'tipo': v.toString().toLowerCase(),
-        'tipoLabel': v.toString(),
-        'marca': '',
-        'modelo': '',
-        'color': '',
-        'placa': '',
-        'anio': 0,
-      };
-    }).toList();
-  }
-
-  final List<dynamic> codigos = data['vehiculosSolicitados'] as List? ?? [];
-  return codigos.map((dynamic c) {
-    final String t = c.toString().toLowerCase();
-    return <String, dynamic>{
-      'tipo': t,
-      'tipoLabel': labels[t] ?? t,
-      'marca': '',
-      'modelo': '',
-      'color': '',
-      'placa': '',
-      'anio': 0,
-    };
-  }).toList();
-}
 
 class AprobarChoferesTurismo extends StatefulWidget {
   const AprobarChoferesTurismo({super.key});
@@ -72,13 +20,71 @@ class AprobarChoferesTurismo extends StatefulWidget {
   State<AprobarChoferesTurismo> createState() => _AprobarChoferesTurismoState();
 }
 
-class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
+class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo>
+    with SingleTickerProviderStateMixin {
   final Set<String> _idsProcesando = <String>{};
+  final TextEditingController _buscarCtrl = TextEditingController();
+  late final TabController _tabCtrl;
+  AdminTipoVehiculoTurismoFiltro _filtroTipo = AdminTipoVehiculoTurismoFiltro.todos;
+  String _buscar = '';
+
+  static final DateFormat _fechaFmt = DateFormat('dd/MM/yyyy HH:mm');
+
+  @override
+  void initState() {
+    super.initState();
+    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl.addListener(() {
+      if (!_tabCtrl.indexIsChanging) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabCtrl.dispose();
+    _buscarCtrl.dispose();
+    super.dispose();
+  }
+
 
   String _mensajeFirebase(FirebaseException e) {
     final m = e.message?.trim();
     if (m != null && m.isNotEmpty) return m;
     return e.code;
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _filtrarYOrdenar(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> raw,
+  ) {
+    return raw.where((doc) {
+      final d = doc.data();
+      if (!AdminSolicitudTurismoUtils.coincideFiltroTipo(d, _filtroTipo)) {
+        return false;
+      }
+      return AdminSolicitudTurismoUtils.coincideBusqueda(d, doc.id, _buscar);
+    }).toList()
+      ..sort((a, b) => AdminSolicitudTurismoUtils.fechaOrden(b.data())
+          .compareTo(AdminSolicitudTurismoUtils.fechaOrden(a.data())));
+  }
+
+  Widget _chipFiltro(
+    AdminTipoVehiculoTurismoFiltro filtro,
+    String label,
+    int count,
+  ) {
+    final selected = _filtroTipo == filtro;
+    return FilterChip(
+      label: Text('$label ($count)'),
+      selected: selected,
+      onSelected: (_) => setState(() => _filtroTipo = filtro),
+      selectedColor: Colors.deepPurpleAccent.withValues(alpha: 0.25),
+      checkmarkColor: Colors.deepPurpleAccent,
+      labelStyle: TextStyle(
+        color: selected ? AdminUi.onCard(context) : AdminUi.secondary(context),
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        fontSize: 12,
+      ),
+    );
   }
 
   Future<void> _iniciarAprobar(
@@ -100,7 +106,8 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
       return;
     }
 
-    final List<Map<String, dynamic>> vehiculos = _vehiculosDesdeSolicitud(data);
+    final List<Map<String, dynamic>> vehiculos =
+        AdminSolicitudTurismoUtils.vehiculosDesdeSolicitud(data);
     if (vehiculos.isEmpty) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -118,7 +125,7 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
         return AlertDialog(
           backgroundColor: AdminUi.dialogSurface(ctx),
           title: Text(
-            'Aprobar solicitud',
+            'Aprobar solicitud turismo',
             style: TextStyle(color: AdminUi.onCard(ctx)),
           ),
           content: Text(
@@ -129,13 +136,16 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: Text('Cancelar',
-                  style: TextStyle(color: AdminUi.secondary(ctx))),
+              child: Text(
+                'Cancelar',
+                style: TextStyle(color: AdminUi.secondary(ctx)),
+              ),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
               style: FilledButton.styleFrom(
-                  backgroundColor: Colors.green.shade700),
+                backgroundColor: Colors.green.shade700,
+              ),
               child: const Text('Aprobar'),
             ),
           ],
@@ -229,7 +239,7 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Chofer aprobado'),
+          content: Text('Chofer turismo aprobado'),
           backgroundColor: Colors.green,
         ),
       );
@@ -244,10 +254,7 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-        ),
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) setState(() => _idsProcesando.remove(docId));
@@ -266,7 +273,7 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
               return AlertDialog(
                 backgroundColor: AdminUi.dialogSurface(ctx),
                 title: Text(
-                  'Rechazar solicitud',
+                  'Rechazar solicitud turismo',
                   style: TextStyle(color: AdminUi.onCard(ctx)),
                 ),
                 content: SingleChildScrollView(
@@ -286,25 +293,22 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
                         decoration: InputDecoration(
                           hintText: 'Motivo (opcional, auditoría interna)',
                           hintStyle: TextStyle(
-                              color: AdminUi.secondary(ctx)
-                                  .withValues(alpha: 0.75)),
+                            color: AdminUi.secondary(ctx).withValues(alpha: 0.75),
+                          ),
                           filled: true,
                           fillColor: AdminUi.inputFill(ctx),
                           border: OutlineInputBorder(
-                            borderRadius:
-                                const BorderRadius.all(Radius.circular(8)),
+                            borderRadius: BorderRadius.circular(8),
                             borderSide:
                                 BorderSide(color: AdminUi.borderSubtle(ctx)),
                           ),
                           enabledBorder: OutlineInputBorder(
-                            borderRadius:
-                                const BorderRadius.all(Radius.circular(8)),
+                            borderRadius: BorderRadius.circular(8),
                             borderSide:
                                 BorderSide(color: AdminUi.borderSubtle(ctx)),
                           ),
                           focusedBorder: OutlineInputBorder(
-                            borderRadius:
-                                const BorderRadius.all(Radius.circular(8)),
+                            borderRadius: BorderRadius.circular(8),
                             borderSide:
                                 BorderSide(color: cs.primary, width: 1.4),
                           ),
@@ -316,13 +320,16 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
-                    child: Text('Cancelar',
-                        style: TextStyle(color: AdminUi.secondary(ctx))),
+                    child: Text(
+                      'Cancelar',
+                      style: TextStyle(color: AdminUi.secondary(ctx)),
+                    ),
                   ),
                   FilledButton(
                     onPressed: () => Navigator.pop(ctx, true),
                     style: FilledButton.styleFrom(
-                        backgroundColor: Colors.red.shade700),
+                      backgroundColor: Colors.red.shade700,
+                    ),
                     child: const Text('Rechazar'),
                   ),
                 ],
@@ -353,7 +360,7 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Solicitud rechazada'),
+            content: Text('Solicitud turismo rechazada'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -368,10 +375,7 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
       } catch (e) {
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
         );
       } finally {
         if (mounted) setState(() => _idsProcesando.remove(docId));
@@ -379,6 +383,20 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
     } finally {
       motivoCtrl.dispose();
     }
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _streamSolicitudes() {
+    if (_tabCtrl.index == 0) {
+      return FirebaseFirestore.instance
+          .collection('solicitudes_turismo')
+          .where('estado', isEqualTo: 'pendiente')
+          .orderBy('fechaSolicitud', descending: true)
+          .snapshots();
+    }
+    return FirebaseFirestore.instance
+        .collection('solicitudes_turismo')
+        .where('estado', isEqualTo: 'rechazado')
+        .snapshots();
   }
 
   @override
@@ -391,213 +409,530 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
         foregroundColor: AdminUi.appBarFg(context),
         iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
         title: Text(
-          'Solicitudes de choferes turismo',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+          'Solicitudes turismo',
           style: TextStyle(color: AdminUi.onCard(context)),
         ),
+        bottom: TabBar(
+          controller: _tabCtrl,
+          labelColor: Colors.deepPurpleAccent,
+          unselectedLabelColor: AdminUi.tabUnselected(context),
+          indicatorColor: Colors.deepPurpleAccent,
+          tabs: const [
+            Tab(text: 'Pendientes'),
+            Tab(text: 'Rechazadas'),
+          ],
+        ),
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('solicitudes_turismo')
-            .where('estado', isEqualTo: 'pendiente')
-            .orderBy('fechaSolicitud', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(
-              child: CircularProgressIndicator(
-                  color: AdminUi.progressAccent(context)),
-            );
-          }
-
-          if (snapshot.hasError) {
-            final err = snapshot.error;
-            final String msg = err is FirebaseException
-                ? _mensajeFirebase(err)
-                : err.toString();
-            return Padding(
-              padding: const EdgeInsets.all(24),
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: TextField(
+              controller: _buscarCtrl,
+              style: TextStyle(color: AdminUi.onCard(context)),
+              decoration: InputDecoration(
+                hintText: 'Buscar nombre, email, teléfono, placa o UID…',
+                hintStyle: TextStyle(
+                  color: AdminUi.secondary(context).withValues(alpha: 0.85),
+                ),
+                prefixIcon:
+                    Icon(Icons.search, color: AdminUi.secondary(context)),
+                filled: true,
+                fillColor: AdminUi.inputFill(context),
+                isDense: true,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AdminUi.borderSubtle(context)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AdminUi.borderSubtle(context)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(
+                    color: Theme.of(context).colorScheme.primary,
+                    width: 1.4,
+                  ),
+                ),
+              ),
+              onChanged: (v) => setState(() => _buscar = v),
+            ),
+          ),
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _streamSolicitudes(),
+            builder: (context, countSnap) {
+              final raw = countSnap.data?.docs ?? const [];
+              final dataList = raw.map((e) => e.data()).toList();
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                child: Row(
                   children: [
-                    Icon(Icons.cloud_off_outlined,
-                        size: 48, color: AdminUi.secondary(context)),
-                    const SizedBox(height: 12),
-                    Text(
-                      'No se pudieron cargar las solicitudes.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: AdminUi.onCard(context),
-                        fontWeight: FontWeight.w600,
+                    _chipFiltro(
+                      AdminTipoVehiculoTurismoFiltro.todos,
+                      'Todos',
+                      dataList.length,
+                    ),
+                    const SizedBox(width: 6),
+                    _chipFiltro(
+                      AdminTipoVehiculoTurismoFiltro.carro,
+                      'Carro',
+                      AdminSolicitudTurismoUtils.contarPorTipo(
+                        dataList,
+                        AdminTipoVehiculoTurismoFiltro.carro,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      msg,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          color: AdminUi.secondary(context), fontSize: 13),
+                    const SizedBox(width: 6),
+                    _chipFiltro(
+                      AdminTipoVehiculoTurismoFiltro.jeepeta,
+                      'Jeepeta',
+                      AdminSolicitudTurismoUtils.contarPorTipo(
+                        dataList,
+                        AdminTipoVehiculoTurismoFiltro.jeepeta,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    _chipFiltro(
+                      AdminTipoVehiculoTurismoFiltro.minivan,
+                      'Minivan',
+                      AdminSolicitudTurismoUtils.contarPorTipo(
+                        dataList,
+                        AdminTipoVehiculoTurismoFiltro.minivan,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    _chipFiltro(
+                      AdminTipoVehiculoTurismoFiltro.bus,
+                      'Bus',
+                      AdminSolicitudTurismoUtils.contarPorTipo(
+                        dataList,
+                        AdminTipoVehiculoTurismoFiltro.bus,
+                      ),
                     ),
                   ],
                 ),
-              ),
-            );
-          }
-
-          final docs = snapshot.data?.docs ?? [];
-
-          if (docs.isEmpty) {
-            return Center(
+              );
+            },
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
               child: Text(
-                'No hay solicitudes pendientes',
-                style: TextStyle(color: AdminUi.secondary(context)),
+                'Choferes normales/motor van en «Expedientes choferes».',
+                style: TextStyle(color: AdminUi.muted(context), fontSize: 11),
               ),
-            );
-          }
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _streamSolicitudes(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return Center(
+                    child: CircularProgressIndicator(
+                      color: AdminUi.progressAccent(context),
+                    ),
+                  );
+                }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: docs.length,
-            itemBuilder: (context, index) {
-              final doc = docs[index];
-              final data = doc.data();
-              final List<Map<String, dynamic>> vehiculosVista =
-                  _vehiculosDesdeSolicitud(data);
-              final bool procesando = _idsProcesando.contains(doc.id);
-
-              return Card(
-                color: AdminUi.card(context),
-                margin: const EdgeInsets.only(bottom: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: AdminUi.borderSubtle(context)),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        data['nombre']?.toString() ?? 'Sin nombre',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AdminUi.onCard(context),
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        data['email']?.toString() ?? '',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: AdminUi.secondary(context)),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Vehículos:',
-                        style: TextStyle(
-                          color: AdminUi.secondary(context),
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      if (vehiculosVista.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 8, bottom: 4),
-                          child: Text(
-                            '• Sin tipos de vehículo en la solicitud',
-                            style: TextStyle(
-                              color: Theme.of(context).brightness ==
-                                      Brightness.light
-                                  ? Colors.deepOrange.shade800
-                                  : Colors.orangeAccent,
-                              fontSize: 12,
-                            ),
-                          ),
-                        )
-                      else
-                        ...vehiculosVista.map((Map<String, dynamic> v) {
-                          return Padding(
-                            padding: const EdgeInsets.only(left: 8, bottom: 4),
-                            child: Text(
-                              '• ${v['tipoLabel'] ?? v['tipo']}: ${v['marca']} ${v['modelo']} ${v['anio']} (${v['color']}) - Placa: ${v['placa']}',
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: AdminUi.muted(context),
-                                fontSize: 12,
-                              ),
-                            ),
-                          );
-                        }),
-                      const SizedBox(height: 8),
-                      _EnlacesDocumentosTurismo(
-                        documentos: data['documentos'],
-                        color: AdminUi.muted(context),
-                      ),
-                      Text(
-                        'Tel: ${data['telefono'] ?? ''}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: AdminUi.secondary(context)),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
+                if (snapshot.hasError) {
+                  final err = snapshot.error;
+                  final String msg = err is FirebaseException
+                      ? _mensajeFirebase(err)
+                      : err.toString();
+                  return Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: procesando
-                                  ? null
-                                  : () =>
-                                      _iniciarAprobar(context, doc.id, data),
-                              icon: procesando
-                                  ? SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color:
-                                            Colors.white.withValues(alpha: 0.9),
-                                      ),
-                                    )
-                                  : const Icon(Icons.check,
-                                      color: Colors.white),
-                              label: Text(
-                                procesando ? 'Procesando…' : 'Aprobar',
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green.shade700,
-                              ),
+                          Icon(
+                            Icons.cloud_off_outlined,
+                            size: 48,
+                            color: AdminUi.secondary(context),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No se pudieron cargar las solicitudes.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AdminUi.onCard(context),
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: procesando
-                                  ? null
-                                  : () => _iniciarRechazar(context, doc.id),
-                              icon:
-                                  const Icon(Icons.close, color: Colors.white),
-                              label: const Text('Rechazar',
-                                  style: TextStyle(color: Colors.white)),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red.shade700,
-                              ),
+                          const SizedBox(height: 8),
+                          Text(
+                            msg,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AdminUi.secondary(context),
+                              fontSize: 13,
                             ),
                           ),
                         ],
                       ),
+                    ),
+                  );
+                }
+
+                final docs = _filtrarYOrdenar(
+                  snapshot.data?.docs ??
+                      <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+                );
+
+                if (docs.isEmpty) {
+                  return Center(
+                    child: Text(
+                      _tabCtrl.index == 0
+                          ? 'No hay solicitudes pendientes con este filtro.'
+                          : 'No hay solicitudes rechazadas con este filtro.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AdminUi.secondary(context)),
+                    ),
+                  );
+                }
+
+                final bool muchos = docs.length > 80;
+                return ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                  itemCount: docs.length + (muchos ? 1 : 0),
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    if (muchos && index == 0) {
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 4),
+                        child: Text(
+                          '${docs.length} resultados — usa el buscador para acotar.',
+                          style: TextStyle(
+                            color: AdminUi.muted(context),
+                            fontSize: 12,
+                          ),
+                        ),
+                      );
+                    }
+                    final idx = muchos ? index - 1 : index;
+                    final doc = docs[idx];
+                    final data = doc.data();
+                    return _SolicitudTurismoCard(
+                      data: data,
+                      docId: doc.id,
+                      pendiente: _tabCtrl.index == 0,
+                      procesando: _idsProcesando.contains(doc.id),
+                      fechaFmt: _fechaFmt,
+                      onAprobar: () => _iniciarAprobar(context, doc.id, data),
+                      onRechazar: () => _iniciarRechazar(context, doc.id),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SolicitudTurismoCard extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final String docId;
+  final bool pendiente;
+  final bool procesando;
+  final DateFormat fechaFmt;
+  final VoidCallback onAprobar;
+  final VoidCallback onRechazar;
+
+  const _SolicitudTurismoCard({
+    required this.data,
+    required this.docId,
+    required this.pendiente,
+    required this.procesando,
+    required this.fechaFmt,
+    required this.onAprobar,
+    required this.onRechazar,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final nombre = (data['nombre'] ?? '').toString();
+    final email = (data['email'] ?? '').toString();
+    final telefono = (data['telefono'] ?? '').toString();
+    final notas = (data['notas'] ?? '').toString().trim();
+    final uidChofer = (data['uidChofer'] ?? '').toString();
+    final motivoRechazo = (data['motivoRechazo'] ?? '').toString().trim();
+    final vehiculos = AdminSolicitudTurismoUtils.vehiculosDesdeSolicitud(data);
+    final docsOk = AdminSolicitudTurismoUtils.documentosCompletosCount(data);
+    final fecha = AdminSolicitudTurismoUtils.fechaOrden(data);
+
+    return Card(
+      color: AdminUi.card(context),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: AdminUi.borderSubtle(context)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        nombre.isNotEmpty ? nombre : 'Sin nombre',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AdminUi.onCard(context),
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (email.isNotEmpty)
+                        Text(
+                          email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AdminUi.muted(context),
+                            fontSize: 12,
+                          ),
+                        ),
+                      if (telefono.isNotEmpty)
+                        Text(
+                          telefono,
+                          style: TextStyle(
+                            color: AdminUi.secondary(context),
+                            fontSize: 12,
+                          ),
+                        ),
                     ],
                   ),
                 ),
-              );
-            },
-          );
-        },
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.deepPurpleAccent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: Colors.deepPurpleAccent.withValues(alpha: 0.45),
+                    ),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.tour, size: 14, color: Colors.deepPurpleAccent),
+                      SizedBox(width: 4),
+                      Text(
+                        'Turismo',
+                        style: TextStyle(
+                          color: Colors.deepPurpleAccent,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text(
+                  'Docs $docsOk/3',
+                  style: TextStyle(
+                    color: docsOk == 3
+                        ? AdminUi.progressAccent(context)
+                        : const Color(0xFFFF5252),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  fecha.millisecondsSinceEpoch > 0
+                      ? fechaFmt.format(fecha)
+                      : 'Sin fecha',
+                  style: TextStyle(color: AdminUi.muted(context), fontSize: 11),
+                ),
+                if (uidChofer.isNotEmpty) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'UID ${uidChofer.length > 10 ? '${uidChofer.substring(0, 10)}…' : uidChofer}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: AdminUi.muted(context), fontSize: 10),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (vehiculos.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Sin tipos de vehículo en la solicitud',
+                  style: TextStyle(
+                    color: Theme.of(context).brightness == Brightness.light
+                        ? Colors.deepOrange.shade800
+                        : Colors.orangeAccent,
+                    fontSize: 12,
+                  ),
+                ),
+              )
+            else ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: vehiculos.map((v) {
+                  final tipo = (v['tipo'] ?? '').toString();
+                  final color = AdminSolicitudTurismoUtils.colorTipo(tipo);
+                  return Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: color.withValues(alpha: 0.45)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          AdminSolicitudTurismoUtils.iconoTipo(tipo),
+                          size: 13,
+                          color: color,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          (v['tipoLabel'] ?? tipo).toString(),
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 8),
+              ...vehiculos.map((v) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    AdminSolicitudTurismoUtils.vehiculoLinea(v),
+                    style: TextStyle(
+                      color: AdminUi.secondary(context),
+                      fontSize: 12,
+                    ),
+                  ),
+                );
+              }),
+            ],
+            const SizedBox(height: 8),
+            _EnlacesDocumentosTurismo(documentos: data['documentos']),
+            if (notas.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AdminUi.inputFill(context),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AdminUi.borderSubtle(context)),
+                ),
+                child: Text(
+                  'Notas: $notas',
+                  style: TextStyle(
+                    color: AdminUi.secondary(context),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+            if (!pendiente && motivoRechazo.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  'Motivo rechazo: $motivoRechazo',
+                  style: const TextStyle(
+                    color: Color(0xFFFF8A80),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+            if (pendiente) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: procesando ? null : onRechazar,
+                      icon: procesando
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFFFF5252),
+                              ),
+                            )
+                          : const Icon(Icons.close),
+                      label: Text(procesando ? 'Procesando…' : 'Rechazar'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFFF5252),
+                        side: const BorderSide(color: Color(0xFFFF5252)),
+                        textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: procesando ? null : onAprobar,
+                      icon: procesando
+                          ? SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AdminUi.progressAccent(context),
+                              ),
+                            )
+                          : const Icon(Icons.check),
+                      label: Text(procesando ? 'Procesando…' : 'Aprobar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade700,
+                        foregroundColor: Colors.white,
+                        textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -605,61 +940,50 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo> {
 
 class _EnlacesDocumentosTurismo extends StatelessWidget {
   final dynamic documentos;
-  final Color color;
 
-  const _EnlacesDocumentosTurismo({
-    required this.documentos,
-    required this.color,
-  });
+  const _EnlacesDocumentosTurismo({required this.documentos});
 
   static Future<void> _abrir(String url) async {
     final uri = Uri.tryParse(url);
-    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) return;
+    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+      return;
+    }
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (documentos is! Map) return const SizedBox.shrink();
-    final Map<String, dynamic> m = Map<String, dynamic>.from(documentos as Map);
-    final List<Widget> chips = [];
-    void addChip(String label, String key) {
-      final v = m[key]?.toString() ?? '';
-      if (v.startsWith('http://') || v.startsWith('https://')) {
-        chips.add(
-          Padding(
-            padding: const EdgeInsets.only(right: 8, bottom: 4),
-            child: ActionChip(
-              label: Text(label),
-              onPressed: () => _abrir(v),
-            ),
-          ),
-        );
-      }
+    if (documentos is! Map) {
+      return Text(
+        'Documentos: sin archivos',
+        style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
+      );
+    }
+    final Map<String, dynamic> m =
+        Map<String, dynamic>.from(documentos as Map);
+
+    Widget docChip(String label, String key) {
+      final url = (m[key] ?? '').toString().trim();
+      final ok = AdminExpedienteChoferUtils.urlAbrible(url);
+      return ActionChip(
+        avatar: Icon(
+          ok ? Icons.check_circle : Icons.error_outline,
+          size: 16,
+          color: ok ? Colors.green : Colors.orange,
+        ),
+        label: Text(label, style: const TextStyle(fontSize: 12)),
+        onPressed: ok ? () => _abrir(url) : null,
+      );
     }
 
-    addChip('Licencia', 'licencia');
-    addChip('Seguro', 'seguro');
-    addChip('Foto vehículo', 'fotoVehiculo');
-
-    if (chips.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Documentos:',
-            style: TextStyle(
-              color: color.withValues(alpha: 0.95),
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-            ),
-          ),
-          Wrap(children: chips),
-        ],
-      ),
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        docChip('Licencia', 'licencia'),
+        docChip('Seguro', 'seguro'),
+        docChip('Foto vehículo', 'fotoVehiculo'),
+      ],
     );
   }
 }

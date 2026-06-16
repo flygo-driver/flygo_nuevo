@@ -167,6 +167,17 @@ afterEvaluate {
                     }
                     apksToCopy.forEach { apk ->
                         apk.copyTo(File(destDir, apk.name), overwrite = true)
+                        // Nombre que busca `flutter run` sin --flavor (variante cliente).
+                        if (flavor == "cliente") {
+                            val flutterAlias = when (lowerBuild) {
+                                "debug" -> "app-debug.apk"
+                                "release" -> "app-release.apk"
+                                else -> null
+                            }
+                            if (flutterAlias != null) {
+                                apk.copyTo(File(destDir, flutterAlias), overwrite = true)
+                            }
+                        }
                     }
                 }
             }
@@ -185,6 +196,18 @@ afterEvaluate {
                         .forEach { aab -> aab.copyTo(File(destDir, aab.name), overwrite = true) }
                 }
             }
+        }
+    }
+
+    // Sin esto, `flutter run` llama assembleDebug y no existe (solo cliente/conductor).
+    if (tasks.findByName("assembleDebug") == null) {
+        tasks.register("assembleDebug") {
+            dependsOn("assembleClienteDebug")
+        }
+    }
+    if (tasks.findByName("assembleRelease") == null) {
+        tasks.register("assembleRelease") {
+            dependsOn("assembleClienteRelease")
         }
     }
 }

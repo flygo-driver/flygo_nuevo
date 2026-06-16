@@ -11,6 +11,8 @@ import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
+
 import 'pools_taxista_reservas.dart';
 import 'pools_taxista_crear.dart';
 
@@ -24,8 +26,9 @@ class PoolsTaxistaLista extends StatefulWidget {
 class _PoolsTaxistaListaState extends State<PoolsTaxistaLista> {
   bool _accionEnCurso = false;
   bool _esActivoVisible(Map<String, dynamic> d) {
-    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
-    return estado != 'cancelado' && estado != 'finalizado';
+    return !PoolRepo.giraEstadoOcultoEnListados(
+      (d['estado'] ?? '').toString(),
+    );
   }
 
   String _cleanPhone(String raw) {
@@ -78,7 +81,8 @@ class _PoolsTaxistaListaState extends State<PoolsTaxistaLista> {
     final quien = agencia.isNotEmpty
         ? agencia
         : (taxistaNombre.isNotEmpty ? taxistaNombre : 'RAI Driver');
-    final titulo = badge.isNotEmpty ? badge : 'Viaje por cupos';
+    final titulo =
+        badge.isNotEmpty ? badge : PoolsProductoCopy.promoTituloDefault;
 
     final base = '''
 ${titulo.toUpperCase()}
@@ -89,7 +93,7 @@ Precio por asiento: RD\$ ${precio.toStringAsFixed(0)}
 Cupos disponibles: $cuposDisponibles
 Paradas: $paradasTxt
 
-Reserva en RAI Driver desde la seccion "Giras / Tours por cupos".
+${PoolsProductoCopy.promoSeccionRai}
 Contactanos por esta via para mas informacion y confirmacion.
 #RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
 '''
@@ -182,7 +186,7 @@ Contactanos por esta via para mas informacion y confirmacion.
 
       final fechaTxt = DateFormat('d MMM, HH:mm', 'es').format(fecha);
       final msg = Uri.encodeComponent(
-        'Hola! Recordatorio de la gira/viaje por cupos $origen -> $destino. '
+        'Hola! Recordatorio de tu salida por cupos ($origen -> $destino). '
         'Salida: $fechaTxt. Por favor confirmar asistencia.',
       );
       final phonesCsv = phones.join(',');
@@ -229,6 +233,84 @@ Contactanos por esta via para mas informacion y confirmacion.
     return PoolRepo.giraPuedeCancelarseAntesDeIniciar(d);
   }
 
+  Future<bool> _confirmarCancelarGira(
+    BuildContext context,
+    Map<String, dynamic> d,
+  ) async {
+    final bool conReservas = PoolRepo.giraTieneReservasActivas(d);
+    final occ = ((d['asientosReservados'] ?? 0) as num).toInt();
+    final pag = ((d['asientosPagados'] ?? 0) as num).toInt();
+
+    if (!conReservas) {
+      final bool? ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('¿Cancelar esta salida?'),
+          content: const Text(
+            'Aún no hay reservas. Se devolverá el prepago reservado al publicar.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('No'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Sí, cancelar'),
+            ),
+          ],
+        ),
+      );
+      return ok == true;
+    }
+
+    final TextEditingController confirmCtrl = TextEditingController();
+    try {
+      final bool? ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Cancelar salida con reservas'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Hay $occ cupo(s) reservado(s) y $pag pago(s) registrado(s). '
+                  'Los pasajeros perderán la reserva. El prepago de comisión de esta salida '
+                  'se devuelve a tu billetera. Esta acción no se puede deshacer.',
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: confirmCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Escribe CANCELAR para confirmar',
+                  ),
+                  textCapitalization: TextCapitalization.characters,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Volver'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Cancelar salida'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return false;
+      return confirmCtrl.text.trim().toUpperCase() == 'CANCELAR';
+    } finally {
+      confirmCtrl.dispose();
+    }
+  }
+
   Future<void> _operarPool(
     BuildContext context, {
     required String action,
@@ -239,6 +321,34 @@ Contactanos por esta via para mas informacion y confirmacion.
     final messenger = ScaffoldMessenger.of(context);
     try {
       if (action == 'iniciar') {
+        final preview = await PoolRepo.previewComisionAlIniciar(poolId);
+        if (!context.mounted) return;
+        final okIniciar = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text(PoolsProductoCopy.accionConfirmarComision),
+            content: Text(
+              '${PoolsProductoCopy.accionConfirmarComisionSub}.\n\n'
+              'Cupos firmes en RAI: ${preview.cuposFirmesRai}\n'
+              'Comisión estimada: RD\$ ${preview.comisionEstimadaRd.toStringAsFixed(0)} '
+              '(${preview.pctComision.toStringAsFixed(0)}% × esos asientos).\n'
+              '${preview.excesoDevolucionRd > 0.01 ? 'Se devuelve RD\$ ${preview.excesoDevolucionRd.toStringAsFixed(0)} de prepago apartado al publicar (apartado RD\$ ${preview.comisionReservadaRd.toStringAsFixed(0)}).\n' : ''}'
+              '${PoolsProductoCopy.ventasFueraNoCuentan}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Volver'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Confirmar'),
+              ),
+            ],
+          ),
+        );
+        if (okIniciar != true) return;
+
         final r = await PoolRepo.iniciarViajePoolSeguro(poolId: poolId);
         if (r['legacy'] != true) {
           final cr = (r['comisionReal'] as num?)?.toDouble();
@@ -248,11 +358,26 @@ Contactanos por esta via para mas informacion y confirmacion.
               asientosReales: ar,
               comisionReal: cr,
             ));
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Catálogo cerrado. Comisión RAI: RD\$ ${cr.toStringAsFixed(0)} '
+                  '($ar cupo(s) en app).',
+                ),
+              ),
+            );
+          } else {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('Catálogo cerrado. Comisión confirmada.'),
+              ),
+            );
           }
+        } else {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Catálogo cerrado.')),
+          );
         }
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Viaje iniciado')),
-        );
       } else if (action == 'finalizar') {
         final r = await PoolRepo.finalizarViajePoolSeguro(poolId: poolId);
         if (r['refundedAsCancel'] == true) {
@@ -265,7 +390,7 @@ Contactanos por esta via para mas informacion y confirmacion.
           unawaited(AnalyticsRai.logGiraCompleted());
         }
         messenger.showSnackBar(
-          const SnackBar(content: Text('Viaje finalizado')),
+          const SnackBar(content: Text('Salida cerrada en RAI.')),
         );
       } else if (action == 'cancelar') {
         const motivo = 'Cancelado por chofer';
@@ -282,9 +407,15 @@ Contactanos por esta via para mas informacion y confirmacion.
       }
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
+      final String texto = msg.isNotEmpty
+          ? msg
+          : (e.code == 'internal'
+              ? 'No se pudo cancelar la salida (error del servidor). '
+                  'Reintenta en unos segundos o contactá soporte.'
+              : e.code);
       messenger.showSnackBar(
         SnackBar(
-          content: Text(msg.isNotEmpty ? msg : e.code),
+          content: Text(texto),
           backgroundColor: Colors.red.shade800,
         ),
       );
@@ -351,7 +482,7 @@ Contactanos por esta via para mas informacion y confirmacion.
         foregroundColor: textPrimary,
         elevation: isDark ? 0 : 0.5,
         title: Text(
-          'Mis viajes por cupos',
+          PoolsProductoCopy.salidasMis,
           style: TextStyle(
             color: accent,
             fontWeight: FontWeight.w800,
@@ -365,7 +496,7 @@ Contactanos por esta via para mas informacion y confirmacion.
               MaterialPageRoute(builder: (_) => const PoolsTaxistaCrear()),
             ),
             icon: const Icon(Icons.add),
-            tooltip: 'Crear viaje',
+            tooltip: 'Publicar salida',
           ),
         ],
       ),
@@ -380,7 +511,7 @@ Contactanos por esta via para mas informacion y confirmacion.
           if (snap.hasError) {
             return Center(
               child: Text(
-                'No se pudo cargar tus viajes por cupos.\n${snap.error}',
+                'No se pudieron cargar tus salidas por cupos.\n${snap.error}',
                 style: TextStyle(color: textMuted),
                 textAlign: TextAlign.center,
               ),
@@ -393,7 +524,7 @@ Contactanos por esta via para mas informacion y confirmacion.
           if (docs.isEmpty) {
             return Center(
               child: Text(
-                'No tienes viajes activos por cupos.',
+                'No tienes salidas activas por cupos (${PoolsProductoCopy.tipos}).',
                 style: TextStyle(color: textMuted),
               ),
             );
@@ -590,7 +721,7 @@ Contactanos por esta via para mas informacion y confirmacion.
                       children: [
                         if (tieneAccionesPool)
                           PopupMenuButton<String>(
-                            tooltip: 'Iniciar / finalizar / cancelar',
+                            tooltip: 'Comisión / cerrar salida / cancelar',
                             enabled: !_accionEnCurso,
                             onSelected: (v) =>
                                 _operarPool(ctx, action: v, poolId: id),
@@ -598,17 +729,28 @@ Contactanos por esta via para mas informacion y confirmacion.
                               if (puedeIniciar)
                                 const PopupMenuItem(
                                   value: 'iniciar',
-                                  child: Text('Iniciar viaje'),
+                                  child: ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(
+                                      PoolsProductoCopy.accionConfirmarComision,
+                                    ),
+                                    subtitle: Text(
+                                      PoolsProductoCopy.accionConfirmarComisionSub,
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
                                 ),
                               if (puedeFinalizar)
                                 const PopupMenuItem(
                                   value: 'finalizar',
-                                  child: Text('Finalizar viaje'),
-                                ),
-                              if (puedeCancelar)
-                                const PopupMenuItem(
-                                  value: 'cancelar',
-                                  child: Text('Cancelar viaje'),
+                                  child: ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(PoolsProductoCopy.accionCerrarEnRai),
+                                    subtitle: Text(
+                                      PoolsProductoCopy.accionCerrarEnRaiSub,
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
                                 ),
                             ],
                             icon: _accionEnCurso
@@ -621,6 +763,30 @@ Contactanos por esta via para mas informacion y confirmacion.
                                     ),
                                   )
                                 : const Icon(Icons.settings_suggest),
+                          ),
+                        if (puedeCancelar)
+                          OutlinedButton.icon(
+                            onPressed: _accionEnCurso
+                                ? null
+                                : () async {
+                                    if (!await _confirmarCancelarGira(ctx, d)) {
+                                      return;
+                                    }
+                                    if (!ctx.mounted) return;
+                                    await _operarPool(
+                                      ctx,
+                                      action: 'cancelar',
+                                      poolId: id,
+                                    );
+                                  },
+                            icon: Icon(Icons.cancel_outlined,
+                                color: Colors.orange.shade700),
+                            label: Text(
+                              'Cancelar salida',
+                              style: TextStyle(
+                                  color: Colors.orange.shade700,
+                                  fontWeight: FontWeight.w700),
+                            ),
                           ),
                         TextButton.icon(
                           onPressed: _accionEnCurso
@@ -707,7 +873,10 @@ Contactanos por esta via para mas informacion y confirmacion.
                               cuposDisponibles: cuposDisponibles,
                               poolId: id,
                             );
-                            Share.share(textoPromo, subject: 'Viaje por cupos');
+                            Share.share(
+                              textoPromo,
+                              subject: PoolsProductoCopy.promoTituloDefault,
+                            );
                           },
                           icon: const Icon(Icons.share_outlined),
                           label: const Text('Publicar en redes'),

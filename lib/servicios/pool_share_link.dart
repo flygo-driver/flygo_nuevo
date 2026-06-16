@@ -67,9 +67,10 @@ class PoolShareLink {
     if (web.isEmpty) return '';
     return '''
 
-🔗 Ver esta gira en RAI Driver:
+🔗 Ver y reservar cupos (RAI Pasajero):
 $web
 
-(Con la app instalada suele abrirse directo al detalle. Si no: $app)''';
+Sin la app: buscá «RAI Pasajero» en Google Play o instalá desde el mismo enlace.
+Respaldo: $app''';
   }
 }

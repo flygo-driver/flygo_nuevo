@@ -11,22 +11,56 @@ import 'package:flygo_nuevo/pantallas/cliente/cliente_mis_viajes_hub.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
+import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_fidelidad_milestone_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_listener.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
+import 'package:flygo_nuevo/widgets/rai_asistente_fab.dart';
+import 'package:flygo_nuevo/widgets/cliente_registro_gate.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
+import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_detalle.dart';
+import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
+import 'package:flygo_nuevo/shell/cliente_pool_deep_link_bridge.dart';
+import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
 
 /// Shell del cliente: barra inferior fija; cada pestaña usa un [Navigator] anidado
 /// (pantallas con [Navigator.push] no tapan Inicio / Mis viajes / etc.).
+/// [ClienteShell] + reintento de deep link gira tras montar (login lento).
+class ClienteShellWithDeepLink extends StatefulWidget {
+  const ClienteShellWithDeepLink({super.key});
+
+  @override
+  State<ClienteShellWithDeepLink> createState() =>
+      _ClienteShellWithDeepLinkState();
+}
+
+class _ClienteShellWithDeepLinkState extends State<ClienteShellWithDeepLink> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      PoolDeepLink.notifyClienteShellReady();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => const ClienteShell();
+}
+
 class ClienteShell extends StatelessWidget {
   const ClienteShell({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const BolaPostFacturaListener(
-      child: ClientePostViajeListener(
-        child: ClienteFidelidadMilestoneListener(
-          child: _ClienteShellScaffold(),
+    return const ClienteRegistroGate(
+      child: BolaPostFacturaListener(
+        child: ClientePostViajeListener(
+          child: ClienteFidelidadMilestoneListener(
+            child: _ClienteShellScaffold(),
+          ),
         ),
       ),
     );
@@ -51,31 +85,154 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
   StreamSubscription<bool>? _viajeActivoSub;
   bool? _viajeActivoShell;
+  Timer? _bootstrapViajeTimeout;
+  VoidCallback? _offlineListener;
+
+  static const Duration _kBootstrapViajeMaxWait = Duration(seconds: 3);
+  static const int _kTabExperiencias = 2;
+
+  String? _lastDeepLinkPoolOpened;
+
+  bool _shellListoParaDeepLinkGira() =>
+      mounted && _viajeActivoShell == false;
+
+  void _abrirGiraDeepLinkEnExperiencias(String poolId) {
+    final String id = poolId.trim();
+    if (id.isEmpty || !_shellListoParaDeepLinkGira()) return;
+    if (_lastDeepLinkPoolOpened == id) return;
+    _lastDeepLinkPoolOpened = id;
+
+    setState(() => _index = _kTabExperiencias);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_shellListoParaDeepLinkGira()) return;
+      final NavigatorState? tabNav =
+          _navigatorKeys[_kTabExperiencias].currentState;
+      if (tabNav == null) return;
+
+      // Si el tab solo tiene Experiencias (raíz), apilar lista + detalle.
+      final bool soloRaiz = !tabNav.canPop();
+      if (soloRaiz) {
+        tabNav.push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => const PoolsClienteLista(tipo: 'todos'),
+          ),
+        );
+      }
+      tabNav.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => PoolsClienteDetalle(poolId: id),
+        ),
+      );
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    ClientePoolDeepLinkBridge.bindShell(
+      isReady: _shellListoParaDeepLinkGira,
+      openPool: _abrirGiraDeepLinkEnExperiencias,
+    );
+    RaiConnectivityService.instance.ensureStarted();
+    unawaited(RaiUbicacionClienteService.instance.ensureStarted());
+
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) {
       _viajeActivoShell = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        PoolDeepLink.notifyClienteShellReady();
+      });
     } else {
+      _offlineListener = () => _resolverBootstrapSiOffline(uid);
+      RaiConnectivityService.instance.offline.addListener(_offlineListener!);
+
+      _bootstrapViajeTimeout = Timer(_kBootstrapViajeMaxWait, () {
+        if (!mounted || _viajeActivoShell != null) return;
+        unawaited(_resolverBootstrapConCache(uid, porTimeout: true));
+      });
+
       _viajeActivoSub =
           ActiveTripService.streamTieneViajeActivo(uid).listen((bool ok) {
         if (!mounted) return;
+        _bootstrapViajeTimeout?.cancel();
         if (_viajeActivoShell != ok) {
           print('[VIAJE_ACTIVO] cliente_shell stream tieneActivo=$ok');
-          setState(() => _viajeActivoShell = ok);
+          setState(() {
+            _viajeActivoShell = ok;
+            if (!ok) {
+              _lastDeepLinkPoolOpened = null;
+            }
+          });
+          if (!ok) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              PoolDeepLink.notifyClienteShellReady();
+            });
+          }
         }
       }, onError: (Object e) {
         print('[VIAJE_ACTIVO] cliente_shell stream error: $e');
-        if (mounted) setState(() => _viajeActivoShell = false);
+        if (!mounted) return;
+        unawaited(_resolverBootstrapConCache(uid, porTimeout: false));
       });
     }
   }
 
+  void _resolverBootstrapSiOffline(String uid) {
+    if (!RaiConnectivityService.instance.isOffline) return;
+    if (_viajeActivoShell != null) return;
+    unawaited(_resolverBootstrapConCache(uid, porTimeout: false));
+  }
+
+  /// Sin red o stream lento: no congelar — usar caché local o mostrar inicio.
+  Future<void> _resolverBootstrapConCache(
+    String uid, {
+    required bool porTimeout,
+  }) async {
+    if (!mounted || _viajeActivoShell != null) return;
+    _bootstrapViajeTimeout?.cancel();
+
+    bool mostrarViaje = false;
+    if (RaiConnectivityService.instance.isOffline ||
+        ActiveTripService.debeMantenerOverlayViajeEnShell) {
+      mostrarViaje = ActiveTripService.debeMantenerOverlayViajeEnShell;
+      if (!mostrarViaje) {
+        final String? cached =
+            await RaiLocalReadCache.lastKnownActiveTripId(uid);
+        mostrarViaje = (cached ?? '').trim().isNotEmpty;
+      }
+    }
+
+    if (!mounted || _viajeActivoShell != null) return;
+    print(
+      '[VIAJE_ACTIVO] cliente_shell bootstrap '
+      '${porTimeout ? 'timeout' : 'offline/error'} → viaje=$mostrarViaje',
+    );
+    setState(() => _viajeActivoShell = mostrarViaje);
+    if (!mostrarViaje) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        PoolDeepLink.notifyClienteShellReady();
+      });
+    }
+  }
+
+  void _notificarDeepLinkSiListo() {
+    if (!_shellListoParaDeepLinkGira()) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_shellListoParaDeepLinkGira()) return;
+      PoolDeepLink.notifyClienteShellReady();
+    });
+  }
+
   @override
   void dispose() {
+    ClientePoolDeepLinkBridge.unbindShell();
+    _bootstrapViajeTimeout?.cancel();
+    if (_offlineListener != null) {
+      RaiConnectivityService.instance.offline.removeListener(_offlineListener!);
+    }
     _viajeActivoSub?.cancel();
+    RaiUbicacionClienteService.instance.disposeService();
     super.dispose();
   }
 
@@ -104,6 +261,7 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             RaiOfflineBanner(uid: uidOffline),
+            const RaiUbicacionClienteBanner(),
             const Expanded(
               child: Center(child: CircularProgressIndicator()),
             ),
@@ -131,10 +289,13 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
       );
     }
     return Scaffold(
+      floatingActionButton: const RaiAsistenteFab(),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           RaiOfflineBanner(uid: uidOffline),
+          const RaiUbicacionClienteBanner(),
           Expanded(
             child: IndexedStack(
               index: _index,
@@ -153,7 +314,10 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) {
+          setState(() => _index = i);
+          if (i == _kTabExperiencias) _notificarDeepLinkSiListo();
+        },
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: const [
           NavigationDestination(
@@ -180,4 +344,5 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
       ),
     );
   }
+
 }

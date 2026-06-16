@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../servicios/pool_repo.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
+import 'verificar_pagos.dart';
 
 /// Listado y control admin de giras / tours por cupos (`viajes_pool`).
 class AdminGirasToursCupos extends StatefulWidget {
@@ -145,9 +146,9 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AdminUi.dialogSurface(ctx),
         title:
-            Text('Cancelar gira', style: TextStyle(color: AdminUi.onCard(ctx))),
+            Text('Cancelar salida', style: TextStyle(color: AdminUi.onCard(ctx))),
         content: Text(
-          '¿Marcar esta gira como cancelada? Los pasajeros deberán ser avisados por el operador.',
+          '¿Marcar esta salida como cancelada? Los pasajeros deberán ser avisados por el operador.',
           style: TextStyle(color: AdminUi.secondary(ctx)),
         ),
         actions: [
@@ -186,7 +187,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
               return AlertDialog(
                 backgroundColor: AdminUi.dialogSurface(ctx),
                 title: Text(
-                  'Anular gira finalizada',
+                  'Anular salida finalizada',
                   style: TextStyle(color: AdminUi.onCard(ctx)),
                 ),
                 content: Column(
@@ -194,7 +195,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Quita la gira del flujo de comisión pendiente y la marca como cancelada '
+                      'Quita la salida del flujo de comisión pendiente y la marca como cancelada '
                       '(uso: error de cierre, disputa, duplicado). Los pasajeros no reciben aviso automático.',
                       style: TextStyle(
                           color: AdminUi.secondary(ctx), fontSize: 13),
@@ -271,7 +272,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Gira anulada administrativamente'),
+            content: Text('Salida anulada administrativamente'),
             backgroundColor: Colors.green,
           ),
         );
@@ -422,7 +423,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
         foregroundColor: AdminUi.appBarFg(context),
         iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
         title: Text(
-          'Giras / tours por cupos',
+          'Salidas por cupos (admin)',
           style: TextStyle(color: AdminUi.onCard(context)),
         ),
       ),
@@ -438,15 +439,37 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: AdminUi.infoBorder(context)),
               ),
-              child: Text(
-                'Control de viajes_pool: estados, cupos y acciones (iniciar, finalizar, cancelar). '
-                'Iniciar exige cupos firmes (pagos verificados o efectivo reservado). '
-                'Si una gira ya está finalizada y hay que corregir el cierre, usa «Anular cierre (admin)». '
-                'Las comisiones pendientes se gestionan en Verificar Pagos.',
-                style: TextStyle(
-                    color: AdminUi.secondary(context),
-                    fontSize: 12,
-                    height: 1.35),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Control de viajes_pool: estados, cupos y acciones (confirmar comisión / cerrar catálogo, cerrar salida, cancelar). '
+                    'Confirmar comisión exige cupos firmes en RAI (pagados o efectivo reservado). '
+                    'Si una salida ya cerró en RAI y hay que corregir, usa «Anular cierre (admin)». '
+                    'Las comisiones 10% pendientes de transferencia se validan en Verificar pagos.',
+                    style: TextStyle(
+                        color: AdminUi.secondary(context),
+                        fontSize: 12,
+                        height: 1.35),
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => const VerificarPagos(
+                              initialTabIndex: 2,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('Ir a comisiones de salidas'),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -634,6 +657,17 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                             color: AdminUi.secondary(context),
                                             fontSize: 12),
                                       ),
+                                      if (d['cuposComisionRai'] != null)
+                                        Text(
+                                          'Comisión RAI: solo cupos vendidos en la app · tope ${d['cuposComisionRai']} cupos'
+                                          '${d['comisionGiraRealRd'] != null ? ' · Cobrada: RD\$ ${((d['comisionGiraRealRd'] as num?) ?? 0).toStringAsFixed(0)}' : ''}'
+                                          '${d['comisionGiraExcesoDevueltoRd'] != null ? ' · Devuelto: RD\$ ${((d['comisionGiraExcesoDevueltoRd'] as num?) ?? 0).toStringAsFixed(0)}' : ''}'
+                                          '${d['asientosFirmesSalida'] != null ? ' · Firmes salida: ${d['asientosFirmesSalida']}' : ''}',
+                                          style: TextStyle(
+                                            color: AdminUi.muted(context),
+                                            fontSize: 11,
+                                          ),
+                                        ),
                                     ],
                                   ),
                                 ),
@@ -669,7 +703,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                             action: 'iniciar', poolId: id),
                                     icon:
                                         const Icon(Icons.play_arrow, size: 18),
-                                    label: const Text('Iniciar'),
+                                    label: const Text('Confirmar comisión'),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: green,
                                       side: BorderSide(
@@ -683,7 +717,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                         : () => _operar(context,
                                             action: 'finalizar', poolId: id),
                                     icon: const Icon(Icons.flag, size: 18),
-                                    label: const Text('Finalizar'),
+                                    label: const Text('Cerrar salida'),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: blue,
                                       side: BorderSide(color: blue),

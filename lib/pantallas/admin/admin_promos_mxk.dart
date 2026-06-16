@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
+import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 
 class AdminPromosMxK extends StatefulWidget {
   const AdminPromosMxK({super.key});
@@ -199,6 +200,7 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
+      drawer: const AdminDrawer(),
       appBar: AppBar(
         backgroundColor: AdminUi.scaffold(context),
         foregroundColor: AdminUi.appBarFg(context),

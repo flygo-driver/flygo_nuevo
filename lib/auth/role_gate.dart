@@ -1,144 +1,151 @@
+// DEPRECATED: usar AuthGatePublic / RaiIdentityRouter. Este widget solo redirige
+// al router por compatibilidad (misma puerta que main.dart y /auth_check).
+//
 // lib/auth/role_gate.dart
-import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/auth/rai_identity_router.dart';
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 
-// Shells
-import 'package:flygo_nuevo/shell/cliente_shell.dart';
-import 'package:flygo_nuevo/shell/taxista_shell.dart';
-
-// Admin
-import 'package:flygo_nuevo/widgets/admin_gate.dart';
-
-class RoleGate extends StatefulWidget {
+/// Compatibilidad legacy → [RaiIdentityRouter.buildGateForUsuarioData].
+class RoleGate extends StatelessWidget {
   const RoleGate({super.key});
-  @override
-  State<RoleGate> createState() => _RoleGateState();
-}
 
-class _RoleGateState extends State<RoleGate> {
-  bool _fixingMissingRol = false; // evita side-effects repetidos
+  static Future<void> _ensureUsuarioDoc(User user) async {
+    final db = FirebaseFirestore.instance;
+    final now = FieldValue.serverTimestamp();
+    final uRef = db.collection('usuarios').doc(user.uid);
+    final rRef = db.collection('roles').doc(user.uid);
+
+    DocumentSnapshot<Map<String, dynamic>> uSnap = await uRef.get();
+    if (uSnap.exists) {
+      final data = uSnap.data() ?? <String, dynamic>{};
+      final rol = (data['rol'] ?? '').toString().trim().toLowerCase();
+      if (rol.isNotEmpty) return;
+    }
+
+    for (var i = 0; i < 8; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+      uSnap = await uRef.get();
+      if (uSnap.exists) {
+        final data = uSnap.data() ?? <String, dynamic>{};
+        final rol = (data['rol'] ?? '').toString().trim().toLowerCase();
+        if (rol.isNotEmpty) return;
+      }
+    }
+
+    String rol = 'cliente';
+    try {
+      final rSnap = await rRef.get();
+      final rolRoles =
+          (rSnap.data()?['rol'] ?? '').toString().trim().toLowerCase();
+      if (rolRoles == 'taxista' ||
+          rolRoles == 'admin' ||
+          rolRoles == 'cliente') {
+        rol = rolRoles;
+      }
+    } catch (_) {}
+
+    await uRef.set({
+      'uid': user.uid,
+      'email': (user.email ?? '').toString(),
+      'nombre': (user.displayName ?? '').toString(),
+      'telefono': (user.phoneNumber ?? '').toString(),
+      'fotoUrl': (user.photoURL ?? '').toString(),
+      'rol': rol,
+      'updatedAt': now,
+      'actualizadoEn': now,
+      'lastLogin': now,
+      'fechaRegistro': now,
+    }, SetOptions(merge: true));
+  }
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, authSnap) {
-        if (authSnap.connectionState == ConnectionState.waiting) {
-          return _loadingSplash('Verificando sesión…');
+        final user = authSnap.data ?? FirebaseAuth.instance.currentUser;
+        if (authSnap.connectionState == ConnectionState.waiting &&
+            user == null) {
+          return RaiIdentitySplash.scaffold();
         }
         if (authSnap.hasError) {
-          return _errorPage('Error de autenticación:\n${authSnap.error}');
+          debugPrint('[RAI_IDENTITY] RoleGate auth error=${authSnap.error}');
+          return _errorScaffold('Error de autenticación:\n${authSnap.error}');
         }
-        final user = authSnap.data;
-        if (user == null) return const SeleccionUsuario();
+        if (user == null) {
+          return const SeleccionUsuario();
+        }
 
-        return StreamBuilder<String?>(
-          stream: RolesService.streamRol(user.uid),
-          builder: (context, rolSnap) {
-            if (rolSnap.connectionState == ConnectionState.waiting) {
-              return _loadingSplash('Cargando rol…');
+        final doc =
+            FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
+
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: doc.snapshots(),
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting &&
+                !snap.hasData) {
+              return RaiIdentitySplash.scaffold();
             }
-            if (rolSnap.hasError) {
-              return _errorPage('Error al leer rol:\n${rolSnap.error}');
-            }
 
-            final rol = (rolSnap.data ?? '').toLowerCase().trim();
-            const valid = {'admin', 'cliente', 'taxista'};
-
-            // Si no hay rol válido, sincroniza una sola vez y muestra selección
-            if (rol.isEmpty || !valid.contains(rol)) {
-              if (!_fixingMissingRol) {
-                _fixingMissingRol = true;
-                Future.microtask(() async {
-                  try {
-                    await RolesService.syncRolConColeccionRoles(user.uid);
-                    await RolesService.ensureUserDoc(user.uid);
-                  } catch (e) {
-                    debugPrint('RoleGate sync/ensure error: $e');
-                  } finally {
-                    if (mounted) _fixingMissingRol = false;
+            if (!snap.hasData || !snap.data!.exists) {
+              return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                future: () async {
+                  await _ensureUsuarioDoc(user);
+                  return doc.get();
+                }(),
+                builder: (context, ensured) {
+                  if (ensured.connectionState != ConnectionState.done) {
+                    return RaiIdentitySplash.scaffold();
                   }
-                });
-              }
-              return const SeleccionUsuario();
+                  if (ensured.hasError) {
+                    debugPrint(
+                      '[RAI_IDENTITY] RoleGate ensure error=${ensured.error}',
+                    );
+                    return _errorScaffold(
+                      'No pudimos preparar tu perfil.\n${ensured.error}',
+                    );
+                  }
+                  final fresh = ensured.data;
+                  if (fresh == null || !fresh.exists) {
+                    return const SeleccionUsuario();
+                  }
+                  return RaiIdentityRouter.buildGateForUsuarioData(
+                    context,
+                    user,
+                    fresh.data() ?? {},
+                  );
+                },
+              );
             }
 
-            // Rutas por rol
-            switch (rol) {
-              case 'admin':
-                return const AdminGate();
-              case 'cliente':
-                return const ClienteShell();
-              case 'taxista':
-                return const TaxistaShell();
-            }
-
-            // Fallback
-            return const SeleccionUsuario();
+            return RaiIdentityRouter.buildGateForUsuarioData(
+              context,
+              user,
+              snap.data!.data() ?? {},
+            );
           },
         );
       },
     );
   }
 
-  // ===== UI helpers =====
-
-  Widget _loadingSplash(String texto) {
-    return const _SplashScaffold(
-      child: _SplashContent(
-        icon: CircularProgressIndicator(color: Colors.greenAccent),
-        text: 'Cargando…',
-      ),
-    );
-  }
-
-  Widget _errorPage(String texto) {
-    return _SplashScaffold(
-      child: _SplashContent(
-        icon:
-            const Icon(Icons.error_outline, color: Colors.redAccent, size: 28),
-        text: texto,
-      ),
-    );
-  }
-}
-
-/// Scaffold común negro para splash / error
-class _SplashScaffold extends StatelessWidget {
-  final Widget child;
-  const _SplashScaffold({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
+  static Widget _errorScaffold(String texto) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Center(child: child),
-    );
-  }
-}
-
-/// Contenido reutilizable (icono + texto)
-class _SplashContent extends StatelessWidget {
-  final Widget icon;
-  final String text;
-  const _SplashContent({required this.icon, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        icon,
-        const SizedBox(height: 16),
-        Text(
-          text,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white70),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            texto,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white70),
+          ),
         ),
-      ],
+      ),
     );
   }
 }

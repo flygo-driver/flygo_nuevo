@@ -337,6 +337,18 @@ export const setComisionPorcentaje = onCall(async (request) => {
     { merge: true },
   );
 
+  // Legacy giras: mismo % en `configuracion_globals` hasta retirar el campo.
+  await db()
+    .collection("configuracion_globals")
+    .doc("app")
+    .set(
+      {
+        comision_gira_porcentaje: porcentaje,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
   invalidateComisionViajePctCache();
 
   const afterSnap = await ref.get();

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gira — RAI Pasajero</title>
+  <meta name="description" content="Reservá cupos de esta gira en RAI Pasajero." />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #101010; color: #eee; }
+    .wrap { max-width: 420px; margin: 0 auto; padding: 20px 16px 32px; }
+    .banner { width: 100%; border-radius: 12px; margin: 12px 0; display: none; max-height: 200px; object-fit: cover; }
+    h1 { font-size: 1.25rem; margin: 0 0 8px; }
+    .route { font-size: 1.1rem; font-weight: 700; color: #00e676; }
+    .meta { color: #aaa; font-size: 0.95rem; line-height: 1.5; margin: 8px 0; }
+    .badge { display: inline-block; background: #1e3a2f; color: #00e676; padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; }
+    a.btn {
+      display: block; margin-top: 12px; padding: 14px 20px; text-align: center;
+      font-weight: 700; text-decoration: none; border-radius: 8px;
+    }
+    .primary { background: #00c853; color: #000; }
+    .secondary { background: #333; color: #fff; border: 1px solid #555; }
+    p.muted { color: #aaa; font-size: 0.9rem; line-height: 1.45; }
+    .err { color: #ff8a80; }
+    .skel { color: #666; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="badge">Gira por cupos · RAI</p>
+    <h1 id="titulo" class="skel">Cargando gira…</h1>
+    <p id="ruta" class="route skel">—</p>
+    <img id="banner" class="banner" alt="Banner de la gira" />
+    <p id="detalle" class="meta skel"></p>
+    <p id="status" class="muted"></p>
+    <a id="openApp" class="btn primary" href="#">Abrir en RAI Pasajero</a>
+    <a id="playStore" class="btn secondary" href="https://play.google.com/store/apps/details?id=com.flygo.rd2">
+      Descargar RAI Pasajero en Google Play
+    </a>
+    <p class="muted">En Play buscá <strong>RAI Pasajero</strong>. El enlace de WhatsApp es para pasajeros, no para RAI Conductor.</p>
+  </div>
+  <script>
+    (function () {
+      var PLAY = 'https://play.google.com/store/apps/details?id=com.flygo.rd2';
+      var PREVIEW_CF =
+        'https://us-central1-flygo-rd.cloudfunctions.net/getPoolSharePreview';
+      var params = new URLSearchParams(window.location.search);
+      var id = (params.get('id') || '').trim();
+      var isAndroid = /Android/i.test(navigator.userAgent);
+
+      var titulo = document.getElementById('titulo');
+      var ruta = document.getElementById('ruta');
+      var detalle = document.getElementById('detalle');
+      var banner = document.getElementById('banner');
+      var status = document.getElementById('status');
+      var openBtn = document.getElementById('openApp');
+
+      var appScheme = id
+        ? 'raidriver://pool?id=' + encodeURIComponent(id)
+        : 'raidriver://pool';
+      var intentUrl = id
+        ? 'intent://pool?id=' + encodeURIComponent(id) +
+          '#Intent;scheme=raidriver;package=com.flygo.rd2;S.browser_fallback_url=' +
+          encodeURIComponent(PLAY) + ';end'
+        : 'intent://pool#Intent;scheme=raidriver;package=com.flygo.rd2;S.browser_fallback_url=' +
+          encodeURIComponent(PLAY) + ';end';
+
+      openBtn.href = isAndroid ? intentUrl : appScheme;
+
+      function fmtFecha(iso) {
+        if (!iso) return '—';
+        try {
+          var d = new Date(iso);
+          return d.toLocaleString('es-DO', {
+            weekday: 'short', day: 'numeric', month: 'short',
+            hour: '2-digit', minute: '2-digit'
+          });
+        } catch (e) { return iso; }
+      }
+
+      function renderPreview(p) {
+        titulo.textContent = (p.agenciaNombre || 'Gira') + ' · cupos';
+        titulo.classList.remove('skel');
+        ruta.textContent = (p.origenTown || '—') + ' → ' + (p.destino || '—');
+        ruta.classList.remove('skel');
+        var precio = Number(p.precioPorAsiento) || 0;
+        var left = Number(p.cuposDisponibles);
+        if (!Number.isFinite(left)) left = 0;
+        detalle.innerHTML =
+          '<strong>Salida:</strong> ' + fmtFecha(p.fechaSalida) + '<br>' +
+          '<strong>Precio por asiento:</strong> RD$ ' + precio.toFixed(0) + '<br>' +
+          '<strong>Cupos disponibles:</strong> ' + left + ' / ' + (p.capacidad || '—') + '<br>' +
+          '<strong>Estado:</strong> ' + (p.estado || '—');
+        detalle.classList.remove('skel');
+        if (p.bannerUrl) {
+          banner.src = p.bannerUrl;
+          banner.style.display = 'block';
+        }
+        status.textContent =
+          'Reservá en la app RAI Pasajero. Si ya la tenés instalada, tocá el botón verde.';
+      }
+
+      if (!id) {
+        titulo.textContent = 'Enlace incompleto';
+        titulo.classList.remove('skel');
+        status.innerHTML = '<span class="err">Falta el id de la gira. Pedí el link de nuevo al conductor.</span>';
+        openBtn.style.display = 'none';
+        return;
+      }
+
+      fetch(PREVIEW_CF + '?poolId=' + encodeURIComponent(id))
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (res.ok && res.j && res.j.ok) {
+            renderPreview(res.j);
+          } else {
+            titulo.textContent = 'Gira no disponible';
+            titulo.classList.remove('skel');
+            status.innerHTML = '<span class="err">No encontramos esta gira o ya fue cancelada. Igual podés abrir la app.</span>';
+          }
+          if (isAndroid) {
+            window.location.href = intentUrl;
+            setTimeout(function () {
+              status.textContent += ' ¿No se abrió? Tocá el botón verde o instalá desde Play.';
+            }, 2200);
+          }
+        })
+        .catch(function () {
+          titulo.textContent = 'Gira por cupos';
+          titulo.classList.remove('skel');
+          ruta.textContent = 'RAI Pasajero';
+          ruta.classList.remove('skel');
+          status.textContent = 'Sin vista previa en este momento. Abrí o instalá la app para ver el detalle.';
+          if (isAndroid) window.location.href = intentUrl;
+        });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "error": "TypeError: Cannot set properties of undefined (setting '1_taxista_prueba')",
+  "stack": "TypeError: Cannot set properties of undefined (setting '1_taxista_prueba')\n    at step (file:///C:/Users/pablo/flygo_nuevo/functions/scripts/e2e-finanzas-pr-staging-validation.mjs:62:28)\n    at main (file:///C:/Users/pablo/flygo_nuevo/functions/scripts/e2e-finanzas-pr-staging-validation.mjs:126:3)",
+  "evidence": {
+    "meta": {
+      "projectId": "flygo-rd",
+      "useEmulator": true,
+      "startedAt": "2026-06-12T01:44:22.819Z",
+      "checklist": {}
+    },
+    "before": {},
+    "after": {},
+    "rollback": {},
+    "findings": [],
+    "recommendation": null
+  }
+}

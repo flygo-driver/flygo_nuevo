@@ -32,7 +32,7 @@ import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
-import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
+import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_live_conductores.dart';
@@ -40,7 +40,7 @@ import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
-import 'package:flygo_nuevo/widgets/datos_transferencia_conductor_panel.dart';
+import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
 
 // ===== Helpers =====
 LatLng _latLng(double lat, double lon) => LatLng(lat, lon);
@@ -183,7 +183,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   String _lastNotifiedState = '';
 
   /// Para evitar abrir la pantalla de Factura más de una vez por viaje.
-  String _facturaShownForViajeId = '';
+  String _postViajeFlujoIniciadoParaViajeId = '';
 
   /// Multiparada: destinos ya visitados (solo UI cliente; prefs por viaje).
   int _multiLegCompletadas = 0;
@@ -1740,34 +1740,58 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     setState(_limpiarCacheCierreViaje);
     if (!mounted) return;
 
-    // Mostrar la factura ANTES del PostViajeClienteFlow.
-    // El `await` garantiza que la factura sea la primera pantalla que ve el
-    // cliente al completarse el viaje y que el flujo post-viaje (calificación
-    // + propina) solo se empuje cuando cierre la factura. Idempotente por
-    // `viajeId` para que jamás se abra dos veces para el mismo viaje aunque
-    // el listener se redispare.
-    if (_facturaShownForViajeId != viajeId) {
-      _facturaShownForViajeId = viajeId;
-      try {
-        await FacturaViaje.mostrar(
-          context,
-          viajeId: viajeId,
-          role: 'cliente',
-        );
-      } catch (_) {
-        // No bloqueamos el flujo post-viaje si la factura falla en presentar.
-      }
-      if (!mounted) return;
+    // Recibo + calificación en un solo flujo ([PostViajeClienteFlow]).
+    if (_postViajeFlujoIniciadoParaViajeId == viajeId) return;
+    if (ClientePostViajeReopenGuard.shouldSuppress(
+      viajeId,
+      viajeData: viajeDataSemilla,
+    )) {
+      return;
+    }
+    if (await ClientePostViajeReopenGuard.shouldSuppressAsync(
+      viajeId,
+      viajeData: viajeDataSemilla,
+    )) {
+      return;
     }
 
-    await Navigator.of(context, rootNavigator: true).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => PostViajeClienteFlow(
-          viajeId: viajeId,
-          viajeDataSemilla: viajeDataSemilla,
-        ),
-      ),
-    );
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    ClientePostViajeReopenGuard.markOpened(viajeId);
+
+    try {
+      final NavigatorState? nav = NavigationService.navigatorKey.currentState;
+      if (nav != null) {
+        await nav.push<void>(
+          MaterialPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (_) => PostViajeClienteFlow(
+              viajeId: viajeId,
+              viajeDataSemilla: viajeDataSemilla,
+            ),
+          ),
+        );
+      } else {
+        await Navigator.of(context, rootNavigator: true).push<void>(
+          MaterialPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (_) => PostViajeClienteFlow(
+              viajeId: viajeId,
+              viajeDataSemilla: viajeDataSemilla,
+            ),
+          ),
+        );
+      }
+      _postViajeFlujoIniciadoParaViajeId = viajeId;
+      final String? uidCierre = uid.trim().isNotEmpty ? uid : null;
+      await ClientePostViajeReopenGuard.markCompleted(
+        viajeId: viajeId,
+        uidCliente: uidCierre,
+      );
+    } catch (e, st) {
+      debugPrint('[PostViaje] navegación post-viaje falló: $e\n$st');
+      _postViajeFlujoIniciadoParaViajeId = '';
+      _navPostViajeParaId = null;
+    }
   }
 
   bool _viajeClienteCompletadoParaPostViaje(Map<String, dynamic> d) {
@@ -1879,7 +1903,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }) {
     if (_abriendoFlujoPostViaje) return;
     if (_navPostViajeParaId == viajeId) return;
-    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
+    if (ClientePostViajeReopenGuard.shouldSuppress(
+      viajeId,
+      viajeData: viajeDataSemilla,
+    )) {
+      return;
+    }
     _navPostViajeParaId = viajeId;
     _abriendoFlujoPostViaje = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -2234,13 +2263,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         }
       }
 
-      // NOTA: la apertura de la factura se realiza DENTRO de
-      // [_abrirFlujoPostViaje] con `await`, justo antes de empujar el
-      // PostViajeClienteFlow. Antes había un disparo aquí que competía con
-      // ese pushReplacement (race condition) y la factura podía no
-      // mostrarse o desaparecer al instante. La bandera
-      // `_facturaShownForViajeId` se sigue usando como guard de
-      // idempotencia desde el flujo post-viaje.
+      // Post-viaje (recibo + calificación): solo desde [_abrirFlujoPostViaje].
+      // `_postViajeFlujoIniciadoParaViajeId` evita abrir el flujo dos veces.
       _syncTurismoReasignacion(viajeId, d);
     }, onError: (Object _) {});
   }
@@ -3471,11 +3495,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   // Datos bancarios del conductor (snapshot en viaje al finalizar + perfil en vivo).
   Widget _buildDatosBancarios(
       Viaje v, String taxistaId, double monto, Map<String, dynamic> viajeData) {
-    return DatosTransferenciaConductorPanel(
+    return TransferenciaRecaudoUi.panel(
       viajeData: viajeData,
       uidTaxista: taxistaId,
       montoRd: monto,
       fondoOscuro: true,
+      tituloConductor: 'DATOS PARA TRANSFERENCIA AL CONDUCTOR',
+      tituloRai: 'PAGAR A RAI (TRANSFERENCIA)',
       footer: Builder(
         builder: (_) {
           final String estadoPago =
@@ -3610,12 +3636,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   _disposeDocWatch();
                   _stopClienteUbicacionEnViaje();
                   final String lost = _lastNonEmptyViajeActivoId;
-
-                  if (lost.isNotEmpty) {
-                    ActiveTripService.mantenerOverlayViajeEnShell(
-                      const Duration(seconds: 90),
-                    );
-                  }
 
                   if (lost.isNotEmpty) {
                     DocumentSnapshot<Map<String, dynamic>>? docSnap =
@@ -3761,9 +3781,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
                     if (_viajeClienteCompletadoParaPostViaje(data)) {
                       _stopClienteUbicacionEnViaje();
-                      ActiveTripService.mantenerOverlayViajeEnShell(
-                        const Duration(seconds: 90),
-                      );
                       _programarFlujoPostViaje(
                         viajeId: v.id,
                         uid: u.uid,

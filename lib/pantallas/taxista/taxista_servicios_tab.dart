@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/taxista/login_chofer_turismo.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_crear.dart';
+import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viajes_turismo_asignados.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
@@ -156,7 +157,7 @@ class TaxistaServiciosTab extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
             child: Text(
-              'Viajes por cupos',
+              'Salidas por cupos',
               style: TextStyle(
                 color: cs.onSurfaceVariant,
                 fontWeight: FontWeight.w700,
@@ -168,11 +169,13 @@ class TaxistaServiciosTab extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 10),
             child: ListTile(
               leading: Icon(Icons.people_alt_outlined, color: cs.primary),
-              title: const Text(
-                'Mis viajes por cupos',
-                style: TextStyle(fontWeight: FontWeight.w600),
+              title: Text(
+                PoolsProductoCopy.salidasMis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: const Text('Ver ocupación, pagos y reservas'),
+              subtitle: Text(
+                'Giras, excursiones y grupos · cupos y reservas',
+              ),
               trailing: Icon(Icons.chevron_right, color: cs.outline),
               onTap: () {
                 Navigator.push(
@@ -188,11 +191,13 @@ class TaxistaServiciosTab extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 10),
             child: ListTile(
               leading: Icon(Icons.add_circle_outline, color: cs.primary),
-              title: const Text(
-                'Crear viaje por cupos',
-                style: TextStyle(fontWeight: FontWeight.w600),
+              title: Text(
+                PoolsProductoCopy.publicarTitulo,
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: const Text('Consular o Tour, ida o ida/vuelta'),
+              subtitle: Text(
+                PoolsProductoCopy.tipos,
+              ),
               trailing: Icon(Icons.chevron_right, color: cs.outline),
               onTap: () {
                 Navigator.push(

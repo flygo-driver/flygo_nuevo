@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.flygo.rd2",
+      "sha256_cert_fingerprints": [
+        "B2:96:02:F1:7C:56:2B:10:4D:32:BA:D4:0A:B0:68:96:F2:4F:3D:58:6F:A0:2A:6C:47:73:33:FB:90:84:25:6E"
+      ]
+    }
+  }
+]

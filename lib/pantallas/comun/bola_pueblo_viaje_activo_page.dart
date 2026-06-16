@@ -1,6 +1,7 @@
 // Pantalla dedicada: mapa + pasos de viaje (acordada / en curso) sin el tablero completo.
 // Reutiliza los mismos widgets que la tarjeta del tablero; no cambia reglas ni repositorio.
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,9 +10,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
@@ -284,7 +286,10 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
               right: 18,
             ).bottom;
 
-            return Scaffold(
+            return _BolaEspejoPoolAutoNavListener(
+              viajeEspejoId: viajeEspejoId,
+              esClienteAsignado: soyClienteAsignado,
+              child: Scaffold(
               backgroundColor: c.bgDeep,
               appBar: AppBar(
                 backgroundColor: c.appBarScrim,
@@ -1037,14 +1042,31 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                               child: FilledButton.icon(
                                                 style: BolaPuebloUi.filledPrimary,
                                                 onPressed: () {
-                                                  Navigator.of(context).push(
-                                                    MaterialPageRoute<void>(
-                                                      builder: (_) =>
-                                                          soyTaxistaAsignado
-                                                              ? const ViajeEnCursoTaxista()
-                                                              : const ViajeEnCursoCliente(),
-                                                    ),
-                                                  );
+                                                  final NavigatorState? nav =
+                                                      NavigationService
+                                                              .navigatorKey
+                                                              .currentState ??
+                                                          Navigator.of(context,
+                                                              rootNavigator:
+                                                                  true);
+                                                  if (soyTaxistaAsignado) {
+                                                    unawaited(
+                                                      nav?.push<void>(
+                                                        MaterialPageRoute<
+                                                            void>(
+                                                          builder: (_) =>
+                                                              const ViajeEnCursoTaxista(),
+                                                        ),
+                                                      ),
+                                                    );
+                                                  } else {
+                                                    unawaited(
+                                                      NavigationService
+                                                          .clearAndGoViajeEnCursoCliente(
+                                                        preNav: nav,
+                                                      ),
+                                                    );
+                                                  }
                                                 },
                                                 icon: const Icon(
                                                     Icons.local_taxi_rounded,
@@ -1218,10 +1240,106 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                 ],
               ),
               ),
+            ),
             );
           },
         );
       },
     );
   }
+}
+
+/// Cliente en Bola: al pasar el viaje espejo a pool activo, abre mapa sin pulsar botón.
+class _BolaEspejoPoolAutoNavListener extends StatefulWidget {
+  const _BolaEspejoPoolAutoNavListener({
+    required this.viajeEspejoId,
+    required this.esClienteAsignado,
+    required this.child,
+  });
+
+  final String viajeEspejoId;
+  final bool esClienteAsignado;
+  final Widget child;
+
+  @override
+  State<_BolaEspejoPoolAutoNavListener> createState() =>
+      _BolaEspejoPoolAutoNavListenerState();
+}
+
+class _BolaEspejoPoolAutoNavListenerState
+    extends State<_BolaEspejoPoolAutoNavListener> {
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _espejoSub;
+  String? _escuchandoViajeId;
+  bool _navegacionMapaPoolEnCurso = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sincronizarListenerEspejo();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BolaEspejoPoolAutoNavListener oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.viajeEspejoId != widget.viajeEspejoId ||
+        oldWidget.esClienteAsignado != widget.esClienteAsignado) {
+      _sincronizarListenerEspejo();
+    }
+  }
+
+  void _sincronizarListenerEspejo() {
+    final String vid = widget.viajeEspejoId.trim();
+    if (!widget.esClienteAsignado || vid.isEmpty || _navegacionMapaPoolEnCurso) {
+      _espejoSub?.cancel();
+      _espejoSub = null;
+      _escuchandoViajeId = null;
+      return;
+    }
+    if (_escuchandoViajeId == vid && _espejoSub != null) return;
+    _espejoSub?.cancel();
+    _escuchandoViajeId = vid;
+    _espejoSub = FirebaseFirestore.instance
+        .collection('viajes')
+        .doc(vid)
+        .snapshots()
+        .listen(_onEspejoPoolSnap, onError: (_) {});
+  }
+
+  void _onEspejoPoolSnap(DocumentSnapshot<Map<String, dynamic>> snap) {
+    if (_navegacionMapaPoolEnCurso || !mounted || !widget.esClienteAsignado) {
+      return;
+    }
+    if (!snap.exists) return;
+    final Map<String, dynamic> vd = snap.data() ?? <String, dynamic>{};
+    if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(vd)) {
+      return;
+    }
+    _navegacionMapaPoolEnCurso = true;
+    _espejoSub?.cancel();
+    _espejoSub = null;
+    _escuchandoViajeId = null;
+    final NavigatorState? preNav =
+        NavigationService.navigatorKey.currentState;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _navegacionMapaPoolEnCurso = false;
+        return;
+      }
+      unawaited(
+        NavigationService.clearAndGoViajeEnCursoCliente(preNav: preNav)
+            .whenComplete(() {
+          if (mounted) _navegacionMapaPoolEnCurso = false;
+        }),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _espejoSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

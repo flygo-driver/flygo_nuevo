@@ -13,6 +13,7 @@ import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 /// Sesión local nula o el callable no recibió identidad (p. ej. token caducado).
@@ -21,7 +22,14 @@ class SessionExpiredForTrip implements Exception {
 
   @override
   String toString() =>
-      'Tu sesión expiró, inicia sesión nuevamente.';
+      'No pudimos confirmar tu sesión. Inténtalo de nuevo.';
+}
+
+/// Resultado de [ViajeData.calificarViajeSeguro].
+class CalificarViajeResult {
+  const CalificarViajeResult({required this.alreadyRated});
+
+  final bool alreadyRated;
 }
 
 class ViajeData {
@@ -1108,15 +1116,8 @@ class ViajeData {
       }
       final bool disponible = (u['disponible'] ?? false) == true;
       if (!disponible) throw Exception('No disponible para aceptar viajes.');
-      final String docsEstado =
-          (u['docsEstado'] ?? '').toString().toLowerCase().trim();
-      final bool documentosCompletos =
-          (u['documentosCompletos'] ?? false) == true;
-      final bool aprobado = documentosCompletos ||
-          docsEstado == 'aprobado' ||
-          docsEstado == 'verificado' ||
-          docsEstado == 'ok';
-      if (!aprobado) throw Exception('Documentos pendientes.');
+      final rechazo = taxistaRechazoAceptarViajePool(u);
+      if (rechazo != null) throw Exception('Taxista no apto: $rechazo');
 
       tx.update(viajesRef, <String, dynamic>{
         'taxistaId': uidTaxista,
@@ -1328,7 +1329,7 @@ class ViajeData {
   }
 
   /// Persistencia vía Cloud Function [submitTripRating]: Admin SDK, compatible con reglas Firestore.
-  static Future<void> calificarViajeSeguro({
+  static Future<CalificarViajeResult> calificarViajeSeguro({
     required String viajeId,
     required String uidCliente,
     required num calificacion,
@@ -1342,17 +1343,12 @@ class ViajeData {
     if (user.uid != uidCliente) {
       throw Exception('Sesión no coincide con el usuario.');
     }
-    try {
-      await user.reload();
-    } catch (_) {}
-    // Callable envía el ID token; si expiró, el backend responde unauthenticated.
-    await user.getIdToken(true);
 
-    final HttpsCallable callable = FirebaseFunctions.instanceFor(
-      region: 'us-central1',
-    ).httpsCallable('submitTripRating');
+    Future<CalificarViajeResult> invocar(User u) async {
+      final HttpsCallable callable = FirebaseFunctions.instanceFor(
+        region: 'us-central1',
+      ).httpsCallable('submitTripRating');
 
-    try {
       final HttpsCallableResult<dynamic> res = await callable.call(
         <String, dynamic>{
           'viajeId': viajeId,
@@ -1369,12 +1365,29 @@ class ViajeData {
             map['error']?.toString() ?? 'No se pudo guardar la calificación.',
           );
         }
+        return CalificarViajeResult(
+          alreadyRated: map['alreadyRated'] == true,
+        );
       }
+      return const CalificarViajeResult(alreadyRated: false);
+    }
+
+    try {
+      try {
+        await user.getIdToken(false);
+      } catch (_) {}
+      return await invocar(user);
     } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'unauthenticated') {
+        try {
+          await user.getIdToken(true);
+          return await invocar(user);
+        } catch (_) {
+          throw const SessionExpiredForTrip();
+        }
+      }
       final String msg = (e.message ?? '').trim();
       switch (e.code) {
-        case 'unauthenticated':
-          throw const SessionExpiredForTrip();
         case 'permission-denied':
           throw Exception(
               msg.isNotEmpty ? msg : 'No puedes calificar este viaje.');

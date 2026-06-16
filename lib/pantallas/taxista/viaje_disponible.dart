@@ -21,6 +21,8 @@ import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/disponibilidad_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/bola_pueblo_disponible_tab.dart';
@@ -29,9 +31,11 @@ import 'package:flygo_nuevo/pantallas/taxista/detalle_viaje.dart';
 import 'package:flygo_nuevo/widgets/cliente_perfil_conductor_chip.dart';
 import 'package:flygo_nuevo/widgets/empty_trips_widget.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/widgets/rai_linear_loading_body.dart';
 import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
+import 'package:flygo_nuevo/widgets/rai_pool_offline_hint.dart';
+import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/pantallas/taxista/completar_vehiculo_taxista.dart';
 
 class _Item {
   final Viaje v;
@@ -45,15 +49,73 @@ class _Item {
       this.distanciaKmPickup);
 }
 
+extension _PoolTaxistaTheme on BuildContext {
+  ({
+    Color scaffoldBg,
+    Color textPrimary,
+    Color textSecondary,
+    Color textMuted,
+    Color textFaint,
+    Color accent,
+    Color cardBg,
+    Color cardBorder,
+    Color chipBg,
+    Color chipBorder,
+    Color chipIcon,
+    Color panelBg,
+    Color panelBorder,
+  }) get _poolTaxistaPal {
+    final t = Theme.of(this);
+    final cs = t.colorScheme;
+    final isDark = t.brightness == Brightness.dark;
+    if (isDark) {
+      final accent = Colors.greenAccent;
+      return (
+        scaffoldBg: cs.surface,
+        textPrimary: cs.onSurface,
+        textSecondary: cs.onSurfaceVariant,
+        textMuted: cs.onSurfaceVariant,
+        textFaint: cs.onSurfaceVariant.withValues(alpha: 0.72),
+        accent: accent,
+        cardBg: cs.surfaceContainerHighest.withValues(alpha: 0.42),
+        cardBorder: accent.withValues(alpha: 0.45),
+        chipBg: cs.surfaceContainerLow,
+        chipBorder: cs.outlineVariant,
+        chipIcon: Colors.greenAccent,
+        panelBg: cs.surfaceContainerLow.withValues(alpha: 0.95),
+        panelBorder: cs.outlineVariant.withValues(alpha: 0.65),
+      );
+    }
+    // Modo claro: alto contraste tipo inDrive (fondo suave, cards blancas, texto oscuro).
+    return (
+      scaffoldBg: const Color(0xFFF2F4F7),
+      textPrimary: const Color(0xFF101828),
+      textSecondary: const Color(0xFF344054),
+      textMuted: const Color(0xFF475467),
+      textFaint: const Color(0xFF667085),
+      accent: const Color(0xFF059669),
+      cardBg: Colors.white,
+      cardBorder: const Color(0xFFD0D5DD),
+      chipBg: const Color(0xFFF9FAFB),
+      chipBorder: const Color(0xFFE4E7EC),
+      chipIcon: const Color(0xFF047857),
+      panelBg: Colors.white,
+      panelBorder: const Color(0xFFE4E7EC),
+    );
+  }
+}
+
 /// Carga del listado del pool: barra lineal de borde a borde (mismo patrón que pestaña BOLA / carga inicial).
 class _PoolEntradaLoading extends StatelessWidget {
   const _PoolEntradaLoading();
 
   @override
   Widget build(BuildContext context) {
-    return const RaiLinearLoadingBody(
-      backgroundColor: Color(0xFF090B10),
-      barColor: Colors.greenAccent,
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return RaiLinearLoadingBody(
+      backgroundColor: cs.surface,
+      barColor: isDark ? Colors.greenAccent : const Color(0xFF16A34A),
     );
   }
 }
@@ -66,12 +128,6 @@ class ViajeDisponible extends StatefulWidget {
 
 class _ViajeDisponibleState extends State<ViajeDisponible>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
-  static const TextStyle _kPoolClienteNombreStyle = TextStyle(
-    color: Colors.white70,
-    fontSize: 13,
-    fontWeight: FontWeight.w600,
-  );
-
   static const String _kDebtNotifLastTsKey = 'debt_notif_last_ts_v1';
   static const Duration _debtNotifCooldown = Duration(hours: 12);
   static const bool _diagTripFlow =
@@ -107,6 +163,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
   bool _usarFallbackSinIndiceAhora = false;
   bool _usarFallbackSinIndiceProg = false;
+
+  /// Modo pool según registro (`motor` vs carro). Se actualiza con el doc del usuario.
+  String _poolModoConductor = TaxistaPoolModoConductor.vehiculo;
 
   bool _ignorarPrimeraEmisionTimbreAhora = true;
   bool _ignorarPrimeraEmisionTimbreProg = true;
@@ -145,9 +204,13 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     Future.microtask(() => NotificationService.I.ensureInited());
     Future.microtask(() async {
+      await _bootstrapPoolModoConductor();
       await _probarIndices();
       _arrancarTimbres();
       if (mounted) setState(() {});
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      await _flushTimbreOfertasParaTab(_tabPool.index);
     });
 
     // 🔥 Cargar ubicación guardada inmediatamente
@@ -290,8 +353,12 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     }
   }
 
-  Future<void> _redirectToActiveTrip() async {
-    if (!mounted) return;
+  Future<void> _redirectToActiveTrip({NavigatorState? preNav}) async {
+    NavigatorState? nav = preNav ?? NavigationService.navigatorKey.currentState;
+    if (nav == null) {
+      if (!mounted) return;
+      nav = Navigator.of(context, rootNavigator: true);
+    }
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
       try {
@@ -307,16 +374,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               .get();
           final d = vs.data();
           if (d != null &&
-              ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(d)) {
+              ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
+                  d)) {
             return;
           }
         }
       } catch (_) {}
     }
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
-    );
+    await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: nav);
   }
 
   @override
@@ -383,7 +448,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     for (final d in snap.docs) {
       if (n >= maxDings) return;
       final data = d.data();
-      if (_usarFallbackSinIndiceAhora && !_pasaFiltroAhoraLocal(data)) {
+      if (!_pasaFiltroAhoraLocal(data)) {
         continue;
       }
       if (!_timbreMeInteresaViaje(data, myUid)) continue;
@@ -416,7 +481,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     for (final d in snap.docs) {
       if (n >= maxDings) return;
       final data = d.data();
-      if (_usarFallbackSinIndiceProg && !_pasaFiltroProgLocal(data)) {
+      if (!_pasaFiltroProgLocal(data)) {
         continue;
       }
       if (!_timbreMeInteresaViaje(data, myUid)) continue;
@@ -520,6 +585,22 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         .where('uidTaxista', isEqualTo: '');
   }
 
+  Future<void> _bootstrapPoolModoConductor() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final snap = await fs.FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get();
+      final modo =
+          ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(snap.data());
+      if (mounted && modo != _poolModoConductor) {
+        _poolModoConductor = modo;
+      }
+    } catch (_) {}
+  }
+
   Future<void> _probarIndices() async {
     try {
       await _qPoolAhora()
@@ -576,16 +657,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       // (posteriores) disparen timbre, sin notificar todo lo existente.
       if (_ignorarPrimeraEmisionTimbreAhora) {
         _ignorarPrimeraEmisionTimbreAhora = false;
-        for (final d in snap.docs) {
-          final data = d.data();
-          if (_usarFallbackSinIndiceAhora && !_pasaFiltroAhoraLocal(data)) {
-            continue;
-          }
-          if (!_timbreMeInteresaViaje(data, myUid)) continue;
-          if (!_esAhoraDesdeData(data)) continue;
-          if (_tabPool.index == 1) {
-            _vistosParaTimbre.add(_timbreClaveViaje(d.id, data, myUid));
-          }
+        if (_tabPool.index == 1) {
+          unawaited(_flushTimbreOfertasParaTab(1));
         }
         return;
       }
@@ -594,7 +667,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
       for (final d in snap.docs) {
         final data = d.data();
-        if (_usarFallbackSinIndiceAhora && !_pasaFiltroAhoraLocal(data)) {
+        if (!_pasaFiltroAhoraLocal(data)) {
           continue;
         }
         if (!_timbreMeInteresaViaje(data, myUid)) continue;
@@ -627,16 +700,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       // posteriores disparen sonido.
       if (_ignorarPrimeraEmisionTimbreProg) {
         _ignorarPrimeraEmisionTimbreProg = false;
-        for (final d in snap.docs) {
-          final data = d.data();
-          if (_usarFallbackSinIndiceProg && !_pasaFiltroProgLocal(data)) {
-            continue;
-          }
-          if (!_timbreMeInteresaViaje(data, myUid)) continue;
-          if (_esAhoraDesdeData(data)) continue;
-          if (_tabPool.index == 2) {
-            _vistosParaTimbre.add(_timbreClaveViaje(d.id, data, myUid));
-          }
+        if (_tabPool.index == 2) {
+          unawaited(_flushTimbreOfertasParaTab(2));
         }
         return;
       }
@@ -645,7 +710,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
       for (final d in snap.docs) {
         final data = d.data();
-        if (_usarFallbackSinIndiceProg && !_pasaFiltroProgLocal(data)) {
+        if (!_pasaFiltroProgLocal(data)) {
           continue;
         }
         if (!_timbreMeInteresaViaje(data, myUid)) continue;
@@ -676,12 +741,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
       if (_ignorarPrimeraEmisionTimbreBola) {
         _ignorarPrimeraEmisionTimbreBola = false;
-        for (final d in snap.docs) {
-          final m = d.data();
-          if (!_bolaDisparaTimbre(m, myUid)) continue;
-          if (_tabPool.index == 0) {
-            _vistosParaTimbre.add('bola_${d.id}');
-          }
+        if (_tabPool.index == 0) {
+          unawaited(_flushTimbreOfertasParaTab(0));
         }
         return;
       }
@@ -734,8 +795,16 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     }
   }
 
-  bool _disponibleParaMi(Map<String, dynamic> data, String myUid) {
-    return ViajePoolTaxistaGate.viajeTomableEnPool(data, myUid);
+  bool _disponibleParaMi(
+    Map<String, dynamic> data,
+    String myUid, {
+    String? poolModoConductor,
+  }) {
+    return ViajePoolTaxistaGate.viajeTomableEnPool(
+      data,
+      myUid,
+      poolModoConductor: poolModoConductor ?? _poolModoConductor,
+    );
   }
 
   bool _timbreViajeNoIgnorado(Map<String, dynamic> data, String myUid) {
@@ -761,9 +830,20 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   }
 
   /// Timbre de pool: viaje tomable **o** espejo Bola visible (misma ventana publicación/aceptación).
-  bool _timbreMeInteresaViaje(Map<String, dynamic> data, String myUid) {
+  bool _timbreMeInteresaViaje(
+    Map<String, dynamic> data,
+    String myUid, {
+    String? poolModoConductor,
+  }) {
     if (!_timbreViajeNoIgnorado(data, myUid)) return false;
-    if (ViajePoolTaxistaGate.viajeTomableEnPool(data, myUid)) return true;
+    final modo = poolModoConductor ?? _poolModoConductor;
+    if (ViajePoolTaxistaGate.viajeTomableEnPool(
+      data,
+      myUid,
+      poolModoConductor: modo,
+    )) {
+      return true;
+    }
     return _esViajeEspejoBolaEnVentana(data, myUid);
   }
 
@@ -892,6 +972,31 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       );
       return;
     }
+    try {
+      final usr = await fs.FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(taxista.uid)
+          .get();
+      final uData = usr.data() ?? {};
+      if (!taxistaVehiculoPerfilCompleto(uData)) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Completa los datos de tu vehículo para aceptar viajes del pool.',
+            ),
+          ),
+        );
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => CompletarVehiculoTaxista(
+              onCompletado: () => Navigator.pop(context),
+            ),
+          ),
+        );
+        return;
+      }
+    } catch (_) {}
     if (!disponible) {
       if (!mounted) return;
       messenger.showSnackBar(
@@ -907,6 +1012,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     if (mounted) {
       setState(() => _aceptandoIds.add(v.id));
     }
+    NavigatorState? rootNav;
+    if (mounted) {
+      rootNav = NavigationService.navigatorKey.currentState;
+      rootNav ??= Navigator.of(context, rootNavigator: true);
+    }
+    ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
+    _navegandoAViajeActivo = true;
+    var navegoAViajeEnCurso = false;
 
     try {
       await ViajesRepo.ensureTaxistaLibre(taxista.uid);
@@ -920,8 +1033,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         placa: '',
       );
       if (kDebugMode) debugPrint('[claimTripWithReason] $res');
-
-      if (!mounted) return;
 
       if (res == 'ok') {
         await NotificationService.I.stopTimbre();
@@ -937,30 +1048,40 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           fs.SetOptions(merge: true),
         );
 
-        if (!mounted) return;
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('✅ Viaje aceptado. Redirigiendo...'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        if (mounted) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('✅ Viaje aceptado. Redirigiendo...'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
 
-        // 🔥 NUEVO: Redirigir a viaje en curso
-        await _redirectToActiveTrip();
+        navegoAViajeEnCurso = true;
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: v.id,
+          uidTaxista: taxista.uid,
+          preNav: rootNav,
+        );
         return;
       }
 
       if (res == 'taxista-ocupado') {
         await NotificationService.I.stopTimbre();
-        if (!mounted) return;
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Tienes un viaje activo. Redirigiendo...'),
-            backgroundColor: Colors.orangeAccent,
-          ),
+        if (mounted) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Tienes un viaje activo. Redirigiendo...'),
+              backgroundColor: Colors.orangeAccent,
+            ),
+          );
+        }
+        navegoAViajeEnCurso = true;
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: v.id,
+          uidTaxista: taxista.uid,
+          preNav: rootNav,
         );
-        // 🔥 NUEVO: Redirigir a viaje en curso
-        await _redirectToActiveTrip();
         return;
       }
 
@@ -971,12 +1092,19 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         );
         if (yaAsignado) {
           await NotificationService.I.stopTimbre();
-          if (!mounted) return;
-          messenger.showSnackBar(
-            const SnackBar(
-              content: Text('✅ Viaje tomado. Abriendo viaje en curso...'),
-              backgroundColor: Colors.green,
-            ),
+          if (mounted) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('✅ Viaje tomado. Abriendo viaje en curso...'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+          navegoAViajeEnCurso = true;
+          await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+            viajeId: v.id,
+            uidTaxista: taxista.uid,
+            preNav: rootNav,
           );
           return;
         }
@@ -1000,6 +1128,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             return 'Aún no se publica (publishAt en el futuro).';
           case 'reservado-otro':
             return 'Reservado por otro taxista.';
+          case 'tipo-servicio-no-coincide':
+            return _poolModoConductor == TaxistaPoolModoConductor.motor
+                ? 'Este viaje es de carro/taxi. Tu perfil es de motores.'
+                : 'Este viaje es de motores. Tu perfil es vehículo.';
           case 'taxista-ocupado':
             return 'Tienes un viaje activo. Finalízalo o cancélalo.';
           default:
@@ -1023,6 +1155,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         ),
       );
     } finally {
+      if (!navegoAViajeEnCurso) {
+        ActiveTripService.cancelarMantenimientoOverlayViaje();
+        _navegandoAViajeActivo = false;
+      }
       if (mounted) {
         setState(() => _aceptandoIds.remove(v.id));
       }
@@ -1059,7 +1195,15 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           'updatedAt': fs.FieldValue.serverTimestamp(),
           'actualizadoEn': fs.FieldValue.serverTimestamp(),
         }, fs.SetOptions(merge: true));
-        if (mounted) await _redirectToActiveTrip();
+        _navegandoAViajeActivo = true;
+        ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
+        final NavigatorState? preNav =
+            NavigationService.navigatorKey.currentState;
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: viajeId,
+          uidTaxista: uidTaxista,
+          preNav: preNav,
+        );
         return true;
       }
       return false;
@@ -1149,11 +1293,12 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     }
   }
 
-  Widget _clienteAvatar(String uidCliente) {
+  Widget _clienteAvatar(BuildContext context, String uidCliente) {
+    final pal = context._poolTaxistaPal;
     final fallback = CircleAvatar(
       radius: 20,
-      backgroundColor: Colors.white12,
-      child: const Icon(Icons.person, color: Colors.white70, size: 20),
+      backgroundColor: pal.chipBg,
+      child: Icon(Icons.person, color: pal.textSecondary, size: 20),
     );
 
     if (uidCliente.trim().isEmpty) return fallback;
@@ -1171,7 +1316,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         if (foto.isEmpty) return fallback;
         return CircleAvatar(
           radius: 20,
-          backgroundColor: Colors.white12,
+          backgroundColor: pal.chipBg,
           backgroundImage: NetworkImage(foto),
           onBackgroundImageError: (_, __) {},
         );
@@ -1180,14 +1325,20 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   }
 
   /// Solo el nombre (sin avatar); el avatar va aparte para no competir en ancho con badges de programado.
-  Widget _clienteNombreSolo(String uidCliente) {
+  Widget _clienteNombreSolo(BuildContext context, String uidCliente) {
+    final pal = context._poolTaxistaPal;
+    final style = TextStyle(
+      color: pal.textPrimary,
+      fontSize: 14,
+      fontWeight: FontWeight.w700,
+    );
     final String uid = uidCliente.trim();
     if (uid.isEmpty) {
-      return const Text(
+      return Text(
         'Cliente',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: _kPoolClienteNombreStyle,
+        style: style,
       );
     }
     return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
@@ -1207,31 +1358,35 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           nombre,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: _kPoolClienteNombreStyle,
+          style: style,
         );
       },
     );
   }
 
-  Color _getColorDisponibilidad(DateTime acceptAfter, bool esAhora) {
-    if (esAhora) return Colors.greenAccent;
+  Color _getColorDisponibilidad(BuildContext context, DateTime acceptAfter, bool esAhora) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (esAhora) {
+      return isDark ? Colors.greenAccent : const Color(0xFF047857);
+    }
     final ahora = DateTime.now();
     final minutosFaltantes = acceptAfter.difference(ahora).inMinutes;
     if (minutosFaltantes > 0) {
-      return Colors.orangeAccent;
-    } else {
-      return Colors.greenAccent;
+      return isDark ? Colors.orangeAccent : const Color(0xFFC2410C);
     }
+    return isDark ? Colors.greenAccent : const Color(0xFF047857);
   }
 
-  Widget _badgeModo({
+  Widget _badgeModo(
+    BuildContext context, {
     required bool esAhora,
     required DateTime fecha,
     required bool estaLiberado,
     required DateTime acceptAfter,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final icon = esAhora ? Icons.flash_on : Icons.schedule;
-    final color = esAhora ? Colors.greenAccent : Colors.orangeAccent;
+    final color = _getColorDisponibilidad(context, acceptAfter, esAhora);
 
     String txt;
     if (esAhora) {
@@ -1245,19 +1400,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: Color.fromRGBO(
-          esAhora ? 0 : 255,
-          esAhora ? 255 : 165,
-          0,
-          0.12,
-        ),
+        color: color.withValues(alpha: isDark ? 0.12 : 0.10),
         border: Border.all(
-          color: Color.fromRGBO(
-            esAhora ? 0 : 255,
-            esAhora ? 255 : 165,
-            0,
-            0.7,
-          ),
+          color: color.withValues(alpha: isDark ? 0.7 : 0.55),
         ),
         borderRadius: BorderRadius.circular(20),
       ),
@@ -1280,119 +1425,139 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     );
   }
 
-  Widget _chipInfo(IconData icon, String text, {Color color = Colors.white70}) {
+  Widget _chipInfo(
+    BuildContext context,
+    IconData icon,
+    String text, {
+    Color? color,
+  }) {
+    final pal = context._poolTaxistaPal;
+    final chipColor = color ?? pal.textPrimary;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color.fromRGBO(255, 255, 255, 0.06),
-        border: Border.all(color: Colors.white24),
+        color: pal.chipBg,
+        border: Border.all(color: pal.chipBorder),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: color),
+          Icon(icon, size: 14, color: color ?? pal.chipIcon),
           const SizedBox(width: 6),
-          Text(text, style: TextStyle(color: color)),
+          Text(text, style: TextStyle(color: chipColor, fontSize: 12.5, fontWeight: FontWeight.w600)),
         ],
       ),
     );
   }
 
-  Widget _bannerNoDisponible() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color.fromRGBO(255, 152, 0, 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: const Color.fromRGBO(255, 152, 0, 0.5),
-        ),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.info_outline, color: Colors.orangeAccent),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Estás en "No disponible". No podrás aceptar viajes del pool ni operar en Bola Ahorro hasta activarlo.',
+  Widget _buildPoolVehiculoIncompletoPlaceholder(BuildContext context) {
+    final pal = context._poolTaxistaPal;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.directions_car_outlined, size: 56, color: pal.accent),
+            const SizedBox(height: 16),
+            Text(
+              'Completa tu vehículo',
+              textAlign: TextAlign.center,
               style: TextStyle(
-                color: isDark ? Colors.white70 : const Color(0xFF374151),
+                color: pal.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Acceso directo al pool turístico (misma regla que Servicios: solo si adm aprobó).
-  Widget _shortcutPoolTurismoSiAprobado(User u) {
-    return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
-      stream: fs.FirebaseFirestore.instance
-          .collection('choferes_turismo')
-          .doc(u.uid)
-          .snapshots(),
-      builder: (context, snap) {
-        final d = snap.data?.data();
-        final estado = (d?['estado'] ?? '').toString().trim().toLowerCase();
-        final ok = estado == 'aprobado' || estado == 'activo';
-        if (!ok) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-          child: Material(
-            color: const Color(0xFF4A148C).withValues(alpha: 0.35),
-            borderRadius: BorderRadius.circular(12),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const PoolTurismoTaxista(),
+            const SizedBox(height: 10),
+            Text(
+              'Placa, modelo, año, color y foto. Luego podrás ver y aceptar viajes aquí. '
+              'Mientras tanto puedes usar Cuenta y Mis pagos.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: pal.textSecondary, height: 1.35),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => CompletarVehiculoTaxista(
+                      onCompletado: () => Navigator.pop(context),
+                    ),
                   ),
                 );
               },
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.tour, color: Colors.purple.shade100, size: 22),
-                    const SizedBox(width: 10),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Pool turístico',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                            ),
-                          ),
-                          Text(
-                            'Viajes liberados por administración',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, color: Colors.white54),
-                  ],
-                ),
+              icon: const Icon(Icons.edit_road),
+              label: const Text('Completar vehículo'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Solo cuando el conductor está en «No disponible» (sin card estática de pool).
+  Widget _bannerNoDisponiblePool({
+    required bool disponible,
+    required bool disponibilidadCargando,
+  }) {
+    if (disponibilidadCargando || disponible) {
+      return const SizedBox.shrink();
+    }
+    final pal = context._poolTaxistaPal;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color.fromRGBO(255, 152, 0, 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color.fromRGBO(255, 152, 0, 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.pause_circle_outline, color: pal.accent, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'No disponible — actívalo en Cuenta para recibir viajes del pool.',
+              style: TextStyle(
+                color: pal.textSecondary,
+                fontSize: 12,
+                height: 1.3,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
-        );
-      },
+        ],
+      ),
+    );
+  }
+
+  /// Cabecera del pool (scrollable): saldo y avisos operativos.
+  Widget _buildPoolScrollHeader({
+    required String uidTaxista,
+    required bool bloqueadoPago,
+    required bool deudaSemanal,
+    required bool disponible,
+    required bool disponibilidadCargando,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _SaldoRecargaPoolBanner(uidTaxista: uidTaxista),
+        const RaiPoolOfflineHint(),
+        if (bloqueadoPago)
+          _bannerBloqueoSemanal()
+        else if (deudaSemanal)
+          _bannerRecordatorioPagoSemanal(),
+        if (!bloqueadoPago)
+          _bannerNoDisponiblePool(
+            disponible: disponible,
+            disponibilidadCargando: disponibilidadCargando,
+          ),
+      ],
     );
   }
 
@@ -1451,83 +1616,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           ),
         ],
       ),
-    );
-  }
-
-  /// Saldo prepago en tiempo real para que el taxista sepa cuánto le queda.
-  Widget _bannerSaldoRecargaTiempoReal(String uidTaxista) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    const minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
-    return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
-      stream: fs.FirebaseFirestore.instance
-          .collection('billeteras_taxista')
-          .doc(uidTaxista)
-          .snapshots(),
-      builder: (context, snap) {
-        final data = snap.data?.data();
-        final saldo = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(data);
-        final disponible =
-            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(data);
-        final pendLegacy = PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
-        final legacyTope = PagosTaxistaRepo.bloqueoPorComisionLegacyTope(data);
-        final bloqueado =
-            PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(data);
-        final ultimaComisionCents = data?['ultimaComisionCents'];
-        final ultimaComisionRd = (ultimaComisionCents is num)
-            ? (ultimaComisionCents.toDouble() / 100.0)
-            : 0.0;
-        final viajesEstimados = ultimaComisionRd > 0
-            ? (disponible / ultimaComisionRd).floor().clamp(0, 9999)
-            : null;
-        final faltante = (minSaldo - disponible).clamp(0.0, double.infinity);
-
-        return Container(
-          width: double.infinity,
-          margin: const EdgeInsets.fromLTRB(16, 8, 16, 6),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: bloqueado
-                ? const Color.fromRGBO(244, 67, 54, 0.14)
-                : const Color.fromRGBO(33, 150, 243, 0.12),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: bloqueado
-                  ? const Color.fromRGBO(244, 67, 54, 0.65)
-                  : const Color.fromRGBO(33, 150, 243, 0.55),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                bloqueado ? Icons.warning_amber_rounded : Icons.account_balance_wallet_outlined,
-                color: bloqueado ? Colors.redAccent : Colors.lightBlueAccent,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  bloqueado
-                      ? (legacyTope
-                          ? 'Recarga BLOQUEADA: comisión legacy ${FormatosMoneda.rd(pendLegacy)} (tope RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}). '
-                              'Aunque el prepago muestre saldo, hay que bajar esa deuda: al aprobar una recarga, '
-                              'lo verificado paga primero legacy; el sobrante suma prepago. Prepago bruto: ${FormatosMoneda.rd(saldo)}; disponible p. comisión: ${FormatosMoneda.rd(disponible)}.'
-                          : 'Recarga BLOQUEADA. Prepago disponible para comisión: ${FormatosMoneda.rd(disponible)} '
-                              '(mín. RD\$${minSaldo.toStringAsFixed(0)}). Te faltan ${FormatosMoneda.rd(faltante)}. '
-                              'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.')
-                      : 'Saldo recarga en tiempo real: ${FormatosMoneda.rd(saldo)} (disponible p. comisión: ${FormatosMoneda.rd(disponible)}). '
-                          '${viajesEstimados == null ? '' : 'Estimado: ~$viajesEstimados viajes como el último antes de llegar al mínimo. '}'
-                          'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.',
-                  style: TextStyle(
-                    color: isDark ? Colors.white70 : const Color(0xFF374151),
-                    fontSize: 12.2,
-                    height: 1.35,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 
@@ -1683,38 +1771,38 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
   Widget _bannerFallback(bool usarFallback) {
     if (!usarFallback) return const SizedBox.shrink();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(16, 6, 16, 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color.fromRGBO(33, 150, 243, 0.12),
+        color: cs.primaryContainer.withValues(alpha: 0.85),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: const Color.fromRGBO(33, 150, 243, 0.5),
+          color: cs.primary.withValues(alpha: 0.35),
         ),
       ),
       child: Text(
-        'Modo sin índice: filtrando/ordenando en el dispositivo mientras el índice se crea.',
-        style: TextStyle(
-          color: isDark ? Colors.white70 : const Color(0xFF374151),
-        ),
+        'Sincronizando índice del pool (2–10 min). '
+        'Mientras tanto filtramos en el dispositivo.',
+        style: TextStyle(color: cs.onPrimaryContainer, fontSize: 12),
       ),
     );
   }
 
-  Color _getColorForTipoServicio(String tipoServicio) {
+  Color _getColorForTipoServicio(BuildContext context, String tipoServicio) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     switch (tipoServicio) {
       case 'motor':
-        return Colors.orange;
+        return isDark ? Colors.orange : const Color(0xFFEA580C);
       case 'turismo':
-        return Colors.purple;
+        return isDark ? Colors.purple : const Color(0xFF7C3AED);
       case 'bola_ahorro':
-        return const Color(0xFFFF8F00);
+        return isDark ? const Color(0xFFFF8F00) : const Color(0xFFD97706);
       case 'normal':
       default:
-        return Colors.greenAccent;
+        return isDark ? Colors.greenAccent : const Color(0xFF047857);
     }
   }
 
@@ -1746,28 +1834,31 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     }
   }
 
-  Widget _buildParadasWidget(Viaje v) {
+  Widget _buildParadasWidget(BuildContext context, Viaje v) {
     if (v.waypoints == null || v.waypoints!.isEmpty) {
       return const SizedBox.shrink();
     }
+
+    final pal = context._poolTaxistaPal;
 
     return Container(
       margin: const EdgeInsets.only(top: 8, bottom: 4),
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E),
+        color: pal.chipBg,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white24),
+        border: Border.all(color: pal.chipBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             '📍 Paradas intermedias:',
             style: TextStyle(
-                color: Colors.white70,
-                fontSize: 12,
-                fontWeight: FontWeight.w600),
+              color: pal.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 6),
           ...v.waypoints!.asMap().entries.map((entry) {
@@ -1780,13 +1871,16 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.flag_circle, size: 14, color: Colors.orangeAccent),
+                  Icon(Icons.flag_circle,
+                      size: 14, color: Colors.orangeAccent),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       '$index. $label',
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 13),
+                      style: TextStyle(
+                        color: pal.textSecondary,
+                        fontSize: 13,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1813,12 +1907,21 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     required bool esTabAhora,
     required double latTaxista,
     required double lonTaxista,
+    required String poolModoConductor,
+    bool nestedScrollChild = false,
   }) {
+    final scrollPhysics = nestedScrollChild
+        ? const ClampingScrollPhysics()
+        : null;
+    final scrollPrimary = !nestedScrollChild;
+
+    Widget poolTabFill(Widget child) => SizedBox.expand(child: child);
+
     return StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
       stream: stream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _PoolEntradaLoading();
+          return poolTabFill(const _PoolEntradaLoading());
         }
         if (snapshot.hasError) {
           final errorMsg = snapshot.error.toString().toLowerCase();
@@ -1838,7 +1941,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               });
               _arrancarTimbres();
             });
-            return const _PoolEntradaLoading();
+            return poolTabFill(const _PoolEntradaLoading());
           }
           // Evita falso "sin internet" cuando hay datos pero falló la query principal.
           // Si ya estamos en fallback y falla, mostramos vacío profesional en vez de error agresivo.
@@ -1857,12 +1960,22 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               });
               _arrancarTimbres();
             });
-            return const _PoolEntradaLoading();
+            return poolTabFill(const _PoolEntradaLoading());
           }
-          return EmptyTripsWidget(esTabAhora: esTabAhora);
+          return poolTabFill(
+            EmptyTripsWidget(
+              esTabAhora: esTabAhora,
+              poolModoConductor: poolModoConductor,
+            ),
+          );
         }
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return EmptyTripsWidget(esTabAhora: esTabAhora);
+          return poolTabFill(
+            EmptyTripsWidget(
+              esTabAhora: esTabAhora,
+              poolModoConductor: poolModoConductor,
+            ),
+          );
         }
 
         final docs = snapshot.data!.docs.toList();
@@ -1877,8 +1990,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         for (final d in docs) {
           final data = d.data();
 
-          if (usandoFallback && !filtroLocalSiFallback(data)) continue;
-          if (!_disponibleParaMi(data, myUid)) continue;
+          if (!filtroLocalSiFallback(data)) continue;
+          if (!_disponibleParaMi(
+            data,
+            myUid,
+            poolModoConductor: poolModoConductor,
+          )) {
+            continue;
+          }
 
           final v = Viaje.fromMap(d.id, Map<String, dynamic>.from(data));
 
@@ -1917,12 +2036,20 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           );
           _diag(
               'items empty tab=${esTabAhora ? "ahora" : "prog"} docs=${docs.length}');
-          return EmptyTripsWidget(esTabAhora: esTabAhora);
+          return poolTabFill(
+            EmptyTripsWidget(
+              esTabAhora: esTabAhora,
+              poolModoConductor: poolModoConductor,
+            ),
+          );
         }
         _diag(
             'items ready tab=${esTabAhora ? "ahora" : "prog"} count=${items.length}');
 
         items.sort((a, b) {
+          if (ordenarAscEnMemoria) {
+            return a.fecha.compareTo(b.fecha);
+          }
           final ad = a.distanciaKmPickup;
           final bd = b.distanciaKmPickup;
           if (ad != null && bd != null) {
@@ -1937,10 +2064,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         });
 
         return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+          primary: scrollPrimary,
+          physics: scrollPhysics,
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
           itemCount: items.length,
           separatorBuilder: (_, __) => const SizedBox(height: 4),
           itemBuilder: (context, index) {
+            final pal = context._poolTaxistaPal;
+            final isDark = Theme.of(context).brightness == Brightness.dark;
             final it = items[index];
             final v = it.v;
             final fecha = it.fecha;
@@ -1954,7 +2085,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             final String textoDisponibilidad =
                 _getTextoDisponibilidad(acceptAfter, esAhora);
             final Color colorDisponibilidad =
-                _getColorDisponibilidad(acceptAfter, esAhora);
+                _getColorDisponibilidad(context, acceptAfter, esAhora);
 
             final bool estaLiberado =
                 esAhora || !DateTime.now().isBefore(acceptAfter);
@@ -1972,30 +2103,31 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                 v.uidCliente.isNotEmpty ? v.uidCliente : v.clienteId;
 
             final Color servicioColor =
-                _getColorForTipoServicio(v.tipoServicio);
+                _getColorForTipoServicio(context, v.tipoServicio);
             final IconData servicioIcon =
                 _getIconForTipoServicio(v.tipoServicio);
             final String servicioLabel =
                 _getLabelForTipoServicio(v.tipoServicio);
 
-            final bool destacarCercano = index == 0 &&
+            final bool destacarCercano = esTabAhora &&
+                index == 0 &&
                 distanciaKmPickup != null &&
                 distanciaKmPickup <= 40.0;
             final Color bordeCard = v.waypoints != null && v.waypoints!.isNotEmpty
                 ? Colors.red.withValues(alpha: 0.7)
                 : destacarCercano
-                    ? Colors.greenAccent.withValues(alpha: 0.95)
+                    ? pal.accent.withValues(alpha: 0.95)
                     : v.tipoServicio == 'motor'
                         ? Colors.orange.withValues(alpha: 0.5)
-                        : Colors.white.withValues(alpha: 0.3);
+                        : pal.cardBorder;
             final double anchoBordeCard =
                 v.waypoints != null && v.waypoints!.isNotEmpty
                     ? 3
                     : (destacarCercano ? 3 : 2);
 
             return Card(
-              color: const Color(0xFF121826),
-              margin: const EdgeInsets.symmetric(vertical: 8),
+              color: pal.cardBg,
+              margin: const EdgeInsets.symmetric(vertical: 6),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
                 side: BorderSide(
@@ -2003,7 +2135,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                   width: anchoBordeCard,
                 ),
               ),
-              elevation: destacarCercano ? 10 : 4,
+              elevation: isDark ? (destacarCercano ? 10 : 4) : (destacarCercano ? 3 : 1),
+              shadowColor: isDark ? Colors.black : Colors.black26,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -2017,14 +2150,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                           children: [
                             Padding(
                               padding: const EdgeInsets.only(top: 2),
-                              child: _clienteAvatar(uidPoolCliente),
+                              child: _clienteAvatar(context, uidPoolCliente),
                             ),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  _clienteNombreSolo(uidPoolCliente),
+                                  _clienteNombreSolo(context, uidPoolCliente),
                                   if (uidPoolCliente.isNotEmpty) ...[
                                     const SizedBox(height: 6),
                                     ClientePerfilConductorChip(
@@ -2044,20 +2177,24 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                           labelPadding:
                                               const EdgeInsets.symmetric(
                                                   horizontal: 8),
-                                          backgroundColor: Colors.greenAccent
-                                              .withValues(alpha: 0.18),
-                                          side: const BorderSide(
-                                              color: Colors.greenAccent),
-                                          label: const Text(
+                                          backgroundColor: pal.accent
+                                              .withValues(alpha: isDark ? 0.18 : 0.12),
+                                          side: BorderSide(
+                                              color: pal.accent.withValues(
+                                                  alpha: isDark ? 1 : 0.65)),
+                                          label: Text(
                                             '📍 Más cercano',
                                             style: TextStyle(
-                                              color: Colors.greenAccent,
+                                              color: isDark
+                                                  ? Colors.greenAccent
+                                                  : pal.accent,
                                               fontSize: 11,
                                               fontWeight: FontWeight.w700,
                                             ),
                                           ),
                                         ),
                                       _badgeModo(
+                                        context,
                                         esAhora: esAhora,
                                         fecha: fecha,
                                         estaLiberado: estaLiberado,
@@ -2090,10 +2227,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                             "${_shortPlace(v.origen)} → ${_shortPlace(v.destino)}",
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w700,
-                              color: Colors.white,
+                              color: pal.textPrimary,
                             ),
                           ),
                         ),
@@ -2104,9 +2241,13 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
-                            color: servicioColor.withValues(alpha: 0.2),
+                            color: servicioColor.withValues(alpha: isDark ? 0.2 : 0.08),
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: servicioColor),
+                            border: Border.all(
+                              color: servicioColor.withValues(
+                                alpha: isDark ? 1 : 0.45,
+                              ),
+                            ),
                           ),
                           child: Row(
                             children: [
@@ -2134,41 +2275,49 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                     const SizedBox(height: 2),
                     Text(
                       DateFormat('EEE d MMM, HH:mm', 'es').format(fecha),
-                      style:
-                          const TextStyle(color: Colors.white38, fontSize: 12),
+                      style: TextStyle(
+                        color: pal.textMuted,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                    _buildParadasWidget(v),
+                    _buildParadasWidget(context, v),
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
                         _chipInfo(
+                          context,
                           Icons.near_me,
                           distanciaKmPickup != null
                               ? 'A ${distanciaKmPickup.toStringAsFixed(1)} km'
                               : 'Cercanía: sin ubicación de recogida',
                         ),
                         _chipInfo(
+                          context,
                           Icons.straighten,
                           "Recorrido: ${FormatosMoneda.km(distanciaKm)}",
                         ),
-                        _chipInfo(Icons.credit_card, v.metodoPago),
+                        _chipInfo(context, Icons.credit_card, v.metodoPago),
                         if (!esAhora)
                           _chipInfo(
+                            context,
                             Icons.event,
                             DateFormat('dd/MM HH:mm').format(fecha),
                           ),
                         if (v.tipoVehiculo.isNotEmpty &&
                             v.tipoServicio != 'motor')
-                          _chipInfo(Icons.local_taxi, v.tipoVehiculo),
+                          _chipInfo(context, Icons.local_taxi, v.tipoVehiculo),
                         if (v.extras != null && v.extras!['pasajeros'] != null)
                           _chipInfo(
+                            context,
                             Icons.people,
                             '${v.extras!['pasajeros']} pasajero${v.extras!['pasajeros'] != 1 ? 's' : ''}',
                           ),
                         if (!esAhora)
                           _chipInfo(
+                            context,
                             Icons.timer,
                             textoDisponibilidad,
                             color: colorDisponibilidad,
@@ -2182,10 +2331,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
+                              Text(
                                 "Total",
                                 style: TextStyle(
-                                  color: Colors.white70,
+                                  color: pal.textSecondary,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -2271,7 +2420,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                             style: ElevatedButton.styleFrom(
                               elevation: 0,
                               backgroundColor: const Color(0xFF16A34A),
-                              disabledBackgroundColor: Colors.white24,
+                              disabledBackgroundColor: isDark
+                                  ? Colors.white24
+                                  : const Color(0xFFE5E7EB),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -2414,10 +2565,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   }
 
   Widget _buildContenidoPrincipal(BuildContext context, Position pos, User u) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color pageBg =
-        isDark ? const Color(0xFF090B10) : const Color(0xFFE9EEF5);
-    const Color appBarBg = Color(0xFF10141C);
+    final pal = context._poolTaxistaPal;
+    final cs = Theme.of(context).colorScheme;
     final media = MediaQuery.of(context);
     final accesibilidad = media.textScaler.clamp(
       minScaleFactor: 1.08,
@@ -2435,20 +2584,28 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     return MediaQuery(
       data: media.copyWith(textScaler: accesibilidad),
       child: Scaffold(
-        backgroundColor: pageBg,
+        backgroundColor: pal.scaffoldBg,
         appBar: AppBar(
-          backgroundColor: appBarBg,
+          backgroundColor: cs.surface,
+          foregroundColor: cs.onSurface,
+          surfaceTintColor: cs.surfaceTint,
+          elevation: 0,
+          scrolledUnderElevation: 1,
           automaticallyImplyLeading: false,
           centerTitle: true,
           toolbarHeight: 56,
           title: const RaiHeaderLogo(height: 36),
-          iconTheme: IconThemeData(
-            color: Theme.of(context).appBarTheme.foregroundColor,
-          ),
-          actions: const [SaldoGananciasChip()],
+          iconTheme: IconThemeData(color: cs.onSurface),
+          actions: [
+            _PoolTurismoAppBarAction(uid: u.uid),
+            const SaldoGananciasChip(),
+          ],
           bottom: TabBar(
             controller: _tabPool,
-            indicatorColor: Colors.greenAccent,
+            indicatorColor: pal.accent,
+            labelColor: pal.accent,
+            unselectedLabelColor: pal.textMuted,
+            dividerColor: cs.outlineVariant.withValues(alpha: 0.45),
             tabs: const [
               Tab(text: 'BOLA'),
               Tab(text: 'AHORA'),
@@ -2471,9 +2628,21 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                 builder: (context, usrSnap) {
                   if (usrSnap.connectionState == ConnectionState.waiting &&
                       !usrSnap.hasData) {
-                    return RaiLinearLoadingBody(backgroundColor: pageBg);
+                    return RaiLinearLoadingBody(backgroundColor: pal.scaffoldBg);
                   }
                   final Map<String, dynamic>? uData = usrSnap.data?.data();
+                  if (uData != null && !taxistaVehiculoPerfilCompleto(uData)) {
+                    return _buildPoolVehiculoIncompletoPlaceholder(context);
+                  }
+                  final String poolModo =
+                      ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(uData);
+                  if (poolModo != _poolModoConductor) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      setState(() => _poolModoConductor = poolModo);
+                      _arrancarTimbres();
+                    });
+                  }
                   final Object debtKey = Object.hash(
                     uData?['tienePagoPendiente'] == true,
                     (uData?['updatedAt'] ?? '').toString(),
@@ -2500,84 +2669,87 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                         Future.microtask(
                             () => _notificarBloqueoPagoSiAplica(u.uid));
                       }
-                      return Column(
-                        children: [
-                          _bannerSaldoRecargaTiempoReal(u.uid),
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(12, 4, 12, 4),
-                            child: Text(
-                              'Tu próximo viaje se asignará automáticamente al cerrar el actual. '
-                              'Si falla la asignación, volverás a disponible y deberás aceptar otro desde el mapa.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white54,
-                                fontSize: 12,
-                                height: 1.35,
-                              ),
+                      if (bloqueadoPago) {
+                        return Column(
+                          children: [
+                            _buildPoolScrollHeader(
+                              uidTaxista: u.uid,
+                              bloqueadoPago: true,
+                              deudaSemanal: deudaSemanal,
+                              disponible: disponible,
+                              disponibilidadCargando: disponibilidadCargando,
                             ),
-                          ),
-                          if (bloqueadoPago)
-                            _bannerBloqueoSemanal()
-                          else if (deudaSemanal)
-                            _bannerRecordatorioPagoSemanal(),
-                          if (!bloqueadoPago &&
-                              !disponibilidadCargando &&
-                              !disponible)
-                            _bannerNoDisponible(),
-                          if (!bloqueadoPago)
                             _bannerFallback(
                               _usarFallbackSinIndiceAhora ||
                                   _usarFallbackSinIndiceProg,
                             ),
-                          if (!bloqueadoPago) _shortcutPoolTurismoSiAprobado(u),
-                          // Comisión efectivo ≥ RD$500: sin TabBarView (BOLA + AHORA + PROGRAMADOS).
+                            Expanded(
+                              child: _panelBloqueoConOpcionesPago(
+                                deudaSemanal: deudaSemanal,
+                                deudaComision: deudaComision,
+                              ),
+                            ),
+                          ],
+                        );
+                      }
+                      final bool usarFallbackIndice =
+                          _usarFallbackSinIndiceAhora ||
+                              _usarFallbackSinIndiceProg;
+                      return Column(
+                        children: [
+                          _buildPoolScrollHeader(
+                            uidTaxista: u.uid,
+                            bloqueadoPago: false,
+                            deudaSemanal: deudaSemanal,
+                            disponible: disponible,
+                            disponibilidadCargando:
+                                disponibilidadCargando,
+                          ),
+                          _bannerFallback(usarFallbackIndice),
                           Expanded(
-                            child: bloqueadoPago
-                                ? _panelBloqueoConOpcionesPago(
-                                    deudaSemanal: deudaSemanal,
-                                    deudaComision: deudaComision,
-                                  )
-                                : TabBarView(
-                                    controller: _tabPool,
-                                    children: [
-                                      BolaPuebloDisponibleTab(
-                                        user: u,
-                                        disponible: disponible,
-                                        disponibilidadCargando:
-                                            disponibilidadCargando,
-                                      ),
-                                      _buildLista(
-                                        stream: streamAhora,
-                                        disponible: disponible,
-                                        disponibilidadCargando:
-                                            disponibilidadCargando,
-                                        myUid: u.uid,
-                                        filtroLocalSiFallback:
-                                            _pasaFiltroAhoraLocal,
-                                        ordenarAscEnMemoria: false,
-                                        usandoFallback:
-                                            _usarFallbackSinIndiceAhora,
-                                        esTabAhora: true,
-                                        latTaxista: pos.latitude,
-                                        lonTaxista: pos.longitude,
-                                      ),
-                                      _buildLista(
-                                        stream: streamProg,
-                                        disponible: disponible,
-                                        disponibilidadCargando:
-                                            disponibilidadCargando,
-                                        myUid: u.uid,
-                                        filtroLocalSiFallback:
-                                            _pasaFiltroProgLocal,
-                                        ordenarAscEnMemoria: true,
-                                        usandoFallback:
-                                            _usarFallbackSinIndiceProg,
-                                        esTabAhora: false,
-                                        latTaxista: pos.latitude,
-                                        lonTaxista: pos.longitude,
-                                      ),
-                                    ],
-                                  ),
+                            child: TabBarView(
+                              controller: _tabPool,
+                              children: [
+                                BolaPuebloDisponibleTab(
+                                  user: u,
+                                  disponible: disponible,
+                                  disponibilidadCargando:
+                                      disponibilidadCargando,
+                                ),
+                                _buildLista(
+                                  stream: streamAhora,
+                                  disponible: disponible,
+                                  disponibilidadCargando:
+                                      disponibilidadCargando,
+                                  myUid: u.uid,
+                                  filtroLocalSiFallback:
+                                      _pasaFiltroAhoraLocal,
+                                  ordenarAscEnMemoria: false,
+                                  usandoFallback:
+                                      _usarFallbackSinIndiceAhora,
+                                  esTabAhora: true,
+                                  latTaxista: pos.latitude,
+                                  lonTaxista: pos.longitude,
+                                  poolModoConductor: poolModo,
+                                ),
+                                _buildLista(
+                                  stream: streamProg,
+                                  disponible: disponible,
+                                  disponibilidadCargando:
+                                      disponibilidadCargando,
+                                  myUid: u.uid,
+                                  filtroLocalSiFallback:
+                                      _pasaFiltroProgLocal,
+                                  ordenarAscEnMemoria: true,
+                                  usandoFallback:
+                                      _usarFallbackSinIndiceProg,
+                                  esTabAhora: false,
+                                  latTaxista: pos.latitude,
+                                  lonTaxista: pos.longitude,
+                                  poolModoConductor: poolModo,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       );
@@ -2588,6 +2760,187 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             },
           ),
         ),
+    );
+  }
+}
+
+/// Saldo prepago: una línea por defecto; tap para desplegar el detalle completo.
+class _SaldoRecargaPoolBanner extends StatefulWidget {
+  const _SaldoRecargaPoolBanner({required this.uidTaxista});
+
+  final String uidTaxista;
+
+  @override
+  State<_SaldoRecargaPoolBanner> createState() =>
+      _SaldoRecargaPoolBannerState();
+}
+
+class _SaldoRecargaPoolBannerState extends State<_SaldoRecargaPoolBanner> {
+  bool _expandido = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
+    return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
+      stream: fs.FirebaseFirestore.instance
+          .collection('billeteras_taxista')
+          .doc(widget.uidTaxista)
+          .snapshots(),
+      builder: (context, snap) {
+        final data = snap.data?.data();
+        final saldo = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(data);
+        final disponible =
+            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(data);
+        final pendLegacy =
+            PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
+        final legacyTope = PagosTaxistaRepo.bloqueoPorComisionLegacyTope(data);
+        final bloqueado =
+            PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(data);
+        final ultimaComisionCents = data?['ultimaComisionCents'];
+        final ultimaComisionRd = (ultimaComisionCents is num)
+            ? (ultimaComisionCents.toDouble() / 100.0)
+            : 0.0;
+        final viajesEstimados = ultimaComisionRd > 0
+            ? (disponible / ultimaComisionRd).floor().clamp(0, 9999)
+            : null;
+        final faltante = (minSaldo - disponible).clamp(0.0, double.infinity);
+
+        final resumen = bloqueado
+            ? 'Recarga bloqueada · disp. ${FormatosMoneda.rd(disponible)}'
+            : 'Prepago ${FormatosMoneda.rd(saldo)} · disp. ${FormatosMoneda.rd(disponible)}';
+
+        final detalle = bloqueado
+            ? (legacyTope
+                ? 'Recarga BLOQUEADA: comisión legacy ${FormatosMoneda.rd(pendLegacy)} (tope RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}). '
+                    'Prepago bruto: ${FormatosMoneda.rd(saldo)}; disponible p. comisión: ${FormatosMoneda.rd(disponible)}.'
+                : 'Recarga BLOQUEADA. Disponible p. comisión: ${FormatosMoneda.rd(disponible)} '
+                    '(mín. RD\$${minSaldo.toStringAsFixed(0)}). Te faltan ${FormatosMoneda.rd(faltante)}. '
+                    'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.')
+            : 'Saldo recarga: ${FormatosMoneda.rd(saldo)} (disponible p. comisión: ${FormatosMoneda.rd(disponible)}). '
+                '${viajesEstimados == null ? '' : 'Estimado: ~$viajesEstimados viajes como el último antes del mínimo. '}'
+                'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.';
+
+        final textColor = isDark
+            ? Colors.white.withValues(alpha: 0.88)
+            : const Color(0xFF1E3A8A);
+        final iconColor =
+            bloqueado ? Colors.redAccent : const Color(0xFF2563EB);
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => setState(() => _expandido = !_expandido),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(12, 4, 12, 2),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: bloqueado
+                    ? (isDark
+                        ? const Color.fromRGBO(244, 67, 54, 0.15)
+                        : const Color.fromRGBO(254, 226, 226, 1))
+                    : (isDark
+                        ? const Color.fromRGBO(33, 150, 243, 0.12)
+                        : const Color(0xFFEFF6FF)),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: bloqueado
+                      ? (isDark
+                          ? const Color.fromRGBO(244, 67, 54, 0.65)
+                          : const Color(0xFFF87171))
+                      : (isDark
+                          ? const Color.fromRGBO(33, 150, 243, 0.55)
+                          : const Color(0xFFBFDBFE)),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    bloqueado
+                        ? Icons.warning_amber_rounded
+                        : Icons.account_balance_wallet_outlined,
+                    color: iconColor,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _expandido ? detalle : resumen,
+                          style: TextStyle(
+                            color: textColor,
+                            fontSize: _expandido ? 12 : 12.5,
+                            height: 1.35,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    _expandido
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    color: textColor.withValues(alpha: 0.55),
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Pool turístico en la barra superior (solo choferes aprobados).
+class _PoolTurismoAppBarAction extends StatelessWidget {
+  const _PoolTurismoAppBarAction({required this.uid});
+
+  final String uid;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
+      stream: fs.FirebaseFirestore.instance
+          .collection('choferes_turismo')
+          .doc(uid)
+          .snapshots(),
+      builder: (context, snap) {
+        final d = snap.data?.data();
+        final estado = (d?['estado'] ?? '').toString().trim().toLowerCase();
+        final ok = estado == 'aprobado' || estado == 'activo';
+        if (!ok) return const SizedBox.shrink();
+        final color = isDark ? Colors.purple.shade200 : const Color(0xFF7E22CE);
+        return Padding(
+          padding: const EdgeInsets.only(right: 2),
+          child: IconButton(
+            tooltip: 'Pool turístico',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const PoolTurismoTaxista(),
+                ),
+              );
+            },
+            icon: Icon(Icons.tour_rounded, color: color),
+            style: IconButton.styleFrom(
+              backgroundColor: color.withValues(alpha: isDark ? 0.18 : 0.12),
+              foregroundColor: color,
+              minimumSize: const Size(40, 40),
+              padding: EdgeInsets.zero,
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -2607,6 +2960,9 @@ class _CountdownChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color chipColor =
+        isDark ? const Color(0xFF67E8F9) : const Color(0xFF0E7490);
     return StreamBuilder<DateTime>(
       stream: Stream<DateTime>.periodic(
         const Duration(seconds: 30),
@@ -2620,22 +2976,23 @@ class _CountdownChip extends StatelessWidget {
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-            color: const Color.fromRGBO(0, 255, 255, 0.12),
+            color: chipColor.withValues(alpha: isDark ? 0.12 : 0.10),
             border: Border.all(
-              color: const Color.fromRGBO(0, 255, 255, 0.7),
+              color: chipColor.withValues(alpha: isDark ? 0.7 : 0.45),
             ),
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.timer, size: 14, color: Colors.cyanAccent),
+              Icon(Icons.timer, size: 14, color: chipColor),
               const SizedBox(width: 6),
               Text(
                 '$label $txt',
-                style: const TextStyle(
-                  color: Colors.cyanAccent,
+                style: TextStyle(
+                  color: chipColor,
                   fontWeight: FontWeight.w600,
+                  fontSize: 12,
                 ),
               ),
             ],

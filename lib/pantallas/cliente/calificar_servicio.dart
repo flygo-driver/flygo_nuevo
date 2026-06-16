@@ -4,7 +4,7 @@ import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/pantallas/cliente/reportar_viaje.dart';
-import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/widgets/taxista_perfil_post_viaje_card.dart';
 
 class CalificarServicio extends StatefulWidget {
   final Viaje viaje;
@@ -26,14 +26,21 @@ class _CalificarServicioState extends State<CalificarServicio> {
     super.dispose();
   }
 
-  void _msg(String text) {
+  void _msg(String text, {Color? bg}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: bg ?? Colors.green.shade800,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _onTapStar(int index) {
-    if (widget.viaje.calificado == true) return; // bloqueo si ya calificado
-    setState(() => _calificacion = (index + 1).toDouble()); // 1..5
+    if (widget.viaje.calificado == true) return;
+    setState(() => _calificacion = (index + 1).toDouble());
   }
 
   Future<void> _guardarCalificacion() async {
@@ -41,13 +48,13 @@ class _CalificarServicioState extends State<CalificarServicio> {
     FocusScope.of(context).unfocus();
 
     final user = FirebaseAuth.instance.currentUser ??
-        await resolveFirebaseUser();
+        await resolveFirebaseUser(timeout: const Duration(seconds: 8));
     if (user == null) {
       if (!mounted) return;
-      _msg('Tu sesión expiró, inicia sesión nuevamente.');
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        await NavigationService.clearToAuthGate();
-      });
+      _msg(
+        'Espera un momento e inténtalo de nuevo.',
+        bg: Colors.orange.shade900,
+      );
       return;
     }
     if (widget.viaje.calificado == true) {
@@ -60,25 +67,27 @@ class _CalificarServicioState extends State<CalificarServicio> {
     setState(() => _cargando = true);
 
     try {
-      await ViajeData.calificarViajeSeguro(
+      final CalificarViajeResult res = await ViajeData.calificarViajeSeguro(
         viajeId: widget.viaje.id,
         uidCliente: user.uid,
         calificacion: _calificacion.clamp(1, 5).toDouble(),
         comentario: _comentarioController.text.trim(),
       );
 
-      _msg('¡Gracias por tu calificación!');
+      _msg(
+        res.alreadyRated
+            ? 'Este viaje ya estaba calificado.'
+            : '¡Conductor calificado! Gracias — tu opinión llegó al equipo RAI.',
+      );
       if (mounted) nav.pop(true);
     } on SessionExpiredForTrip catch (_) {
-      _msg('Tu sesión expiró, inicia sesión nuevamente.');
-      if (mounted) {
-        setState(() => _cargando = false);
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          await NavigationService.clearToAuthGate();
-        });
-      }
+      _msg(
+        'No pudimos enviar la calificación. Comprueba tu conexión e inténtalo de nuevo.',
+        bg: Colors.orange.shade900,
+      );
+      if (mounted) setState(() => _cargando = false);
     } catch (e) {
-      _msg('Error al guardar calificación: $e');
+      _msg('Error al guardar calificación: $e', bg: Colors.red.shade900);
       if (mounted) setState(() => _cargando = false);
     }
   }
@@ -98,7 +107,6 @@ class _CalificarServicioState extends State<CalificarServicio> {
         : const Color(0xFFF1F5F9);
 
     return PopScope(
-      // Bloquea el "atrás" mientras está guardando
       canPop: !_cargando,
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -108,7 +116,7 @@ class _CalificarServicioState extends State<CalificarServicio> {
           iconTheme: IconThemeData(color: theme.appBarTheme.foregroundColor),
           elevation: theme.appBarTheme.elevation ?? 0,
           title: Text(
-            'Calificar Servicio',
+            'Calificar conductor',
             style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.bold,
@@ -122,6 +130,14 @@ class _CalificarServicioState extends State<CalificarServicio> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (v.uidTaxista.isNotEmpty) ...[
+                  TaxistaPerfilPostViajeCard(
+                    uidTaxista: v.uidTaxista,
+                    nombreFallback: v.nombreTaxista,
+                    fondoOscuro: isDark,
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 if (v.origen.isNotEmpty || v.destino.isNotEmpty) ...[
                   Text(
                     '🧭 ${v.origen} → ${v.destino}',
@@ -151,7 +167,6 @@ class _CalificarServicioState extends State<CalificarServicio> {
                 ),
                 const SizedBox(height: 16),
 
-                // Estrellas táctiles
                 Row(
                   children: List.generate(5, (i) {
                     final filled = _calificacion >= i + 1;
@@ -177,7 +192,6 @@ class _CalificarServicioState extends State<CalificarServicio> {
 
                 const SizedBox(height: 16),
 
-                // Slider sincronizado
                 Slider(
                   value: _calificacion,
                   min: 1,

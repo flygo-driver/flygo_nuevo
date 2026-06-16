@@ -9,11 +9,9 @@ import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/modelo/chofer_turismo.dart';
-import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -203,17 +201,23 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     );
   }
 
+  bool _viajeOperativoParaMapa(Map<String, dynamic> data) {
+    if (data['completado'] == true) return false;
+    final String st =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    return !EstadosViaje.esTerminal(st);
+  }
+
   void _programarNavegacionViajeActivo(BuildContext context) {
     if (_navegacionViajeActivoProgramada) return;
     _navegacionViajeActivoProgramada = true;
     _navegarViajeActivoTimer?.cancel();
+    final NavigatorState? navRoot =
+        Navigator.of(context, rootNavigator: true);
     _navegarViajeActivoTimer = Timer(const Duration(milliseconds: 2600), () {
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (BuildContext innerContext) => const ViajeEnCursoCliente(),
-        ),
+      unawaited(
+        NavigationService.clearAndGoViajeEnCursoCliente(preNav: navRoot),
       );
     });
   }
@@ -225,13 +229,11 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     _ultimoDataViaje = data;
     final String taxistaId =
         (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
-    final String estado = (data['estado'] ?? '').toString();
-    final String estadoNorm = EstadosViaje.normalizar(estado);
 
     if (taxistaId.isNotEmpty) {
       _ensureChoferAsignadoUbicacionStream(taxistaId);
       _notificarAsignacionChofer(context, data);
-      if (EstadosViaje.activos.contains(estadoNorm)) {
+      if (_viajeOperativoParaMapa(data)) {
         _programarNavegacionViajeActivo(context);
       }
     } else {
@@ -1189,9 +1191,9 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
           if (EstadosViaje.esCompletado(estado)) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) unawaited(_navegarFacturaPostCompletado());
+              if (mounted) unawaited(_navegarPostViajeCompletado());
             });
-            return _buildCompletadoState(navegandoFactura: _postCompletadoEnCurso);
+            return _buildCompletadoState(navegandoPostViaje: _postCompletadoEnCurso);
           }
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1282,22 +1284,13 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     );
   }
 
-  Future<void> _navegarFacturaPostCompletado() async {
+  Future<void> _navegarPostViajeCompletado() async {
     if (_postCompletadoEnCurso || !mounted) return;
     _postCompletadoEnCurso = true;
     if (mounted) setState(() {});
 
     ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
 
-    try {
-      await FacturaViaje.mostrar(
-        context,
-        viajeId: widget.viajeId,
-        role: 'cliente',
-      );
-    } catch (_) {
-      // Continuar al post-viaje aunque falle la presentación.
-    }
     if (!mounted) return;
 
     await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -1308,7 +1301,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     );
   }
 
-  Widget _buildCompletadoState({bool navegandoFactura = false}) {
+  Widget _buildCompletadoState({bool navegandoPostViaje = false}) {
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -1327,13 +1320,13 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                   color: Colors.greenAccent, size: 64),
               const SizedBox(height: 16),
               Text(
-                navegandoFactura ? 'Preparando comprobante…' : 'Viaje finalizado',
+                navegandoPostViaje ? 'Abriendo recibo…' : 'Viaje finalizado',
                 style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
                     fontWeight: FontWeight.bold),
               ),
-              if (navegandoFactura) ...[
+              if (navegandoPostViaje) ...[
                 const SizedBox(height: 20),
                 const CircularProgressIndicator(color: Colors.greenAccent),
               ] else ...[

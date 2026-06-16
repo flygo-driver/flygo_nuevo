@@ -7,7 +7,6 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 
 class ConfirmarViajePage extends StatefulWidget {
@@ -140,6 +139,11 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
     }
 
     setState(() => _cargando = true);
+    NavigatorState? navAntesDeCrear =
+        NavigationService.navigatorKey.currentState;
+    if (navAntesDeCrear == null && mounted) {
+      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
+    }
     try {
       // 1) Asegura doc de usuario con rol por defecto cliente (si no existe)
       await RolesService.ensureUserDoc(u.uid, defaultRol: Roles.cliente);
@@ -184,11 +188,14 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
       final bool esProgramadoConfirm =
           _fechaHora.isAfter(DateTime.now().add(const Duration(minutes: 10)));
       if (esProgramadoConfirm) {
-        await NavigationService.clearAndGo(
-          ViajeProgramadoPendiente(viajeId: id),
+        await NavigationService.clearAndGoPage(
+          preNav: navAntesDeCrear,
+          page: ViajeProgramadoPendiente(viajeId: id),
         );
       } else {
-        await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+        await NavigationService.clearAndGoViajeEnCursoCliente(
+          preNav: navAntesDeCrear,
+        );
       }
     } on FirebaseException catch (e) {
       if (!mounted) return;

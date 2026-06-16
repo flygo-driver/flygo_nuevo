@@ -2,7 +2,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
@@ -214,12 +213,8 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
                     ),
                   );
                 }
-                await Navigator.of(context, rootNavigator: true)
-                    .pushAndRemoveUntil(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const ViajeEnCursoCliente(),
-                  ),
-                  (route) => false,
+                await NavigationService.clearAndGoViajeEnCursoCliente(
+                  preNav: Navigator.of(context, rootNavigator: true),
                 );
               } catch (_) {
                 if (mounted) {

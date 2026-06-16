@@ -18,6 +18,7 @@ class CampoLugarTypeAhead extends StatelessWidget {
     return CampoLugarAutocomplete(
       label: etiqueta,
       hint: 'Escribe para buscar…',
+      asistenteDireccionHabilitado: true,
       onPlaceSelected: onSeleccion,
     );
   }

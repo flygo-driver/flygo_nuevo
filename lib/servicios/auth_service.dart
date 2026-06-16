@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
+
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -65,8 +67,30 @@ class AuthService {
       password: password,
     );
     final user = cred.user!;
-    await _ensureUserDoc(user: user, rolSiFalta: rolSiFalta ?? 'cliente');
+    final entrada = rolSiFalta ?? 'cliente';
+    await _ensureUserDoc(user: user, rolSiFalta: entrada);
+    await _validarRolTrasLogin(user: user, entradaRol: entrada);
     return user;
+  }
+
+  Future<void> _validarRolTrasLogin({
+    required User user,
+    required String entradaRol,
+  }) async {
+    final snap = await _db.collection('usuarios').doc(user.uid).get();
+    final rol = AppFlavorRolGuard.rolCanonicoDesdeMaps(usuario: snap.data());
+    if (!AppFlavorRolGuard.esRolOperativo(rol)) return;
+    AppFlavorRolGuard.assertRolEntradaPermitida(
+      rolFirestore: rol,
+      entradaRol: entradaRol,
+      email: user.email,
+    );
+    if (!AppFlavorRolGuard.rolCompatibleConFlavor(rol)) {
+      await AppFlavorRolGuard.rechazarSesionRolIncorrecto(
+        rolFirestore: rol,
+        email: user.email,
+      );
+    }
   }
 
   // Google sin fetchSignInMethodsForEmail (sin warning)

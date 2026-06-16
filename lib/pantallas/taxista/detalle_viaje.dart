@@ -18,6 +18,7 @@ import '../../servicios/roles_service.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../utils/viaje_pool_taxista_gate.dart';
 import '../../servicios/navegacion_externa_launcher.dart';
+import '../../servicios/navigation_service.dart';
 import 'viaje_en_curso_taxista.dart';
 
 class DetalleViaje extends StatefulWidget {
@@ -224,7 +225,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
       if (await PagosTaxistaRepo.tieneBloqueoOperativo(user.uid)) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(PagosTaxistaRepo.mensajeRecargaTomarViajes),
             backgroundColor: Colors.orangeAccent,
           ),
@@ -318,11 +319,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
           );
           await UbicacionTaxista.marcarNoDisponible();
           if (!mounted) return;
-          Navigator.pop(context);
-          if (!mounted) return;
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
+          await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+            viajeId: viajeId,
+            uidTaxista: user.uid,
           );
           return;
         }
@@ -335,9 +334,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
               backgroundColor: Colors.orangeAccent,
             ),
           );
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
+          await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+            viajeId: viajeId,
+            uidTaxista: user.uid,
           );
           return;
         }
@@ -377,11 +376,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
         await UbicacionTaxista.marcarNoDisponible();
 
         if (!mounted) return;
-        Navigator.pop(context);
-        if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: viajeId,
+          uidTaxista: user.uid,
         );
       } else {
         if (!mounted) return;
@@ -532,8 +529,14 @@ class _DetalleViajeState extends State<DetalleViaje> {
                   final sinTaxista = uidTaxistaL.isEmpty;
                   final turismoSoloAdmin =
                       ViajePoolTaxistaGate.esTurismoSoloAdminPendiente(d);
+                  final poolModo =
+                      ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(ud);
                   final puedeTomarPool =
-                      ViajePoolTaxistaGate.viajeTomableEnPool(d, uid);
+                      ViajePoolTaxistaGate.viajeTomableEnPool(
+                    d,
+                    uid,
+                    poolModoConductor: poolModo,
+                  );
                   final puedeTomarTurismoPool =
                       ViajePoolTaxistaGate.esTurismoPoolTomable(d);
                   final puedeTomar = puedeTomarPool || puedeTomarTurismoPool;
@@ -566,6 +569,14 @@ class _DetalleViajeState extends State<DetalleViaje> {
                     }
                     if (!disponibleUsuario) {
                       return 'Activa tu disponibilidad en el menú (Disponibilidad) para aceptar este viaje.';
+                    }
+                    if (!ViajePoolTaxistaGate.viajeCoincideModoConductor(
+                      d,
+                      poolModo,
+                    )) {
+                      return poolModo == TaxistaPoolModoConductor.motor
+                          ? 'Este viaje es de carro/taxi. Tu perfil es de motores.'
+                          : 'Este viaje es de motores. Tu perfil es vehículo.';
                     }
                     return null;
                   }
@@ -638,6 +649,46 @@ class _DetalleViajeState extends State<DetalleViaje> {
                   );
 
                   final List<Widget> detalleCuerpoViaje = <Widget>[
+                    if (sinTaxista &&
+                        !puedeTomarTurismoPool &&
+                        !ViajePoolTaxistaGate.viajeCoincideModoConductor(
+                          d,
+                          poolModo,
+                        ))
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.orangeAccent.withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(
+                              Icons.info_outline,
+                              color: Colors.orangeAccent,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                poolModo == TaxistaPoolModoConductor.motor
+                                    ? 'Este viaje es de carro/taxi. Tu perfil registrado es de motores.'
+                                    : 'Este viaje es de motores. Tu perfil registrado es vehículo.',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(

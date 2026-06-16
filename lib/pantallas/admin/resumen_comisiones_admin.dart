@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import '../../config/plataforma_economia.dart';
+import '../../servicios/comision_viaje_pct_service.dart';
 import '../../servicios/comisiones_diarias_repo.dart';
 import '../../widgets/admin_drawer.dart';
 import '../../utils/formatos_moneda.dart';
@@ -18,15 +20,8 @@ class ResumenComisionesAdmin extends StatefulWidget {
 
 class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     with SingleTickerProviderStateMixin {
-  Map<String, dynamic>? _resumenHoy;
-  Map<String, dynamic>? _resumenSemana;
-  Map<String, dynamic>? _resumenMes;
-  Map<String, dynamic>? _auditoriaViajes;
-  List<Map<String, dynamic>> _topTaxistas = [];
-  List<Map<String, dynamic>> _evolucionSemanal = [];
-  bool _cargando = true;
-  String? _errorCarga;
-  bool _cargaEnCurso = false;
+  bool? _esAdmin;
+  String? _errorAcceso;
 
   late final TabController _tabController;
   final DateFormat _dateFormat = DateFormat('dd/MM/yyyy');
@@ -51,11 +46,17 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     return '—';
   }
 
+  static String _fmtPct(double p) {
+    if (p == p.roundToDouble()) return p.round().toString();
+    return p.toStringAsFixed(1);
+  }
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _cargarDatos();
+    ComisionViajePctService.refresh(force: true);
+    _validarAcceso();
   }
 
   @override
@@ -64,81 +65,21 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     super.dispose();
   }
 
-  Future<void> _cargarDatos() async {
-    if (_cargaEnCurso) return;
-    _cargaEnCurso = true;
-    try {
-      if (mounted) {
-        setState(() {
-          _cargando = true;
-          _errorCarga = null;
-        });
-      }
-
-      final bool esAdmin = await _validarRolAdmin();
-      if (!esAdmin) {
-        if (mounted) {
-          setState(() {
-            _cargando = false;
-            _errorCarga = 'Esta cuenta no tiene rol administrador.';
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content:
-                  Text('Acceso denegado: inicia sesión con un usuario admin'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return;
-      }
-
-      final Map<String, dynamic>? resumenHoy = await _safeLoad(
-          () => ComisionesDiariasRepo.getComisionesHoy(), 'resumen_hoy');
-      final Map<String, dynamic>? resumenSemana = await _safeLoad(
-          () => ComisionesDiariasRepo.getComisionesSemana(), 'resumen_semana');
-      final Map<String, dynamic>? resumenMes = await _safeLoad(
-          () => ComisionesDiariasRepo.getComisionesMes(), 'resumen_mes');
-      final List<Map<String, dynamic>> topTaxistas = await _safeLoad(
-              () => ComisionesDiariasRepo.getTopTaxistasHoy(limite: 5),
-              'top_taxistas') ??
-          <Map<String, dynamic>>[];
-      final List<Map<String, dynamic>> evolucion = await _safeLoad(
-              () => ComisionesDiariasRepo.getEvolucionSemanal(), 'evolucion') ??
-          <Map<String, dynamic>>[];
-      final Map<String, dynamic>? auditoriaViajes = await _safeLoad(
-        () => ComisionesDiariasRepo.getAuditoriaViajesComision(dias: 30),
-        'auditoria',
+  Future<void> _validarAcceso() async {
+    final bool esAdmin = await _validarRolAdmin();
+    if (!mounted) return;
+    setState(() {
+      _esAdmin = esAdmin;
+      _errorAcceso =
+          esAdmin ? null : 'Esta cuenta no tiene rol administrador.';
+    });
+    if (!esAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Acceso denegado: inicia sesión con un usuario admin'),
+          backgroundColor: Colors.red,
+        ),
       );
-
-      if (!mounted) return;
-      setState(() {
-        _resumenHoy = resumenHoy;
-        _resumenSemana = resumenSemana;
-        _resumenMes = resumenMes;
-        _auditoriaViajes = auditoriaViajes;
-        _topTaxistas = topTaxistas;
-        _evolucionSemanal = evolucion;
-        _cargando = false;
-        final bool sinResumenPrincipal = _resumenHoy == null &&
-            _resumenSemana == null &&
-            _resumenMes == null;
-        _errorCarga = sinResumenPrincipal
-            ? 'No se pudieron cargar las comisiones.'
-            : null;
-      });
-
-      if (mounted && _errorCarga != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error cargando datos'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      _cargaEnCurso = false;
-      if (mounted) setState(() {});
     }
   }
 
@@ -158,15 +99,6 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     }
   }
 
-  Future<T?> _safeLoad<T>(Future<T> Function() loader, String nombre) async {
-    try {
-      return await loader();
-    } catch (e) {
-      debugPrint('[ResumenComisionesAdmin] error en $nombre: $e');
-      return null;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -180,11 +112,19 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
           'Resumen de Comisiones',
           style: TextStyle(color: AdminUi.onCard(context)),
         ),
-        actions: <Widget>[
-          IconButton(
-            icon: Icon(Icons.refresh, color: AdminUi.appBarFg(context)),
-            onPressed: _cargaEnCurso ? null : _cargarDatos,
-            tooltip: 'Actualizar',
+        actions: const [
+          Padding(
+            padding: EdgeInsets.only(right: 12),
+            child: Center(
+              child: Text(
+                'En vivo',
+                style: TextStyle(
+                  color: Colors.greenAccent,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
+              ),
+            ),
           ),
         ],
         bottom: TabBar(
@@ -199,63 +139,184 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
           ],
         ),
       ),
-      body: _cargando
+      body: _esAdmin == null
           ? Center(
               child: CircularProgressIndicator(
                   color: AdminUi.progressAccent(context)))
-          : (_errorCarga != null &&
-                  _resumenHoy == null &&
-                  _resumenSemana == null &&
-                  _resumenMes == null)
+          : (_esAdmin != true)
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      _errorCarga!,
+                      _errorAcceso ?? 'Acceso denegado',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           color: AdminUi.secondary(context), fontSize: 16),
                     ),
                   ),
                 )
-              : TabBarView(
-                  controller: _tabController,
-                  children: <Widget>[
-                    _buildHoyTab(),
-                    _buildSemanaTab(),
-                    _buildMesTab(),
-                  ],
+              : StreamBuilder<double>(
+                  stream: ComisionViajePctService.streamPorcentajeVigente(),
+                  initialData: PlataformaEconomia.comisionViajePorcentaje,
+                  builder: (context, pctSnap) {
+                    final double pctVigente =
+                        pctSnap.data ?? PlataformaEconomia.comisionViajePorcentaje;
+                    return StreamBuilder<
+                        List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+                      stream: ComisionesDiariasRepo
+                          .streamViajesCompletadosMesActual(),
+                      builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return Center(
+                        child: CircularProgressIndicator(
+                            color: AdminUi.progressAccent(context)),
+                      );
+                    }
+                    if (snap.hasError) {
+                      final err = snap.error.toString();
+                      final pideIndice = err.contains('index') ||
+                          err.contains('failed-precondition');
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.cloud_off_outlined,
+                                  size: 48,
+                                  color: AdminUi.secondary(context)),
+                              const SizedBox(height: 12),
+                              Text(
+                                pideIndice
+                                    ? 'Falta un índice en Firestore para comisiones.'
+                                    : 'Error cargando viajes',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: AdminUi.onCard(context),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                pideIndice
+                                    ? 'En la terminal del proyecto ejecuta:\n'
+                                        'firebase deploy --only firestore:indexes\n'
+                                        'Luego espera 2–10 min en Firebase Console → Firestore → Índices.'
+                                    : err,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: AdminUi.secondary(context),
+                                    fontSize: 13,
+                                    height: 1.4),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+
+                    final mesDocs = snap.data ?? const [];
+                    final resumenHoy =
+                        ComisionesDiariasRepo.resumenHoyDesdeDocs(mesDocs);
+                    final resumenSemana =
+                        ComisionesDiariasRepo.resumenSemanaDesdeDocs(mesDocs);
+                    final resumenMes =
+                        ComisionesDiariasRepo.resumenMesDesdeDocs(mesDocs);
+                    final topTaxistas =
+                        ComisionesDiariasRepo.topTaxistasHoyDesdeDocs(mesDocs);
+                    final evolucionSemanal =
+                        ComisionesDiariasRepo.evolucionSemanalDesdeDocs(mesDocs);
+                    final auditoriaViajes =
+                        ComisionesDiariasRepo.auditoriaViajesDesdeDocs(mesDocs);
+
+                    return Column(
+                      children: <Widget>[
+                        _bannerComisionGlobal(context, pctVigente),
+                        Expanded(
+                          child: TabBarView(
+                            controller: _tabController,
+                            children: <Widget>[
+                              _buildHoyTab(
+                                resumenHoy,
+                                topTaxistas,
+                                evolucionSemanal,
+                                auditoriaViajes,
+                                pctVigente,
+                              ),
+                              _buildSemanaTab(
+                                resumenSemana,
+                                evolucionSemanal,
+                                pctVigente,
+                              ),
+                              _buildMesTab(resumenMes, pctVigente),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                      },
+                    );
+                  },
                 ),
     );
   }
 
-  // ===== TAB HOY =====
-  Widget _buildHoyTab() {
-    if (_resumenHoy == null) {
-      return Center(
-        child: Text('No hay datos',
-            style: TextStyle(color: AdminUi.secondary(context))),
-      );
-    }
+  Widget _bannerComisionGlobal(BuildContext context, double pctVigente) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AdminUi.card(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AdminUi.borderSubtle(context)),
+      ),
+      child: Text(
+        'Comisión global vigente: ${_fmtPct(pctVigente)}%. '
+        'Los totales suman la comisión registrada en cada viaje al completarse; '
+        'viajes nuevos usarán el % actual.',
+        style: TextStyle(
+          color: AdminUi.secondary(context),
+          fontSize: 12,
+          height: 1.35,
+        ),
+      ),
+    );
+  }
 
+  // ===== TAB HOY =====
+  Widget _buildHoyTab(
+    Map<String, dynamic> resumenHoy,
+    List<Map<String, dynamic>> topTaxistas,
+    List<Map<String, dynamic>> evolucionSemanal,
+    Map<String, dynamic> auditoriaViajes,
+    double pctVigente,
+  ) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
-        _buildTarjetaResumenDia(),
+        _buildTarjetaResumenDia(resumenHoy, pctVigente),
         const SizedBox(height: 20),
-        _buildAuditoriaCard(),
+        _buildAuditoriaCard(auditoriaViajes),
         const SizedBox(height: 20),
-        _buildTopTaxistas(),
+        _buildTopTaxistas(topTaxistas),
         const SizedBox(height: 20),
-        _buildEvolucionSemanal(),
+        _buildEvolucionSemanal(evolucionSemanal),
         const SizedBox(height: 20),
         _buildAccionesRapidas(),
       ],
     );
   }
 
-  Widget _buildTarjetaResumenDia() {
+  Widget _buildTarjetaResumenDia(
+    Map<String, dynamic> resumenHoy,
+    double pctVigente,
+  ) {
     final cs = Theme.of(context).colorScheme;
+    final pctEfectivo =
+        (resumenHoy['porcentajeComision'] ?? _fmtPct(pctVigente)).toString();
+    final pctChofer = 100.0 - pctVigente;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -285,7 +346,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
                 ),
               ),
               Text(
-                _formatFecha(_resumenHoy!['fecha']),
+                _formatFecha(resumenHoy['fecha']),
                 style: TextStyle(color: AdminUi.muted(context), fontSize: 12),
               ),
             ],
@@ -298,7 +359,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
               _buildMetrica(
                 context,
                 'Total recaudado',
-                FormatosMoneda.rd(_toDouble(_resumenHoy!['totalRecaudado'])),
+                FormatosMoneda.rd(_toDouble(resumenHoy['totalRecaudado'])),
                 Icons.account_balance_wallet,
                 AdminUi.onCard(context),
               ),
@@ -306,7 +367,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
               _buildMetrica(
                 context,
                 'Viajes',
-                '${_toInt(_resumenHoy!['totalViajes'])}',
+                '${_toInt(resumenHoy['totalViajes'])}',
                 Icons.trip_origin,
                 AdminUi.onCard(context),
               ),
@@ -315,7 +376,6 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
 
           const SizedBox(height: 16),
 
-          // Comisión (20%) destacada
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -329,23 +389,23 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Text(
-                      'COMISIÓN 20%',
-                      style: TextStyle(
+                    Text(
+                      'COMISIÓN ${_fmtPct(pctVigente)}%',
+                      style: const TextStyle(
                         color: Colors.green,
                         fontWeight: FontWeight.bold,
                         fontSize: 14,
                       ),
                     ),
                     Text(
-                      'Plataforma RAI',
+                      'Promedio hoy: $pctEfectivo% · Plataforma RAI',
                       style: TextStyle(
                           color: AdminUi.secondary(context), fontSize: 12),
                     ),
                   ],
                 ),
                 Text(
-                  FormatosMoneda.rd(_toDouble(_resumenHoy!['totalComisiones'])),
+                  FormatosMoneda.rd(_toDouble(resumenHoy['totalComisiones'])),
                   style: const TextStyle(
                     color: Colors.green,
                     fontSize: 24,
@@ -369,11 +429,11 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: <Widget>[
                 Text(
-                  'Taxistas ganaron (80%)',
+                  'Taxistas ganaron (${_fmtPct(pctChofer)}%)',
                   style: TextStyle(color: AdminUi.secondary(context)),
                 ),
                 Text(
-                  FormatosMoneda.rd(_toDouble(_resumenHoy!['totalGanancias'])),
+                  FormatosMoneda.rd(_toDouble(resumenHoy['totalGanancias'])),
                   style: const TextStyle(
                     color: Colors.blue,
                     fontWeight: FontWeight.bold,
@@ -425,8 +485,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     );
   }
 
-  Widget _buildTopTaxistas() {
-    if (_topTaxistas.isEmpty) {
+  Widget _buildTopTaxistas(List<Map<String, dynamic>> topTaxistas) {
+    if (topTaxistas.isEmpty) {
       return Center(
         child: Text('Sin datos de taxistas hoy',
             style: TextStyle(color: AdminUi.secondary(context))),
@@ -458,7 +518,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
             ],
           ),
           const SizedBox(height: 16),
-          ..._topTaxistas
+          ...topTaxistas
               .asMap()
               .entries
               .map((MapEntry<int, Map<String, dynamic>> entry) {
@@ -545,9 +605,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     );
   }
 
-  Widget _buildAuditoriaCard() {
-    final data = _auditoriaViajes;
-    if (data == null) return const SizedBox.shrink();
+  Widget _buildAuditoriaCard(Map<String, dynamic> data) {
     final int auditados = _toInt(data['auditados']);
     final int totalIncons = _toInt(data['totalInconsistencias']);
     final List<Map<String, dynamic>> inconsistencias =
@@ -607,14 +665,14 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     );
   }
 
-  Widget _buildEvolucionSemanal() {
-    if (_evolucionSemanal.isEmpty) {
+  Widget _buildEvolucionSemanal(List<Map<String, dynamic>> evolucionSemanal) {
+    if (evolucionSemanal.isEmpty) {
       return const SizedBox.shrink();
     }
 
     // Encontrar el valor máximo para escala
     final double maxComision =
-        _evolucionSemanal.fold(0.0, (double prev, Map<String, dynamic> item) {
+        evolucionSemanal.fold(0.0, (double prev, Map<String, dynamic> item) {
       final c = _toDouble(item['comisiones']);
       return c > prev ? c : prev;
     });
@@ -648,7 +706,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
             height: 120,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
-              children: _evolucionSemanal.map((Map<String, dynamic> dia) {
+              children: evolucionSemanal.map((Map<String, dynamic> dia) {
                 final com = _toDouble(dia['comisiones']);
                 final double altura =
                     maxComision > 0 ? (com / maxComision) * 80 : 0;
@@ -731,51 +789,42 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     );
   }
 
-  // ===== TAB SEMANA =====
-  Widget _buildSemanaTab() {
-    if (_resumenSemana == null) {
-      return Center(
-        child: Text('No hay datos',
-            style: TextStyle(color: AdminUi.secondary(context))),
-      );
-    }
-
+  Widget _buildSemanaTab(
+    Map<String, dynamic> resumenSemana,
+    List<Map<String, dynamic>> evolucionSemanal,
+    double pctVigente,
+  ) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
         _buildTarjetaResumenPeriodo(
           'RESUMEN SEMANAL',
-          '${_formatFecha(_resumenSemana!['inicio'])} - ${_formatFecha(_resumenSemana!['fin'])}',
-          _toDouble(_resumenSemana!['totalRecaudado']),
-          _toDouble(_resumenSemana!['totalComisiones']),
-          _toDouble(_resumenSemana!['totalGanancias']),
-          _toInt(_resumenSemana!['totalViajes']),
+          '${_formatFecha(resumenSemana['inicio'])} - ${_formatFecha(resumenSemana['fin'])}',
+          _toDouble(resumenSemana['totalRecaudado']),
+          _toDouble(resumenSemana['totalComisiones']),
+          _toDouble(resumenSemana['totalGanancias']),
+          _toInt(resumenSemana['totalViajes']),
+          pctVigente,
         ),
         const SizedBox(height: 16),
-        _buildEvolucionSemanal(),
+        _buildEvolucionSemanal(evolucionSemanal),
       ],
     );
   }
 
   // ===== TAB MES =====
-  Widget _buildMesTab() {
-    if (_resumenMes == null) {
-      return Center(
-        child: Text('No hay datos',
-            style: TextStyle(color: AdminUi.secondary(context))),
-      );
-    }
-
+  Widget _buildMesTab(Map<String, dynamic> resumenMes, double pctVigente) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
         _buildTarjetaResumenPeriodo(
           'RESUMEN MENSUAL',
-          (_resumenMes!['mes'] ?? '—').toString(),
-          _toDouble(_resumenMes!['totalRecaudado']),
-          _toDouble(_resumenMes!['totalComisiones']),
-          _toDouble(_resumenMes!['totalGanancias']),
-          _toInt(_resumenMes!['totalViajes']),
+          (resumenMes['mes'] ?? '—').toString(),
+          _toDouble(resumenMes['totalRecaudado']),
+          _toDouble(resumenMes['totalComisiones']),
+          _toDouble(resumenMes['totalGanancias']),
+          _toInt(resumenMes['totalViajes']),
+          pctVigente,
         ),
       ],
     );
@@ -788,7 +837,9 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     double totalComisiones,
     double totalGanancias,
     int totalViajes,
+    double pctVigente,
   ) {
+    final pctChofer = 100.0 - pctVigente;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -821,11 +872,15 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
               FormatosMoneda.rd(totalRecaudado), AdminUi.onCard(context)),
           Divider(color: AdminUi.borderSubtle(context), height: 16),
           _buildFilaResumen(
-              'Comisión 20%', FormatosMoneda.rd(totalComisiones), Colors.green,
+              'Comisión ${_fmtPct(pctVigente)}%',
+              FormatosMoneda.rd(totalComisiones),
+              Colors.green,
               bold: true),
           Divider(color: AdminUi.borderSubtle(context), height: 16),
-          _buildFilaResumen('Taxistas ganaron (80%)',
-              FormatosMoneda.rd(totalGanancias), Colors.blue),
+          _buildFilaResumen(
+              'Taxistas ganaron (${_fmtPct(pctChofer)}%)',
+              FormatosMoneda.rd(totalGanancias),
+              Colors.blue),
           Divider(color: AdminUi.borderSubtle(context), height: 16),
           _buildFilaResumen('Total de viajes', '$totalViajes viajes',
               AdminUi.secondary(context)),

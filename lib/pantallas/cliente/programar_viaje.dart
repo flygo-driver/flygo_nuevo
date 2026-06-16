@@ -15,7 +15,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
 // 🔰 IMPORT para ir al viaje en curso
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
 // ✅ Confirmación de viaje programado (no confundir con “en curso”)
 
@@ -30,6 +29,7 @@ import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
@@ -39,7 +39,9 @@ import 'package:flygo_nuevo/widgets/programar_viaje_futuro_animation.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
+import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/widgets/rai_cotizacion_offline_hint.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
@@ -189,6 +191,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   double precioCalculado = 0.0;
   double comisionCalculada = 0.0;
   double gananciaTaxistaCalculada = 0.0;
+  bool _precioEsEstimadoOffline = false;
 
   bool ubicacionObtenida = false;
   bool _cargando = false;
@@ -406,12 +409,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (mounted) _nudgeCtrl.stop();
     });
 
-    // 🔥 Si es turismo y no hay destino seleccionado, abrir selector automáticamente
-    if (tipoServicio == 'turismo' && _destinoTurismoSeleccionado == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _mostrarSelectorDestinosTuristicos();
-      });
-    }
   }
 
   // 🔥 Función para normalizar tipo de vehículo
@@ -497,10 +494,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   }
 
   Future<void> _expandSheet() async {
-    final target = (widget.modoAhora ? 0.86 : 0.88).clamp(0.26, 0.88);
+    final double target = tipoServicio == 'turismo'
+        ? (widget.modoAhora ? 0.56 : 0.68)
+        : (widget.modoAhora ? 0.86 : 0.88);
+    final double clamped = target.clamp(_sheetMinFracProgramar, 0.88);
     try {
       await _sheetCtrl.animateTo(
-        target,
+        clamped,
         duration: const Duration(milliseconds: 380),
         curve: Curves.easeOutCubic,
       );
@@ -566,8 +566,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   // ====== UBICACIÓN/MAPA ======
   Future<void> _initUbicacionParaMapa() async {
     setState(() => _cargandoUbicacion = true);
-    // Flujo explícito (programar viaje): puede mostrar diálogo del SO si aún denied.
-    final basic = await LocationPermissionService.checkAndRequestBasicPermission();
+    final basic = await LocationPermissionService.checkAndRequestBasicPermission(
+      requestIfDenied: false,
+    );
     if (!basic.serviceEnabled) {
       if (mounted) {
         setState(() => _cargandoUbicacion = false);
@@ -609,6 +610,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       _updateOrigenMarker(here);
 
       setState(() => _cargandoUbicacion = false);
+      unawaited(RaiUbicacionClienteService.instance.refrescar());
 
       await _programarMapAnimate(
         (c) => c.animateCamera(
@@ -911,6 +913,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     _calculoDebounce?.cancel();
     _cotizacionSeq++;
     precioCalculado = 0;
+    _precioEsEstimadoOffline = false;
     ubicacionObtenida = false;
     comisionCalculada = 0;
     gananciaTaxistaCalculada = 0;
@@ -973,6 +976,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (widget.modoAhora) {
         final ready = await LocationPermissionService.ensureLocationReady(
           context: context,
+          requestIfDenied: false,
         );
         if (!ready.isUsable) {
           if (!automatico) {
@@ -990,12 +994,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           _updateOrigenMarker(ll);
           if (mounted) setState(() {});
         }
-        if (!automatico && mounted) {
-          await LocationPermissionService.maybePromptAlwaysForCriticalFlow(
-            context,
-            isTaxista: false,
-          );
-        }
+        unawaited(RaiUbicacionClienteService.instance.refrescar());
       }
 
       double origenLat = 0, origenLon = 0;
@@ -1033,6 +1032,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         if (!mounted) return;
         final ready = await LocationPermissionService.ensureLocationReady(
           context: context,
+          requestIfDenied: false,
         );
         if (!ready.isUsable) {
           if (!automatico) {
@@ -1081,25 +1081,24 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             : destino;
       }
 
-      double dist =
-          DistanciaService.calcularDistancia(origenLat, origenLon, dLat, dLon);
+      double dist = 0;
       DirectionsResult? dir;
-      if (kUseDirectionsForDistance) {
-        dir = await DirectionsService.drivingDistanceKm(
-          originLat: origenLat,
-          originLon: origenLon,
-          destLat: dLat,
-          destLon: dLon,
-          withTraffic: true,
-          region: 'do',
-        );
-        if (dir != null && dir.km > 0) dist = dir.km;
-      }
-      if (dist <= 0) {
+      final RaiDistanciaCotizacion? distRes =
+          await RaiOfflineCotizacionService.resolverDistancia(
+        originLat: origenLat,
+        originLon: origenLon,
+        destLat: dLat,
+        destLon: dLon,
+        useDirections: kUseDirectionsForDistance,
+      );
+      if (distRes == null || distRes.km <= 0) {
         if (!automatico) _snack("❌ No se pudo calcular una distancia válida.");
         _setCargaFalseSiCorre(runId);
         return;
       }
+      dist = distRes.km;
+      dir = distRes.directions;
+      final bool estimadoOffline = distRes.estimadoOffline;
 
       final List<LatLng> routeLatLng = dir?.path ?? const <LatLng>[];
       _peajeCtrl.text = _peaje.toStringAsFixed(0);
@@ -1125,6 +1124,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
         distanciaKm = dist;
         precioCalculado = precioCents / 100.0;
+        _precioEsEstimadoOffline = estimadoOffline;
         comisionCalculada = comisionCents / 100.0;
         gananciaTaxistaCalculada = gananciaCents / 100.0;
         ubicacionObtenida = true;
@@ -1531,7 +1531,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
     try {
       final ({bool serviceEnabled, LocationPermission permission}) snap =
-          await GpsService.checkServiceThenRequestPermissionIfNeeded();
+          await LocationPermissionService.checkServiceThenRequestIfNeeded();
       if (snap.serviceEnabled && GpsService.permissionUsable(snap.permission)) {
         final Position? pos = await GpsService.obtenerUbicacionActual(
           timeout: const Duration(seconds: 12),
@@ -1590,37 +1590,23 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       _updateOrigenMarker(_origenMap!);
 
       double dist = 0;
-      try {
-        final result = await DirectionsService.drivingDistanceKm(
-          originLat: origen.lat,
-          originLon: origen.lon,
-          destLat: latDestino!,
-          destLon: lonDestino!,
-          withTraffic: true,
-          region: 'do',
-        );
-        dist = result?.km ??
-            DistanciaService.calcularDistancia(
-              origen.lat,
-              origen.lon,
-              latDestino!,
-              lonDestino!,
-            );
-      } catch (_) {
-        dist = DistanciaService.calcularDistancia(
-          origen.lat,
-          origen.lon,
-          latDestino!,
-          lonDestino!,
-        );
-      }
-
-      if (dist <= 0) {
+      bool estimadoOffline = false;
+      final RaiDistanciaCotizacion? distRes =
+          await RaiOfflineCotizacionService.resolverDistancia(
+        originLat: origen.lat,
+        originLon: origen.lon,
+        destLat: latDestino!,
+        destLon: lonDestino!,
+        useDirections: true,
+      );
+      if (distRes == null || distRes.km <= 0) {
         if (mounted) {
           _snack('No se pudo calcular la distancia al destino.');
         }
         return;
       }
+      dist = distRes.km;
+      estimadoOffline = distRes.estimadoOffline;
 
       final double precioDouble =
           await _calcularPrecioPorTipo(dist, idaYVuelta, peaje: _peaje);
@@ -1633,6 +1619,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       setState(() {
         distanciaKm = dist;
         precioCalculado = precioCents / 100.0;
+        _precioEsEstimadoOffline = estimadoOffline;
         comisionCalculada = comisionCents / 100.0;
         gananciaTaxistaCalculada = precioCalculado - comisionCalculada;
         ubicacionObtenida = true;
@@ -1701,18 +1688,27 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   }
 
   // ✅ MÉTODO PARA MOSTRAR SELECTOR DE DESTINOS TURÍSTICOS
-  void _mostrarSelectorDestinosTuristicos() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => TurismoDestinosSheetHost(
-        seedLat: latCliente ?? _origenMap?.latitude,
-        seedLon: lonCliente ?? _origenMap?.longitude,
-        tipoVehiculoInicial: _tipoVehiculoTurismo,
-        onDestinoSeleccionado: (seleccion) async {
-          Navigator.pop(context);
-          await _aplicarSeleccionTurismo(seleccion);
+  Future<void> _mostrarSelectorDestinosTuristicos() async {
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext ctx) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Catálogo turístico'),
+              centerTitle: true,
+            ),
+            body: TurismoDestinosSheetHost(
+              showFloatingBack: false,
+              seedLat: latCliente ?? _origenMap?.latitude,
+              seedLon: lonCliente ?? _origenMap?.longitude,
+              tipoVehiculoInicial: _tipoVehiculoTurismo,
+              onDestinoSeleccionado: (DestinoSeleccionado seleccion) async {
+                Navigator.of(ctx).pop();
+                await _aplicarSeleccionTurismo(seleccion);
+              },
+            ),
+          );
         },
       ),
     );
@@ -1729,6 +1725,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) {
       messenger.showSnackBar(const SnackBar(content: Text(kMsgLogin)));
+      return;
+    }
+    if (RaiOfflineCotizacionService.estaOffline) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(RaiOfflineCotizacionService.mensajeNoConfirmar),
+        ),
+      );
       return;
     }
     if (!ubicacionObtenida || latCliente == null || latDestino == null) {
@@ -1752,11 +1756,17 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     if (await _bloquearSiTaxista()) return;
 
     setState(() => _cargando = true);
+    NavigatorState? navAntesDeCrear =
+        NavigationService.navigatorKey.currentState;
+    if (navAntesDeCrear == null && mounted) {
+      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
+    }
     try {
       if (widget.modoAhora) {
         if (!mounted) return;
         final ready = await LocationPermissionService.ensureLocationReady(
           context: context,
+          requestIfDenied: false,
         );
         if (!ready.isUsable) {
           messenger.showSnackBar(
@@ -1857,19 +1867,39 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       );
 
       if (viajeInmediato) {
-        // Turismo inmediato: pantalla de espera ADM (no mapa genérico hasta asignar chofer).
         if (tipoServicio == 'turismo') {
-          await NavigationService.clearAndGo(
-            EsperaAsignacionTurismo(viajeId: id),
-          );
+          final fs.DocumentSnapshot<Map<String, dynamic>> turismoSnap =
+              await fs.FirebaseFirestore.instance
+                  .collection('viajes')
+                  .doc(id)
+                  .get();
+          final Map<String, dynamic> turismoData =
+              turismoSnap.data() ?? <String, dynamic>{};
+          final bool choferAsignado = (turismoData['uidTaxista'] ??
+                  turismoData['taxistaId'] ??
+                  '')
+              .toString()
+              .trim()
+              .isNotEmpty;
+          if (choferAsignado) {
+            await NavigationService.clearAndGoViajeEnCursoCliente(
+              preNav: navAntesDeCrear,
+            );
+          } else {
+            await NavigationService.clearAndGoPage(
+              preNav: navAntesDeCrear,
+              page: EsperaAsignacionTurismo(viajeId: id),
+            );
+          }
         } else {
-          await NavigationService.clearAndGo(const ViajeEnCursoCliente());
+          await NavigationService.clearAndGoViajeEnCursoCliente(
+            preNav: navAntesDeCrear,
+          );
         }
       } else {
-        // Programado lejano: misma pila raíz que multi / confirmar (motor incluido).
-        if (!mounted) return;
-        await NavigationService.clearAndGo(
-          ViajeProgramadoPendiente(viajeId: id),
+        await NavigationService.clearAndGoPage(
+          preNav: navAntesDeCrear,
+          page: ViajeProgramadoPendiente(viajeId: id),
         );
       }
     } on fs.FirebaseException catch (e) {
@@ -2621,6 +2651,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     ),
                   ),
                 ),
+                RaiCotizacionOfflineHint(visible: _precioEsEstimadoOffline),
                 if (!widget.modoAhora) ...[
                   const SizedBox(height: 10),
                   SizedBox(
@@ -2677,10 +2708,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () => _programarViaje(
-                      ScaffoldMessenger.of(context),
-                      Navigator.of(context),
-                    ),
+                    onPressed: (ubicacionObtenida &&
+                            precioCalculado > 0 &&
+                            !RaiOfflineCotizacionService.estaOffline)
+                        ? () => _programarViaje(
+                              ScaffoldMessenger.of(context),
+                              Navigator.of(context),
+                            )
+                        : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: mapFloating
                           ? Color.alphaBlend(
@@ -3080,7 +3115,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       child: Scaffold(
         backgroundColor: mapFloating ? Colors.transparent : themedBg,
         appBar: RaiAppBar(
-          title: 'Programar Viaje',
+          title: tipoServicio == 'turismo' ? 'Turismo RAI' : 'Programar Viaje',
           backWhenCanPop: true,
         ),
         body: Stack(
@@ -3157,7 +3192,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             controller: _sheetCtrl,
             minChildSize: _sheetMinFracProgramar,
             maxChildSize: 0.88,
-            initialChildSize: 0.36,
+            initialChildSize:
+                tipoServicio == 'turismo' ? 0.44 : 0.36,
             snap: true,
             snapSizes: const [_sheetMinFracProgramar, 0.72, 0.88],
             builder: (context, controller) {
@@ -3309,9 +3345,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               shadows: freeTextHaloShadows),
                                           const SizedBox(width: 6),
                                           Text(
-                                            _mostrarResumenCotizacion
-                                                ? 'Toca “Cambiar ruta” abajo para el buscador y opciones'
-                                                : 'Desliza o toca para ver todo',
+                                            tipoServicio == 'turismo'
+                                                ? (_destinoTurismoSeleccionado !=
+                                                        null
+                                                    ? 'Desliza para ver precio y confirmar'
+                                                    : 'Busca un destino o abre el catálogo abajo')
+                                                : (_mostrarResumenCotizacion
+                                                    ? 'Toca “Cambiar ruta” abajo para el buscador y opciones'
+                                                    : 'Desliza o toca para ver todo'),
                                             textAlign: TextAlign.center,
                                             style: TextStyle(
                                                 color: freeTextMutedColor,
@@ -3657,6 +3698,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                           hint: uiRutaMockup
                                                               ? 'Dirección, barrio, hotel o lugar en RD…'
                                                               : 'Ej. SDQ, hotel, sector…',
+                                                          biasLat: latCliente ??
+                                                              _origenMap
+                                                                  ?.latitude,
+                                                          biasLon: lonCliente ??
+                                                              _origenMap
+                                                                  ?.longitude,
+                                                          asistenteDireccionHabilitado:
+                                                              true,
                                                           showQuickSuggestions:
                                                               false,
                                                           showCategories: false,
@@ -3686,6 +3735,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                                 .displayLabel;
                                                             origenTexto = det
                                                                 .displayLabel;
+                                                            latCliente =
+                                                                det.lat;
+                                                            lonCliente =
+                                                                det.lon;
+                                                            ubicacionObtenida =
+                                                                true;
                                                             _origenMap = LatLng(
                                                                 det.lat,
                                                                 det.lon);
@@ -3970,7 +4025,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                     ),
                                         ),
                                       ),
-                                    if (!_tieneDestinoParaCalculo()) ...[
+                                    if (!_tieneDestinoParaCalculo() &&
+                                        widget.tipoServicio != 'turismo') ...[
                                       _bannerAntesDeElegirDestino(
                                         destinoAccent: pRuta.destinoAccent,
                                         destinoFill: pRuta.destinoFill,
@@ -4013,6 +4069,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 children: [
                                                   CampoLugarAutocomplete(
                                                     label: 'Buscar destino',
+                                                    asistenteDireccionHabilitado:
+                                                        true,
+                                                    biasLat:
+                                                        _origenMap?.latitude,
+                                                    biasLon:
+                                                        _origenMap?.longitude,
                                                     hint: uiRutaMockup
                                                         ? 'Dirección, barrio, hotel o lugar en RD…'
                                                         : '¿A dónde vas?',
@@ -4131,7 +4193,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                       ParpadeoRutaProgramar(
                                         pulseColor: pRuta.destinoAccent,
                                         child: _seccionRutaCard(
-                                          titulo: 'Destino turístico',
+                                          titulo: '¿A dónde quieres ir?',
                                           icono: Icons.explore,
                                           accent: pRuta.destinoAccent,
                                           fill: pRuta.destinoFill,
@@ -4143,8 +4205,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                             children: [
                                               CampoLugarAutocomplete(
                                                 label: 'Buscar destino',
+                                                asistenteDireccionHabilitado:
+                                                    true,
                                                 hint:
-                                                    'Dirección, hotel, playa o lugar en RD…',
+                                                    'Hotel, playa, aeropuerto o lugar en RD…',
                                                 initialText:
                                                     _destinoTurismoSeleccionado
                                                             ?.nombre ??
@@ -4193,29 +4257,28 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               const SizedBox(height: 12),
                                               if (_destinoTurismoSeleccionado ==
                                                   null) ...[
-                                                Text(
-                                                  'o elige del catálogo turístico',
-                                                  textAlign: TextAlign.center,
-                                                  style: TextStyle(
-                                                    color: textMuted,
-                                                    fontSize: 12,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 8),
-                                                ElevatedButton.icon(
+                                                OutlinedButton.icon(
                                                   onPressed:
                                                       _mostrarSelectorDestinosTuristicos,
-                                                  icon: const Icon(Icons.map),
+                                                  icon: Icon(
+                                                    Icons.travel_explore_rounded,
+                                                    color: pRuta.destinoAccent,
+                                                  ),
                                                   label: const Text(
-                                                      'Seleccionar destino turístico'),
-                                                  style:
-                                                      ElevatedButton.styleFrom(
-                                                    backgroundColor:
-                                                        pRuta.destinoAccent,
+                                                    'Explorar catálogo turístico',
+                                                  ),
+                                                  style: OutlinedButton.styleFrom(
                                                     foregroundColor:
-                                                        Colors.white,
+                                                        pRuta.destinoAccent,
+                                                    side: BorderSide(
+                                                      color: pRuta.destinoAccent
+                                                          .withValues(
+                                                              alpha: 0.65),
+                                                    ),
                                                     minimumSize: const Size(
-                                                        double.infinity, 48),
+                                                      double.infinity,
+                                                      48,
+                                                    ),
                                                     shape:
                                                         RoundedRectangleBorder(
                                                       borderRadius:
@@ -4850,7 +4913,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                     child: ElevatedButton(
                                                       onPressed: (ubicacionObtenida &&
                                                               precioCalculado >
-                                                                  0)
+                                                                  0 &&
+                                                              !RaiOfflineCotizacionService
+                                                                  .estaOffline)
                                                           ? () => _programarViaje(
                                                               ScaffoldMessenger
                                                                   .of(

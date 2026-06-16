@@ -9,15 +9,18 @@ import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/taxista/detalle_viaje.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
@@ -99,14 +102,26 @@ class PoolTurismoTaxista extends StatefulWidget {
 }
 
 class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final Set<String> _aceptandoIds = <String>{};
+  final Set<String> _vistosParaTimbre = <String>{};
+
+  StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreAhora;
+  StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreProg;
+  fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreAhora;
+  fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreProg;
+
+  late TabController _tabPool;
+  bool _ignorarPrimeraEmisionTimbreAhora = true;
+  bool _ignorarPrimeraEmisionTimbreProg = true;
+  bool _appEnForeground = true;
 
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>?
       _activeTripListener;
 
   bool _usarFallbackSinIndiceAhora = false;
   bool _usarFallbackSinIndiceProg = false;
+  Timer? _reintentoIndiceTimer;
 
   static const List<String> _kEstadosPend = <String>[
     EstadosViaje.pendiente,
@@ -125,14 +140,26 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _tabPool = TabController(length: 2, vsync: this);
+    _tabPool.addListener(_onPoolTabChanged);
     FirebaseAuth.instance.currentUser?.getIdToken(true);
     _checkExistingActiveTrip();
     Future.microtask(() async {
+      await NotificationService.I.ensureInited();
       await _probarIndices();
+      _arrancarTimbres();
       if (mounted) setState(() {});
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      await _flushTimbreOfertasParaTab(_tabPool.index);
     });
     _cargarUbicacionCache();
     unawaited(_refrescarEstadoGps());
+  }
+
+  void _onPoolTabChanged() {
+    if (_tabPool.indexIsChanging || !mounted) return;
+    unawaited(_flushTimbreOfertasParaTab(_tabPool.index));
   }
 
   Future<void> _refrescarEstadoGps() async {
@@ -244,27 +271,53 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     });
   }
 
-  void _redirectToActiveTrip() {
+  Future<void> _redirectToActiveTrip({NavigatorState? preNav}) async {
     if (!mounted || _navegandoAViajeActivo) return;
     _navegandoAViajeActivo = true;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => const ViajeEnCursoTaxista()),
-    );
+    await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: preNav);
   }
 
   @override
   void dispose() {
+    _reintentoIndiceTimer?.cancel();
+    _subTimbreAhora?.cancel();
+    _subTimbreProg?.cancel();
+    _tabPool.removeListener(_onPoolTabChanged);
+    _tabPool.dispose();
     _activeTripListener?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
+  void _programarReintentoIndicesSiFalta() {
+    if (!_usarFallbackSinIndiceAhora && !_usarFallbackSinIndiceProg) {
+      _reintentoIndiceTimer?.cancel();
+      _reintentoIndiceTimer = null;
+      return;
+    }
+    _reintentoIndiceTimer ??= Timer.periodic(const Duration(minutes: 2), (_) {
+      if (!mounted) return;
+      unawaited(_probarIndices());
+    });
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appEnForeground = state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
     if (state == AppLifecycleState.resumed && mounted) {
       unawaited(_refrescarEstadoGps());
       unawaited(_reconciliarViajeActivoAlResume());
+      _arrancarTimbres();
+      if (_usarFallbackSinIndiceAhora || _usarFallbackSinIndiceProg) {
+        unawaited(_probarIndices());
+      }
       setState(() {});
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      unawaited(NotificationService.I.stopTimbre());
     }
   }
 
@@ -376,37 +429,183 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
     if (!mounted) return;
     setState(() {});
+    _programarReintentoIndicesSiFalta();
+    _arrancarTimbres();
+  }
+
+  void _arrancarTimbres() {
+    _subTimbreAhora?.cancel();
+    _subTimbreProg?.cancel();
+    _ignorarPrimeraEmisionTimbreAhora = true;
+    _ignorarPrimeraEmisionTimbreProg = true;
+
+    final qA = _usarFallbackSinIndiceAhora ? _qFallbackBase() : _qTurismoPoolAhora();
+    final qP =
+        _usarFallbackSinIndiceProg ? _qFallbackBase() : _qTurismoPoolProgramados();
+
+    _subTimbreAhora = qA.limit(120).snapshots().listen((snap) async {
+      if (!_appEnForeground) return;
+      _snapTimbreAhora = snap;
+      final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+
+      if (_ignorarPrimeraEmisionTimbreAhora) {
+        _ignorarPrimeraEmisionTimbreAhora = false;
+        if (_tabPool.index == 0) {
+          unawaited(_flushTimbreOfertasParaTab(0));
+        }
+        return;
+      }
+      if (_tabPool.index != 0) return;
+
+      for (final d in snap.docs) {
+        final data = d.data();
+        if (!_pasaFiltroAhoraLocalPool(data)) continue;
+        if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
+        final id = d.id;
+        if (_vistosParaTimbre.contains(id)) continue;
+        _vistosParaTimbre.add(id);
+        await NotificationService.I.playPoolOfferSoundInApp();
+        if (_viajeTienePrecioReal(data)) {
+          await NotificationService.I.notifyNuevoViaje(
+            viajeId: id,
+            titulo: 'Nuevo viaje turístico',
+            cuerpo:
+                '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+            skipSound: true,
+          );
+        }
+      }
+    });
+
+    _subTimbreProg = qP.limit(200).snapshots().listen((snap) async {
+      if (!_appEnForeground) return;
+      _snapTimbreProg = snap;
+      final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+
+      if (_ignorarPrimeraEmisionTimbreProg) {
+        _ignorarPrimeraEmisionTimbreProg = false;
+        if (_tabPool.index == 1) {
+          unawaited(_flushTimbreOfertasParaTab(1));
+        }
+        return;
+      }
+      if (_tabPool.index != 1) return;
+
+      for (final d in snap.docs) {
+        final data = d.data();
+        if (!_pasaFiltroProgLocalPool(data)) continue;
+        if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
+        final id = d.id;
+        if (_vistosParaTimbre.contains(id)) continue;
+        _vistosParaTimbre.add(id);
+        await NotificationService.I.playPoolOfferSoundInApp();
+        if (_viajeTienePrecioReal(data)) {
+          await NotificationService.I.notifyNuevoViaje(
+            viajeId: id,
+            titulo: 'Viaje turístico programado',
+            cuerpo:
+                '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+            skipSound: true,
+          );
+        }
+      }
+    });
+  }
+
+  bool _timbreViajeNoIgnorado(Map<String, dynamic> data, String myUid) {
+    final ign = data['ignoradosPor'];
+    if (ign is List && ign.contains(myUid)) return false;
+    return true;
+  }
+
+  bool _timbreMeInteresaTurismoPool(Map<String, dynamic> data, String myUid) {
+    if (!_timbreViajeNoIgnorado(data, myUid)) return false;
+    return ViajePoolTaxistaGate.esTurismoPoolTomable(data);
+  }
+
+  bool _viajeTienePrecioReal(Map<String, dynamic> data) {
+    final dynamic pc = data['precio_cents'];
+    if (pc is int && pc > 0) return true;
+    if (pc is num && pc > 0) return true;
+    double n(dynamic v) {
+      if (v == null) return 0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString().trim().replaceAll(',', '.')) ?? 0;
+    }
+
+    return n(data['precio']) > 0.009 || n(data['precioFinal'] ?? data['total']) > 0.009;
+  }
+
+  Future<void> _flushTimbreOfertasParaTab(int tabIndex, {int max = 2}) async {
+    if (!_appEnForeground) return;
+    if (tabIndex == 0) {
+      await _flushTimbreAhoraDesdeSnap(max);
+    } else if (tabIndex == 1) {
+      await _flushTimbreProgDesdeSnap(max);
+    }
+  }
+
+  Future<void> _flushTimbreAhoraDesdeSnap(int maxDings) async {
+    final snap = _snapTimbreAhora;
+    if (snap == null) return;
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    var n = 0;
+    for (final d in snap.docs) {
+      if (n >= maxDings) return;
+      final data = d.data();
+      if (!_pasaFiltroAhoraLocalPool(data)) continue;
+      if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
+      if (_vistosParaTimbre.contains(d.id)) continue;
+      _vistosParaTimbre.add(d.id);
+      await NotificationService.I.playPoolOfferSoundInApp();
+      if (_viajeTienePrecioReal(data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: d.id,
+          titulo: 'Nuevo viaje turístico',
+          cuerpo:
+              '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+          skipSound: true,
+        );
+      }
+      n++;
+      if (n < maxDings) {
+        await Future<void>.delayed(const Duration(milliseconds: 380));
+      }
+    }
+  }
+
+  Future<void> _flushTimbreProgDesdeSnap(int maxDings) async {
+    final snap = _snapTimbreProg;
+    if (snap == null) return;
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    var n = 0;
+    for (final d in snap.docs) {
+      if (n >= maxDings) return;
+      final data = d.data();
+      if (!_pasaFiltroProgLocalPool(data)) continue;
+      if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
+      if (_vistosParaTimbre.contains(d.id)) continue;
+      _vistosParaTimbre.add(d.id);
+      await NotificationService.I.playPoolOfferSoundInApp();
+      if (_viajeTienePrecioReal(data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: d.id,
+          titulo: 'Viaje turístico programado',
+          cuerpo:
+              '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
+          skipSound: true,
+        );
+      }
+      n++;
+      if (n < maxDings) {
+        await Future<void>.delayed(const Duration(milliseconds: 380));
+      }
+    }
   }
 
   bool _disponibleParaMiPool(Map<String, dynamic> data, String myUid) {
-    final tipoServicio = (data['tipoServicio'] ?? '').toString();
-    final canal = (data['canalAsignacion'] ?? '').toString();
-
-    if (tipoServicio != 'turismo' ||
-        canal != AsignacionTurismoRepo.canalTurismoPool) {
-      return false;
-    }
-
-    if ((data['uidTaxista'] ?? '').toString().isNotEmpty) return false;
-
-    final estado = (data['estado'] ?? '').toString();
-    if (!_kEstadosPend.contains(estado)) return false;
-
-    final ignorados =
-        (data['ignoradosPor'] as List?)?.cast<String>() ?? const <String>[];
-    if (myUid.isNotEmpty && ignorados.contains(myUid)) return false;
-
-    final reservadoPor = (data['reservadoPor'] ?? '').toString();
-    final rh = data['reservadoHasta'];
-    DateTime? vence;
-    if (rh is fs.Timestamp) vence = rh.toDate();
-    if (rh is DateTime) vence = rh;
-
-    final bool reservaVigente = reservadoPor.isNotEmpty &&
-        (vence == null || vence.isAfter(DateTime.now()));
-    if (reservaVigente) return false;
-
-    return true;
+    if (!_timbreViajeNoIgnorado(data, myUid)) return false;
+    return ViajePoolTaxistaGate.esTurismoPoolTomable(data);
   }
 
   bool _pasaFiltroAhoraLocalPool(Map<String, dynamic> d) {
@@ -422,17 +621,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     if (rawA is DateTime) acc = rawA;
 
     final now = DateTime.now();
-    final tipo = (d['tipoServicio'] ?? '').toString();
-    final canal = (d['canalAsignacion'] ?? '').toString();
+    if (!ViajePoolTaxistaGate.esTurismoPoolTomable(d)) return false;
 
-    if (tipo != 'turismo' || canal != AsignacionTurismoRepo.canalTurismoPool) {
-      return false;
-    }
-
-    return esAhora &&
-        pub != null &&
-        !now.isBefore(pub) &&
-        (acc == null || !now.isBefore(acc));
+    final bool publishOk = (pub == null) || !now.isBefore(pub);
+    final bool acceptOk = (acc == null) || !now.isBefore(acc);
+    return esAhora && publishOk && acceptOk;
   }
 
   bool _pasaFiltroProgLocalPool(Map<String, dynamic> d) {
@@ -450,15 +643,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     if (rawA is DateTime) acc = rawA;
 
     final now = DateTime.now();
-    final tipo = (d['tipoServicio'] ?? '').toString();
-    final canal = (d['canalAsignacion'] ?? '').toString();
+    if (!ViajePoolTaxistaGate.esTurismoPoolTomable(d)) return false;
 
-    if (tipo != 'turismo' || canal != AsignacionTurismoRepo.canalTurismoPool) {
-      return false;
-    }
-
-    return (pub != null && !now.isBefore(pub)) &&
-        (acc == null || !now.isBefore(acc));
+    final bool publishOk = (pub == null) || !now.isBefore(pub);
+    final bool acceptOk = (acc == null) || !now.isBefore(acc);
+    return publishOk && acceptOk;
   }
 
   DateTime _fechaDe(Map<String, dynamic> data) {
@@ -509,6 +698,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       case 'bloqueado-pago-semanal':
       case 'bloqueado-comision-efectivo':
         return PagosTaxistaRepo.mensajeRecargaTomarViajes;
+      case 'chofer-turismo-no-aprobado':
+        return AsignacionTurismoRepo.mensajeNoAutorizadoPoolTurismo;
       default:
         if (res.startsWith('permiso:')) {
           return 'Permisos/reglas Firestore: ${res.split(':').last}';
@@ -551,6 +742,9 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     if (_aceptandoIds.contains(v.id)) return;
 
     setState(() => _aceptandoIds.add(v.id));
+    ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
+    _navegandoAViajeActivo = true;
+    var navegoAViajeEnCurso = false;
 
     try {
       final prep = await AsignacionTurismoRepo.prepararClaimPoolTurismo(
@@ -585,6 +779,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       if (!mounted) return;
 
       if (res == 'ok') {
+        await NotificationService.I.stopTimbre();
         await ViajesRepo.sincronizarChoferTurismoTrasAceptarDesdePool(
           uidChofer: taxista.uid,
           viajeId: v.id,
@@ -616,18 +811,27 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
             backgroundColor: cs.primary,
           ),
         );
-        _redirectToActiveTrip();
+        navegoAViajeEnCurso = true;
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: v.id,
+          uidTaxista: taxista.uid,
+        );
         return;
       }
 
       if (res == 'taxista-ocupado') {
+        await NotificationService.I.stopTimbre();
         messenger.showSnackBar(
           SnackBar(
             content: const Text('Tienes un viaje activo. Redirigiendo...'),
             backgroundColor: cs.tertiaryContainer,
           ),
         );
-        _redirectToActiveTrip();
+        navegoAViajeEnCurso = true;
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: v.id,
+          uidTaxista: taxista.uid,
+        );
         return;
       }
 
@@ -664,6 +868,10 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         ),
       );
     } finally {
+      if (!navegoAViajeEnCurso) {
+        ActiveTripService.cancelarMantenimientoOverlayViaje();
+        _navegandoAViajeActivo = false;
+      }
       if (mounted) setState(() => _aceptandoIds.remove(v.id));
     }
   }
@@ -718,7 +926,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         ),
       ),
       child: Text(
-        'Modo sin índice: filtrando en el dispositivo. Crea el índice compuesto si Firestore lo solicita.',
+        'Sincronizando índice del pool turístico (2–10 min). '
+        'Mientras tanto filtramos en el dispositivo.',
         style: TextStyle(color: cs.onPrimaryContainer, fontSize: 12),
       ),
     );
@@ -875,7 +1084,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
             final precioTotal = v.precio;
             final ganancia = (v.gananciaTaxista > 0)
                 ? v.gananciaTaxista
-                : (precioTotal * 0.80);
+                : PlataformaEconomia.gananciaTaxistaRdDesdeTotal(precioTotal);
 
             final pal = context._poolTurismoPal;
 
@@ -1118,6 +1327,50 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     );
   }
 
+  Widget _panelBloqueoPoolTurismo() {
+    final p = context._poolTurismoPal;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).pushNamed('/mis_pagos'),
+            icon: const Icon(Icons.payment_rounded),
+            label: const Text('Ir a Mis pagos'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () =>
+                Navigator.of(context).pushNamed('/bloqueado_por_pagos'),
+            icon: const Icon(Icons.account_balance_outlined),
+            label: const Text('Cuenta bancaria y pasos'),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            PagosTaxistaRepo.mensajeRecargaListaVacia,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: p.textSecondary,
+              fontSize: 15,
+              height: 1.45,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Cuando el administrador apruebe tu recarga, el pool turístico se reactiva solo.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: p.textMuted, fontSize: 13, height: 1.4),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildContenidoPrincipal(
     BuildContext context,
     Position pos,
@@ -1134,64 +1387,108 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     final p = context._poolTurismoPal;
 
     return TaxistaTripRouter(
-      child: DefaultTabController(
-        length: 2,
-        child: Scaffold(
-          backgroundColor: p.scaffoldBg,
-          appBar: _poolAppBar(
-            context,
-            actions: const [SaldoGananciasChip()],
-            bottom: TabBar(
-              indicatorColor: p.accent,
-              labelColor: p.accent,
-              unselectedLabelColor: p.textMuted,
-              tabs: const [
-                Tab(text: 'AHORA'),
-                Tab(text: 'PROGRAMADOS'),
-              ],
-            ),
+      child: Scaffold(
+        backgroundColor: p.scaffoldBg,
+        appBar: _poolAppBar(
+          context,
+          actions: const [SaldoGananciasChip()],
+          bottom: TabBar(
+            controller: _tabPool,
+            indicatorColor: p.accent,
+            labelColor: p.accent,
+            unselectedLabelColor: p.textMuted,
+            tabs: const [
+              Tab(text: 'AHORA'),
+              Tab(text: 'PROGRAMADOS'),
+            ],
           ),
-          body: StreamBuilder<bool>(
-            stream: RolesService.streamDisponibilidad(u.uid),
-            builder: (context, dispSnap) {
-              final disponible = dispSnap.data ?? false;
-              return Column(
-                children: [
-                  if (!disponible) _bannerNoDisponible(context),
-                  _bannerFallback(
-                    context,
-                    _usarFallbackSinIndiceAhora || _usarFallbackSinIndiceProg,
-                  ),
-                  Expanded(
-                    child: TabBarView(
+        ),
+        body: StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
+          stream: fs.FirebaseFirestore.instance
+              .collection('usuarios')
+              .doc(u.uid)
+              .snapshots(),
+          builder: (context, usrSnap) {
+            final uData = usrSnap.data?.data();
+            return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
+              stream: fs.FirebaseFirestore.instance
+                  .collection('billeteras_taxista')
+                  .doc(u.uid)
+                  .snapshots(),
+              builder: (context, billeSnap) {
+                final bloqueado = !PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+                  uData,
+                  billeSnap.data?.data(),
+                );
+                return StreamBuilder<bool>(
+                  stream: RolesService.streamDisponibilidad(u.uid),
+                  builder: (context, dispSnap) {
+                    final disponible = dispSnap.data ?? false;
+                    return Column(
                       children: [
-                        _buildLista(
-                          stream: streamAhora,
-                          disponible: disponible,
-                          myUid: u.uid,
-                          filtroLocalSiFallback: _pasaFiltroAhoraLocalPool,
-                          usandoFallback: _usarFallbackSinIndiceAhora,
-                          esTabAhora: true,
-                          latTaxista: pos.latitude,
-                          lonTaxista: pos.longitude,
+                        if (!disponible) _bannerNoDisponible(context),
+                        if (bloqueado)
+                          Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color.fromRGBO(244, 67, 54, 0.15),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: const Color.fromRGBO(244, 67, 54, 0.7),
+                              ),
+                            ),
+                            child: Text(
+                              PagosTaxistaRepo.mensajeRecargaBannerLista,
+                              style: TextStyle(color: p.textSecondary),
+                            ),
+                          ),
+                        _bannerFallback(
+                          context,
+                          _usarFallbackSinIndiceAhora ||
+                              _usarFallbackSinIndiceProg,
                         ),
-                        _buildLista(
-                          stream: streamProg,
-                          disponible: disponible,
-                          myUid: u.uid,
-                          filtroLocalSiFallback: _pasaFiltroProgLocalPool,
-                          usandoFallback: _usarFallbackSinIndiceProg,
-                          esTabAhora: false,
-                          latTaxista: pos.latitude,
-                          lonTaxista: pos.longitude,
+                        Expanded(
+                          child: bloqueado
+                              ? _panelBloqueoPoolTurismo()
+                              : TabBarView(
+                                  controller: _tabPool,
+                                  children: [
+                                    _buildLista(
+                                      stream: streamAhora,
+                                      disponible: disponible,
+                                      myUid: u.uid,
+                                      filtroLocalSiFallback:
+                                          _pasaFiltroAhoraLocalPool,
+                                      usandoFallback:
+                                          _usarFallbackSinIndiceAhora,
+                                      esTabAhora: true,
+                                      latTaxista: pos.latitude,
+                                      lonTaxista: pos.longitude,
+                                    ),
+                                    _buildLista(
+                                      stream: streamProg,
+                                      disponible: disponible,
+                                      myUid: u.uid,
+                                      filtroLocalSiFallback:
+                                          _pasaFiltroProgLocalPool,
+                                      usandoFallback:
+                                          _usarFallbackSinIndiceProg,
+                                      esTabAhora: false,
+                                      latTaxista: pos.latitude,
+                                      lonTaxista: pos.longitude,
+                                    ),
+                                  ],
+                                ),
                         ),
                       ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
+                    );
+                  },
+                );
+              },
+            );
+          },
         ),
       ),
     );

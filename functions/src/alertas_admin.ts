@@ -1,4 +1,4 @@
-import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import { FieldValue, getFirestore, Timestamp } from "firebase-admin/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 
 import { logAdminAudit } from "./audit.js";
@@ -113,6 +113,65 @@ export const proactiveAdminAlertsHourly = onSchedule("every 60 minutes", async (
 
   // Enviar (best-effort): si no hay SMTP, queda solo en logs.
   await sendMail({ subject, text: lines.join("\n") });
+
+  // Persistir alerta in-app para panel ADM (tiempo real).
+  const severidad =
+    rateCancel >= 0.35 || (comisionesPendientes30d ?? 0) >= 25
+      ? "critical"
+      : cancelados > 0 || bloqueosNuevos > 0
+        ? "warning"
+        : "info";
+
+  await db()
+    .collection("admin_alertas")
+    .add({
+      tipo: "resumen_horario",
+      titulo: `Resumen operativo (1h) — ${shortIso(now)}`,
+      mensaje: lines.slice(2).join("\n"),
+      severidad,
+      leida: false,
+      metadata: {
+        viajesTotal,
+        completados,
+        cancelados,
+        cancelRate: Number(rateCancel.toFixed(4)),
+        bloqueosNuevos,
+        comisionesPendientes30d,
+        comisionesPendientes30dErr,
+      },
+      windowFrom: from1h.toISOString(),
+      windowTo: now.toISOString(),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+  // Alertas puntuales si superan umbrales.
+  if (rateCancel >= 0.25 && viajesTotal >= 5) {
+    await db()
+      .collection("admin_alertas")
+      .add({
+        tipo: "cancelaciones_alta",
+        titulo: "Tasa de cancelación elevada",
+        mensaje: `${cancelados}/${viajesTotal} viajes cancelados en la última hora (${fmtPct(rateCancel)}).`,
+        severidad: rateCancel >= 0.35 ? "critical" : "warning",
+        leida: false,
+        metadata: { cancelados, viajesTotal, cancelRate: rateCancel },
+        createdAt: FieldValue.serverTimestamp(),
+      });
+  }
+
+  if (bloqueosNuevos > 0) {
+    await db()
+      .collection("admin_alertas")
+      .add({
+        tipo: "bloqueos_nuevos",
+        titulo: "Nuevos bloqueos por comisión",
+        mensaje: `${bloqueosNuevos} taxista(s) bloqueados por pago pendiente en la última hora.`,
+        severidad: bloqueosNuevos >= 5 ? "critical" : "warning",
+        leida: false,
+        metadata: { bloqueosNuevos },
+        createdAt: FieldValue.serverTimestamp(),
+      });
+  }
 
   logAdminAudit({
     action: "proactive_admin_alerts_hourly",

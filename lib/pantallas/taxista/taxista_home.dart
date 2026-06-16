@@ -1,7 +1,7 @@
 // lib/pantallas/taxista/taxista_home.dart
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/shell/taxista_shell.dart';
+import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 
 /// Punto de entrada legado: mismo shell que tras onboarding.
 class TaxistaHome extends StatelessWidget {
@@ -9,6 +9,6 @@ class TaxistaHome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const TaxistaShell();
+    return const TaxistaEntry();
   }
 }

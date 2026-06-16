@@ -7,6 +7,11 @@
 
     <!-- Visibilidad para abrir Waze/Maps/geo -->
     <queries>
+        <!-- Android 11+: necesario para que el mic enlace con Google Speech -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <package android:name="com.google.android.googlequicksearchbox" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="geo" />
@@ -45,6 +50,9 @@
     <!-- Cámara -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Asistente RAI: dictar dirección por voz (opcional) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Galería: Photo Picker (image_picker + main.dart). Estas líneas solo evitan que
          dependencias fusionen permisos de medios amplios; no se añaden al APK final. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />
@@ -78,6 +86,36 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Giras/pool: raidriver://pool?id=… (WhatsApp respaldo) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="raidriver"
+                    android:host="pool" />
+            </intent-filter>
+
+            <!-- Giras/pool: App Links https (requiere assetlinks.json con huella release) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="flygo-rd.web.app"
+                    android:pathPrefix="/pool" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="flygo-rd.firebaseapp.com"
+                    android:pathPrefix="/pool" />
+            </intent-filter>
         </activity>
 
         <!-- Tema normal de Flutter al volver del splash -->
@@ -87,6 +125,9 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <meta-data
+            android:name="flutter_deeplinking_enabled"
+            android:value="true" />
 
         <!-- Google Maps / Places -->
         <meta-data

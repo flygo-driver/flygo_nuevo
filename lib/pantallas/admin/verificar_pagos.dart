@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../modelo/liquidacion_semanal.dart';
 import '../../modelo/recarga_comision_taxista.dart';
 import '../../config/plataforma_economia.dart';
+import '../../servicios/conciliacion_banco_repo.dart';
 import '../../servicios/liquidacion_semanal_repo.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/viajes_repo.dart';
@@ -18,7 +19,7 @@ import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
 class VerificarPagos extends StatefulWidget {
-  /// 0 = recargas prepago, 1 = comisiones semanales, 2/3 = transferencias.
+  /// 0 = recargas prepago, 1 = comisiones semanales, 2/3 = transferencias, 4 = conciliación banco.
   const VerificarPagos({
     super.key,
     this.initialTabIndex = 0,
@@ -50,7 +51,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
   void initState() {
     super.initState();
     final int tab = widget.initialTabIndex;
-    _tabIndex = tab < 0 ? 0 : (tab > 3 ? 3 : tab);
+    _tabIndex = tab < 0 ? 0 : (tab > 4 ? 4 : tab);
     _filtroEstadoRecarga = widget.initialFiltroRecarga.trim().isEmpty
         ? 'todos'
         : widget.initialFiltroRecarga.trim();
@@ -1050,6 +1051,11 @@ class _VerificarPagosState extends State<VerificarPagos> {
                     width: 168,
                     child: _tabButton('Transferencias validadas', 3),
                   ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 168,
+                    child: _tabButton('Conciliación banco', 4),
+                  ),
                 ],
               ),
             ),
@@ -1059,7 +1065,8 @@ class _VerificarPagosState extends State<VerificarPagos> {
               0 => _buildRecargasPrepago(),
               1 => _buildComisionesSemanales(),
               2 => _buildTransferenciasPendientes(),
-              _ => _buildPagosATaxistas(),
+              3 => _buildPagosATaxistas(),
+              _ => _buildConciliacionesBanco(),
             },
           ),
         ],
@@ -2738,6 +2745,432 @@ class _VerificarPagosState extends State<VerificarPagos> {
             seleccionado ? cs.onSecondaryContainer : AdminUi.secondary(context),
         fontWeight: FontWeight.w600,
       ),
+    );
+  }
+
+  String _formatCents(dynamic raw) {
+    if (raw == null) return '—';
+    final n = raw is num ? raw.toInt() : int.tryParse(raw.toString()) ?? 0;
+    return formatter.format(n / 100);
+  }
+
+  Future<void> _mostrarDialogImportarExtracto() async {
+    final csvCtrl = TextEditingController();
+    final cuentaCtrl = TextEditingController();
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) {
+          return AlertDialog(
+            backgroundColor: AdminUi.dialogSurface(ctx),
+            title: Text(
+              'Importar extracto Popular',
+              style: TextStyle(color: AdminUi.onCard(ctx)),
+            ),
+            content: SizedBox(
+              width: 420,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Pegá CSV con encabezados: fecha, monto, referencia, descripcion.',
+                    style: TextStyle(
+                      color: AdminUi.secondary(ctx),
+                      fontSize: 12.5,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: csvCtrl,
+                    maxLines: 8,
+                    style: TextStyle(color: AdminUi.onCard(ctx), fontSize: 12),
+                    decoration: InputDecoration(
+                      hintText: 'fecha,monto,referencia,descripcion\n...',
+                      filled: true,
+                      fillColor: AdminUi.inputFill(ctx),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: cuentaCtrl,
+                    style: TextStyle(color: AdminUi.onCard(ctx)),
+                    decoration: InputDecoration(
+                      labelText: 'Últimos 4 dígitos cuenta RAI (opcional)',
+                      filled: true,
+                      fillColor: AdminUi.inputFill(ctx),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancelar'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Importar'),
+              ),
+            ],
+          );
+        },
+      );
+      if (ok != true || csvCtrl.text.trim().isEmpty) return;
+      await _ejecutarAccionAdmin(() async {
+        final res = await ConciliacionBancoRepo.importarExtractoCsv(
+          csv: csvCtrl.text,
+          cuentaRaiUltimos4: cuentaCtrl.text,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Import: ${res['creados'] ?? 0} creados, '
+              '${res['omitidos'] ?? 0} omitidos, '
+              '${res['invalidos'] ?? 0} inválidos',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      });
+    } finally {
+      csvCtrl.dispose();
+      cuentaCtrl.dispose();
+    }
+  }
+
+  Widget _buildConciliacionesBanco() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Material(
+            color: Colors.indigo.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Recaudo transferencia → cuenta RAI: importá el extracto Popular, '
+                'proponé matches ref RAI-V + monto, y confirmá/rechazá aquí. '
+                'La verificación del viaje ocurre solo en Cloud Functions.',
+                style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: _accionEnCurso
+                    ? null
+                    : () => _ejecutarAccionAdmin(() async {
+                          final res =
+                              await ConciliacionBancoRepo.proponerAutomaticas();
+                          if (!mounted) return;
+                          if (res['omitido'] == true) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Omitido: ${res['motivo'] ?? 'flag OFF'}',
+                                ),
+                                backgroundColor: Colors.orange,
+                              ),
+                            );
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Propuestas: ${res['propuestas'] ?? 0} · '
+                                'Omitidos: ${res['omitidos'] ?? 0} · '
+                                'Sin viaje: ${res['sinViaje'] ?? 0}',
+                              ),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }),
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                label: const Text('Proponer automáticas'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _accionEnCurso ? null : _mostrarDialogImportarExtracto,
+                icon: const Icon(Icons.upload_file, size: 18),
+                label: const Text('Importar CSV'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: StreamBuilder<List<Map<String, dynamic>>>(
+            stream: ConciliacionBancoRepo.streamPropuestas(),
+            builder: (context, snap) {
+              if (snap.hasError) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'Conciliaciones: ${snap.error}',
+                      style: const TextStyle(color: Colors.red),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                );
+              }
+              if (snap.connectionState == ConnectionState.waiting &&
+                  !snap.hasData) {
+                return Center(
+                  child: CircularProgressIndicator(
+                    color: AdminUi.progressAccent(context),
+                  ),
+                );
+              }
+              final rows = snap.data ?? const <Map<String, dynamic>>[];
+              if (rows.isEmpty) {
+                return Center(
+                  child: Text(
+                    'No hay propuestas pendientes.\n'
+                    'Importá extracto y ejecutá «Proponer automáticas».',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                );
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: rows.length,
+                itemBuilder: (context, index) {
+                  final c = rows[index];
+                  final id = (c['id'] ?? '').toString();
+                  final ref = (c['referenciaRecaudo'] ?? '').toString();
+                  final viajeId = (c['viajeId'] ?? '').toString();
+                  final movId = (c['movimientoBancoId'] ?? '').toString();
+                  final diff = c['diferenciaCents'];
+                  final reglas = (c['matchReglas'] as List?)
+                          ?.map((e) => e.toString())
+                          .toList() ??
+                      const <String>[];
+                  final tieneDiscrepancia =
+                      reglas.contains('monto_discrepancia') ||
+                          (diff is num && diff != 0);
+                  final nota = (c['nota'] ?? '').toString();
+
+                  return Card(
+                    color: AdminUi.card(context),
+                    margin: const EdgeInsets.only(bottom: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: tieneDiscrepancia
+                            ? Colors.orange.withValues(alpha: 0.6)
+                            : Colors.green.withValues(alpha: 0.45),
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            ref.isEmpty ? 'Sin referencia' : ref,
+                            style: TextStyle(
+                              color: AdminUi.onCard(context),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Viaje #${_shortDocId(viajeId)} · Mov. ${_shortDocId(movId)}',
+                            style: TextStyle(
+                              color: AdminUi.secondary(context),
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Esperado: ${_formatCents(c['montoEsperadoCents'])} · '
+                            'Extracto: ${_formatCents(c['montoRealCents'])}'
+                            '${tieneDiscrepancia ? ' · Δ ${_formatCents(diff)}' : ''}',
+                            style: TextStyle(
+                              color: AdminUi.onCard(context),
+                              fontSize: 12.5,
+                            ),
+                          ),
+                          if (nota.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              nota,
+                              style: TextStyle(
+                                color: Colors.orange.shade200,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 12),
+                          Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              OutlinedButton(
+                                onPressed: _accionEnCurso
+                                    ? null
+                                    : () async {
+                                        final notaCtrl =
+                                            TextEditingController();
+                                        try {
+                                          final ok = await showDialog<bool>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              backgroundColor:
+                                                  AdminUi.dialogSurface(ctx),
+                                              title: Text(
+                                                'Rechazar conciliación',
+                                                style: TextStyle(
+                                                    color:
+                                                        AdminUi.onCard(ctx)),
+                                              ),
+                                              content: TextField(
+                                                controller: notaCtrl,
+                                                maxLines: 3,
+                                                decoration:
+                                                    const InputDecoration(
+                                                  hintText: 'Motivo (obligatorio)',
+                                                ),
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(ctx, false),
+                                                  child:
+                                                      const Text('Cancelar'),
+                                                ),
+                                                FilledButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(ctx, true),
+                                                  child:
+                                                      const Text('Rechazar'),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          if (ok != true) return;
+                                          if (notaCtrl.text.trim().isEmpty) {
+                                            if (!context.mounted) return;
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                    'Indicá un motivo'),
+                                                backgroundColor: Colors.orange,
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          await _ejecutarAccionAdmin(() async {
+                                            await ConciliacionBancoRepo
+                                                .rechazar(
+                                              conciliacionId: id,
+                                              notaAdmin: notaCtrl.text.trim(),
+                                            );
+                                            if (!context.mounted) return;
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                    'Conciliación rechazada'),
+                                                backgroundColor: Colors.orange,
+                                              ),
+                                            );
+                                          });
+                                        } finally {
+                                          notaCtrl.dispose();
+                                        }
+                                      },
+                                child: const Text('Rechazar'),
+                              ),
+                              ElevatedButton(
+                                onPressed: _accionEnCurso
+                                    ? null
+                                    : () async {
+                                        if (tieneDiscrepancia) {
+                                          final continuar =
+                                              await showDialog<bool>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: const Text(
+                                                  'Confirmar con discrepancia'),
+                                              content: const Text(
+                                                'El monto del extracto no coincide exactamente. '
+                                                '¿Confirmar igual?',
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(ctx, false),
+                                                  child:
+                                                      const Text('Cancelar'),
+                                                ),
+                                                FilledButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(ctx, true),
+                                                  child:
+                                                      const Text('Confirmar'),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          if (continuar != true) return;
+                                        }
+                                        await _ejecutarAccionAdmin(() async {
+                                          await ConciliacionBancoRepo.confirmar(
+                                            conciliacionId: id,
+                                          );
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Viaje verificado por conciliación',
+                                              ),
+                                              backgroundColor: Colors.green,
+                                            ),
+                                          );
+                                        });
+                                      },
+                                child: const Text('Confirmar'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

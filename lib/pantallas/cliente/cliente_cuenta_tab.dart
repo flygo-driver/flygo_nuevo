@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/cliente_pagos_sheet.dart';
 import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
+import 'package:flygo_nuevo/widgets/rai_asistente_launcher.dart';
 
 /// Perfil, pagos, soporte y ajustes (misma lógica que el drawer, sin duplicar rutas).
 class ClienteCuentaTab extends StatelessWidget {
@@ -125,6 +126,13 @@ class ClienteCuentaTab extends StatelessWidget {
             subtitle: const Text('Efectivo y transferencia'),
             trailing: Icon(Icons.chevron_right, color: cs.outline),
             onTap: () => showClienteMetodosPago(context),
+          ),
+          ListTile(
+            leading: Icon(Icons.auto_awesome_rounded, color: cs.primary),
+            title: const Text('Asistente RAI'),
+            subtitle: const Text('IA · direcciones · cómo funciona'),
+            trailing: Icon(Icons.chevron_right, color: cs.outline),
+            onTap: () => RaiAsistenteLauncher.abrirAsistente(context),
           ),
           ListTile(
             leading: Icon(Icons.support_agent, color: cs.primary),

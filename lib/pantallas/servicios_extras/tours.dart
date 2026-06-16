@@ -121,7 +121,9 @@ class ToursTuristicosScreen extends StatelessWidget {
                 );
               },
               icon: Icon(Icons.groups, color: accent),
-              label: const Text('Ver tours/giras por cupos de agencias'),
+              label: const Text(
+                'Ver salidas por cupos (giras, excursiones, grupos)',
+              ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: accent,
                 side: BorderSide(color: accent.withValues(alpha: 0.8)),

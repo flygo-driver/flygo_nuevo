@@ -6,11 +6,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_crear_publicacion_flow.dart';
+import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_viaje_activo_page.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:flygo_nuevo/widgets/bola_cliente_mapa_conductor_live.dart';
@@ -580,6 +582,48 @@ class BolaPuebloFormat {
 }
 
 class BolaPuebloDialogs {
+  /// Tras confirmar bola (publicar o cerrar acuerdo): pantalla Bola o mapa pool si el espejo ya está activo.
+  static Future<void> _navegarClienteTrasBolaConfirmada({
+    required NavigatorState? preNav,
+    required String bolaId,
+  }) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance
+              .collection('bolas_pueblo')
+              .doc(bolaId)
+              .get();
+      final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+      final String estado = (d['estado'] ?? '').toString().trim();
+      final String viajeEspejoId =
+          (d['viajeEspejoId'] ?? '').toString().trim();
+
+      if ((estado == 'en_curso' || estado == 'acordada') &&
+          viajeEspejoId.isNotEmpty) {
+        final DocumentSnapshot<Map<String, dynamic>> vSnap =
+            await FirebaseFirestore.instance
+                .collection('viajes')
+                .doc(viajeEspejoId)
+                .get();
+        if (vSnap.exists) {
+          final Map<String, dynamic> vd = vSnap.data() ?? <String, dynamic>{};
+          if (!ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
+              vd)) {
+            await NavigationService.clearAndGoViajeEnCursoCliente(
+              preNav: preNav,
+            );
+            return;
+          }
+        }
+      }
+    } catch (_) {}
+
+    await NavigationService.clearAndGoPage(
+      preNav: preNav,
+      page: BolaPuebloViajeActivoPage(bolaId: bolaId),
+    );
+  }
+
   BolaPuebloDialogs._();
 
   static String mensajeExcepcionUsuario(Object e) {
@@ -700,9 +744,14 @@ class BolaPuebloDialogs {
     );
 
     if (result == null) return;
+    NavigatorState? navAntesDeCrear =
+        NavigationService.navigatorKey.currentState;
+    if (navAntesDeCrear == null && context.mounted) {
+      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
+    }
     try {
       onBusy(true);
-      await BolaPuebloRepo.crearPublicacion(
+      final String bolaId = await BolaPuebloRepo.crearPublicacion(
         uid: uid,
         rol: rol,
         nombre: nombre,
@@ -723,6 +772,14 @@ class BolaPuebloDialogs {
       ScaffoldMessenger.of(context).showSnackBar(
         BolaPuebloTheme.snack(context, 'Publicación creada'),
       );
+      final String rolNorm = rol.trim().toLowerCase();
+      final String tipoNorm = tipo.trim().toLowerCase();
+      if (rolNorm == 'cliente' || tipoNorm == 'pedido') {
+        await _navegarClienteTrasBolaConfirmada(
+          preNav: navAntesDeCrear,
+          bolaId: bolaId,
+        );
+      }
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -1740,6 +1797,15 @@ class BolaPuebloDialogs {
                                                                       null)
                                                               ? null
                                                               : () async {
+                                                                  final NavigatorState?
+                                                                      navAntesDeCrear =
+                                                                      NavigationService
+                                                                          .navigatorKey
+                                                                          .currentState ??
+                                                                      Navigator.of(
+                                                                          context,
+                                                                          rootNavigator:
+                                                                              true);
                                                                   aceptandoOfertaId =
                                                                       d.id;
                                                                   setModalState(
@@ -1764,6 +1830,13 @@ class BolaPuebloDialogs {
                                                                         context,
                                                                       );
                                                                     }
+                                                                    await BolaPuebloDialogs
+                                                                        ._navegarClienteTrasBolaConfirmada(
+                                                                      preNav:
+                                                                          navAntesDeCrear,
+                                                                      bolaId:
+                                                                          bolaId,
+                                                                    );
                                                                   } catch (e) {
                                                                     if (context
                                                                         .mounted) {
@@ -3141,6 +3214,12 @@ class _BolaPuebloContraofertasInboundState
                                 onPressed: anyBusy && !accBusy
                                     ? null
                                     : () async {
+                                        final NavigatorState?
+                                            navAntesDeCrear =
+                                            NavigationService
+                                                .navigatorKey.currentState ??
+                                            Navigator.of(context,
+                                                rootNavigator: true);
                                         setState(() => _busy = 'acc:${d.id}');
                                         try {
                                           await BolaPuebloRepo
@@ -3152,6 +3231,11 @@ class _BolaPuebloContraofertasInboundState
                                           await BolaPuebloDialogs
                                               .mostrarPostAceptarOfertaDialog(
                                                   context);
+                                          await BolaPuebloDialogs
+                                              ._navegarClienteTrasBolaConfirmada(
+                                            preNav: navAntesDeCrear,
+                                            bolaId: widget.bolaId,
+                                          );
                                         } catch (e) {
                                           if (context.mounted) {
                                             ScaffoldMessenger.of(context)
@@ -3982,13 +4066,25 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
                         child: FilledButton.icon(
                           style: BolaPuebloUi.filledPrimary,
                           onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => soyTaxistaAsignado
-                                    ? const ViajeEnCursoTaxista()
-                                    : const ViajeEnCursoCliente(),
-                              ),
-                            );
+                            final NavigatorState? nav =
+                                NavigationService.navigatorKey.currentState ??
+                                    Navigator.of(context, rootNavigator: true);
+                            if (soyTaxistaAsignado) {
+                              unawaited(
+                                nav?.push<void>(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        const ViajeEnCursoTaxista(),
+                                  ),
+                                ),
+                              );
+                            } else {
+                              unawaited(
+                                NavigationService.clearAndGoViajeEnCursoCliente(
+                                  preNav: nav,
+                                ),
+                              );
+                            }
                           },
                           icon: const Icon(Icons.local_taxi_rounded, size: 22),
                           label: Text(

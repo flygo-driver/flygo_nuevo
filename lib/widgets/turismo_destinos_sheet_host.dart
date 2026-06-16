@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 
 /// Abre el selector de turismo al instante; la ubicación se completa en segundo plano
@@ -16,12 +17,15 @@ class TurismoDestinosSheetHost extends StatefulWidget {
     this.tipoVehiculoInicial = 'carro',
     this.seedLat,
     this.seedLon,
+    this.showFloatingBack = true,
   });
 
   final void Function(DestinoSeleccionado seleccion) onDestinoSeleccionado;
   final String tipoVehiculoInicial;
   final double? seedLat;
   final double? seedLon;
+  /// En pantalla completa con AppBar, usar `false`.
+  final bool showFloatingBack;
 
   @override
   State<TurismoDestinosSheetHost> createState() =>
@@ -63,7 +67,7 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
 
     try {
       final ({bool serviceEnabled, LocationPermission permission}) snap =
-          await GpsService.checkServiceThenRequestPermissionIfNeeded();
+          await LocationPermissionService.checkServiceThenRequestIfNeeded();
       if (!mounted) return;
       if (!snap.serviceEnabled || !GpsService.permissionUsable(snap.permission)) {
         return;
@@ -107,24 +111,25 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
           tipoVehiculoInicial: widget.tipoVehiculoInicial,
           onDestinoSeleccionado: widget.onDestinoSeleccionado,
         ),
-        Positioned(
-          top: 10,
-          left: 12,
-          child: SafeArea(
-            bottom: false,
-            child: Material(
-              color: btnBg,
-              shape: CircleBorder(
-                side: BorderSide(color: border),
-              ),
-              child: IconButton(
-                tooltip: 'Volver',
-                icon: Icon(Icons.arrow_back_rounded, color: fg),
-                onPressed: () => Navigator.of(context).maybePop(),
+        if (widget.showFloatingBack)
+          Positioned(
+            top: 10,
+            left: 12,
+            child: SafeArea(
+              bottom: false,
+              child: Material(
+                color: btnBg,
+                shape: CircleBorder(
+                  side: BorderSide(color: border),
+                ),
+                child: IconButton(
+                  tooltip: 'Volver',
+                  icon: Icon(Icons.arrow_back_rounded, color: fg),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
               ),
             ),
           ),
-        ),
       ],
     );
   }

@@ -23,6 +23,26 @@ class ActiveTripService {
   /// Evita que el shell quite [ViajeEnCursoCliente] en el instante en que
   /// `viajeActivoId` ya se limpió pero aún corre factura / post-viaje.
   static int _mantenerOverlayViajeHastaMs = 0;
+  static int _bloquearShellSinViajeHastaMs = 0;
+
+  /// Tras «Aceptar viaje»: evita que [TaxistaShell] vuelva al pool por snapshots
+  /// intermedios (viajeActivoId antes que uidTaxista en el doc).
+  static void bloquearShellTaxistaTrasAceptar(Duration duracion) {
+    final int hasta = DateTime.now().add(duracion).millisecondsSinceEpoch;
+    if (hasta > _bloquearShellSinViajeHastaMs) {
+      _bloquearShellSinViajeHastaMs = hasta;
+      print(
+          '[VIAJE_ACTIVO] ActiveTripService.bloquearShellTaxistaTrasAceptar ${duracion.inSeconds}s');
+    }
+    mantenerOverlayViajeEnShell(duracion);
+  }
+
+  static bool get debeBloquearShellSinViajeTaxista =>
+      DateTime.now().millisecondsSinceEpoch < _bloquearShellSinViajeHastaMs;
+
+  static void cancelarBloqueoShellTaxista() {
+    _bloquearShellSinViajeHastaMs = 0;
+  }
 
   /// Mantiene el overlay de “viaje en curso” en el shell aunque el stream diga
   /// `false` (p. ej. transición a factura).
@@ -43,6 +63,7 @@ class ActiveTripService {
   /// Sin esto, [ClienteShell] puede seguir mostrando [ViajeEnCursoCliente] ~90s aunque el viaje ya cerró.
   static void cancelarMantenimientoOverlayViaje() {
     _mantenerOverlayViajeHastaMs = 0;
+    _bloquearShellSinViajeHastaMs = 0;
   }
 
   /// Documento del viaje activo, o `null`.
@@ -62,25 +83,50 @@ class ActiveTripService {
           (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
       if (vid.isEmpty) return false;
 
-      final DocumentSnapshot<Map<String, dynamic>> vSnap =
-          await _db.collection('viajes').doc(vid).get();
-      if (!vSnap.exists) return false;
-      final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
-      if (!_usuarioParticipaViajeDoc(d, u)) return false;
-
-      if (!ViajePoolTaxistaGate.viajeDocDebeMostrarOverlayShell(d, u)) {
-        return false;
-      }
-
-      final String st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
-      if (d['completado'] == true || EstadosViaje.esTerminal(st)) {
-        return false;
-      }
-      return true;
+      return _viajeEnSeguimientoDesdeDocId(vid, u);
     } catch (e) {
       print('[VIAJE_ACTIVO] usuarioTieneViajeEnSeguimiento error: $e');
       return false;
     }
+  }
+
+  static Future<bool> _viajeEnSeguimientoDesdeDocId(String vid, String uid) async {
+    for (int i = 0; i < 12; i++) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> vSnap =
+            await _db.collection('viajes').doc(vid).get(
+                  i == 0
+                      ? const GetOptions()
+                      : const GetOptions(source: Source.server),
+                );
+        if (!vSnap.exists) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          continue;
+        }
+        final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
+        if (!_usuarioParticipaViajeDoc(d, uid)) {
+          final String t1 = (d['uidTaxista'] ?? '').toString().trim();
+          final String t2 = (d['taxistaId'] ?? '').toString().trim();
+          if (t1.isEmpty && t2.isEmpty) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+            continue;
+          }
+          return false;
+        }
+        if (!ViajePoolTaxistaGate.viajeDocDebeMostrarOverlayShell(d, uid)) {
+          return false;
+        }
+        final String st =
+            EstadosViaje.normalizar((d['estado'] ?? '').toString());
+        if (d['completado'] == true || EstadosViaje.esTerminal(st)) {
+          return false;
+        }
+        return true;
+      } catch (_) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    }
+    return debeBloquearShellSinViajeTaxista;
   }
 
   static bool _usuarioParticipaViajeDoc(Map<String, dynamic> d, String uid) {
@@ -150,9 +196,10 @@ class ActiveTripService {
         })
         .distinct()
         .asyncMap((_) async {
-          if (debeMantenerOverlayViajeEnShell) {
+          if (debeMantenerOverlayViajeEnShell ||
+              debeBloquearShellSinViajeTaxista) {
             print(
-                '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → true (overlay post-cierre)');
+                '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → true (overlay/bloqueo taxista)');
             return true;
           }
           final bool ok = await usuarioTieneViajeEnSeguimiento(u);

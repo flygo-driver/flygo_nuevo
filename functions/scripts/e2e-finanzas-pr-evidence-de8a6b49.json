@@ -1,0 +1,367 @@
+{
+  "meta": {
+    "projectId": "flygo-rd",
+    "useEmulator": true,
+    "startedAt": "2026-06-12T01:44:38.288Z",
+    "checklist": {
+      "1_taxista_prueba": {
+        "ok": true,
+        "detail": "admin=e2e_admin_de8a6b49 taxista=e2e_taxista_de8a6b49"
+      },
+      "2_registrar_viajes": {
+        "ok": true,
+        "detail": "efectivo=o0iEDtcHQrHSh1HwIYta,0MMpVa04pbpOXjEIU4Dd transferencia=DyduoojJfli9JuIliTJ2"
+      },
+      "3_generar_liquidacion": {
+        "ok": true,
+        "detail": "liquidacionId=e2e_taxista_de8a6b49_2026-W23"
+      },
+      "4a_viajeIds_solo_digital": {
+        "ok": true,
+        "detail": "viajeIds=[\"DyduoojJfli9JuIliTJ2\"]"
+      },
+      "4b_efectivo_excluidos_count": {
+        "ok": true,
+        "detail": "viajesEfectivoExcluidosCount=2"
+      },
+      "4c_total_neto_cents": {
+        "ok": true,
+        "detail": "totalNetoCents=1700 esperado=1700"
+      },
+      "4d_bruto_eq_comision_mas_neto": {
+        "ok": true,
+        "detail": "bruto=2000 comision=300 neto=1700"
+      },
+      "5_aprobar_liquidacion": {
+        "ok": true,
+        "detail": "{\"ok\":true,\"liquidacionId\":\"e2e_taxista_de8a6b49_2026-W23\",\"alreadyProcessed\":false,\"estado\":\"pagado\",\"viajesLiquidados\":[\"DyduoojJfli9JuIliTJ2\"]}"
+      },
+      "6_viaje_digital_liquidado": {
+        "ok": true,
+        "detail": "liquidado=true liqId=e2e_taxista_de8a6b49_2026-W23 liquidadoEn=true"
+      },
+      "7a_efectivo_no_en_viajeIds": {
+        "ok": true,
+        "detail": "viajeIds=[\"DyduoojJfli9JuIliTJ2\"]"
+      },
+      "7b_efectivo_no_liquidado_digital": {
+        "ok": true,
+        "detail": "e1.liquidado=false e2.liquidado=false"
+      },
+      "7c_saldo_retirable_sin_digital_pendiente": {
+        "ok": true,
+        "detail": "ganRetirableCents=0"
+      },
+      "7d_efectivo_no_pago_semanal": {
+        "ok": true,
+        "detail": "legacyIncluye=[]"
+      },
+      "8_rollback_pr1": {
+        "ok": true,
+        "detail": "flags useLiq=false legacyWrite=true elegibles=1"
+      }
+    },
+    "finishedAt": "2026-06-12T01:44:38.855Z",
+    "passCount": 14,
+    "failCount": 0
+  },
+  "before": {
+    "viajes": {
+      "o0iEDtcHQrHSh1HwIYta": {
+        "uidTaxista": "e2e_taxista_de8a6b49",
+        "completado": true,
+        "estado": "finalizado",
+        "metodoPago": "Efectivo",
+        "metodoPagoNormalizado": "efectivo",
+        "estadoPago": "pagado",
+        "precio": 10,
+        "precio_cents": 1000,
+        "comision": 1.5,
+        "comision_cents": 150,
+        "gananciaTaxista": 8.5,
+        "ganancia_cents": 850,
+        "finalizadoEn": {
+          "_seconds": 1780588799,
+          "_nanoseconds": 999000000
+        },
+        "liquidado": false
+      },
+      "0MMpVa04pbpOXjEIU4Dd": {
+        "uidTaxista": "e2e_taxista_de8a6b49",
+        "completado": true,
+        "estado": "finalizado",
+        "metodoPago": "Efectivo",
+        "metodoPagoNormalizado": "efectivo",
+        "estadoPago": "pagado",
+        "precio": 12,
+        "precio_cents": 1200,
+        "comision": 1.5,
+        "comision_cents": 180,
+        "gananciaTaxista": 8.5,
+        "ganancia_cents": 1020,
+        "finalizadoEn": {
+          "_seconds": 1780588799,
+          "_nanoseconds": 999000000
+        },
+        "liquidado": false
+      },
+      "DyduoojJfli9JuIliTJ2": {
+        "uidTaxista": "e2e_taxista_de8a6b49",
+        "completado": true,
+        "estado": "finalizado",
+        "metodoPago": "Transferencia",
+        "metodoPagoNormalizado": "transferencia",
+        "estadoPago": "verificado",
+        "precio": 20,
+        "precio_cents": 2000,
+        "comision": 3,
+        "comision_cents": 300,
+        "gananciaTaxista": 17,
+        "ganancia_cents": 1700,
+        "finalizadoEn": {
+          "_seconds": 1780588799,
+          "_nanoseconds": 999000000
+        },
+        "liquidado": false
+      }
+    }
+  },
+  "after": {
+    "liquidacion_generada": {
+      "id": "e2e_taxista_de8a6b49_2026-W23",
+      "totalBrutoCents": 2000,
+      "estado": "pendiente_pago",
+      "periodo": "2026-W23",
+      "idempotencyKey": "gen_liq_sem_e2e_taxista_de8a6b49_2026-W23",
+      "nombreTaxista": "E2E Taxista PR",
+      "uidTaxista": "e2e_taxista_de8a6b49",
+      "periodoFin": {
+        "_seconds": 1780891199,
+        "_nanoseconds": 999000000
+      },
+      "totalNetoCents": 1700,
+      "viajesEfectivoExcluidosCount": 2,
+      "viajeIds": [
+        "DyduoojJfli9JuIliTJ2"
+      ],
+      "version": 1,
+      "viajesCount": 1,
+      "reglaElegibilidad": "liquidacion_semanal_v1",
+      "comisionRaiCents": 300,
+      "periodoInicio": {
+        "_seconds": 1780286400,
+        "_nanoseconds": 0
+      },
+      "generadoPor": "e2e_admin_de8a6b49",
+      "moneda": "DOP",
+      "cuentaDestinoCompleta": true,
+      "incluyeSoloMetodos": [
+        "transferencia",
+        "tarjeta"
+      ],
+      "totalesPorMetodo": {
+        "transferencia": {
+          "totalBrutoCents": 2000,
+          "comisionRaiCents": 300,
+          "totalNetoCents": 1700,
+          "viajesCount": 1
+        },
+        "tarjeta": {
+          "totalBrutoCents": 0,
+          "comisionRaiCents": 0,
+          "totalNetoCents": 0,
+          "viajesCount": 0
+        }
+      },
+      "cuentaDestinoSnapshot": {
+        "ci": "",
+        "banco": "Popular",
+        "tipoCuenta": "ahorro",
+        "numeroCuenta": "1234567890",
+        "titular": "E2E Taxista PR",
+        "capturadoEn": {
+          "_seconds": 1781228678,
+          "_nanoseconds": 691000000
+        }
+      },
+      "createdAt": {
+        "_seconds": 1781228678,
+        "_nanoseconds": 691000000
+      },
+      "generadoEn": {
+        "_seconds": 1781228678,
+        "_nanoseconds": 691000000
+      },
+      "updatedAt": {
+        "_seconds": 1781228678,
+        "_nanoseconds": 691000000
+      }
+    },
+    "viajes": {
+      "o0iEDtcHQrHSh1HwIYta": {
+        "uidTaxista": "e2e_taxista_de8a6b49",
+        "completado": true,
+        "estado": "finalizado",
+        "metodoPago": "Efectivo",
+        "metodoPagoNormalizado": "efectivo",
+        "estadoPago": "pagado",
+        "precio": 10,
+        "precio_cents": 1000,
+        "comision": 1.5,
+        "comision_cents": 150,
+        "gananciaTaxista": 8.5,
+        "ganancia_cents": 850,
+        "finalizadoEn": {
+          "_seconds": 1780588799,
+          "_nanoseconds": 999000000
+        },
+        "liquidado": false
+      },
+      "0MMpVa04pbpOXjEIU4Dd": {
+        "uidTaxista": "e2e_taxista_de8a6b49",
+        "completado": true,
+        "estado": "finalizado",
+        "metodoPago": "Efectivo",
+        "metodoPagoNormalizado": "efectivo",
+        "estadoPago": "pagado",
+        "precio": 12,
+        "precio_cents": 1200,
+        "comision": 1.5,
+        "comision_cents": 180,
+        "gananciaTaxista": 8.5,
+        "ganancia_cents": 1020,
+        "finalizadoEn": {
+          "_seconds": 1780588799,
+          "_nanoseconds": 999000000
+        },
+        "liquidado": false
+      },
+      "DyduoojJfli9JuIliTJ2": {
+        "uidTaxista": "e2e_taxista_de8a6b49",
+        "completado": true,
+        "estado": "finalizado",
+        "metodoPago": "Transferencia",
+        "metodoPagoNormalizado": "transferencia",
+        "estadoPago": "verificado",
+        "precio": 20,
+        "precio_cents": 2000,
+        "comision": 3,
+        "comision_cents": 300,
+        "gananciaTaxista": 17,
+        "ganancia_cents": 1700,
+        "finalizadoEn": {
+          "_seconds": 1780588799,
+          "_nanoseconds": 999000000
+        },
+        "liquidadoPorUid": "e2e_admin_de8a6b49",
+        "liquidacionSemanalId": "e2e_taxista_de8a6b49_2026-W23",
+        "liquidado": true,
+        "liquidadoEn": {
+          "_seconds": 1781228678,
+          "_nanoseconds": 797000000
+        },
+        "actualizadoEn": {
+          "_seconds": 1781228678,
+          "_nanoseconds": 797000000
+        },
+        "updatedAt": {
+          "_seconds": 1781228678,
+          "_nanoseconds": 797000000
+        }
+      }
+    },
+    "liquidacion_pagada": {
+      "id": "e2e_taxista_de8a6b49_2026-W23",
+      "totalBrutoCents": 2000,
+      "periodo": "2026-W23",
+      "idempotencyKey": "gen_liq_sem_e2e_taxista_de8a6b49_2026-W23",
+      "nombreTaxista": "E2E Taxista PR",
+      "uidTaxista": "e2e_taxista_de8a6b49",
+      "periodoFin": {
+        "_seconds": 1780891199,
+        "_nanoseconds": 999000000
+      },
+      "totalNetoCents": 1700,
+      "viajesEfectivoExcluidosCount": 2,
+      "viajeIds": [
+        "DyduoojJfli9JuIliTJ2"
+      ],
+      "version": 1,
+      "viajesCount": 1,
+      "reglaElegibilidad": "liquidacion_semanal_v1",
+      "comisionRaiCents": 300,
+      "periodoInicio": {
+        "_seconds": 1780286400,
+        "_nanoseconds": 0
+      },
+      "generadoPor": "e2e_admin_de8a6b49",
+      "moneda": "DOP",
+      "cuentaDestinoCompleta": true,
+      "incluyeSoloMetodos": [
+        "transferencia",
+        "tarjeta"
+      ],
+      "totalesPorMetodo": {
+        "transferencia": {
+          "totalBrutoCents": 2000,
+          "comisionRaiCents": 300,
+          "totalNetoCents": 1700,
+          "viajesCount": 1
+        },
+        "tarjeta": {
+          "totalBrutoCents": 0,
+          "comisionRaiCents": 0,
+          "totalNetoCents": 0,
+          "viajesCount": 0
+        }
+      },
+      "cuentaDestinoSnapshot": {
+        "ci": "",
+        "banco": "Popular",
+        "tipoCuenta": "ahorro",
+        "numeroCuenta": "1234567890",
+        "titular": "E2E Taxista PR",
+        "capturadoEn": {
+          "_seconds": 1781228678,
+          "_nanoseconds": 691000000
+        }
+      },
+      "createdAt": {
+        "_seconds": 1781228678,
+        "_nanoseconds": 691000000
+      },
+      "generadoEn": {
+        "_seconds": 1781228678,
+        "_nanoseconds": 691000000
+      },
+      "estado": "pagado",
+      "notaAdmin": "e2e validation",
+      "pagadoPorUid": "e2e_admin_de8a6b49",
+      "referenciaAch": "ACH-E2E-001",
+      "pagadoEn": {
+        "_seconds": 1781228678,
+        "_nanoseconds": 797000000
+      },
+      "updatedAt": {
+        "_seconds": 1781228678,
+        "_nanoseconds": 797000000
+      }
+    }
+  },
+  "rollback": {
+    "config": {
+      "excluirEfectivoDePagoSemanal": true,
+      "generarLiquidacionesSemanalesAuto": false,
+      "useLiquidacionesSemanales": false,
+      "escrituraPagosTaxistasLegacy": true
+    },
+    "legacyRb": {
+      "viajesIncluidos": [
+        "sim_new_transfer"
+      ],
+      "count": 1
+    }
+  },
+  "findings": [],
+  "recommendation": "GO_CONDICIONAL: E2E emulador PASS. Ejecutar mismo script en flygo-9abd2 con ADC + deploy PR2 antes de activación permanente."
+}

@@ -210,6 +210,7 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
 
         'ratingSuma': 0,
         'ratingConteo': 0,
+        'registroTaxistaCompleto': true,
 
         'fechaRegistro': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),

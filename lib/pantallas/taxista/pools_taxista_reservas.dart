@@ -3,9 +3,31 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-class PoolsTaxistaReservas extends StatelessWidget {
+class PoolsTaxistaReservas extends StatefulWidget {
   final String poolId;
   const PoolsTaxistaReservas({super.key, required this.poolId});
+
+  @override
+  State<PoolsTaxistaReservas> createState() => _PoolsTaxistaReservasState();
+}
+
+class _PoolsTaxistaReservasState extends State<PoolsTaxistaReservas> {
+  bool _yaCerroPorCancelacion = false;
+
+  void _volverSiGiraCancelada(String estadoPool) {
+    final s = estadoPool.trim().toLowerCase();
+    if (s != 'cancelado' && s != 'cancelado_por_admin') return;
+    if (_yaCerroPorCancelacion) return;
+    _yaCerroPorCancelacion = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final nav = Navigator.of(context);
+      if (nav.canPop()) nav.pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Esta salida fue cancelada.')),
+      );
+    });
+  }
 
   void _snack(ScaffoldMessengerState messenger, String m) {
     messenger.showSnackBar(SnackBar(content: Text(m)));
@@ -121,16 +143,19 @@ class PoolsTaxistaReservas extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 2),
                   child: Text(
                     metodoL == 'transferencia'
-                        ? 'Pago: transferencia — coordiná el bauche por WhatsApp o llamada'
+                        ? 'Pago: transferencia — coordina el bauche por WhatsApp o llamada'
                         : 'Pago: $metodo',
                     style: TextStyle(
-                        color: textSecondary, fontSize: 12, height: 1.25),
+                      color: textSecondary,
+                      fontSize: 12,
+                      height: 1.25,
+                    ),
                   ),
                 ),
               Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
-                  'Total RD\$ ${total.toStringAsFixed(0)} · Depósito RD\$ ${deposit.toStringAsFixed(0)}',
+                  'Total RD\$ ${total.toStringAsFixed(0)} · Deposito RD\$ ${deposit.toStringAsFixed(0)}',
                   style: TextStyle(color: textSecondary, fontSize: 13),
                 ),
               ),
@@ -164,7 +189,7 @@ class PoolsTaxistaReservas extends StatelessWidget {
                         onPressed: () => _whatsApp(
                           context,
                           wa,
-                          'Hola $nombre, te escribo por tu reserva del viaje por cupos (pago / bauche).',
+                          'Hola $nombre, te escribo por tu reserva de cupos en esta salida (pago / bauche).',
                         ),
                         icon: const Icon(Icons.chat, size: 15),
                         label: const Text('WhatsApp'),
@@ -181,7 +206,7 @@ class PoolsTaxistaReservas extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final poolRef = PoolRepo.pools.doc(poolId);
+    final poolRef = PoolRepo.pools.doc(widget.poolId);
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
     final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
@@ -202,91 +227,107 @@ class PoolsTaxistaReservas extends StatelessWidget {
         ),
         centerTitle: true,
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        // Sin orderBy: evita índices y sigue mostrando reservas legacy sin createdAt.
-        stream: poolRef.collection('reservas').snapshots(),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return Center(child: CircularProgressIndicator(color: accent));
-          }
-          if (snap.hasError) {
-            return Center(
-                child: Text('Error cargando reservas.',
-                    style: TextStyle(color: textMuted)));
-          }
-
-          var docs = snap.data?.docs ?? [];
-          docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(docs)
-            ..sort((a, b) {
-              final ta = a.data()['createdAt'];
-              final tb = b.data()['createdAt'];
-              final da = ta is Timestamp ? ta.millisecondsSinceEpoch : 0;
-              final db = tb is Timestamp ? tb.millisecondsSinceEpoch : 0;
-              return db.compareTo(da);
-            });
-          if (docs.isEmpty) {
-            return Center(
-                child: Text('Sin reservas aún.',
-                    style: TextStyle(color: textMuted)));
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemCount: docs.length,
-            itemBuilder: (ctx, i) {
-              final d = docs[i].data();
-              final id = docs[i].id;
-              final estado = (d['estado'] ?? '').toString();
-              final seats = ((d['seats'] ?? 0) as num).toInt();
-              final total = ((d['total'] ?? 0.0) as num).toDouble();
-              final deposit = ((d['deposit'] ?? 0.0) as num).toDouble();
-              final uidCliente = (d['uidCliente'] ?? '').toString();
-              final metodo = (d['metodoPago'] ?? '').toString();
-              final telReserva = (d['clienteTelefono'] ?? '').toString().trim();
-              final waReserva = (d['clienteWhatsApp'] ?? '').toString().trim();
-
-              final streamPerfil = uidCliente.isEmpty
-                  ? null
-                  : FirebaseFirestore.instance
-                      .collection('usuarios')
-                      .doc(uidCliente)
-                      .snapshots();
-
-              return Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: cardBorder),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: poolRef.snapshots(),
+        builder: (context, poolSnap) {
+          if (poolSnap.hasData && poolSnap.data!.exists) {
+            final poolEstado =
+                (poolSnap.data!.data()?['estado'] ?? '').toString();
+            _volverSiGiraCancelada(poolEstado);
+            final poolEstadoL = poolEstado.trim().toLowerCase();
+            if (poolEstadoL == 'cancelado' ||
+                poolEstadoL == 'cancelado_por_admin') {
+              return Center(
+                child: Text(
+                  'Salida cancelada',
+                  style: TextStyle(color: textMuted),
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: streamPerfil == null
-                          ? _reservaContenido(
-                              ctx,
-                              d: d,
-                              perfil: null,
-                              estado: estado,
-                              seats: seats,
-                              total: total,
-                              deposit: deposit,
-                              metodo: metodo,
-                              telEfectivo: telReserva,
-                              waEfectivo:
-                                  waReserva.isNotEmpty ? waReserva : telReserva,
-                            )
-                          : StreamBuilder<
-                              DocumentSnapshot<Map<String, dynamic>>>(
-                              stream: streamPerfil,
-                              builder: (context, userSnap) {
-                                final perfil = userSnap.data?.data();
-                                return _reservaContenido(
+              );
+            }
+          }
+
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: poolRef.collection('reservas').snapshots(),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return Center(child: CircularProgressIndicator(color: accent));
+              }
+              if (snap.hasError) {
+                return Center(
+                  child: Text(
+                    'Error cargando reservas.',
+                    style: TextStyle(color: textMuted),
+                  ),
+                );
+              }
+
+              var docs = snap.data?.docs ?? [];
+              docs = docs
+                  .where(
+                    (doc) => PoolRepo.reservaPoolActivaParaCliente(
+                      (doc.data()['estado'] ?? '').toString(),
+                    ),
+                  )
+                  .toList();
+              docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+                docs,
+              )..sort((a, b) {
+                  final ta = a.data()['createdAt'];
+                  final tb = b.data()['createdAt'];
+                  final da = ta is Timestamp ? ta.millisecondsSinceEpoch : 0;
+                  final db = tb is Timestamp ? tb.millisecondsSinceEpoch : 0;
+                  return db.compareTo(da);
+                });
+              if (docs.isEmpty) {
+                return Center(
+                  child: Text(
+                    'Sin reservas activas.',
+                    style: TextStyle(color: textMuted),
+                  ),
+                );
+              }
+
+              return ListView.separated(
+                padding: const EdgeInsets.all(12),
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemCount: docs.length,
+                itemBuilder: (ctx, i) {
+                  final d = docs[i].data();
+                  final id = docs[i].id;
+                  final estado = (d['estado'] ?? '').toString();
+                  final seats = ((d['seats'] ?? 0) as num).toInt();
+                  final total = ((d['total'] ?? 0.0) as num).toDouble();
+                  final deposit = ((d['deposit'] ?? 0.0) as num).toDouble();
+                  final uidCliente = (d['uidCliente'] ?? '').toString();
+                  final metodo = (d['metodoPago'] ?? '').toString();
+                  final telReserva =
+                      (d['clienteTelefono'] ?? '').toString().trim();
+                  final waReserva =
+                      (d['clienteWhatsApp'] ?? '').toString().trim();
+
+                  final streamPerfil = uidCliente.isEmpty
+                      ? null
+                      : FirebaseFirestore.instance
+                          .collection('usuarios')
+                          .doc(uidCliente)
+                          .snapshots();
+
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: cardBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: cardBorder),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: streamPerfil == null
+                              ? _reservaContenido(
                                   ctx,
                                   d: d,
-                                  perfil: perfil,
+                                  perfil: null,
                                   estado: estado,
                                   seats: seats,
                                   total: total,
@@ -296,29 +337,51 @@ class PoolsTaxistaReservas extends StatelessWidget {
                                   waEfectivo: waReserva.isNotEmpty
                                       ? waReserva
                                       : telReserva,
+                                )
+                              : StreamBuilder<
+                                  DocumentSnapshot<Map<String, dynamic>>>(
+                                  stream: streamPerfil,
+                                  builder: (context, userSnap) {
+                                    final perfil = userSnap.data?.data();
+                                    return _reservaContenido(
+                                      ctx,
+                                      d: d,
+                                      perfil: perfil,
+                                      estado: estado,
+                                      seats: seats,
+                                      total: total,
+                                      deposit: deposit,
+                                      metodo: metodo,
+                                      telEfectivo: telReserva,
+                                      waEfectivo: waReserva.isNotEmpty
+                                          ? waReserva
+                                          : telReserva,
+                                    );
+                                  },
+                                ),
+                        ),
+                        if (estado != 'pagado')
+                          TextButton.icon(
+                            onPressed: () async {
+                              final messenger =
+                                  ScaffoldMessenger.of(ctx);
+                              try {
+                                await PoolRepo.marcarReservaPagadaSegura(
+                                  poolId: widget.poolId,
+                                  reservaId: id,
                                 );
-                              },
-                            ),
+                                _snack(messenger, 'Marcada como pagada');
+                              } catch (e) {
+                                _snack(messenger, 'Error: $e');
+                              }
+                            },
+                            icon: const Icon(Icons.check_circle_outline),
+                            label: const Text('Marcar pagada'),
+                          ),
+                      ],
                     ),
-                    if (estado != 'pagado')
-                      TextButton.icon(
-                        onPressed: () async {
-                          final messenger = ScaffoldMessenger.of(ctx);
-                          try {
-                            await PoolRepo.marcarReservaPagadaSegura(
-                              poolId: poolId,
-                              reservaId: id,
-                            );
-                            _snack(messenger, 'Marcada como pagada');
-                          } catch (e) {
-                            _snack(messenger, '❌ $e');
-                          }
-                        },
-                        icon: const Icon(Icons.check_circle_outline),
-                        label: const Text('Marcar pagada'),
-                      ),
-                  ],
-                ),
+                  );
+                },
               );
             },
           );
