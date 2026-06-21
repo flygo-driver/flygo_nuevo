@@ -321,6 +321,27 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         label: dest.isNotEmpty ? dest : 'Destino final',
         esFinal: true,
       ));
+    } else {
+      final dynamic rp = v.extras?['rutaPuntos'];
+      if (rp is List) {
+        for (final dynamic item in rp.reversed) {
+          if (item is! Map) continue;
+          final Map<String, dynamic> m = Map<String, dynamic>.from(item);
+          final String rol = (m['rol'] ?? '').toString().toLowerCase();
+          if (rol != 'destino' && rol != 'destino_final') continue;
+          final double? lat = _waypointLat(m);
+          final double? lon = _waypointLon(m);
+          if (lat == null || lon == null || !_coordsValid(lat, lon)) continue;
+          final String label = (m['label'] ?? v.destino).toString().trim();
+          out.add((
+            lat: lat,
+            lon: lon,
+            label: label.isNotEmpty ? label : 'Destino final',
+            esFinal: true,
+          ));
+          break;
+        }
+      }
     }
     return out;
   }
@@ -367,6 +388,37 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     return _coordsDestinoParaFinalizar(v);
   }
 
+  Future<Viaje> _asegurarEnCursoParaMultiparada(Viaje v) async {
+    final String st = EstadosViaje.normalizar(v.estado);
+    if (st == EstadosViaje.enCurso) return v;
+    if (st != EstadosViaje.aBordo || !v.codigoVerificado) {
+      throw Exception(
+        'Iniciá la ruta al destino antes de confirmar paradas.',
+      );
+    }
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      throw Exception('Sesión inválida');
+    }
+    await ViajesRepo.iniciarViaje(viajeId: v.id, uidTaxista: uid);
+    final DocumentSnapshot<Map<String, dynamic>> snap =
+        await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
+    if (!snap.exists) throw Exception('Viaje no encontrado');
+    return Viaje.fromMap(v.id, snap.data() ?? <String, dynamic>{});
+  }
+
+  Future<void> _abrirMapsLegMultiparada(
+    double lat,
+    double lon,
+    String label,
+  ) async {
+    await NavegacionExternaLauncher.abrirGoogleMapsDestino(lat, lon);
+    _tripFlowSnack(
+      'Navegación al pin: $label',
+      backgroundColor: Colors.lightBlueAccent,
+    );
+  }
+
   Future<void> _navegarDestinoMultiparadaActual(Viaje v) async {
     final leg = _destinoMultiActual(v);
     if (leg == null) return;
@@ -389,21 +441,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (_multiLegCompletadas >= total || v.multiparadaCompleta) return;
     _actionBusy = true;
     try {
+      Viaje operativo = await _asegurarEnCursoParaMultiparada(v);
+      if (!mounted) return;
       final (double, double)? ping = _taxistaPosCola.value;
       await ViajesRepo.registrarLegMultiparadaCompletada(
-        viajeId: v.id,
+        viajeId: operativo.id,
         latConfirmacion: ping?.$1,
         lonConfirmacion: ping?.$2,
       );
       if (!mounted) return;
       final snap = await FirebaseFirestore.instance
           .collection('viajes')
-          .doc(v.id)
+          .doc(operativo.id)
           .get();
       if (!mounted) return;
       final data = snap.data();
       if (data != null) {
-        final Viaje actualizado = Viaje.fromMap(v.id, data);
+        final Viaje actualizado = Viaje.fromMap(operativo.id, data);
         setState(() {
           _aplicarProgresoMultiparadaDesdeViaje(actualizado);
           _cachedViaje = actualizado;
@@ -418,14 +472,19 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           );
         } else {
           final leg = _destinoMultiActual(actualizado);
-          _tripFlowSnack(
-            leg == null
-                ? 'Parada registrada.'
-                : 'Siguiente: ${leg.label}',
-            backgroundColor: Colors.lightBlueAccent,
-          );
-          if (leg != null && mounted) {
-            await _navegarDestinoMultiparadaActual(actualizado);
+          if (leg == null) {
+            _tripFlowSnack(
+              'Parada registrada.',
+              backgroundColor: Colors.lightBlueAccent,
+            );
+          } else {
+            _tripFlowSnack(
+              'Siguiente destino: ${leg.label}',
+              backgroundColor: Colors.lightBlueAccent,
+            );
+            if (mounted) {
+              await _abrirMapsLegMultiparada(leg.lat, leg.lon, leg.label);
+            }
           }
         }
       }

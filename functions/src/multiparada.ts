@@ -126,13 +126,15 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
     }
 
     const estado = String(d.estado ?? "").trim().toLowerCase().replace(/\s+/g, "_");
-    if (estado !== "en_curso") {
+    const codigoOk = d.codigoVerificado === true;
+    const estadoOk = estado === "en_curso" || (estado === "a_bordo" && codigoOk);
+    if (!estadoOk) {
       throw new HttpsError(
         "failed-precondition",
         "Solo podés registrar paradas con el viaje en curso (ruta iniciada).",
       );
     }
-    if (d.codigoVerificado !== true) {
+    if (!codigoOk) {
       throw new HttpsError(
         "failed-precondition",
         "El código PIN del cliente debe estar verificado antes de registrar paradas.",
