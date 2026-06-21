@@ -23,16 +23,47 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/usuarios/$(request.auth.uid));
     }
 
+    function roleDoc(uid) {
+      return get(/databases/$(database)/documents/roles/$(uid));
+    }
+
+    function roleFromRolesCollection(uid) {
+      return exists(/databases/$(database)/documents/roles/$(uid)) &&
+        roleDoc(uid).data.rol is string
+        ? roleDoc(uid).data.rol
+        : "";
+    }
+
+    function normalizedRole(raw) {
+      return raw == "administrador" ? "admin" :
+        raw == "driver" ? "taxista" :
+        raw == "user" ? "cliente" :
+        raw;
+    }
+
+    function rolUsuarioSesion() {
+      let r = myRole();
+      return r != ""
+        ? normalizedRole(r)
+        : normalizedRole(roleFromRolesCollection(request.auth.uid));
+    }
+
     function myRole() {
       return myUserDocExists()
         ? (myUserDoc().data.rol is string ? myUserDoc().data.rol : "")
         : "";
     }
 
-    /// Transitorio: acepta "administrador" hasta migrar datos a canon "admin".
+    /// Coincide con LoginAdmin / AdminGate / admin_dashboard (CF).
     function isAdmin() {
-      return isAuth() &&
-        (myRole() == "admin" || myRole() == "administrador");
+      return isAuth() && (
+        normalizedRole(myRole()) == "admin" ||
+        normalizedRole(roleFromRolesCollection(request.auth.uid)) == "admin" ||
+        (myUserDocExists() && (
+          myUserDoc().data.isAdmin == true ||
+          myUserDoc().data.admin == true
+        ))
+      );
     }
 
     function isTaxista() {
@@ -47,7 +78,18 @@ service cloud.firestore {
     }
 
     function isCliente() {
-      return isAuth() && (myRole() == "cliente");
+      return isAuth() && rolUsuarioSesion() == "cliente";
+    }
+
+    /// Crear viaje pasajero: dueño autenticado (no admin). Cuentas conductor también
+    /// pueden pedir viaje en la app pasajero (Play unificado / mismo uid).
+    function puedeCrearViajeComoCliente() {
+      return isAuth() &&
+        request.resource.data.uidCliente == request.auth.uid &&
+        request.resource.data.clienteId == request.auth.uid &&
+        request.resource.data.uidTaxista == "" &&
+        request.resource.data.taxistaId == "" &&
+        rolUsuarioSesion() != "admin";
     }
 
     /// taxista o driver (misma convención que la app y Cloud Functions).
@@ -58,7 +100,7 @@ service cloud.firestore {
     /// Pedido = solo cliente publica; Oferta «Voy para» = solo chofer publica.
     function bolaPuebloCreateRolTipoCoherente() {
       return (request.resource.data.tipo == "pedido" &&
-          myRole() == "cliente" &&
+          rolUsuarioSesion() == "cliente" &&
           request.resource.data.createdByRol == "cliente") ||
         (request.resource.data.tipo == "oferta" &&
           esRolChoferEnSesion() &&
@@ -83,20 +125,17 @@ service cloud.firestore {
     function taxistaDocsEstadoDe(uid) {
       let u = userDoc(uid).data;
       let e = u.docsEstado is string ? u.docsEstado : "";
-      if (e == "") {
-        e = u.estadoDocumentos is string ? u.estadoDocumentos : "pendiente";
-      }
-      return e;
+      return e != "" ? e : (u.estadoDocumentos is string ? u.estadoDocumentos : "pendiente");
     }
 
-    /// Claim pool: registro + docs aprobados + contrato + puedeRecibirViajes.
+    /// Claim pool: registro + docs aprobados + contrato (paridad TaxistaEntry; no puedeRecibirViajes).
     function taxistaAptoParaClaimPool(uid) {
       let u = userDoc(uid).data;
       return u.registroTaxistaCompleto == true &&
         u.documentosCompletos == true &&
         taxistaDocsEstadoDe(uid) == "aprobado" &&
-        u.puedeRecibirViajes == true &&
-        u.contratoTaxistaAceptado == true;
+        u.contratoTaxistaAceptado == true &&
+        !(u.bloqueado == true);
     }
 
     function changedOnly(allowed) {
@@ -445,7 +484,7 @@ service cloud.firestore {
           )
         );
 
-      allow create: if isCliente() &&
+      allow create: if puedeCrearViajeComoCliente() &&
         request.resource.data.uidCliente == request.auth.uid &&
         request.resource.data.clienteId == request.auth.uid &&
         request.resource.data.uidTaxista == "" &&
@@ -851,6 +890,8 @@ service cloud.firestore {
       allow delete: if isAdmin();
 
       match /reservas/{reservaId} {
+        // Lectura cliente/taxista del pool (path concreto). Admin también puede usar
+        // match /{path=**}/reservas abajo para collectionGroup sin get(padre).
         allow read: if isAdmin() ||
           (isAuth() && (
             resource.data.uidCliente == request.auth.uid ||
@@ -873,10 +914,30 @@ service cloud.firestore {
       }
     }
 
+    // Collection group `reservas` (Verificar pagos · Giras RAI).
+    // Las queries collectionGroup no pueden usar reglas con get(viajes_pool/...).
+    match /{path=**}/reservas/{reservaId} {
+      allow read: if isAdmin();
+    }
+
     // Ledger comisiones giras: solo Cloud Functions / admin (evita manipulación desde cliente).
     match /ledger_giras/{entryId} {
       allow read: if isAdmin() ||
         (isAuth() && resource.data.uidTaxista == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /ledger_pool_reservas/{entryId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.ownerTaxistaId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /liquidaciones_pool/{liqId} {
+      // Admin: listado por estado (Verificar pagos · neto organizador).
+      allow list: if isAdmin();
+      allow get: if isAdmin() ||
+        (isAuth() && resource.data.ownerTaxistaId == request.auth.uid);
       allow create, update, delete: if false;
     }
 

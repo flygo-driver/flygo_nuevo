@@ -52,7 +52,7 @@ class PoolDeepLink {
   ];
 
   static const Duration _pendingPollInterval = Duration(milliseconds: 600);
-  static const Duration _pendingMaxWait = Duration(seconds: 45);
+  static const Duration _pendingMaxWait = Duration(seconds: 90);
 
   static Future<void> install() async {
     await dispose();
@@ -113,16 +113,24 @@ class PoolDeepLink {
     }
   }
 
+  static void markNavigationComplete(String poolId) {
+    final String id = poolId.trim();
+    if (id.isEmpty) return;
+    _pendingPoolId = null;
+    _lastOpenedPoolId = id;
+    _lastOpenedAt = DateTime.now();
+    _pendingRetryTimer?.cancel();
+    _pendingRetryTimer = null;
+  }
+
   static void _enqueueOpen(Uri uri) {
     final String? id = PoolShareLink.parsePoolId(uri);
     if (id == null || id.isEmpty) return;
 
-    if (!isClienteFlavor) {
-      if (isConductorFlavor) {
-        _conductorDeepLinkHint =
-            'Este enlace es para pasajeros. Abrilo con RAI Pasajero (Google Play) '
-            'para ver la gira y reservar cupos.';
-      }
+    if (isConductorFlavor) {
+      _conductorDeepLinkHint =
+          'Este enlace es para pasajeros. Abrilo con RAI Pasajero (Google Play) '
+          'para ver la gira y reservar cupos.';
       return;
     }
 
@@ -150,14 +158,6 @@ class PoolDeepLink {
       return;
     }
 
-    if (!ClientePoolDeepLinkBridge.tryOpenPool(id)) {
-      return;
-    }
-
-    _pendingPoolId = null;
-    _lastOpenedPoolId = id;
-    _lastOpenedAt = now;
-    _pendingRetryTimer?.cancel();
-    _pendingRetryTimer = null;
+    ClientePoolDeepLinkBridge.tryOpenPool(id);
   }
 }

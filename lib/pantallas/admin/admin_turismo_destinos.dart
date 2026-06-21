@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../servicios/turismo_catalogo_rd.dart';
 import '../../servicios/turismo_destinos_repo.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -21,11 +22,8 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        title: Text('Destinos turismo',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: AdminAppBar(
+        title: 'Destinos turismo',
         actions: [
           IconButton(
             icon: Icon(Icons.add, color: AdminUi.iconStandard(context)),
@@ -45,7 +43,8 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
             ),
             child: Text(
               'Catálogo base: ${TurismoCatalogoRD.lugares.length} destinos en código. '
-              'Aquí agregas extras en Firestore (sin redeploy).',
+              'Aquí agregas extras en Firestore (sin redeploy). '
+              'Cada destino debe tener lat/lon válidas en RD para cotizar.',
               style: TextStyle(color: AdminUi.secondary(context), height: 1.35),
             ),
           ),
@@ -89,6 +88,14 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
                 children: docs.map((d) {
                   final m = d.data();
                   final activo = m['activo'] != false;
+                  final lat = (m['lat'] as num?)?.toDouble();
+                  final lon = (m['lon'] as num?)?.toDouble();
+                  final coordsOk = lat != null &&
+                      lon != null &&
+                      TurismoCatalogoRD.corregirCoordenadasRd(lat, lon) != null;
+                  final subtipo = TurismoCatalogoRD.normalizarSubtipo(
+                    (m['subtipo'] ?? '').toString(),
+                  );
                   return Container(
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(12),
@@ -111,10 +118,23 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
                                 ),
                               ),
                               Text(
-                                '${m['ciudad']} · ${m['subtipo']}',
+                                '${m['ciudad']} · $subtipo',
                                 style: TextStyle(
                                   color: AdminUi.secondary(context),
                                   fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                coordsOk
+                                    ? 'Listo para cotizar'
+                                    : 'Faltan coordenadas válidas (RD)',
+                                style: TextStyle(
+                                  color: coordsOk
+                                      ? Colors.green.shade700
+                                      : Colors.orange.shade800,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ],
@@ -128,7 +148,8 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
                         IconButton(
                           icon: Icon(Icons.edit,
                               color: AdminUi.iconStandard(context)),
-                          onPressed: () => _dialogoDestino(context, docId: d.id, data: m),
+                          onPressed: () =>
+                              _dialogoDestino(context, docId: d.id, data: m),
                         ),
                       ],
                     ),
@@ -147,13 +168,12 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
     String? docId,
     Map<String, dynamic>? data,
   }) async {
+    final messenger = ScaffoldMessenger.of(context);
     final idCtrl = TextEditingController(text: (data?['id'] ?? '').toString());
     final nombreCtrl =
         TextEditingController(text: (data?['nombre'] ?? '').toString());
     final ciudadCtrl =
         TextEditingController(text: (data?['ciudad'] ?? '').toString());
-    final subtipoCtrl = TextEditingController(
-        text: (data?['subtipo'] ?? TurismoCatalogoRD.playa).toString());
     final latCtrl =
         TextEditingController(text: (data?['lat'] ?? '').toString());
     final lonCtrl =
@@ -161,53 +181,88 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
     final descCtrl =
         TextEditingController(text: (data?['descripcion'] ?? '').toString());
 
+    var subtipoSeleccionado = TurismoCatalogoRD.normalizarSubtipo(
+      (data?['subtipo'] ?? TurismoCatalogoRD.playa).toString(),
+    );
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AdminUi.dialogSurface(ctx),
-        title: Text(
-          docId == null ? 'Nuevo destino' : 'Editar destino',
-          style: TextStyle(color: AdminUi.onCard(ctx)),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text(
+            docId == null ? 'Nuevo destino' : 'Editar destino',
+            style: TextStyle(color: AdminUi.onCard(ctx)),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
                   controller: idCtrl,
-                  decoration: const InputDecoration(labelText: 'ID único')),
-              TextField(
+                  decoration: const InputDecoration(labelText: 'ID único'),
+                ),
+                TextField(
                   controller: nombreCtrl,
-                  decoration: const InputDecoration(labelText: 'Nombre')),
-              TextField(
+                  decoration: const InputDecoration(labelText: 'Nombre'),
+                ),
+                TextField(
                   controller: ciudadCtrl,
-                  decoration: const InputDecoration(labelText: 'Ciudad')),
-              TextField(
-                  controller: subtipoCtrl,
-                  decoration: const InputDecoration(labelText: 'Subtipo')),
-              TextField(
+                  decoration: const InputDecoration(labelText: 'Ciudad'),
+                ),
+                DropdownButton<String>(
+                  value: subtipoSeleccionado,
+                  isExpanded: true,
+                  items: TurismoCatalogoRD.subtiposValidos
+                      .map(
+                        (s) => DropdownMenuItem(
+                          value: s,
+                          child: Text(s.replaceAll('_', ' ')),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setDialogState(() => subtipoSeleccionado = v);
+                  },
+                ),
+                TextField(
                   controller: latCtrl,
-                  decoration: const InputDecoration(labelText: 'Latitud'),
-                  keyboardType: TextInputType.number),
-              TextField(
+                  decoration: const InputDecoration(
+                    labelText: 'Latitud',
+                    helperText: 'Entre 17 y 20.5 (RD)',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                ),
+                TextField(
                   controller: lonCtrl,
-                  decoration: const InputDecoration(labelText: 'Longitud'),
-                  keyboardType: TextInputType.number),
-              TextField(
+                  decoration: const InputDecoration(
+                    labelText: 'Longitud',
+                    helperText: 'Entre -72.5 y -68 (RD)',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                ),
+                TextField(
                   controller: descCtrl,
                   decoration: const InputDecoration(labelText: 'Descripción'),
-                  maxLines: 2),
-            ],
+                  maxLines: 2,
+                ),
+              ],
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
+          actions: [
+            TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancelar')),
-          FilledButton(
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Guardar')),
-        ],
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
       ),
     );
 
@@ -215,11 +270,21 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
     final lat = double.tryParse(latCtrl.text.trim());
     final lon = double.tryParse(lonCtrl.text.trim());
     if (lat == null || lon == null || nombreCtrl.text.trim().isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nombre, lat y lon son requeridos')),
-        );
-      }
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Nombre, lat y lon son requeridos')),
+      );
+      return;
+    }
+
+    final coords = TurismoCatalogoRD.corregirCoordenadasRd(lat, lon);
+    if (coords == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Coordenadas fuera de RD o inválidas. Revisa lat/lon (¿invertidos?).',
+          ),
+        ),
+      );
       return;
     }
 
@@ -229,25 +294,21 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
           : idCtrl.text.trim(),
       nombre: nombreCtrl.text.trim(),
       ciudad: ciudadCtrl.text.trim(),
-      subtipo: subtipoCtrl.text.trim(),
-      lat: lat,
-      lon: lon,
+      subtipo: subtipoSeleccionado,
+      lat: coords.lat,
+      lon: coords.lon,
       descripcion: descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
     );
 
     try {
       await TurismoDestinosRepo.guardar(docId: docId, lugar: lugar);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Destino guardado')),
-        );
-      }
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Destino guardado y listo para cotizar')),
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
+      messenger.showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     }
   }
 }

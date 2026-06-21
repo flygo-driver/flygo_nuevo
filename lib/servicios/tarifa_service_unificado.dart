@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 // ✅ Eliminado import no utilizado de turismo_catalogo_rd.dart
 
+import '../modelo/tarifas_tramos_config.dart';
+import 'tarifas_tramos_calculo.dart';
+
 class TarifaServiceUnificado {
   static final TarifaServiceUnificado _instance =
       TarifaServiceUnificado._internal();
@@ -11,9 +14,14 @@ class TarifaServiceUnificado {
   Map<String, dynamic>? _cacheGeneral;
   Map<String, dynamic>? _cacheTurismo;
   Map<String, dynamic>? _cachePromo;
+  TarifasTramosConfig? _cacheTramos;
   DateTime? _lastFetchGeneral;
   DateTime? _lastFetchTurismo;
   DateTime? _lastFetchPromo;
+  DateTime? _lastFetchTramos;
+
+  /// Último desglose de cotización (solo lectura; se resetea en cada cálculo).
+  Map<String, dynamic>? ultimoDesgloseCotizacion;
 
   static const Duration _cacheDuration = Duration(minutes: 5);
 
@@ -135,6 +143,7 @@ class TarifaServiceUnificado {
       _recargarGenerales(),
       _recargarTurismo(),
       _recargarPromo(),
+      _recargarTramos(),
     ]);
   }
 
@@ -223,6 +232,50 @@ class TarifaServiceUnificado {
     return _cachePromo!;
   }
 
+  Future<TarifasTramosConfig> _getTarifasTramos() async {
+    if (_cacheTramos != null &&
+        _lastFetchTramos != null &&
+        DateTime.now().difference(_lastFetchTramos!) < _cacheDuration) {
+      return _cacheTramos!;
+    }
+    return _recargarTramos();
+  }
+
+  Future<TarifasTramosConfig> _recargarTramos() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('config')
+          .doc('tarifas_tramos')
+          .get();
+      final data = doc.data();
+      if (!doc.exists || data == null || data.isEmpty) {
+        _cacheTramos = TarifasTramosConfig.defaultsPrueba();
+      } else {
+        final parsed = TarifasTramosConfig.fromFirestore(data);
+        if (parsed.porVehiculo.isEmpty) {
+          _cacheTramos = TarifasTramosConfig(
+            activo: parsed.activo,
+            tramosKm: parsed.tramosKm,
+            minimoLargaDistanciaRd: parsed.minimoLargaDistanciaRd,
+            promoAplicaSoloTramoLocal: parsed.promoAplicaSoloTramoLocal,
+            distanciaMaximaCotizableKm: parsed.distanciaMaximaCotizableKm,
+            porVehiculo: TarifasTramosConfig.defaultsPrueba().porVehiculo,
+          );
+        } else {
+          _cacheTramos = parsed;
+        }
+      }
+    } catch (_) {
+      _cacheTramos = TarifasTramosConfig.defaultsPrueba();
+    }
+    _lastFetchTramos = DateTime.now();
+    return _cacheTramos!;
+  }
+
+  double get distanciaMaximaCotizableKm =>
+      _cacheTramos?.distanciaMaximaCotizableKm ??
+      TarifasTramosConfig.distanciaMaximaDefaultKm;
+
   double _aplicarDescuento(double precio, int contadorViajes) {
     if (_cachePromo == null) return precio;
 
@@ -263,8 +316,9 @@ class TarifaServiceUnificado {
     return nucleoTrayecto + 0.5 * nucleoTrayecto + toll * 2;
   }
 
-  /// 🔥 Calcula el precio para un servicio dado.
-  Future<double> calcularPrecio({
+  /// Calcula precio final y deja [ultimoDesgloseCotizacion] con el detalle.
+  Future<({double precio, Map<String, dynamic>? desglose})>
+      calcularPrecioConDesglose({
     required String tipoServicio,
     String? tipoVehiculo,
     String? subtipoTurismo,
@@ -273,47 +327,45 @@ class TarifaServiceUnificado {
     double peaje = 0.0,
     int contadorViajes = 1,
   }) async {
+    ultimoDesgloseCotizacion = null;
+    final tramos = await _getTarifasTramos();
     double precioBase;
+    Map<String, dynamic> desgloseNucleo;
+    bool esLargaDistancia = false;
+    bool promoSoloLocal = false;
 
     // ===== TURISMO =====
     if (tipoServicio == 'turismo') {
-      // 🔥 PASO 1: Normalizar el subtipo (de AEROPUERTO a aeropuerto)
       final String subtipoNormalizado = _normalizarSubtipo(subtipoTurismo);
-      // 🔇 Prints comentados para producción
-      // print('🎯 Turismo - Subtipo original: $subtipoTurismo');
-      // print('🎯 Turismo - Subtipo normalizado: $subtipoNormalizado');
-
-      // 🔥 PASO 2: Determinar qué tipo de vehículo usar para este subtipo
-      // Si ya viene tipoVehiculo, lo respetamos, si no, usamos el mapeo
       final String vehiculoParaConfig =
           tipoVehiculo ?? _mapeoSubtipoAVehiculo[subtipoNormalizado] ?? 'carro';
-      // print('🎯 Turismo - Vehículo a usar: $vehiculoParaConfig');
 
       final tarifas = await _getTarifasTurismo();
       final config = tarifas[vehiculoParaConfig];
 
       if (config == null) {
-        // Si no hay configuración, usar fallback
-        // print('⚠️ No hay configuración para $vehiculoParaConfig, usando fallback');
-        return _calcularPrecioTurismoFallback(
+        final fallback = await _calcularPrecioTurismoFallbackConDesglose(
           tipoVehiculo: vehiculoParaConfig,
           distanciaKm: distanciaKm,
           idaVuelta: idaVuelta,
           peaje: peaje,
           contadorViajes: contadorViajes,
+          tramos: tramos,
         );
+        return (precio: fallback.precio, desglose: fallback.desglose);
       }
 
       final activo = config['activo'] ?? true;
       if (!activo) {
-        // print('⚠️ Servicio $vehiculoParaConfig inactivo, usando fallback');
-        return _calcularPrecioTurismoFallback(
+        final fallback = await _calcularPrecioTurismoFallbackConDesglose(
           tipoVehiculo: vehiculoParaConfig,
           distanciaKm: distanciaKm,
           idaVuelta: idaVuelta,
           peaje: peaje,
           contadorViajes: contadorViajes,
+          tramos: tramos,
         );
+        return (precio: fallback.precio, desglose: fallback.desglose);
       }
 
       final base = (config['tarifaBase'] as num).toDouble();
@@ -321,10 +373,20 @@ class TarifaServiceUnificado {
       final minimo = (config['precioMinimo'] as num).toDouble();
       final cobraPeaje = config['cobraPeaje'] ?? true;
 
-      var nucleo = base + (distanciaKm * porKm);
-      if (nucleo < minimo) nucleo = minimo;
+      final nucleoRes = TarifasTramosCalculo.calcular(
+        distanciaKm: distanciaKm,
+        baseRd: base,
+        porKmLocal: porKm,
+        minimoLocalRd: minimo,
+        tramos: tramos,
+        claveVehiculo: vehiculoParaConfig,
+      );
+      desgloseNucleo = nucleoRes.desglose;
+      esLargaDistancia = desgloseNucleo['esLargaDistancia'] == true;
+      promoSoloLocal = tramos.promoAplicaSoloTramoLocal;
+
       precioBase = _turismoNucleoIdaVueltaYPeaje(
-        nucleoTrayecto: nucleo,
+        nucleoTrayecto: nucleoRes.nucleoRd,
         idaVuelta: idaVuelta,
         peaje: peaje,
         cobraPeaje: cobraPeaje,
@@ -344,8 +406,18 @@ class TarifaServiceUnificado {
       final porKm = (config['porKm'] as num).toDouble();
       final minimo = (config['minimo'] as num).toDouble();
 
-      precioBase = base + (distanciaKm * porKm);
-      if (precioBase < minimo) precioBase = minimo;
+      final nucleoRes = TarifasTramosCalculo.calcular(
+        distanciaKm: distanciaKm,
+        baseRd: base,
+        porKmLocal: porKm,
+        minimoLocalRd: minimo,
+        tramos: tramos,
+        claveVehiculo: 'motor',
+      );
+      desgloseNucleo = nucleoRes.desglose;
+      esLargaDistancia = desgloseNucleo['esLargaDistancia'] == true;
+      promoSoloLocal = tramos.promoAplicaSoloTramoLocal;
+      precioBase = nucleoRes.nucleoRd;
       if (peaje > 0) precioBase += peaje;
     }
 
@@ -371,23 +443,67 @@ class TarifaServiceUnificado {
         }
       }
 
-      precioBase = base + (distanciaKm * porKm);
-      if (precioBase < minimo) precioBase = minimo;
+      final nucleoRes = TarifasTramosCalculo.calcular(
+        distanciaKm: distanciaKm,
+        baseRd: base,
+        porKmLocal: porKm,
+        minimoLocalRd: minimo,
+        tramos: tramos,
+        claveVehiculo: tipoVehiculo,
+      );
+      desgloseNucleo = nucleoRes.desglose;
+      esLargaDistancia = desgloseNucleo['esLargaDistancia'] == true;
+      promoSoloLocal = tramos.promoAplicaSoloTramoLocal;
+      precioBase = nucleoRes.nucleoRd;
       if (peaje > 0) precioBase += peaje;
     } else {
       throw ArgumentError('Tipo de servicio no válido: $tipoServicio');
     }
 
-    // Ida y vuelta (turismo ya aplicado arriba: ida completa + ½ vuelta + peaje sin ×1,8)
+    final double antesIdaVuelta = precioBase;
     if (idaVuelta && tipoServicio != 'turismo') {
       precioBase *= 1.8;
     }
 
-    // Aplicar promoción si está activa
     await _getConfigPromo();
-    final precioFinal = _aplicarDescuento(precioBase, contadorViajes);
+    final bool omitirPromo =
+        promoSoloLocal && esLargaDistancia && tramos.activo;
+    final precioFinal = omitirPromo
+        ? precioBase
+        : _aplicarDescuento(precioBase, contadorViajes);
 
-    return precioFinal;
+    final desglose = Map<String, dynamic>.from(desgloseNucleo)
+      ..['tipoServicio'] = tipoServicio
+      ..['idaVuelta'] = idaVuelta
+      ..['peajeRd'] = peaje > 0 ? double.parse(peaje.toStringAsFixed(2)) : 0.0
+      ..['antesIdaVueltaRd'] = double.parse(antesIdaVuelta.toStringAsFixed(2))
+      ..['promoOmitidaPorLargaDistancia'] = omitirPromo
+      ..['totalRd'] = double.parse(precioFinal.toStringAsFixed(2));
+
+    ultimoDesgloseCotizacion = desglose;
+    return (precio: precioFinal, desglose: desglose);
+  }
+
+  /// 🔥 Calcula el precio para un servicio dado.
+  Future<double> calcularPrecio({
+    required String tipoServicio,
+    String? tipoVehiculo,
+    String? subtipoTurismo,
+    required double distanciaKm,
+    bool idaVuelta = false,
+    double peaje = 0.0,
+    int contadorViajes = 1,
+  }) async {
+    final r = await calcularPrecioConDesglose(
+      tipoServicio: tipoServicio,
+      tipoVehiculo: tipoVehiculo,
+      subtipoTurismo: subtipoTurismo,
+      distanciaKm: distanciaKm,
+      idaVuelta: idaVuelta,
+      peaje: peaje,
+      contadorViajes: contadorViajes,
+    );
+    return r.precio;
   }
 
   /// 🔥 Función de normalización de subtipos
@@ -469,15 +585,15 @@ class TarifaServiceUnificado {
     return 'CIUDAD';
   }
 
-  /// 🔥 Función de fallback para turismo
-  double _calcularPrecioTurismoFallback({
+  Future<({double precio, Map<String, dynamic>? desglose})>
+      _calcularPrecioTurismoFallbackConDesglose({
     required String tipoVehiculo,
     required double distanciaKm,
     required bool idaVuelta,
     required double peaje,
     required int contadorViajes,
-  }) {
-    // Tarifas base de fallback por tipo de vehículo
+    required TarifasTramosConfig tramos,
+  }) async {
     const fallbackPorVehiculo = {
       'carro': {'base': 100.0, 'km': 25.0, 'minimo': 300.0},
       'jeepeta': {'base': 150.0, 'km': 30.0, 'minimo': 400.0},
@@ -485,19 +601,43 @@ class TarifaServiceUnificado {
       'bus': {'base': 300.0, 'km': 40.0, 'minimo': 600.0},
     };
 
+    final key = tipoVehiculo.toLowerCase();
     final config =
-        fallbackPorVehiculo[tipoVehiculo] ?? fallbackPorVehiculo['carro']!;
+        fallbackPorVehiculo[key] ?? fallbackPorVehiculo['carro']!;
 
-    var nucleo = config['base']! + (distanciaKm * config['km']!);
-    if (nucleo < config['minimo']!) nucleo = config['minimo']!;
-    final precio = _turismoNucleoIdaVueltaYPeaje(
-      nucleoTrayecto: nucleo,
+    final nucleoRes = TarifasTramosCalculo.calcular(
+      distanciaKm: distanciaKm,
+      baseRd: config['base']!,
+      porKmLocal: config['km']!,
+      minimoLocalRd: config['minimo']!,
+      tramos: tramos,
+      claveVehiculo: tipoVehiculo,
+    );
+
+    var precioBase = _turismoNucleoIdaVueltaYPeaje(
+      nucleoTrayecto: nucleoRes.nucleoRd,
       idaVuelta: idaVuelta,
       peaje: peaje,
       cobraPeaje: true,
     );
 
-    return _aplicarDescuento(precio, contadorViajes);
+    await _getConfigPromo();
+    final esLarga = nucleoRes.desglose['esLargaDistancia'] == true;
+    final omitirPromo =
+        tramos.promoAplicaSoloTramoLocal && esLarga && tramos.activo;
+    final precioFinal = omitirPromo
+        ? precioBase
+        : _aplicarDescuento(precioBase, contadorViajes);
+
+    final desglose = Map<String, dynamic>.from(nucleoRes.desglose)
+      ..['tipoServicio'] = 'turismo'
+      ..['idaVuelta'] = idaVuelta
+      ..['peajeRd'] = peaje > 0 ? double.parse(peaje.toStringAsFixed(2)) : 0.0
+      ..['promoOmitidaPorLargaDistancia'] = omitirPromo
+      ..['totalRd'] = double.parse(precioFinal.toStringAsFixed(2));
+
+    ultimoDesgloseCotizacion = desglose;
+    return (precio: precioFinal, desglose: desglose);
   }
 
   /// Obtiene la descripción de la promoción actual
@@ -577,4 +717,5 @@ class TarifaServiceUnificado {
   Future<Map<String, dynamic>> getConfigGeneral() => _getTarifasGenerales();
   Future<Map<String, dynamic>> getConfigTurismo() => _getTarifasTurismo();
   Future<Map<String, dynamic>> getConfigPromo() => _getConfigPromo();
+  Future<TarifasTramosConfig> getConfigTramos() => _getTarifasTramos();
 }

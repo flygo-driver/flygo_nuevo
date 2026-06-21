@@ -6,16 +6,17 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_crear_publicacion_flow.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_viaje_activo_page.dart';
-import 'package:flygo_nuevo/servicios/navigation_service.dart';
-import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
-import 'package:flygo_nuevo/widgets/bola_cliente_mapa_conductor_live.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
@@ -32,6 +33,29 @@ double _pctComisionDesdeDoc(Map<String, dynamic> data) {
 
 class BolaPuebloNav {
   BolaPuebloNav._();
+
+  static String _prefDestNav(String bolaId) =>
+      'bola_dest_nav_${bolaId.trim()}';
+
+  static Future<void> marcarDestinoNavAbierto(String bolaId) async {
+    final id = bolaId.trim();
+    if (id.isEmpty) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(_prefDestNav(id), true);
+    } catch (_) {}
+  }
+
+  static Future<bool> destinoNavAbierto(String bolaId) async {
+    final id = bolaId.trim();
+    if (id.isEmpty) return false;
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getBool(_prefDestNav(id)) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 
   static bool _coordPairOk(double? a, double? b) =>
       a != null && b != null && a.isFinite && b.isFinite;
@@ -214,7 +238,13 @@ class BolaPuebloNav {
     String sheetTitle = 'Ir al destino del viaje',
     String hint =
         'Desde donde estés ahora hasta el destino acordado en la bola.',
+    String? bolaIdMarcarNav,
   }) async {
+    Future<void> marcarNavSiCorresponde() async {
+      if (bolaIdMarcarNav != null && bolaIdMarcarNav.trim().isNotEmpty) {
+        await marcarDestinoNavAbierto(bolaIdMarcarNav);
+      }
+    }
     final c = BolaPuebloColors.of(context);
     await showModalBottomSheet<void>(
       context: context,
@@ -287,6 +317,7 @@ class BolaPuebloNav {
                   subtitle: 'Hasta el destino',
                   onTap: () async {
                     Navigator.pop(ctx);
+                    await marcarNavSiCorresponde();
                     await abrirGoogleMapsSoloDestino(
                       direccion: destinoLabel,
                       lat: destinoLat,
@@ -305,6 +336,7 @@ class BolaPuebloNav {
                   subtitle: 'Hasta el destino',
                   onTap: () async {
                     Navigator.pop(ctx);
+                    await marcarNavSiCorresponde();
                     await abrirWazeSoloPunto(
                       direccion: destinoLabel,
                       lat: destinoLat,
@@ -582,8 +614,145 @@ class BolaPuebloFormat {
 }
 
 class BolaPuebloDialogs {
-  /// Tras confirmar bola (publicar o cerrar acuerdo): pantalla Bola o mapa pool si el espejo ya está activo.
-  static Future<void> _navegarClienteTrasBolaConfirmada({
+  /// Tras acordar tarifa: pantalla estándar de viaje (PIN → iniciar → finalizar → factura)
+  /// o tablero Bola si aún no hay espejo pool operativo.
+  /// Tras acordar tarifa → pantalla estándar de viaje (PIN → iniciar → finalizar → factura)
+  /// igual que taxi; el tablero solo muestra resumen + enlace.
+  static Future<void> abrirViajeEnCursoOperativoBola({
+    required String bolaId,
+    required bool esTaxista,
+    NavigatorState? preNav,
+    BuildContext? context,
+  }) async {
+    NavigatorState? nav = preNav ?? NavigationService.navigatorKey.currentState;
+    if ((nav == null || !nav.mounted) &&
+        context != null &&
+        context.mounted) {
+      nav = Navigator.of(context, rootNavigator: true);
+    }
+    if (nav == null || !nav.mounted) return;
+
+    await BolaPuebloRepo.reconciliarSesionBolaAtascada();
+    final String? viajeId =
+        await ViajesRepo.enlazarViajeEspejoBolaOperativo(bolaId: bolaId);
+    if (viajeId == null || viajeId.trim().isEmpty) {
+      if (nav.mounted) {
+        try {
+          final DocumentSnapshot<Map<String, dynamic>> snap =
+              await FirebaseFirestore.instance
+                  .collection('bolas_pueblo')
+                  .doc(bolaId)
+                  .get();
+          final String estado =
+              (snap.data()?['estado'] ?? '').toString().trim();
+          if (estado == 'acordada' || estado == 'en_curso') {
+            await NavigationService.clearAndGoPage(
+              preNav: nav,
+              page: BolaPuebloViajeActivoPage(bolaId: bolaId),
+            );
+          } else {
+            await NavigationService.clearAndGoBolaTablero(preNav: nav);
+          }
+        } catch (_) {
+          await NavigationService.clearAndGoBolaTablero(preNav: nav);
+        }
+      }
+      return;
+    }
+
+    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
+
+    if (esTaxista) {
+      ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(seconds: 90));
+      final String uid =
+          (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+      if (uid.isNotEmpty) {
+        await NavigationService.esperarViajeAsignadoAlTaxista(
+          viajeId: viajeId,
+          uidTaxista: uid,
+          timeout: const Duration(seconds: 10),
+        );
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: viajeId,
+          uidTaxista: uid,
+          preNav: nav,
+        );
+      } else {
+        await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: nav);
+      }
+      return;
+    }
+
+    final String uidCli = (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+    if (uidCli.isNotEmpty) {
+      await NavigationService.esperarViajeEspejoBolaCliente(
+        viajeId: viajeId,
+        uidCliente: uidCli,
+        timeout: const Duration(seconds: 10),
+      );
+    }
+    await NavigationService.clearAndGoViajeEnCursoCliente(preNav: nav);
+  }
+
+  /// Abre el flujo correcto según estado (tablero parcial, Mi viaje en curso, etc.).
+  static Future<void> abrirModoViajeBolaPorId({
+    required BuildContext context,
+    required String bolaId,
+    NavigatorState? preNav,
+  }) async {
+    final String bid = bolaId.trim();
+    if (bid.isEmpty) return;
+
+    NavigatorState? nav = preNav ?? NavigationService.navigatorKey.currentState;
+    if ((nav == null || !nav.mounted) && context.mounted) {
+      nav = Navigator.of(context, rootNavigator: true);
+    }
+    if (nav == null || !nav.mounted) return;
+    final NavigatorState navigator = nav;
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance
+              .collection('bolas_pueblo')
+              .doc(bid)
+              .get();
+      if (!navigator.mounted) return;
+      final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+      final String estado = (d['estado'] ?? '').toString().trim();
+      final String uid = (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+      final String uidTx = (d['uidTaxista'] ?? '').toString().trim();
+      final String uidCli = (d['uidCliente'] ?? '').toString().trim();
+      if ((estado == 'acordada' || estado == 'en_curso') &&
+          uid.isNotEmpty &&
+          (uid == uidTx || uid == uidCli)) {
+        await abrirViajeEnCursoOperativoBola(
+          bolaId: bid,
+          esTaxista: uid == uidTx,
+          preNav: navigator,
+          context: context.mounted ? context : null,
+        );
+        return;
+      }
+      if (estado == 'abierta' ||
+          estado == 'finalizada' ||
+          estado == 'cancelada') {
+        if (estado == 'finalizada' || estado == 'cancelada') {
+          await NavigationService.clearAndGoPage(
+            preNav: navigator,
+            page: BolaPuebloViajeActivoPage(bolaId: bid),
+          );
+        } else {
+          await NavigationService.clearAndGoBolaTablero(preNav: navigator);
+        }
+        return;
+      }
+    } catch (_) {}
+
+    if (!navigator.mounted) return;
+    await NavigationService.clearAndGoBolaTablero(preNav: navigator);
+  }
+
+  static Future<void> _navegarTrasBolaAcordada({
     required NavigatorState? preNav,
     required String bolaId,
   }) async {
@@ -595,33 +764,29 @@ class BolaPuebloDialogs {
               .get();
       final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
       final String estado = (d['estado'] ?? '').toString().trim();
-      final String viajeEspejoId =
-          (d['viajeEspejoId'] ?? '').toString().trim();
+      if (estado != 'acordada' && estado != 'en_curso') {
+        await NavigationService.clearAndGoBolaTablero(preNav: preNav);
+        return;
+      }
 
-      if ((estado == 'en_curso' || estado == 'acordada') &&
-          viajeEspejoId.isNotEmpty) {
-        final DocumentSnapshot<Map<String, dynamic>> vSnap =
-            await FirebaseFirestore.instance
-                .collection('viajes')
-                .doc(viajeEspejoId)
-                .get();
-        if (vSnap.exists) {
-          final Map<String, dynamic> vd = vSnap.data() ?? <String, dynamic>{};
-          if (!ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
-              vd)) {
-            await NavigationService.clearAndGoViajeEnCursoCliente(
-              preNav: preNav,
-            );
-            return;
-          }
-        }
+      final String uid =
+          (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+      final String uidTx = (d['uidTaxista'] ?? '').toString().trim();
+      final String uidCli = (d['uidCliente'] ?? '').toString().trim();
+      final bool esTaxista = uid.isNotEmpty && uid == uidTx;
+      final bool esCliente = uid.isNotEmpty && uid == uidCli;
+
+      if (esTaxista || esCliente) {
+        await abrirViajeEnCursoOperativoBola(
+          bolaId: bolaId,
+          esTaxista: esTaxista,
+          preNav: preNav,
+        );
+        return;
       }
     } catch (_) {}
 
-    await NavigationService.clearAndGoPage(
-      preNav: preNav,
-      page: BolaPuebloViajeActivoPage(bolaId: bolaId),
-    );
+    await NavigationService.clearAndGoBolaTablero(preNav: preNav);
   }
 
   BolaPuebloDialogs._();
@@ -735,6 +900,22 @@ class BolaPuebloDialogs {
     required String tipo,
     required void Function(bool busy) onBusy,
   }) async {
+    if (tipo.trim().toLowerCase() == 'pedido') {
+      try {
+        await BolaPuebloRepo.assertClientePuedePedirNuevaBola(uid);
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(
+            context,
+            mensajeExcepcionUsuario(e),
+            error: true,
+          ),
+        );
+        return;
+      }
+    }
+
     final result =
         await Navigator.of(context).push<BolaPuebloCrearPublicacionResult>(
       MaterialPageRoute(
@@ -744,14 +925,9 @@ class BolaPuebloDialogs {
     );
 
     if (result == null) return;
-    NavigatorState? navAntesDeCrear =
-        NavigationService.navigatorKey.currentState;
-    if (navAntesDeCrear == null && context.mounted) {
-      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
-    }
     try {
       onBusy(true);
-      final String bolaId = await BolaPuebloRepo.crearPublicacion(
+      await BolaPuebloRepo.crearPublicacion(
         uid: uid,
         rol: rol,
         nombre: nombre,
@@ -772,14 +948,7 @@ class BolaPuebloDialogs {
       ScaffoldMessenger.of(context).showSnackBar(
         BolaPuebloTheme.snack(context, 'Publicación creada'),
       );
-      final String rolNorm = rol.trim().toLowerCase();
-      final String tipoNorm = tipo.trim().toLowerCase();
-      if (rolNorm == 'cliente' || tipoNorm == 'pedido') {
-        await _navegarClienteTrasBolaConfirmada(
-          preNav: navAntesDeCrear,
-          bolaId: bolaId,
-        );
-      }
+      // Bola queda abierta: seguir en tablero hasta acordar tarifa (no modo viaje).
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -1085,13 +1254,10 @@ class BolaPuebloDialogs {
     try {
       await BolaPuebloRepo.cancelarAcuerdoAntesDeAbordo(
           bolaId: bolaId, uidActor: uid);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(BolaPuebloTheme.snack(context, 'Acuerdo cancelado'));
-        if (Navigator.of(context).canPop()) {
-          Navigator.of(context).pop();
-        }
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(BolaPuebloTheme.snack(context, 'Acuerdo cancelado'));
+      await NavigationService.salirModoViajeBola(context);
     } catch (e) {
       if (context.mounted) {
         final msg = BolaPuebloDialogs.mensajeExcepcionUsuario(e);
@@ -1831,7 +1997,7 @@ class BolaPuebloDialogs {
                                                                       );
                                                                     }
                                                                     await BolaPuebloDialogs
-                                                                        ._navegarClienteTrasBolaConfirmada(
+                                                                        ._navegarTrasBolaAcordada(
                                                                       preNav:
                                                                           navAntesDeCrear,
                                                                       bolaId:
@@ -2104,6 +2270,80 @@ class BolaPuebloDialogs {
     }
   }
 
+  /// Conductor: cierra el viaje espejo en `viajes` (mismo flujo que «Mi viaje en curso»).
+  /// Tras abrir Maps/Waze o «Continuar sin mapa» en prueba en casa.
+  static Future<void> finalizarBolaTaxistaOperativo(
+    BuildContext context, {
+    required String bolaId,
+  }) async {
+    final String uid =
+        (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+    if (uid.isEmpty) return;
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance
+              .collection('bolas_pueblo')
+              .doc(bolaId.trim())
+              .get();
+      final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+      final String uidTx = (d['uidTaxista'] ?? '').toString().trim();
+      if (uid != uidTx) {
+        throw Exception('Solo el conductor asignado puede finalizar.');
+      }
+
+      final String viajeId =
+          (d['viajeEspejoId'] ?? '').toString().trim();
+      String vid = viajeId;
+      if (vid.isEmpty) {
+        final QuerySnapshot<Map<String, dynamic>> q =
+            await FirebaseFirestore.instance
+                .collection('viajes')
+                .where('bolaPuebloId', isEqualTo: bolaId.trim())
+                .limit(1)
+                .get();
+        if (q.docs.isNotEmpty) vid = q.docs.first.id;
+      }
+      if (vid.isEmpty) {
+        await confirmarFinalizacionDialog(context, bolaId, uid);
+        return;
+      }
+
+      final outcome = await ViajesRepo.completarViajePorTaxista(vid);
+      unawaited(BolaPuebloFirestoreSync.postCompletarViajeEspejo(vid));
+
+      if (!context.mounted) return;
+      if (outcome == CompletarViajeTaxistaOutcome.alreadyCompleted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(context, 'Bola ya finalizada'),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(context, 'Bola finalizada'),
+        );
+      }
+
+      BolaPostFacturaReopenGuard.markOpened(bolaId.trim());
+      await FacturaBolaPueblo.mostrar(
+        context,
+        bolaId: bolaId.trim(),
+        role: 'taxista',
+      );
+      if (context.mounted) {
+        await NavigationService.salirModoViajeBola(context);
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          mensajeExcepcionUsuario(e),
+          error: true,
+        ),
+      );
+    }
+  }
+
   static Future<void> confirmarFinalizacionDialog(
       BuildContext context, String bolaId, String uidActor) async {
     try {
@@ -2152,6 +2392,468 @@ class BolaPuebloDialogs {
         ),
       );
     }
+  }
+}
+
+/// Acciones de destino en curso: taxista finaliza con «Finalizar bola» tras abrir mapa.
+class BolaEnCursoDestinoAcciones extends StatefulWidget {
+  const BolaEnCursoDestinoAcciones({
+    super.key,
+    required this.bolaId,
+    required this.viajeEspejoId,
+    required this.soyTaxistaAsignado,
+    required this.soyClienteAsignado,
+    required this.user,
+    required this.uidTaxista,
+    required this.uidCliente,
+    required this.destino,
+    required this.origen,
+    this.destinoLat,
+    this.destinoLon,
+    this.origenLat,
+    this.origenLon,
+    required this.confTax,
+    required this.confCli,
+    required this.codigoVerificado,
+  });
+
+  final String bolaId;
+  final String viajeEspejoId;
+  final bool soyTaxistaAsignado;
+  final bool soyClienteAsignado;
+  final User user;
+  final String uidTaxista;
+  final String uidCliente;
+  final String destino;
+  final String origen;
+  final double? destinoLat;
+  final double? destinoLon;
+  final double? origenLat;
+  final double? origenLon;
+  final bool confTax;
+  final bool confCli;
+  final bool codigoVerificado;
+
+  @override
+  State<BolaEnCursoDestinoAcciones> createState() =>
+      _BolaEnCursoDestinoAccionesState();
+}
+
+class _BolaEnCursoDestinoAccionesState extends State<BolaEnCursoDestinoAcciones>
+    with WidgetsBindingObserver {
+  bool _destinoNavAbierto = false;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_cargarNavDestino());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_cargarNavDestino());
+    }
+  }
+
+  Future<void> _cargarNavDestino() async {
+    final bool abierto =
+        await BolaPuebloNav.destinoNavAbierto(widget.bolaId);
+    if (mounted && abierto != _destinoNavAbierto) {
+      setState(() => _destinoNavAbierto = abierto);
+    }
+  }
+
+  Future<void> _marcarDestinoNavListo() async {
+    await BolaPuebloNav.marcarDestinoNavAbierto(widget.bolaId);
+    if (mounted) setState(() => _destinoNavAbierto = true);
+  }
+
+  Future<void> _abrirMapsDestino() async {
+    await BolaPuebloNav.abrirSelectorSoloDestino(
+      context,
+      destinoLabel: widget.destino,
+      destinoLat: widget.destinoLat,
+      destinoLon: widget.destinoLon,
+      bolaIdMarcarNav: widget.bolaId,
+    );
+    await _cargarNavDestino();
+  }
+
+  Future<void> _finalizarBola() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await BolaPuebloDialogs.finalizarBolaTaxistaOperativo(
+        context,
+        bolaId: widget.bolaId,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color fgMuted = BolaPuebloColors.of(context).onMuted;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        BolaPuebloContrapartePanel(
+          bolaId: widget.bolaId,
+          counterpartyUid: widget.soyClienteAsignado
+              ? widget.uidTaxista
+              : widget.uidCliente,
+          sectionTitle:
+              widget.soyClienteAsignado ? 'Tu conductor' : 'Tu pasajero',
+          vistaChofer: widget.soyTaxistaAsignado,
+        ),
+        const SizedBox(height: 14),
+        BolaPuebloUi.sectionLabel(context, 'Estado del traslado'),
+        BolaPuebloUi.metaRow(
+          context,
+          icon: Icons.verified_outlined,
+          text:
+              'Código: ${widget.codigoVerificado ? 'verificado' : 'pendiente'}',
+        ),
+        BolaPuebloUi.metaRow(
+          context,
+          icon: Icons.local_taxi_outlined,
+          text:
+              'Conductor: ${widget.confTax ? 'confirmó llegada' : 'pendiente'}',
+        ),
+        BolaPuebloUi.metaRow(
+          context,
+          icon: Icons.person_pin_outlined,
+          text: 'Cliente: ${widget.confCli ? 'confirmó llegada' : 'pendiente'}',
+        ),
+        const SizedBox(height: 14),
+        BolaPuebloUi.sectionLabel(context, 'Ir al destino'),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            style: BolaPuebloUi.filledSecondary,
+            onPressed: widget.destino.trim().isEmpty ? null : _abrirMapsDestino,
+            icon: const Icon(Icons.directions_car_filled_rounded, size: 22),
+            label: const Text('Maps / Waze hasta el destino'),
+          ),
+        ),
+        if (widget.soyTaxistaAsignado) ...[
+          if (!_destinoNavAbierto) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        await _marcarDestinoNavListo();
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          BolaPuebloTheme.snack(
+                            context,
+                            'Listo. Siguiente: «Finalizar bola».',
+                          ),
+                        );
+                      },
+                icon: const Icon(Icons.skip_next_rounded, size: 22),
+                label: const Text('Continuar sin mapa (prueba en casa)'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.tealAccent,
+                  side: BorderSide(
+                    color: Colors.tealAccent.withValues(alpha: 0.55),
+                  ),
+                  minimumSize: const Size(double.infinity, 48),
+                ),
+              ),
+            ),
+          ],
+          if (_destinoNavAbierto) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                style: BolaPuebloUi.filledPrimary,
+                onPressed: _busy ? null : _finalizarBola,
+                icon: _busy
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.flag_rounded, size: 22),
+                label: const Text('Finalizar bola'),
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            Text(
+              'Prueba en casa: abrí Maps/Waze o «Continuar sin mapa»; '
+              'luego aparece «Finalizar bola».',
+              style: TextStyle(
+                color: fgMuted.withValues(alpha: 0.95),
+                fontSize: 11.5,
+                height: 1.35,
+              ),
+            ),
+          ],
+        ] else ...[
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              style: BolaPuebloUi.filledPrimary,
+              onPressed: () => BolaPuebloDialogs.confirmarFinalizacionDialog(
+                context,
+                widget.bolaId,
+                widget.user.uid,
+              ),
+              icon: const Icon(Icons.flag_rounded, size: 22),
+              label: const Text('Confirmar que llegamos'),
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          style: BolaPuebloUi.outlineAccent(context),
+          onPressed: () => BolaPuebloNav.abrirSelectorNavegacion(
+            context,
+            origen: widget.origen,
+            destino: widget.destino,
+            origenLat: widget.origenLat,
+            origenLon: widget.origenLon,
+            destinoLat: widget.destinoLat,
+            destinoLon: widget.destinoLon,
+          ),
+          icon: const Icon(Icons.navigation_rounded, size: 21),
+          label: const Text('Ruta completa otra vez (origen → destino)'),
+        ),
+        if (widget.viajeEspejoId.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: BolaPuebloUi.outlineAccent(context),
+              onPressed: () {
+                final NavigatorState? nav =
+                    NavigationService.navigatorKey.currentState ??
+                        Navigator.of(context, rootNavigator: true);
+                if (widget.soyTaxistaAsignado) {
+                  unawaited(
+                    NavigationService.clearAndGoViajeEnCursoTaxista(
+                      preNav: nav,
+                    ),
+                  );
+                } else {
+                  unawaited(
+                    NavigationService.clearAndGoViajeEnCursoCliente(
+                      preNav: nav,
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.local_taxi_rounded, size: 20),
+              label: Text(
+                widget.soyTaxistaAsignado
+                    ? 'Abrir Mi viaje en curso (conductor)'
+                    : 'Abrir Mi viaje en curso',
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Cliente: una sola bola activa; oculta «Pedir bola» mientras haya abierta/acordada/en curso.
+class BolaClientePedirPedidoPanel extends StatelessWidget {
+  const BolaClientePedirPedidoPanel({
+    super.key,
+    required this.bolaActiva,
+    required this.uid,
+    required this.rol,
+    required this.nombre,
+    required this.guardando,
+    required this.onBusy,
+    required this.onContinuarBola,
+  });
+
+  final Map<String, String>? bolaActiva;
+  final String uid;
+  final String rol;
+  final String nombre;
+  final bool guardando;
+  final void Function(bool busy) onBusy;
+  final void Function(String bolaId) onContinuarBola;
+
+  static String _etiquetaEstado(String estado) {
+    switch (estado) {
+      case 'abierta':
+        return 'Esperando conductor en el tablero';
+      case 'acordada':
+        return 'Acordada — seguí con el viaje';
+      case 'en_curso':
+        return 'Viaje en curso';
+      default:
+        return estado;
+    }
+  }
+
+  static String _continuarLabel(String estado) {
+    switch (estado) {
+      case 'abierta':
+        return 'Ver mi pedido';
+      case 'acordada':
+      case 'en_curso':
+        return 'Continuar mi bola';
+      default:
+        return 'Abrir mi bola';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, String>? activa = bolaActiva;
+    if (activa != null) {
+      final String id = (activa['id'] ?? '').trim();
+      final String estado = (activa['estado'] ?? '').trim();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1B5E20).withValues(alpha: 0.28),
+              borderRadius: BorderRadius.circular(BolaPuebloUi.radiusButton),
+              border: Border.all(
+                color: const Color(0xFF69F0AE).withValues(alpha: 0.45),
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.info_outline_rounded,
+                  color: Color(0xFF69F0AE),
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Tenés una bola activa',
+                        style: BolaPuebloUi.panelBody(context).copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _etiquetaEstado(estado),
+                        style: BolaPuebloUi.panelBody(context).copyWith(
+                          color: const Color(0xFFB9F6CA),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Solo podés pedir una bola a la vez. Seguí la tuya o cancelala en su tarjeta antes de publicar otra.',
+                        style: BolaPuebloUi.panelBody(context).copyWith(
+                          fontSize: 12.5,
+                          height: 1.35,
+                          color: Colors.white.withValues(alpha: 0.88),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF2962FF),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius:
+                    BorderRadius.circular(BolaPuebloUi.radiusButton),
+              ),
+            ),
+            onPressed: id.isEmpty ? null : () => onContinuarBola(id),
+            icon: const Icon(Icons.arrow_forward_rounded, size: 22),
+            label: Text(
+              _continuarLabel(estado),
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return FilledButton.icon(
+      style: FilledButton.styleFrom(
+        backgroundColor: const Color(0xFF00C853),
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(BolaPuebloUi.radiusButton),
+        ),
+        elevation: 6,
+        shadowColor: const Color(0xFF00E676).withValues(alpha: 0.65),
+      ).copyWith(
+        overlayColor: WidgetStatePropertyAll(
+          Colors.white.withValues(alpha: 0.08),
+        ),
+      ),
+      onPressed: guardando
+          ? null
+          : () => BolaPuebloDialogs.crearPublicacion(
+                context: context,
+                uid: uid,
+                rol: rol,
+                nombre: nombre,
+                tipo: 'pedido',
+                onBusy: onBusy,
+              ),
+      icon: const Icon(Icons.add_road_rounded, size: 22),
+      label: const Text(
+        'Pedir bola',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.2,
+          shadows: [
+            Shadow(
+              color: Color(0x5500FF95),
+              blurRadius: 12,
+              offset: Offset(0, 0),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -2232,11 +2934,18 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
       return;
     }
     _lastResumeSnackAt = now;
+    final String msg;
+    if (!_pasoNavegacionListo) {
+      msg =
+          'Volviste a RAI Driver. Siguiente: «Ir a recoger al cliente» o «Llegué al punto».';
+    } else if (!_pasoAbordoListo) {
+      msg = 'Volviste a RAI Driver. Siguiente: «Subió el cliente».';
+    } else {
+      msg =
+          'Volviste a RAI Driver. Siguiente: ingresá el código y «Verificar e iniciar ruta».';
+    }
     ScaffoldMessenger.of(context).showSnackBar(
-      BolaPuebloTheme.snack(
-        context,
-        'Volviste a RAI Driver. Continúa con "Subió el cliente" y luego el código.',
-      ),
+      BolaPuebloTheme.snack(context, msg),
     );
   }
 
@@ -2322,7 +3031,12 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
       if (!mounted) return;
       _codigoInicioCtrl.clear();
       ScaffoldMessenger.of(context).showSnackBar(
-        BolaPuebloTheme.snack(context, 'Bola iniciada (en curso)'),
+        BolaPuebloTheme.snack(context, 'Código verificado — abriendo viaje en curso'),
+      );
+      ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
+      ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(seconds: 90));
+      await NavigationService.clearAndGoViajeEnCursoTaxista(
+        preNav: NavigationService.navigatorKey.currentState,
       );
     } catch (e) {
       if (!mounted) return;
@@ -3232,7 +3946,7 @@ class _BolaPuebloContraofertasInboundState
                                               .mostrarPostAceptarOfertaDialog(
                                                   context);
                                           await BolaPuebloDialogs
-                                              ._navegarClienteTrasBolaConfirmada(
+                                              ._navegarTrasBolaAcordada(
                                             preNav: navAntesDeCrear,
                                             bolaId: widget.bolaId,
                                           );
@@ -3364,7 +4078,7 @@ class _BolaPuebloOfertaDescartadaListenerState
 }
 
 /// Tarjeta de una publicación (misma lógica en pantalla Bola y pestaña taxista).
-class BolaPuebloPublicacionCard extends StatelessWidget {
+class BolaPuebloPublicacionCard extends StatefulWidget {
   const BolaPuebloPublicacionCard({
     super.key,
     required this.docId,
@@ -3393,7 +4107,38 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
   final void Function(String bolaId)? onAbrirModoViaje;
 
   @override
+  State<BolaPuebloPublicacionCard> createState() =>
+      _BolaPuebloPublicacionCardState();
+}
+
+class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
+  bool _detallesExpandidos = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _detallesExpandidos = _viajeActivoParticipante(widget.data, widget.user);
+  }
+
+  static bool _viajeActivoParticipante(Map<String, dynamic> data, User user) {
+    final String estado = (data['estado'] ?? '').toString();
+    final String uidTaxista = (data['uidTaxista'] ?? '').toString();
+    final String uidCliente = (data['uidCliente'] ?? '').toString();
+    final bool partActivo =
+        uidTaxista == user.uid || uidCliente == user.uid;
+    return partActivo && (estado == 'acordada' || estado == 'en_curso');
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final docId = widget.docId;
+    final data = widget.data;
+    final user = widget.user;
+    final nombre = widget.nombre;
+    final rol = widget.rol;
+    final onVerRutaEnMapa = widget.onVerRutaEnMapa;
+    final puedeOperarEnPool = widget.puedeOperarEnPool;
+
     final ownerUid = (data['createdByUid'] ?? '').toString();
     final owner = (data['createdByNombre'] ?? 'Usuario').toString();
     final tipo = (data['tipo'] ?? '').toString();
@@ -3413,13 +4158,6 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
         ((data['gananciaNetaChoferRd'] ?? 0) as num).toDouble();
     final double montoAcordadoRd =
         ((data['montoAcordadoRd'] ?? 0) as num).toDouble();
-    final bool confTax = data['confirmacionTaxistaFinal'] == true;
-    final bool confCli = data['confirmacionClienteFinal'] == true;
-    final bool codigoVerificado = data['codigoVerificado'] == true;
-    final bool pickupConfirmadoTaxista =
-        data['pickupConfirmadoTaxista'] == true;
-    final String codigoBola = (data['codigoVerificacionBola'] ?? '').toString();
-    final dynamic codigoGeneradoEn = data['codigoGeneradoEn'];
     final double tarifaNormalRd =
         ((data['tarifaNormalRd'] ?? 0) as num).toDouble();
     final double tarifaBaseBolaRd =
@@ -3437,17 +4175,7 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
                 : (tarifaNormalRd > 0 ? tarifaNormalRd : monto)));
     final double distanciaKm = ((data['distanciaKm'] ?? 0) as num).toDouble();
     final int pasajeros = ((data['pasajeros'] ?? 1) as num).toInt().clamp(1, 8);
-    final String viajeEspejoIdBola =
-        (data['viajeEspejoId'] ?? '').toString().trim();
     final double pctComisionLabel = _pctComisionDesdeDoc(data);
-    final double? origenLatBola =
-        (data['origenLat'] is num) ? (data['origenLat'] as num).toDouble() : null;
-    final double? origenLonBola =
-        (data['origenLon'] is num) ? (data['origenLon'] as num).toDouble() : null;
-    final double? destinoLatBola =
-        (data['destinoLat'] is num) ? (data['destinoLat'] as num).toDouble() : null;
-    final double? destinoLonBola =
-        (data['destinoLon'] is num) ? (data['destinoLon'] as num).toDouble() : null;
 
     final c = BolaPuebloColors.of(context);
     final Color cardBg = c.surface;
@@ -3485,11 +4213,16 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
     final IconData tipoIcon = esPedido
         ? Icons.person_pin_circle_rounded
         : Icons.directions_car_filled_rounded;
-    final bool ocultarNavRutaClienteEnAcordada =
-        estado == 'acordada' && soyClienteAsignado;
     final bool partActivo = soyTaxistaAsignado || soyClienteAsignado;
     final bool esTaxistaRol = rol == 'taxista' || rol == 'driver';
     final bool bloqueadoOperacionBola = esTaxistaRol && !puedeOperarEnPool;
+    final bool modoCompactoTablero =
+        !_viajeActivoParticipante(data, user);
+    final String resumenRuta = BolaPuebloUi.resumenRutaTablero(
+      origen: origen,
+      destino: destino,
+      esPedido: esPedido,
+    );
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -3599,6 +4332,124 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
+            if (modoCompactoTablero) ...[
+              Text(
+                resumenRuta,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  height: 1.35,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              if (estado == 'abierta') ...[
+                const SizedBox(height: 6),
+                Text(
+                  'RD\$${monto.toStringAsFixed(0)} · $fecha'
+                  '${distanciaKm > 0 ? ' · ${distanciaKm.toStringAsFixed(0)} km' : ''}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: fgMuted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
+                ),
+              ] else if (estado == 'acordada' || estado == 'en_curso') ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Acordado RD\$${(montoAcordadoRd > 0 ? montoAcordadoRd : monto).toStringAsFixed(0)} · $fecha',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: fgMuted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              if (!_detallesExpandidos &&
+                  esMio &&
+                  estado == 'abierta') ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: BolaPuebloUi.filledPrimary,
+                    onPressed: bloqueadoOperacionBola
+                        ? null
+                        : () => BolaPuebloDialogs.verOfertasSheet(
+                              context,
+                              docId,
+                              tipoPublicacion: tipo,
+                              ofertaMinRd: ofertaMinRd,
+                              ofertaMaxRd: ofertaMaxRd,
+                            ),
+                    icon: const Icon(Icons.forum_rounded, size: 20),
+                    label: Text(
+                      bloqueadoOperacionBola
+                          ? 'Activa disponibilidad'
+                          : 'Ver ofertas y aceptar',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (!_detallesExpandidos &&
+                  !esMio &&
+                  estado == 'abierta') ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    style: BolaPuebloUi.filledPrimary,
+                    onPressed: bloqueadoOperacionBola
+                        ? null
+                        : () => BolaPuebloDialogs.enviarOferta(
+                              context: context,
+                              bolaId: docId,
+                              uid: user.uid,
+                              nombre: nombre,
+                              rol: rol,
+                              montoInicial: montoSemillaOferta,
+                            ),
+                    child: Text(
+                      bloqueadoOperacionBola
+                          ? 'No disponible'
+                          : (monto > 0
+                              ? 'Enviar oferta · RD\$${monto.toStringAsFixed(0)}'
+                              : 'Enviar oferta'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: BolaPuebloUi.outlineAccent(context),
+                  onPressed: () =>
+                      setState(() => _detallesExpandidos = !_detallesExpandidos),
+                  icon: Icon(
+                    _detallesExpandidos
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 22,
+                  ),
+                  label: Text(
+                    _detallesExpandidos ? 'Ocultar detalles' : 'Ver detalles',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+            if (!modoCompactoTablero || _detallesExpandidos) ...[
+              if (modoCompactoTablero && _detallesExpandidos) ...[
+                const SizedBox(height: 14),
+                Divider(color: c.outlineSoft.withValues(alpha: 0.35)),
+                const SizedBox(height: 14),
+              ],
             BolaPuebloUi.routeBlock(
               context,
               origen: origen,
@@ -3850,270 +4701,89 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 14),
-              if (onAbrirModoViaje != null) ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    style: BolaPuebloUi.filledPrimary,
-                    onPressed: () => onAbrirModoViaje!(docId),
-                    icon: const Icon(Icons.explore_rounded, size: 22),
-                    label: Text(
-                      estado == 'en_curso'
-                          ? 'Modo viaje: mapa y confirmaciones'
-                          : 'Modo viaje: mapa y pasos',
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: fgMuted.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(BolaPuebloUi.radiusSmall),
+                  border: Border.all(
+                    color: BolaPuebloTheme.accent.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Mismo flujo que un taxi',
+                      style: TextStyle(
+                        color: fg,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-              ],
-            ],
-            if (soyTaxistaAsignado && estado == 'acordada') ...[
-              BolaTaxistaAcordadaFlow(
-                docId: docId,
-                user: user,
-                origen: origen,
-                destino: destino,
-                pickupConfirmadoServidor: pickupConfirmadoTaxista,
-                uidPasajero: uidCliente,
-                tipoPublicacion: tipo,
-                origenLat: origenLatBola,
-                origenLon: origenLonBola,
-                destinoLat: destinoLatBola,
-                destinoLon: destinoLonBola,
-              ),
-              const SizedBox(height: 14),
-            ],
-            if (soyClienteAsignado && estado == 'acordada') ...[
-              BolaPuebloClienteMapsAcordada(
-                origen: origen,
-                tipo: tipo,
-                origenLat: origenLatBola,
-                origenLon: origenLonBola,
-              ),
-              const SizedBox(height: 14),
-              if (origenLatBola != null &&
-                  origenLonBola != null &&
-                  !pickupConfirmadoTaxista &&
-                  uidTaxista.trim().isNotEmpty) ...[
-                BolaClienteMapaConductorLive(
-                  viajeEspejoId: viajeEspejoIdBola,
-                  uidTaxista: uidTaxista,
-                  refLat: origenLatBola,
-                  refLon: origenLonBola,
-                  refNombre: origen.isEmpty ? null : origen,
-                ),
-                const SizedBox(height: 14),
-              ],
-              BolaClienteAcordadaCapas(
-                bolaId: docId,
-                uidConductor: uidTaxista,
-                codigoBola: codigoBola,
-                codigoGeneradoEn: codigoGeneradoEn,
-                pickupConfirmadoTaxista: pickupConfirmadoTaxista,
-                user: user,
-                fg: fg,
-                fgMuted: fgMuted,
-                esClienteVaHaciaConductor: tipo == 'oferta',
-              ),
-              const SizedBox(height: 14),
-            ],
-            if (partActivo &&
-                estado == 'acordada' &&
-                BolaPuebloRepo.puedeCancelarAcuerdo(data)) ...[
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red.shade700,
-                    side: BorderSide(color: Colors.red.withValues(alpha: 0.45)),
-                  ),
-                  onPressed: () =>
-                      BolaPuebloDialogs.confirmarCancelarAcuerdoBola(
-                    context: context,
-                    bolaId: docId,
-                    uid: user.uid,
-                  ),
-                  icon: const Icon(Icons.cancel_outlined, size: 20),
-                  label: const Text('Cancelar acuerdo'),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (estado == 'en_curso' && partActivo) ...[
-              BolaPuebloDialogs.bannerSinCancelacionEnCurso(context),
-              const SizedBox(height: 12),
-              if (soyClienteAsignado &&
-                  destinoLatBola != null &&
-                  destinoLonBola != null &&
-                  uidTaxista.trim().isNotEmpty) ...[
-                BolaClienteMapaConductorLive(
-                  viajeEspejoId: viajeEspejoIdBola,
-                  uidTaxista: uidTaxista,
-                  refLat: destinoLatBola,
-                  refLon: destinoLonBola,
-                  refNombre: destino.isEmpty ? null : destino,
-                  mapaHaciaDestino: true,
-                ),
-                const SizedBox(height: 14),
-              ],
-              BolaPuebloContrapartePanel(
-                bolaId: docId,
-                counterpartyUid: soyClienteAsignado ? uidTaxista : uidCliente,
-                sectionTitle:
-                    soyClienteAsignado ? 'Tu conductor' : 'Tu pasajero',
-                vistaChofer: soyTaxistaAsignado,
-              ),
-              const SizedBox(height: 14),
-              BolaPuebloUi.sectionLabel(context, 'Navegar al destino'),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: BolaPuebloUi.filledSecondary,
-                  onPressed: destino.trim().isEmpty
-                      ? null
-                      : () => BolaPuebloNav.abrirSelectorSoloDestino(
-                            context,
-                            destinoLabel: destino,
-                            destinoLat: destinoLatBola,
-                            destinoLon: destinoLonBola,
-                          ),
-                  icon: const Icon(Icons.flag_outlined, size: 22),
-                  label: const Text('Ir al destino del viaje (Maps / Waze)'),
-                ),
-              ),
-              const SizedBox(height: 14),
-            ],
-            if (estado == 'en_curso' && partActivo) ...[
-              BolaPuebloUi.sectionLabel(context, 'Estado del traslado'),
-              BolaPuebloUi.metaRow(
-                context,
-                icon: Icons.verified_outlined,
-                text:
-                    'Código: ${codigoVerificado ? 'verificado' : 'pendiente'}',
-              ),
-              BolaPuebloUi.metaRow(
-                context,
-                icon: Icons.local_taxi_outlined,
-                text:
-                    'Conductor: ${confTax ? 'confirmó llegada' : 'pendiente'}',
-              ),
-              BolaPuebloUi.metaRow(
-                context,
-                icon: Icons.person_pin_outlined,
-                text: 'Cliente: ${confCli ? 'confirmó llegada' : 'pendiente'}',
-              ),
-              const SizedBox(height: 12),
-            ],
-            if ((estado == 'acordada' || estado == 'en_curso') &&
-                !(soyTaxistaAsignado && estado == 'acordada') &&
-                !ocultarNavRutaClienteEnAcordada) ...[
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  style: BolaPuebloUi.outlineAccent(context),
-                  onPressed: () => BolaPuebloNav.abrirSelectorNavegacion(
-                    context,
-                    origen: origen,
-                    destino: destino,
-                    origenLat: origenLatBola,
-                    origenLon: origenLonBola,
-                    destinoLat: destinoLatBola,
-                    destinoLon: destinoLonBola,
-                  ),
-                  icon: const Icon(Icons.navigation_rounded, size: 21),
-                  label: const Text('Navegar ruta completa'),
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
-            if (partActivo && estado == 'en_curso') ...[
-              if (viajeEspejoIdBola.isNotEmpty) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: fgMuted.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(BolaPuebloUi.radiusSmall),
-                    border: Border.all(
-                      color: BolaPuebloTheme.accent.withValues(alpha: 0.45),
+                    const SizedBox(height: 8),
+                    Text(
+                      soyTaxistaAsignado
+                          ? 'Navegar → cliente a bordo → PIN → destino → finalizar viaje. '
+                              'Todo en «Mi viaje en curso».'
+                          : 'Seguí al conductor, compartí el PIN y cerrá el viaje en '
+                              '«Mi viaje en curso».',
+                      style: TextStyle(
+                        color: fgMuted,
+                        fontSize: 13,
+                        height: 1.4,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'Viaje vinculado al pool RAI',
-                        style: TextStyle(
-                          color: fg,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
+                    if (estado == 'en_curso') ...[
+                      const SizedBox(height: 10),
+                      BolaPuebloDialogs.bannerSinCancelacionEnCurso(context),
+                    ],
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        style: BolaPuebloUi.filledPrimary,
+                        onPressed: () {
+                          unawaited(
+                            BolaPuebloDialogs.abrirViajeEnCursoOperativoBola(
+                              bolaId: docId,
+                              esTaxista: soyTaxistaAsignado,
+                              context: context,
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.local_taxi_rounded, size: 22),
+                        label: Text(
+                          soyTaxistaAsignado
+                              ? 'Abrir mi viaje en curso (conductor)'
+                              : 'Abrir mi viaje en curso',
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Finalizá, factura y comisión (efectivo/transferencia) desde '
-                        '«Mi viaje en curso», igual que un taxi estándar.',
-                        style: TextStyle(
-                          color: fgMuted,
-                          fontSize: 13,
-                          height: 1.4,
-                          fontWeight: FontWeight.w600,
+                    ),
+                    if (estado == 'acordada' &&
+                        BolaPuebloRepo.puedeCancelarAcuerdo(data)) ...[
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red.shade700,
+                          side: BorderSide(
+                              color: Colors.red.withValues(alpha: 0.45)),
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          style: BolaPuebloUi.filledPrimary,
-                          onPressed: () {
-                            final NavigatorState? nav =
-                                NavigationService.navigatorKey.currentState ??
-                                    Navigator.of(context, rootNavigator: true);
-                            if (soyTaxistaAsignado) {
-                              unawaited(
-                                nav?.push<void>(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        const ViajeEnCursoTaxista(),
-                                  ),
-                                ),
-                              );
-                            } else {
-                              unawaited(
-                                NavigationService.clearAndGoViajeEnCursoCliente(
-                                  preNav: nav,
-                                ),
-                              );
-                            }
-                          },
-                          icon: const Icon(Icons.local_taxi_rounded, size: 22),
-                          label: Text(
-                            soyTaxistaAsignado
-                                ? 'Abrir Mi viaje en curso (conductor)'
-                                : 'Abrir Mi viaje en curso',
-                          ),
+                        onPressed: () =>
+                            BolaPuebloDialogs.confirmarCancelarAcuerdoBola(
+                          context: context,
+                          bolaId: docId,
+                          uid: user.uid,
                         ),
+                        icon: const Icon(Icons.cancel_outlined, size: 20),
+                        label: const Text('Cancelar acuerdo'),
                       ),
                     ],
-                  ),
+                  ],
                 ),
-              ] else ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    style: BolaPuebloUi.filledPrimary,
-                    onPressed: () =>
-                        BolaPuebloDialogs.confirmarFinalizacionDialog(
-                            context, docId, user.uid),
-                    icon: const Icon(Icons.flag_rounded, size: 22),
-                    label: Text(
-                      soyTaxistaAsignado
-                          ? 'Confirmar llegada al destino'
-                          : 'Confirmar que llegamos',
-                    ),
-                  ),
-                ),
-              ],
+              ),
               const SizedBox(height: 12),
             ],
             if ((estado == 'acordada' || estado == 'en_curso') &&
@@ -4335,6 +5005,7 @@ class BolaPuebloPublicacionCard extends StatelessWidget {
                 ],
               ),
             ],
+            ], // fin detalles expandidos / viaje activo
           ],
         ),
       ),

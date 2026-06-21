@@ -1,5 +1,14 @@
-# Copia este archivo a android/key.properties y rellena (no subas key.properties al repo).
-# storeFile puede ser ruta relativa a la carpeta android/ (p. ej. upload-keystore.jks).
+# Copia a android/key.properties (NO subir al repo).
+# Usa tu keystore EXISTENTE de Play — no generes uno nuevo.
+#
+# Play unificado (com.flygo.rd2):
+#   flutter build appbundle --flavor cliente --release
+#
+# Split futuro conductor (com.flygo.rd2.conductor):
+#   flutter build appbundle --flavor conductor --release
+#
+# storeFile: ruta absoluta o relativa a android/
+# Ejemplo candidato: C:/Users/pablo/flygo_rd2/flygo_rd2_keystore.jks
 storePassword=
 keyPassword=
 keyAlias=

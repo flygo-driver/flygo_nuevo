@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../modelo/viaje.dart';
+import '../utils/trip_publish_windows.dart';
 
 class TripsService {
   TripsService._();
@@ -20,7 +21,6 @@ class TripsService {
   static final _auth = FirebaseAuth.instance;
 
   static const String _region = 'us-central1';
-  static const int _umbralAhoraMin = 10;
 
   static String _callableUrl(String name) {
     final proj = Firebase.app().options.projectId;
@@ -68,9 +68,8 @@ class TripsService {
       );
     }
 
-    final esAhora = !v.fechaHora.isAfter(
-      DateTime.now().add(const Duration(minutes: _umbralAhoraMin)),
-    );
+    final now = DateTime.now();
+    final esAhora = TripPublishWindows.esAhoraPorFechaPickup(v.fechaHora, now);
 
     final data = v.toCreateMap();
     data['uidCliente'] = u.uid;
@@ -95,6 +94,7 @@ class TripsService {
       final callable = functions.httpsCallable('issueBoardingPin');
       _log('[CF plugin] issueBoardingPin call tripId=$tripId');
       final res = await callable.call(<String, dynamic>{
+        'viajeId': tripId,
         'tripId': tripId,
         'ttlMinutes': ttlMinutes,
       });
@@ -108,6 +108,7 @@ class TripsService {
     } catch (e) {
       _log('[CF plugin] issueBoardingPin FALLÓ -> $e');
       final data = await _callCallableHttp('issueBoardingPin', {
+        'viajeId': tripId,
         'tripId': tripId,
         'ttlMinutes': ttlMinutes,
       });

@@ -575,7 +575,7 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
           if (mounted) {
             setState(() {
               _sugs = [
-                PrediccionLugar(
+                const PrediccionLugar(
                   placeId: '__rai_inteligente__',
                   primary: 'Buscar con RAI (IA + Google)',
                   secondary: 'Para direcciones difíciles',

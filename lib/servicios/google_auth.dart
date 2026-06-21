@@ -53,6 +53,15 @@ class GoogleAuthService {
             'com.flygo.rd2, y google-services.json en android/app.';
       }
     }
+    final rawLower = error.toString().toLowerCase();
+    if (rawLower.contains('signinwithidp are blocked') ||
+        rawLower.contains('identitytoolkit') ||
+        rawLower.contains('api_key_service_blocked')) {
+      return 'Google Sign-In bloqueado por configuración de Firebase (API key). '
+          'En Google Cloud → flygo-rd → Credenciales, la clave Android de Firebase '
+          'debe permitir Identity Toolkit API y Token Service API. '
+          'No cambia la firma de Play Store.';
+    }
     if (error is FirebaseAuthException) {
       switch (error.code) {
         case 'aborted-by-user':

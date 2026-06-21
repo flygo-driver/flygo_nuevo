@@ -230,6 +230,11 @@ class _ViajesCercanosTaxistaLayerState
             filtrados.firstWhere(
                 (QueryDocumentSnapshot<Map<String, dynamic>> d) => d.id == id);
         final Map<String, dynamic> data = doc.data();
+        final String? uid = FirebaseAuth.instance.currentUser?.uid;
+        final String clienteId = ViajesRepo.uidClienteDesdeDocViaje(data);
+        if (uid != null && clienteId.isNotEmpty && clienteId == uid) {
+          continue;
+        }
         unawaited(NotificationService.I.notifyNuevoViaje(
           viajeId: id,
           titulo: 'Nuevo viaje pendiente',

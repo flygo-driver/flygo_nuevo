@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
+import 'package:flygo_nuevo/servicios/logout.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -50,12 +51,7 @@ class AuthService {
 
   User? getCurrentUser() => _auth.currentUser;
 
-  Future<void> logout() async {
-    try {
-      await GoogleSignIn().signOut();
-    } catch (_) {}
-    await _auth.signOut();
-  }
+  Future<void> logout() async => cerrarSesionAuthOnly();
 
   Future<User> loginUser(
     String email,

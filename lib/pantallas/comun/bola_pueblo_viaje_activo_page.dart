@@ -10,10 +10,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
@@ -176,12 +179,29 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
             backgroundColor: c.bgDeep,
             appBar: AppBar(
               backgroundColor: c.appBarScrim,
-              leading: const BackButton(),
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                tooltip: 'Volver al tablero',
+                onPressed: () =>
+                    NavigationService.popOrGoBolaTablero(context),
+              ),
               title: const Text('Bola Ahorro'),
             ),
             body: Center(
-                child: Text('Publicación no encontrada',
-                    style: TextStyle(color: c.onMuted))),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('Publicación no encontrada',
+                      style: TextStyle(color: c.onMuted)),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: () =>
+                        NavigationService.popOrGoBolaTablero(context),
+                    child: const Text('Volver al tablero'),
+                  ),
+                ],
+              ),
+            ),
           );
         }
 
@@ -193,20 +213,66 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
             uidTaxista == user.uid || uidCliente == user.uid;
 
         if (!partActivo || (estado != 'acordada' && estado != 'en_curso')) {
+          if (partActivo && estado == 'finalizada') {
+            return BolaViajeTerminalPage(
+              bolaId: bolaId,
+              uid: user.uid,
+              uidTaxista: uidTaxista,
+              terminal: BolaViajeTerminal.finalizada,
+            );
+          }
+          if (partActivo && estado == 'cancelada') {
+            return BolaViajeTerminalPage(
+              bolaId: bolaId,
+              uid: user.uid,
+              uidTaxista: uidTaxista,
+              terminal: BolaViajeTerminal.cancelada,
+              mensajeCancelacion:
+                  BolaPuebloRepo.mensajeCancelacionParaParticipante(
+                data,
+                user.uid,
+              ),
+            );
+          }
+          if (partActivo && estado == 'abierta') {
+            return _BolaRedirigirAlTablero(
+              mensaje:
+                  'Negociá tarifa en el tablero. Cuando acuerdes, entrás a Mi viaje en curso.',
+            );
+          }
+          final bool aunAbierta = estado == 'abierta';
           return Scaffold(
             backgroundColor: c.bgDeep,
             appBar: AppBar(
               backgroundColor: c.appBarScrim,
-              leading: const BackButton(),
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                tooltip: 'Volver al tablero',
+                onPressed: () =>
+                    NavigationService.popOrGoBolaTablero(context),
+              ),
               title: const Text('Bola Ahorro'),
             ),
             body: Padding(
               padding: const EdgeInsets.all(24),
               child: Center(
-                child: Text(
-                  'Esta bola ya no está en modo viaje para vos, o aún no hay acuerdo.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: c.onMuted, height: 1.4),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      aunAbierta
+                          ? 'Tu publicación está en el tablero. Cuando acuerdes tarifa con un conductor o pasajero, podrás seguir el viaje aquí.'
+                          : 'Esta bola ya no está en modo viaje para vos, o aún no hay acuerdo.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: c.onMuted, height: 1.4),
+                    ),
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: () =>
+                          NavigationService.popOrGoBolaTablero(context),
+                      child: const Text('Volver al tablero'),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -287,8 +353,10 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
             ).bottom;
 
             return _BolaEspejoPoolAutoNavListener(
+              bolaId: bolaId,
               viajeEspejoId: viajeEspejoId,
               esClienteAsignado: soyClienteAsignado,
+              esTaxistaAsignado: soyTaxistaAsignado,
               child: Scaffold(
               backgroundColor: c.bgDeep,
               appBar: AppBar(
@@ -298,7 +366,8 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                 leading: IconButton(
                   icon: Icon(Icons.arrow_back_rounded, color: c.onSurface),
                   tooltip: 'Volver al tablero',
-                  onPressed: () => Navigator.maybePop(context),
+                  onPressed: () =>
+                      NavigationService.popOrGoBolaTablero(context),
                 ),
                 title: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -961,222 +1030,25 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                     BolaPuebloDialogs
                                         .bannerSinCancelacionEnCurso(context),
                                     const SizedBox(height: 12),
-                                    if (viajeEspejoId.isNotEmpty) ...[
-                                      Container(
-                                        width: double.infinity,
-                                        padding: const EdgeInsets.all(14),
-                                        decoration: BoxDecoration(
-                                          color: fgMuted.withValues(alpha: 0.08),
-                                          borderRadius: BorderRadius.circular(
-                                              BolaPuebloUi.radiusSmall),
-                                          border: Border.all(
-                                            color: BolaPuebloTheme.accent
-                                                .withValues(alpha: 0.45),
-                                          ),
-                                        ),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.stretch,
-                                          children: [
-                                            Text(
-                                              'Viaje vinculado al pool',
-                                              style: TextStyle(
-                                                color: fg,
-                                                fontSize: 15,
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'La factura, la comisión sobre tu saldo de recargas y «Finalizar viaje» '
-                                              'se gestionan en la misma pantalla que un taxi estándar (Mi viaje en curso). '
-                                              'Desde acá podés chatear, llamar y abrir navegación al destino.',
-                                              style: TextStyle(
-                                                color: fgMuted,
-                                                fontSize: 13,
-                                                height: 1.4,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 14),
-                                            BolaPuebloContrapartePanel(
-                                              bolaId: bolaId,
-                                              counterpartyUid:
-                                                  soyClienteAsignado
-                                                      ? uidTaxista
-                                                      : uidCliente,
-                                              sectionTitle: soyClienteAsignado
-                                                  ? 'Tu conductor'
-                                                  : 'Tu pasajero',
-                                              vistaChofer: soyTaxistaAsignado,
-                                            ),
-                                            const SizedBox(height: 14),
-                                            BolaPuebloUi.sectionLabel(
-                                                context, 'Ir al destino'),
-                                            const SizedBox(height: 8),
-                                            SizedBox(
-                                              width: double.infinity,
-                                              child: FilledButton.icon(
-                                                style:
-                                                    BolaPuebloUi.filledSecondary,
-                                                onPressed: destino.trim().isEmpty
-                                                    ? null
-                                                    : () => BolaPuebloNav
-                                                        .abrirSelectorSoloDestino(
-                                                          context,
-                                                          destinoLabel: destino,
-                                                          destinoLat: dLa,
-                                                          destinoLon: dLo,
-                                                        ),
-                                                icon: const Icon(
-                                                    Icons
-                                                        .directions_car_filled_rounded,
-                                                    size: 22),
-                                                label: const Text(
-                                                    'Maps / Waze hasta el destino'),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 12),
-                                            SizedBox(
-                                              width: double.infinity,
-                                              child: FilledButton.icon(
-                                                style: BolaPuebloUi.filledPrimary,
-                                                onPressed: () {
-                                                  final NavigatorState? nav =
-                                                      NavigationService
-                                                              .navigatorKey
-                                                              .currentState ??
-                                                          Navigator.of(context,
-                                                              rootNavigator:
-                                                                  true);
-                                                  if (soyTaxistaAsignado) {
-                                                    unawaited(
-                                                      nav?.push<void>(
-                                                        MaterialPageRoute<
-                                                            void>(
-                                                          builder: (_) =>
-                                                              const ViajeEnCursoTaxista(),
-                                                        ),
-                                                      ),
-                                                    );
-                                                  } else {
-                                                    unawaited(
-                                                      NavigationService
-                                                          .clearAndGoViajeEnCursoCliente(
-                                                        preNav: nav,
-                                                      ),
-                                                    );
-                                                  }
-                                                },
-                                                icon: const Icon(
-                                                    Icons.local_taxi_rounded,
-                                                    size: 22),
-                                                label: Text(
-                                                  soyTaxistaAsignado
-                                                      ? 'Abrir Mi viaje en curso (conductor)'
-                                                      : 'Abrir Mi viaje en curso',
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(height: 16),
-                                    ] else ...[
-                                      BolaPuebloContrapartePanel(
-                                        bolaId: bolaId,
-                                        counterpartyUid: soyClienteAsignado
-                                            ? uidTaxista
-                                            : uidCliente,
-                                        sectionTitle: soyClienteAsignado
-                                            ? 'Tu conductor'
-                                            : 'Tu pasajero',
-                                        vistaChofer: soyTaxistaAsignado,
-                                      ),
-                                      const SizedBox(height: 14),
-                                      BolaPuebloUi.sectionLabel(
-                                          context, 'Estado del traslado'),
-                                      BolaPuebloUi.metaRow(
-                                        context,
-                                        icon: Icons.verified_outlined,
-                                        text:
-                                            'Código: ${codigoVerificado ? 'verificado' : 'pendiente'}',
-                                      ),
-                                      BolaPuebloUi.metaRow(
-                                        context,
-                                        icon: Icons.local_taxi_outlined,
-                                        text:
-                                            'Conductor: ${confTax ? 'confirmó llegada' : 'pendiente'}',
-                                      ),
-                                      BolaPuebloUi.metaRow(
-                                        context,
-                                        icon: Icons.person_pin_outlined,
-                                        text:
-                                            'Cliente: ${confCli ? 'confirmó llegada' : 'pendiente'}',
-                                      ),
-                                      const SizedBox(height: 14),
-                                      BolaPuebloUi.sectionLabel(
-                                          context, 'Ir al destino'),
-                                      const SizedBox(height: 8),
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: FilledButton.icon(
-                                          style: BolaPuebloUi.filledSecondary,
-                                          onPressed: destino.trim().isEmpty
-                                              ? null
-                                              : () => BolaPuebloNav
-                                                  .abrirSelectorSoloDestino(
-                                                    context,
-                                                    destinoLabel: destino,
-                                                    destinoLat: dLa,
-                                                    destinoLon: dLo,
-                                                  ),
-                                          icon: const Icon(
-                                              Icons.directions_car_filled_rounded,
-                                              size: 22),
-                                          label: const Text(
-                                              'Maps / Waze hasta el destino'),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 14),
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: FilledButton.icon(
-                                          style: BolaPuebloUi.filledPrimary,
-                                          onPressed: () => BolaPuebloDialogs
-                                              .confirmarFinalizacionDialog(
-                                                  context, bolaId, user.uid),
-                                          icon: const Icon(Icons.flag_rounded,
-                                              size: 22),
-                                          label: Text(
-                                            soyTaxistaAsignado
-                                                ? 'Confirmar llegada al destino'
-                                                : 'Confirmar que llegamos',
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      OutlinedButton.icon(
-                                        style:
-                                            BolaPuebloUi.outlineAccent(context),
-                                        onPressed: () =>
-                                            BolaPuebloNav.abrirSelectorNavegacion(
-                                          context,
-                                          origen: origen,
-                                          destino: destino,
-                                          origenLat: oLa,
-                                          origenLon: oLo,
-                                          destinoLat: dLa,
-                                          destinoLon: dLo,
-                                        ),
-                                        icon: const Icon(
-                                            Icons.navigation_rounded,
-                                            size: 21),
-                                        label: const Text(
-                                            'Ruta completa otra vez (origen → destino)'),
-                                      ),
-                                      const SizedBox(height: 16),
-                                    ],
+                                    BolaEnCursoDestinoAcciones(
+                                      bolaId: bolaId,
+                                      viajeEspejoId: viajeEspejoId,
+                                      soyTaxistaAsignado: soyTaxistaAsignado,
+                                      soyClienteAsignado: soyClienteAsignado,
+                                      user: user,
+                                      uidTaxista: uidTaxista,
+                                      uidCliente: uidCliente,
+                                      destino: destino,
+                                      origen: origen,
+                                      destinoLat: dLa,
+                                      destinoLon: dLo,
+                                      origenLat: oLa,
+                                      origenLon: oLo,
+                                      confTax: confTax,
+                                      confCli: confCli,
+                                      codigoVerificado: codigoVerificado,
+                                    ),
+                                    const SizedBox(height: 16),
                                   ],
                                   Theme(
                                     data: Theme.of(context).copyWith(
@@ -1249,16 +1121,20 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
   }
 }
 
-/// Cliente en Bola: al pasar el viaje espejo a pool activo, abre mapa sin pulsar botón.
+/// Tras acordar tarifa: abre automáticamente la pantalla estándar de viaje en curso.
 class _BolaEspejoPoolAutoNavListener extends StatefulWidget {
   const _BolaEspejoPoolAutoNavListener({
+    required this.bolaId,
     required this.viajeEspejoId,
     required this.esClienteAsignado,
+    required this.esTaxistaAsignado,
     required this.child,
   });
 
+  final String bolaId;
   final String viajeEspejoId;
   final bool esClienteAsignado;
+  final bool esTaxistaAsignado;
   final Widget child;
 
   @override
@@ -1282,14 +1158,18 @@ class _BolaEspejoPoolAutoNavListenerState
   void didUpdateWidget(covariant _BolaEspejoPoolAutoNavListener oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.viajeEspejoId != widget.viajeEspejoId ||
-        oldWidget.esClienteAsignado != widget.esClienteAsignado) {
+        oldWidget.esClienteAsignado != widget.esClienteAsignado ||
+        oldWidget.esTaxistaAsignado != widget.esTaxistaAsignado ||
+        oldWidget.bolaId != widget.bolaId) {
       _sincronizarListenerEspejo();
     }
   }
 
   void _sincronizarListenerEspejo() {
     final String vid = widget.viajeEspejoId.trim();
-    if (!widget.esClienteAsignado || vid.isEmpty || _navegacionMapaPoolEnCurso) {
+    final bool participante =
+        widget.esClienteAsignado || widget.esTaxistaAsignado;
+    if (!participante || vid.isEmpty || _navegacionMapaPoolEnCurso) {
       _espejoSub?.cancel();
       _espejoSub = null;
       _escuchandoViajeId = null;
@@ -1306,9 +1186,8 @@ class _BolaEspejoPoolAutoNavListenerState
   }
 
   void _onEspejoPoolSnap(DocumentSnapshot<Map<String, dynamic>> snap) {
-    if (_navegacionMapaPoolEnCurso || !mounted || !widget.esClienteAsignado) {
-      return;
-    }
+    if (_navegacionMapaPoolEnCurso || !mounted) return;
+    if (!widget.esClienteAsignado && !widget.esTaxistaAsignado) return;
     if (!snap.exists) return;
     final Map<String, dynamic> vd = snap.data() ?? <String, dynamic>{};
     if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(vd)) {
@@ -1325,12 +1204,48 @@ class _BolaEspejoPoolAutoNavListenerState
         _navegacionMapaPoolEnCurso = false;
         return;
       }
-      unawaited(
-        NavigationService.clearAndGoViajeEnCursoCliente(preNav: preNav)
-            .whenComplete(() {
+      unawaited(() async {
+        try {
+          final String? viajeId =
+              await ViajesRepo.enlazarViajeEspejoBolaOperativo(
+            bolaId: widget.bolaId,
+          );
+          if (viajeId == null || viajeId.trim().isEmpty) return;
+          ActiveTripService.mantenerOverlayViajeEnShell(
+            const Duration(seconds: 90),
+          );
+          if (widget.esTaxistaAsignado) {
+            ActiveTripService.bloquearShellTaxistaTrasAceptar(
+              const Duration(seconds: 90),
+            );
+            final String uid =
+                (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+            if (uid.isNotEmpty) {
+              await NavigationService.esperarViajeAsignadoAlTaxista(
+                viajeId: viajeId,
+                uidTaxista: uid,
+              );
+            }
+            await NavigationService.clearAndGoViajeEnCursoTaxista(
+              preNav: preNav,
+            );
+          } else {
+            final String uid =
+                (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+            if (uid.isNotEmpty) {
+              await NavigationService.esperarViajeEspejoBolaCliente(
+                viajeId: viajeId,
+                uidCliente: uid,
+              );
+            }
+            await NavigationService.clearAndGoViajeEnCursoCliente(
+              preNav: preNav,
+            );
+          }
+        } finally {
           if (mounted) _navegacionMapaPoolEnCurso = false;
-        }),
-      );
+        }
+      }());
     });
   }
 
@@ -1342,4 +1257,213 @@ class _BolaEspejoPoolAutoNavListenerState
 
   @override
   Widget build(BuildContext context) => widget.child;
+}
+
+enum BolaViajeTerminal { finalizada, cancelada }
+
+/// Tras cerrar la bola: factura (si finalizada) y salida coherente al shell.
+class BolaViajeTerminalPage extends StatefulWidget {
+  const BolaViajeTerminalPage({
+    super.key,
+    required this.bolaId,
+    required this.uid,
+    required this.uidTaxista,
+    required this.terminal,
+    this.mensajeCancelacion,
+  });
+
+  final String bolaId;
+  final String uid;
+  final String uidTaxista;
+  final BolaViajeTerminal terminal;
+  final String? mensajeCancelacion;
+
+  @override
+  State<BolaViajeTerminalPage> createState() => _BolaViajeTerminalPageState();
+}
+
+class _BolaViajeTerminalPageState extends State<BolaViajeTerminalPage> {
+  bool _autoComprobanteOfrecido = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.terminal == BolaViajeTerminal.finalizada) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_abrirComprobante(automatico: true));
+      });
+    }
+  }
+
+  String get _role =>
+      widget.uid.trim() == widget.uidTaxista.trim() ? 'taxista' : 'cliente';
+
+  /// [automatico]: una sola vez al llegar (evita choque con el listener).
+  /// Manual («Ver comprobante»): siempre abre la factura.
+  Future<void> _abrirComprobante({required bool automatico}) async {
+    if (!mounted) return;
+
+    if (automatico) {
+      if (_autoComprobanteOfrecido) return;
+      if (BolaPostFacturaReopenGuard.shouldSuppressListenerPush(widget.bolaId)) {
+        return;
+      }
+      _autoComprobanteOfrecido = true;
+      BolaPostFacturaReopenGuard.markOpened(widget.bolaId);
+    }
+
+    try {
+      await FacturaBolaPueblo.mostrar(
+        context,
+        bolaId: widget.bolaId,
+        role: _role,
+      );
+      if (!automatico) {
+        BolaPostFacturaReopenGuard.markOpened(widget.bolaId);
+      }
+    } catch (_) {
+      if (automatico && mounted) {
+        _autoComprobanteOfrecido = false;
+      }
+    }
+  }
+
+  Future<void> _salir() async {
+    if (!mounted) return;
+    await NavigationService.salirModoViajeBola(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = BolaPuebloColors.of(context);
+    final bool finalizada =
+        widget.terminal == BolaViajeTerminal.finalizada;
+
+    return Scaffold(
+      backgroundColor: c.bgDeep,
+      appBar: AppBar(
+        backgroundColor: c.appBarScrim,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          tooltip: 'Salir',
+          onPressed: () => unawaited(_salir()),
+        ),
+        title: const Text('Bola Ahorro'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                finalizada ? Icons.check_circle_outline_rounded : Icons.cancel_outlined,
+                size: 56,
+                color: finalizada
+                    ? BolaPuebloTheme.accent
+                    : Colors.red.shade300,
+              ),
+              const SizedBox(height: 20),
+              Text(
+                finalizada
+                    ? 'Viaje finalizado'
+                    : 'Este acuerdo fue cancelado',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: c.onSurface,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                finalizada
+                    ? (_role == 'taxista'
+                        ? 'La bola quedó cerrada. Revisá tu comprobante y volvé a recibir viajes.'
+                        : 'La bola quedó cerrada. Podés ver tu comprobante abajo.')
+                    : (widget.mensajeCancelacion ??
+                        'Este acuerdo fue cancelado. Ya no hay traslado activo.'),
+                textAlign: TextAlign.center,
+                style: TextStyle(color: c.onMuted, height: 1.45),
+              ),
+              const SizedBox(height: 28),
+              if (finalizada) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: BolaPuebloUi.filledPrimary,
+                    onPressed: () =>
+                        unawaited(_abrirComprobante(automatico: false)),
+                    icon: const Icon(Icons.receipt_long_rounded),
+                    label: const Text('Ver comprobante'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: BolaPuebloUi.outlineAccent(context),
+                  onPressed: () => unawaited(_salir()),
+                  icon: const Icon(Icons.home_rounded),
+                  label: Text(
+                    _role == 'taxista'
+                        ? 'Volver a Mi trabajo'
+                        : 'Volver al inicio',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pantalla puente: redirige al tablero (negociación abierta, no viaje operativo).
+class _BolaRedirigirAlTablero extends StatefulWidget {
+  const _BolaRedirigirAlTablero({required this.mensaje});
+
+  final String mensaje;
+
+  @override
+  State<_BolaRedirigirAlTablero> createState() =>
+      _BolaRedirigirAlTableroState();
+}
+
+class _BolaRedirigirAlTableroState extends State<_BolaRedirigirAlTablero> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(NavigationService.clearAndGoBolaTablero());
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = BolaPuebloColors.of(context);
+    return Scaffold(
+      backgroundColor: c.bgDeep,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(color: BolaPuebloTheme.accent),
+              const SizedBox(height: 16),
+              Text(
+                widget.mensaje,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: c.onMuted, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

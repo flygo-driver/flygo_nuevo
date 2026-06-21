@@ -475,6 +475,20 @@ abstract final class BolaPuebloUi {
     );
   }
 
+  /// Una línea para el tablero: «Estoy en Sambil, voy para La Vega».
+  static String resumenRutaTablero({
+    required String origen,
+    required String destino,
+    required bool esPedido,
+  }) {
+    final o = origen.trim().isEmpty ? '—' : origen.trim();
+    final d = destino.trim().isEmpty ? '—' : destino.trim();
+    if (esPedido) {
+      return 'Necesita ir de $o a $d';
+    }
+    return 'Estoy en $o, voy para $d';
+  }
+
   static Widget routeBlock(
     BuildContext context, {
     required String origen,

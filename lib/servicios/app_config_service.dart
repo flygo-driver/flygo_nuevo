@@ -61,7 +61,7 @@ class AppConfigService {
   static DocumentReference<Map<String, dynamic>> _refPagos() =>
       _db.collection('app_config').doc('pagos');
 
-  /// Valores por defecto si ADM aún no guardó en Firestore (misma base que env).
+  /// Valores por defecto producción (misma cuenta que Play / depósitos reales).
   static DatosBancarios get datosBancariosPorDefecto => DatosBancarios(
         bancoNombre: RecargaBancariaConfig.banco,
         tipoCuenta: RecargaBancariaConfig.tipoCuenta,
@@ -69,17 +69,38 @@ class AppConfigService {
         titular: RecargaBancariaConfig.titular,
         rnc: RecargaBancariaConfig.rnc,
         alias: '',
-        nota: '',
+        nota: RecargaBancariaConfig.notaRecarga,
         qrUrl: '',
         whatsappSoporte: '',
       );
 
-  /// Lo que debe ver el taxista: Firestore (`app_config/pagos`) o fallback local.
+  static String _pick(String remote, String fallback) {
+    final t = remote.trim();
+    return t.isNotEmpty ? t : fallback;
+  }
+
+  /// Firestore (`app_config/pagos`) con fallback campo a campo a [datosBancariosPorDefecto].
+  /// Cuenta empresa (titular, RNC, banco, tipo, número) siempre [RecargaBancariaConfig].
+  /// Firestore no puede pisar con placeholders (ej. 000-000000-0).
   static DatosBancarios efectivos(DatosBancarios? remoto) {
-    if (remoto != null && remoto.numeroCuenta.trim().isNotEmpty) {
-      return remoto;
-    }
-    return datosBancariosPorDefecto;
+    final d = datosBancariosPorDefecto;
+    if (remoto == null) return d;
+    return DatosBancarios(
+      bancoNombre: d.bancoNombre,
+      tipoCuenta: d.tipoCuenta,
+      numeroCuenta: d.numeroCuenta,
+      titular: d.titular,
+      rnc: d.rnc,
+      alias: _pick(remoto.alias, d.alias),
+      nota: _pick(remoto.nota, d.nota),
+      qrUrl: _pick(remoto.qrUrl, d.qrUrl),
+      whatsappSoporte: _pick(remoto.whatsappSoporte, d.whatsappSoporte),
+    );
+  }
+
+  /// Stream con datos empresa siempre completos (taxista / Mis pagos).
+  static Stream<DatosBancarios> streamDatosBancariosEfectivos() {
+    return streamDatosBancarios().map(efectivos);
   }
 
   /// Lee 1 sola vez la config bancaria (null si no existe).
@@ -104,6 +125,14 @@ class AppConfigService {
   /// Solo para admins: actualizar los datos bancarios.
   static Future<void> actualizarDatosBancarios(DatosBancarios cfg) async {
     await _refPagos().set(cfg.toMap(), SetOptions(merge: true));
+  }
+
+  /// Publica en Firestore la cuenta empresa real (merge; no borra campos extra).
+  static Future<void> publicarDatosEmpresaProduccion() async {
+    await _refPagos().set(
+      RecargaBancariaConfig.toFirestoreMap(),
+      SetOptions(merge: true),
+    );
   }
 
   /// Sugerencia de referencia para transferencias del taxista (TX-<uid>-YYYY-MM).

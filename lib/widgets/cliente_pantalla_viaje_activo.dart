@@ -29,7 +29,10 @@ class ClientePantallaViajeActivo extends StatelessWidget {
   Widget build(BuildContext context) {
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) {
-      return ViajeEnCursoCliente(key: viajeEnCursoKey);
+      return ViajeEnCursoCliente(
+        key: viajeEnCursoKey,
+        delegarEsperaTurismoAlRouter: true,
+      );
     }
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -44,7 +47,10 @@ class ClientePantallaViajeActivo extends StatelessWidget {
         final String viajeId =
             (userSnap.data?.data()?['viajeActivoId'] ?? '').toString().trim();
         if (viajeId.isEmpty) {
-          return ViajeEnCursoCliente(key: viajeEnCursoKey);
+          return ViajeEnCursoCliente(
+            key: viajeEnCursoKey,
+            delegarEsperaTurismoAlRouter: true,
+          );
         }
 
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -57,13 +63,28 @@ class ClientePantallaViajeActivo extends StatelessWidget {
             AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> viajeSnap,
           ) {
             if (!viajeSnap.hasData || !viajeSnap.data!.exists) {
-              return ViajeEnCursoCliente(key: viajeEnCursoKey);
+              return ViajeEnCursoCliente(
+                key: viajeEnCursoKey,
+                delegarEsperaTurismoAlRouter: true,
+              );
             }
             final Map<String, dynamic> data = viajeSnap.data!.data()!;
-            if (debeMostrarEsperaTurismo(data)) {
-              return EsperaAsignacionTurismo(viajeId: viajeId);
-            }
-            return ViajeEnCursoCliente(key: viajeEnCursoKey);
+            final bool esperaTurismo = debeMostrarEsperaTurismo(data);
+            return AnimatedSwitcher(
+              duration: const Duration(milliseconds: 280),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: esperaTurismo
+                  ? EsperaAsignacionTurismo(
+                      key: ValueKey<String>('espera_turismo_$viajeId'),
+                      viajeId: viajeId,
+                    )
+                  : ViajeEnCursoCliente(
+                      key: viajeEnCursoKey ??
+                          ValueKey<String>('viaje_curso_$viajeId'),
+                      delegarEsperaTurismoAlRouter: true,
+                    ),
+            );
           },
         );
       },

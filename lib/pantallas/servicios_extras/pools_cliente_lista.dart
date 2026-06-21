@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:flygo_nuevo/servicios/giras_cupos_cliente_alerts.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
@@ -32,17 +35,73 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
   final _servicioCtrl = TextEditingController();
   String _filtroTexto = '';
 
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subAlertasGiras;
+  QuerySnapshot<Map<String, dynamic>>? _ultimoSnapCatalogo;
+  bool _ignorarPrimeraEmisionAlertas = true;
+  bool _welcomeAlertasEstaVisita = false;
+
   @override
   void initState() {
     super.initState();
     _tipoFiltro =
         widget.tipo.trim().isEmpty ? 'todos' : widget.tipo.trim().toLowerCase();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _arrancarAlertasGiras();
+    });
   }
 
   @override
   void dispose() {
+    _subAlertasGiras?.cancel();
     _servicioCtrl.dispose();
     super.dispose();
+  }
+
+  void _arrancarAlertasGiras() {
+    _subAlertasGiras?.cancel();
+    _ignorarPrimeraEmisionAlertas = true;
+    _subAlertasGiras = PoolRepo.streamPoolsCliente(
+      tipo: _tipoFiltro,
+      origenTown: _origenTown,
+    ).listen((snap) {
+      _ultimoSnapCatalogo = snap;
+      final bool esPrimera = _ignorarPrimeraEmisionAlertas;
+      if (esPrimera) _ignorarPrimeraEmisionAlertas = false;
+      unawaited(_procesarAlertasGirasCatalogo(esPrimeraEmisionSuscripcion: esPrimera));
+    });
+  }
+
+  Future<void> _procesarAlertasGirasCatalogo({
+    required bool esPrimeraEmisionSuscripcion,
+  }) async {
+    if (!mounted) return;
+    final snap = _ultimoSnapCatalogo;
+    if (snap == null) return;
+    final docs = _filtrarDocsCatalogo(snap);
+    await GirasCuposClienteAlerts.I.handleCatalogUpdate(
+      docs: docs,
+      esPrimeraEmisionSuscripcion: esPrimeraEmisionSuscripcion,
+      welcomeYaEnEstaVisita: _welcomeAlertasEstaVisita,
+      onWelcomePlayed: () {
+        if (mounted) setState(() => _welcomeAlertasEstaVisita = true);
+      },
+    );
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _filtrarDocsCatalogo(
+    QuerySnapshot<Map<String, dynamic>> snap,
+  ) {
+    final now = DateTime.now();
+    final docs = snap.docs.where((e) {
+      final d = e.data();
+      final fecha = _fechaSalida(d);
+      return _matchesServicio(d) &&
+          _matchesTipo(d) &&
+          _isEstadoVisible((d['estado'] ?? '').toString()) &&
+          fecha.isAfter(now.subtract(const Duration(minutes: 5)));
+    }).toList()
+      ..sort(_sortByAgencyAndDate);
+    return docs;
   }
 
   Color _tipoColor(String tipo) {
@@ -266,8 +325,10 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                     style: TextStyle(color: textPrimary)),
                               ))
                           .toList(),
-                      onChanged: (v) =>
-                          setState(() => _origenTown = v ?? _origenTown),
+                      onChanged: (v) {
+                        setState(() => _origenTown = v ?? _origenTown);
+                        _arrancarAlertasGiras();
+                      },
                     ),
                   ],
                 ),
@@ -291,7 +352,14 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                       borderSide: BorderSide(color: accent, width: 2),
                     ),
                   ),
-                  onChanged: (v) => setState(() => _filtroTexto = v),
+                  onChanged: (v) {
+                    setState(() => _filtroTexto = v);
+                    unawaited(
+                      _procesarAlertasGirasCatalogo(
+                        esPrimeraEmisionSuscripcion: false,
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -320,7 +388,10 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                               : textSecondary,
                           fontWeight: FontWeight.w600,
                         ),
-                        onSelected: (_) => setState(() => _tipoFiltro = t),
+                        onSelected: (_) {
+                          setState(() => _tipoFiltro = t);
+                          _arrancarAlertasGiras();
+                        },
                       ),
                   ],
                 ),
@@ -347,16 +418,15 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     ),
                   );
                 }
-                final now = DateTime.now();
-                final docs = (snap.data?.docs ?? []).where((e) {
-                  final d = e.data();
-                  final fecha = _fechaSalida(d);
-                  return _matchesServicio(d) &&
-                      _matchesTipo(d) &&
-                      _isEstadoVisible((d['estado'] ?? '').toString()) &&
-                      fecha.isAfter(now.subtract(const Duration(minutes: 5)));
-                }).toList()
-                  ..sort(_sortByAgencyAndDate);
+                if (!snap.hasData) {
+                  return Center(
+                    child: Text(
+                      'No hay salidas próximas desde este pueblo.',
+                      style: TextStyle(color: textMuted),
+                    ),
+                  );
+                }
+                final docs = _filtrarDocsCatalogo(snap.data!);
                 if (docs.isEmpty) {
                   return Center(
                     child: Text(
@@ -433,46 +503,44 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            if (marcaAgencia) ...[
+                              Center(
+                                child: PoolAgencyLogoHeader(
+                                  logoUrl: agenciaLogoUrl,
+                                  title: agenciaNombre.isNotEmpty
+                                      ? agenciaNombre
+                                      : taxistaNombre,
+                                  compact: true,
+                                  accent: accent,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                            ],
                             if (bannerUrl.isNotEmpty ||
                                 bannerVideoUrl.isNotEmpty) ...[
                               PoolPromoStrip(
                                 bannerUrl: bannerUrl,
                                 bannerVideoUrl: bannerVideoUrl,
                                 title: '$origen -> $destino',
-                                height: 150,
-                                borderRadius: BorderRadius.circular(10),
-                                textPrimary: textPrimary,
+                                height: 200,
+                                borderRadius: BorderRadius.circular(12),
+                                textPrimary: Colors.white,
                                 textMuted: textMuted,
                                 softFill: softFill,
+                                routeLabel: '$origen → $destino',
+                                priceLabel: precioTxt,
+                                dateLabel: DateFormat('d MMM · HH:mm', 'es')
+                                    .format(fecha),
+                                publisherLabel: agenciaNombre.isNotEmpty
+                                    ? agenciaNombre
+                                    : taxistaNombre,
+                                heroAccent: accent,
                               ),
                               const SizedBox(height: 10),
                             ],
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                if (marcaAgencia)
-                                  Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: softFill,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: cardBorder),
-                                    ),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: agenciaLogoUrl.isNotEmpty
-                                        ? Image.network(
-                                            agenciaLogoUrl,
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (_, __, ___) => Icon(
-                                              Icons.business,
-                                              color: textSecondary,
-                                            ),
-                                          )
-                                        : Icon(Icons.business,
-                                            color: textSecondary),
-                                  ),
-                                if (marcaAgencia) const SizedBox(width: 10),
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment:
@@ -493,7 +561,9 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                           fontWeight: FontWeight.w700,
                                         ),
                                       ),
-                                      if (marcaAgencia) ...[
+                                      if (marcaAgencia &&
+                                          bannerUrl.isEmpty &&
+                                          bannerVideoUrl.isEmpty) ...[
                                         const SizedBox(height: 4),
                                         Text(
                                           agenciaNombre.isNotEmpty

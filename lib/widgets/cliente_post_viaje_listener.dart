@@ -1,7 +1,6 @@
 // lib/widgets/cliente_post_viaje_listener.dart
 //
-// Si el viaje termina mientras el cliente está en el flujo principal (home visible),
-// Abre [PostViajeClienteFlow] (recibo único + calificación) al detectar el cierre.
+// Abre factura + [PostViajeClienteFlow] al detectar el cierre.
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,7 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
-import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
+import 'package:flygo_nuevo/navegacion/post_viaje_cliente_nav.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
@@ -183,14 +182,9 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
       if (!nav.mounted) return;
       ActiveTripService.cancelarMantenimientoOverlayViaje();
       ClientePostViajeReopenGuard.markOpened(viajeId);
-      await nav.push<void>(
-        MaterialPageRoute<void>(
-          fullscreenDialog: true,
-          builder: (_) => PostViajeClienteFlow(
-            viajeId: viajeId,
-            viajeDataSemilla: Map<String, dynamic>.from(data),
-          ),
-        ),
+      await PostViajeClienteNav.abrirFacturaYFlujo(
+        viajeId: viajeId,
+        viajeDataSemilla: Map<String, dynamic>.from(data),
       );
       final String? uid = FirebaseAuth.instance.currentUser?.uid;
       await ClientePostViajeReopenGuard.markCompleted(

@@ -8,6 +8,7 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
+import 'package:flygo_nuevo/widgets/admin_app_bar.dart';
 import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 
 class ConfiguracionViajeComisionAdmin extends StatefulWidget {
@@ -99,14 +100,8 @@ class _ConfiguracionViajeComisionAdminState
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Comisión viaje (efectivo)',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: const AdminAppBar(
+        title: 'Comisión viaje (efectivo)',
       ),
       body: _cargando
           ? const Center(child: CircularProgressIndicator())

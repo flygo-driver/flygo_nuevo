@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
+import 'package:flygo_nuevo/widgets/admin_app_bar.dart';
 import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 
 class AdminPromosMxK extends StatefulWidget {
@@ -201,12 +202,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Promociones M×K',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: AdminAppBar(
+        title: 'Promociones M×K',
         actions: [
           IconButton(
             icon: Icon(Icons.refresh, color: AdminUi.appBarFg(context)),
@@ -284,7 +281,7 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
                       Switch(
                         value: _activa,
                         onChanged: (bool v) => setState(() => _activa = v),
-                        activeColor: AdminUi.progressAccent(context),
+                        activeThumbColor: AdminUi.progressAccent(context),
                       ),
                     ],
                   ),

@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'admin_ui_theme.dart';
 import '../../servicios/admin_dashboard_service.dart';
 import '../../servicios/admin_reportes_service.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 
 class ReportesAdmin extends StatefulWidget {
@@ -40,16 +41,6 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v.trim()) ?? 0.0;
     return 0.0;
-  }
-
-  bool _esCompletado(String estado) {
-    final e = estado.trim().toLowerCase();
-    return e == 'completado' || e == 'completed';
-  }
-
-  bool _esCancelado(String estado) {
-    final e = estado.trim().toLowerCase();
-    return e == 'cancelado' || e == 'canceled';
   }
 
   @override
@@ -104,12 +95,8 @@ class _ReportesAdminState extends State<ReportesAdmin> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Reportes y Estadísticas',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: AdminAppBar(
+        title: 'Reportes y Estadísticas',
         actions: [
           PopupMenuButton<int>(
             onSelected: (int v) {
@@ -280,36 +267,47 @@ class _ReportesAdminState extends State<ReportesAdmin> {
             children: [
               SizedBox(
                 width: 190,
-                child: DropdownButtonFormField<String>(
-                  value: _tipoExport,
-                  decoration: const InputDecoration(labelText: 'Tipo de reporte'),
-                  items: tipos
-                      .map((e) => DropdownMenuItem<String>(
-                            value: e,
-                            child: Text(e),
-                          ))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _tipoExport = v);
-                  },
+                child: InputDecorator(
+                  decoration:
+                      const InputDecoration(labelText: 'Tipo de reporte'),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _tipoExport,
+                      isExpanded: true,
+                      items: tipos
+                          .map((e) => DropdownMenuItem<String>(
+                                value: e,
+                                child: Text(e),
+                              ))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _tipoExport = v);
+                      },
+                    ),
+                  ),
                 ),
               ),
               SizedBox(
                 width: 170,
-                child: DropdownButtonFormField<int>(
-                  value: _diasExport,
+                child: InputDecorator(
                   decoration: const InputDecoration(labelText: 'Rango'),
-                  items: const [
-                    DropdownMenuItem(value: 1, child: Text('1 día')),
-                    DropdownMenuItem(value: 7, child: Text('7 días')),
-                    DropdownMenuItem(value: 30, child: Text('30 días')),
-                    DropdownMenuItem(value: 90, child: Text('90 días')),
-                  ],
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _diasExport = v);
-                  },
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<int>(
+                      value: _diasExport,
+                      isExpanded: true,
+                      items: const [
+                        DropdownMenuItem(value: 1, child: Text('1 día')),
+                        DropdownMenuItem(value: 7, child: Text('7 días')),
+                        DropdownMenuItem(value: 30, child: Text('30 días')),
+                        DropdownMenuItem(value: 90, child: Text('90 días')),
+                      ],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _diasExport = v);
+                      },
+                    ),
+                  ),
                 ),
               ),
               ElevatedButton.icon(

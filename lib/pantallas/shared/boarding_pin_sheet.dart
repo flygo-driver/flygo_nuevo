@@ -43,11 +43,22 @@ class _BoardingPinSheetState extends State<BoardingPinSheet> {
       if (!mounted || !doc.exists) return;
 
       final d = doc.data()!;
-      final pin = (d['boardingPin'] ?? '').toString();
+      final codigo = _digitsOnly((d['codigoVerificacion'] ?? '').toString());
+      final boarding = _digitsOnly((d['boardingPin'] ?? '').toString());
+      final pin = codigo.length == 6
+          ? codigo
+          : (boarding.length == 6 ? boarding : '');
 
       DateTime? exp;
       final expTs = d['boardingPinExpiresAt'];
-      if (expTs is Timestamp) exp = expTs.toDate();
+      if (expTs is Timestamp) {
+        exp = expTs.toDate();
+      } else {
+        final expMs = d['boardingPinExpira'];
+        if (expMs is num && expMs > 0) {
+          exp = DateTime.fromMillisecondsSinceEpoch(expMs.toInt());
+        }
+      }
 
       setState(() {
         _pinActual = pin.isEmpty ? null : pin;
@@ -55,6 +66,8 @@ class _BoardingPinSheetState extends State<BoardingPinSheet> {
       });
     } catch (_) {}
   }
+
+  String _digitsOnly(String raw) => raw.replaceAll(RegExp(r'\D'), '');
 
   Future<void> _emitirPin() async {
     if (_generando) return;
@@ -77,7 +90,7 @@ class _BoardingPinSheetState extends State<BoardingPinSheet> {
 
   Future<void> _confirmarAbordaje() async {
     if (_confirmando) return;
-    final pin = _pinCtrl.text.trim();
+    final pin = _digitsOnly(_pinCtrl.text);
     if (pin.length != 6) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Ingresa los 6 dígitos del PIN.')),

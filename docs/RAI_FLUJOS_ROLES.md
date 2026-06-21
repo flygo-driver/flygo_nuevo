@@ -49,7 +49,14 @@ Cola desbloqueo: `AdminRegularizarGirasTaxista` (abuso cancelaciones en pools).
 
 1. `firebase deploy --only firestore:rules,firestore:indexes,functions` (solo funciones tocadas en tu cambio).
 2. `flutter run --release --flavor conductor -t lib/main.dart`
-3. ADM: `flutter run -d chrome -t lib/main.dart --route=/login_admin`
+3. **Admin web (hosting):** logo RAI en pestaña del navegador (no favicon Flutter):
+   ```powershell
+   node scripts/sync-web-branding.js
+   flutter build web --release
+   firebase deploy --only hosting
+   ```
+   Admin: [https://flygo-rd.web.app/#/login_admin](https://flygo-rd.web.app/#/login_admin)
+4. **Admin local (dev):** `flutter run -d chrome -t lib/main.dart --route=/login_admin` — usa el mismo `web/index.html` con favicon RAI inline.
 
 ## Prueba manual rápida
 

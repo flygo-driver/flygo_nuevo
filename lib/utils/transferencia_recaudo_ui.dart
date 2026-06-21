@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/servicios/finance_config_service.dart';
+import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/widgets/datos_transferencia_conductor_panel.dart';
 import 'package:flygo_nuevo/widgets/datos_transferencia_rai_panel.dart';
 
@@ -9,7 +11,11 @@ class TransferenciaRecaudoUi {
 
   static bool viajeUsaRecaudoEnCuentaRai(Map<String, dynamic> viajeData) {
     final ref = (viajeData['referenciaRecaudo'] ?? '').toString().trim();
-    return ref.isNotEmpty;
+    if (ref.isNotEmpty) return true;
+    final destino = (viajeData['recaudoDestino'] ?? '').toString().trim().toLowerCase();
+    if (destino == 'rai') return true;
+    return FinanceConfigService.transferenciaRecaudoEnCuentaRai &&
+        MetodoPagoViaje.esTransferencia(viajeData['metodoPago']?.toString());
   }
 
   static String referenciaDesdeViaje(Map<String, dynamic> viajeData) {

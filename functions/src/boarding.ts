@@ -1,4 +1,4 @@
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { multiparadaInitPatch } from "./multiparada.js";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
@@ -33,6 +33,19 @@ function onlyDigits(value: unknown): string {
   return String(value ?? "").replace(/\D/g, "").trim();
 }
 
+/** Mismo formato que Flutter `ViajesRepo.crearViajePendiente`: 6 dígitos. */
+function generarPinVerificacionSeisDigitos(): string {
+  return String(100000 + Math.floor(Math.random() * 900000));
+}
+
+function pinVerificacionDelViaje(data: AnyMap): string {
+  const codigo = onlyDigits(data.codigoVerificacion);
+  if (codigo.length === 6) return codigo;
+  const boarding = onlyDigits(data.boardingPin);
+  if (boarding.length === 6) return boarding;
+  return boarding || codigo;
+}
+
 function isValidTransitionToEnCurso(estado: string): boolean {
   return [
     "a_bordo",
@@ -45,13 +58,18 @@ function isValidTransitionToEnCurso(estado: string): boolean {
   ].includes(estado);
 }
 
-// Genera un PIN de abordaje (taxista/admin) en viaje asignado.
+// Genera / renueva PIN de abordaje (6 dígitos, mismo criterio que codigoVerificacion del pool).
 export const issueBoardingPin = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const actorUid = request.auth.uid;
   const role = await assertTaxiOrAdmin(actorUid);
-  const viajeId = String(request.data?.viajeId ?? "").trim();
+  const viajeId = String(request.data?.viajeId ?? request.data?.tripId ?? "").trim();
   if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const ttlRaw = Number(request.data?.ttlMinutes ?? 240);
+  const ttlMinutes = Number.isFinite(ttlRaw)
+    ? Math.min(Math.max(Math.floor(ttlRaw), 5), 24 * 60)
+    : 240;
 
   const viajeRef = db().collection("viajes").doc(viajeId);
   const viajeSnap = await viajeRef.get();
@@ -62,14 +80,19 @@ export const issueBoardingPin = onCall(async (request) => {
     throw new HttpsError("permission-denied", "No autorizado para este viaje");
   }
 
-  const pin = Math.floor(1000 + Math.random() * 9000).toString();
+  const pin = generarPinVerificacionSeisDigitos();
+  const expMs = Date.now() + ttlMinutes * 60 * 1000;
+  const expiraTs = Timestamp.fromMillis(expMs);
+
   await viajeRef.update({
     boardingPin: pin,
-    boardingPinExpira: Date.now() + 10 * 60 * 1000,
+    boardingPinExpira: expMs,
+    boardingPinExpiresAt: expiraTs,
+    codigoVerificacion: pin,
     updatedAt: FieldValue.serverTimestamp(),
   });
 
-  return { ok: true, pin };
+  return { ok: true, pin, expiresAt: new Date(expMs).toISOString() };
 });
 
 // Confirma el PIN al abordar (cliente/taxista/admin).
@@ -101,8 +124,8 @@ export const confirmBoarding = onCall(async (request) => {
     throw new HttpsError("permission-denied", "No autorizado para este viaje");
   }
 
-  const pinDoc = onlyDigits(data.boardingPin);
-  if (!pinDoc || pinDoc !== pinIngresado) {
+  const pinDoc = pinVerificacionDelViaje(data);
+  if (!pinDoc || pinDoc.length !== 6 || pinDoc !== pinIngresado) {
     throw new HttpsError("permission-denied", "PIN incorrecto");
   }
   const expira = Number(data.boardingPinExpira ?? 0);
@@ -148,10 +171,8 @@ export const iniciarViajeSeguro = onCall(async (request) => {
 
     const codigoVerificado = data.codigoVerificado === true;
     if (!codigoVerificado) {
-      const pinDocA = onlyDigits(data.codigoVerificacion);
-      const pinDocB = onlyDigits(data.boardingPin);
-      const pinDoc = pinDocA || pinDocB;
-      if (!pinDoc || pinIngresado.length == 0 || pinIngresado !== pinDoc) {
+      const pinDoc = pinVerificacionDelViaje(data);
+      if (!pinDoc || pinDoc.length !== 6 || pinIngresado.length === 0 || pinIngresado !== pinDoc) {
         throw new HttpsError("failed-precondition", "Código de verificación inválido");
       }
     }

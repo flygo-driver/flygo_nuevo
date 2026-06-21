@@ -3,8 +3,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../config/recarga_bancaria_config.dart';
 import '../../servicios/admin_config_service.dart';
 import '../../servicios/app_config_service.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -22,7 +24,7 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
   final _formPrepago = GlobalKey<FormState>();
 
   final _banco = TextEditingController();
-  final _tipoCuenta = TextEditingController(text: 'Corriente');
+  final _tipoCuenta = TextEditingController(text: 'Cuenta Corriente');
   final _numero = TextEditingController();
   final _titular = TextEditingController();
   final _rnc = TextEditingController();
@@ -66,18 +68,17 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
   Future<void> _cargar() async {
     setState(() => _cargando = true);
     try {
-      final banco = await AppConfigService.obtenerDatosBancarios();
-      if (banco != null) {
-        _banco.text = banco.bancoNombre;
-        _tipoCuenta.text = banco.tipoCuenta;
-        _numero.text = banco.numeroCuenta;
-        _titular.text = banco.titular;
-        _rnc.text = banco.rnc;
-        _alias.text = banco.alias;
-        _nota.text = banco.nota;
-        _qr.text = banco.qrUrl;
-        _whatsapp.text = banco.whatsappSoporte;
-      }
+      final remoto = await AppConfigService.obtenerDatosBancarios();
+      final banco = AppConfigService.efectivos(remoto);
+      _banco.text = banco.bancoNombre;
+      _tipoCuenta.text = banco.tipoCuenta;
+      _numero.text = banco.numeroCuenta;
+      _titular.text = banco.titular;
+      _rnc.text = banco.rnc;
+      _alias.text = banco.alias;
+      _nota.text = banco.nota;
+      _qr.text = banco.qrUrl;
+      _whatsapp.text = banco.whatsappSoporte;
       final prep = await FirebaseFirestore.instance
           .collection('config')
           .doc('comision_prepago')
@@ -109,6 +110,32 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Datos bancarios actualizados')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _guardando = false);
+    }
+  }
+
+  Future<void> _publicarDatosEmpresa() async {
+    setState(() => _guardando = true);
+    try {
+      await AppConfigService.publicarDatosEmpresaProduccion();
+      await _cargar();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Cuenta ${RecargaBancariaConfig.titular} publicada '
+              '(${RecargaBancariaConfig.banco} ${RecargaBancariaConfig.numeroCuenta})',
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -160,11 +187,8 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        title: Text('Configuración RAI',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: AdminAppBar(
+        title: 'Configuración RAI',
         bottom: TabBar(
           controller: _tabs,
           labelColor: AdminUi.accentGreen(context),
@@ -219,6 +243,14 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
               child: FilledButton(
                 onPressed: _guardando ? null : _guardarBanco,
                 child: Text(_guardando ? 'Guardando…' : 'Guardar banco'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _guardando ? null : _publicarDatosEmpresa,
+                child: const Text('Publicar cuenta empresa RAI en Firestore'),
               ),
             ),
           ],

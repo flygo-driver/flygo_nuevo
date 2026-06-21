@@ -15,6 +15,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 // Avatar
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class PanelTaxista extends StatelessWidget {
   const PanelTaxista({super.key});
@@ -23,10 +24,9 @@ class PanelTaxista extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.greenAccent,
-        title: const Text('RAI Driver — Taxista'),
+      appBar: RaiAppBar(
+        title: 'RAI Driver — Taxista',
+        centerTitle: true,
         actions: [
           IconButton(
             tooltip: 'Mi perfil (cambiar foto)',

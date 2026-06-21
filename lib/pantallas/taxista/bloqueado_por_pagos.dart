@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import '../../navegacion/taxista_finanzas_nav.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../modelo/pago_taxista.dart';
+import '../../widgets/cuenta_open_ask_deposito_panel.dart';
 import '../../widgets/rai_app_bar.dart';
-import '../../widgets/rai_cuenta_deposito_panel.dart';
 import '../../config/plataforma_economia.dart';
+import '../../servicios/logout.dart';
 
 class BloqueadoPorPagos extends StatefulWidget {
   const BloqueadoPorPagos({super.key});
@@ -23,6 +25,7 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
   Map<String, dynamic>? _usuarioData;
   bool _deudaSemanalVencida = false;
   bool _cargando = true;
+  String? _errorCarga;
 
   @override
   void initState() {
@@ -33,27 +36,36 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
   Future<void> _cargarPagosPendientes() async {
     if (user == null) return;
 
+    if (mounted) {
+      setState(() {
+        _cargando = true;
+        _errorCarga = null;
+      });
+    }
+
     try {
-      final bille = await FirebaseFirestore.instance
-          .collection('billeteras_taxista')
-          .doc(user!.uid)
-          .get();
-      final usr = await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(user!.uid)
-          .get();
-      final deudaSemanal =
-          await PagosTaxistaRepo.tieneDeudaSemanalVencida(user!.uid);
-      final pagos =
-          await PagosTaxistaRepo.streamPagosPorTaxista(user!.uid).first;
+      final uid = user!.uid;
+      final results = await Future.wait<Object?>([
+        FirebaseFirestore.instance
+            .collection('billeteras_taxista')
+            .doc(uid)
+            .get(),
+        FirebaseFirestore.instance.collection('usuarios').doc(uid).get(),
+        PagosTaxistaRepo.tieneDeudaSemanalVencida(uid),
+        PagosTaxistaRepo.obtenerPagosAbiertosTaxista(uid),
+      ]);
+
+      final bille = results[0] as DocumentSnapshot<Map<String, dynamic>>;
+      final usr = results[1] as DocumentSnapshot<Map<String, dynamic>>;
+      final deudaSemanal = results[2] as bool;
+      final pagos = results[3] as List<PagoTaxista>;
 
       PagoTaxista? pendiente;
-      try {
-        pendiente = pagos.firstWhere(
-          (p) => p.estado == 'pendiente' || p.estado == 'vencido',
-        );
-      } catch (e) {
-        pendiente = null;
+      for (final p in pagos) {
+        if (p.estado == 'pendiente' || p.estado == 'vencido') {
+          pendiente = p;
+          break;
+        }
       }
 
       if (mounted) {
@@ -63,11 +75,16 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
           _usuarioData = usr.data();
           _deudaSemanalVencida = deudaSemanal;
           _cargando = false;
+          _errorCarga = null;
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _cargando = false);
+        setState(() {
+          _cargando = false;
+          _errorCarga =
+              'No pudimos cargar todos los datos. Podés ir a Mis pagos para recargar.';
+        });
       }
     }
   }
@@ -142,6 +159,27 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
                     ),
 
                     const SizedBox(height: 12),
+
+                    if (_errorCarga != null)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.orange.shade700),
+                        ),
+                        child: Text(
+                          _errorCarga!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
 
                     // Mensaje principal
                     Container(
@@ -428,8 +466,9 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
 
                     const SizedBox(height: 24),
 
-                    const RaiCuentaDepositoPanel(
-                      titulo: 'Datos bancarios de la empresa',
+                    const CuentaOpenAskDepositoPanel(
+                      fondoOscuro: true,
+                      mostrarNota: true,
                     ),
 
                     const SizedBox(height: 24),
@@ -439,9 +478,10 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: () {
-                              Navigator.pushNamed(context, '/mis_pagos');
-                            },
+                            onPressed: () => TaxistaFinanzasNav.abrirMisPagos(
+                              context,
+                              scrollToRecargaSection: true,
+                            ),
                             icon: const Icon(Icons.payment),
                             label: const Text('IR A MIS PAGOS'),
                             style: ElevatedButton.styleFrom(
@@ -500,10 +540,7 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
 
   // ✅ Método separado para cerrar sesión (elimina el warning)
   Future<void> _cerrarSesion() async {
-    await FirebaseAuth.instance.signOut();
-    if (mounted) {
-      Navigator.pushReplacementNamed(context, '/login');
-    }
+    await cerrarSesion(context);
   }
 
   static const _gradientePaso = LinearGradient(

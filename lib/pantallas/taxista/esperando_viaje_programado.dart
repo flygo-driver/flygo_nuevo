@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../modelo/viaje.dart';
 import '../../servicios/trips_service.dart';
 import '../../utils/formatos_moneda.dart';
+import '../../utils/trip_publish_windows.dart';
 import 'viaje_en_curso_taxista.dart';
 import '../shared/boarding_pin_sheet.dart';
 
@@ -74,7 +75,7 @@ class _ItemProg extends StatelessWidget {
   const _ItemProg({required this.v});
 
   bool _esAhora(DateTime fecha) =>
-      !fecha.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+      TripPublishWindows.esAhoraPorFechaPickup(fecha, DateTime.now());
 
   @override
   Widget build(BuildContext context) {

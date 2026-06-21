@@ -10,7 +10,6 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
-import '../../config/plataforma_economia.dart';
 import '../../modelo/liquidacion_semanal.dart';
 import '../../modelo/recarga_comision_taxista.dart';
 import '../../modelo/pago_taxista.dart';
@@ -19,9 +18,11 @@ import '../../servicios/finance_config_service.dart';
 import '../../servicios/liquidacion_semanal_repo.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/rai_local_read_cache.dart';
+import '../../servicios/comision_prepago_config_service.dart';
 import '../../widgets/configuracion_bancaria.dart';
-import '../../widgets/rai_cuenta_deposito_panel.dart';
+import '../../widgets/cuenta_open_ask_deposito_panel.dart';
 import '../../widgets/rai_offline_banner.dart';
+import '../../widgets/taxista_credito_rai_monedero.dart';
 
 Widget _pasoRecarga(
   ColorScheme cs, {
@@ -180,6 +181,7 @@ class _MisPagosState extends State<MisPagos> {
   final dateFormat = DateFormat('dd/MM/yyyy');
   final GlobalKey _recargaSeccionKey = GlobalKey();
   bool _scrollRecargaAgendado = false;
+  StreamSubscription<List<RecargaComisionTaxista>>? _recargasAnalyticsSub;
 
   /// Solo para analytics: transición a `pagado` (aprobación admin).
   final Map<String, String> _prevEstadoRecargaPorId = <String, String>{};
@@ -198,6 +200,14 @@ class _MisPagosState extends State<MisPagos> {
   void initState() {
     super.initState();
     unawaited(FinanceConfigService.ensureStarted());
+    final String? uid = user?.uid;
+    if (uid != null && uid.trim().isNotEmpty) {
+      unawaited(PagosTaxistaRepo.sincronizarBloqueoOperativo(uid.trim()));
+      _recargasAnalyticsSub =
+          PagosTaxistaRepo.streamRecargasComisionPorTaxista(uid.trim()).listen(
+        _detectRecargaAprobadaAnalytics,
+      );
+    }
     if (widget.scrollToRecargaSection) {
       void tryScroll() {
         if (!mounted || _scrollRecargaAgendado) return;
@@ -219,6 +229,12 @@ class _MisPagosState extends State<MisPagos> {
       });
       Future<void>.delayed(const Duration(milliseconds: 550), tryScroll);
     }
+  }
+
+  @override
+  void dispose() {
+    _recargasAnalyticsSub?.cancel();
+    super.dispose();
   }
 
   Future<List<Map<String, dynamic>>> _cargarDetallesViajesPago(
@@ -327,40 +343,24 @@ class _MisPagosState extends State<MisPagos> {
           );
         }
         final list = snapshot.data ?? const <LiquidacionSemanal>[];
-        return StreamBuilder<List<RecargaComisionTaxista>>(
-          stream: PagosTaxistaRepo.streamRecargasComisionPorTaxista(user!.uid),
-          builder: (context, recSnapshot) {
-            final recargas = recSnapshot.data ?? <RecargaComisionTaxista>[];
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              _detectRecargaAprobadaAnalytics(recargas);
-            });
-            if (list.isEmpty) {
-              return Column(
-                children: [
-                  _buildResumenRapidoRecargas(context, recargas),
-                  _buildRecargasCreditoSection(context, recargas),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text(
-                        'No tienes liquidaciones semanales registradas',
-                        style: TextStyle(color: cs.onSurfaceVariant),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }
-            final LiquidacionSemanal pendiente = list.firstWhere(
-              (l) => l.esPendiente,
-              orElse: () => list.first,
-            );
-            return Column(
-              children: [
-                _buildResumenRapidoRecargas(context, recargas),
-                _buildRecargasCreditoSection(context, recargas),
-                if (pendiente.esPendiente)
+        if (list.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(
+                'No tienes liquidaciones semanales registradas',
+                style: TextStyle(color: cs.onSurfaceVariant),
+              ),
+            ),
+          );
+        }
+        final LiquidacionSemanal pendiente = list.firstWhere(
+          (l) => l.esPendiente,
+          orElse: () => list.first,
+        );
+        return Column(
+          children: [
+            if (pendiente.esPendiente)
                   Container(
                     margin: const EdgeInsets.all(16),
                     padding: const EdgeInsets.all(20),
@@ -560,8 +560,6 @@ class _MisPagosState extends State<MisPagos> {
                 ),
               ],
             );
-          },
-        );
       },
     );
   }
@@ -599,24 +597,7 @@ class _MisPagosState extends State<MisPagos> {
           orElse: () => pagos.first,
         );
 
-        return StreamBuilder<List<RecargaComisionTaxista>>(
-          stream:
-              PagosTaxistaRepo.streamRecargasComisionPorTaxista(user!.uid),
-          builder: (context, recSnapshot) {
-            final recargas = recSnapshot.data ?? <RecargaComisionTaxista>[];
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              _detectRecargaAprobadaAnalytics(recargas);
-            });
-            return Column(
-              children: <Widget>[
-                _buildResumenRapidoRecargas(context, recargas),
-                _buildRecargasCreditoSection(context, recargas),
-                _buildPagosTaxistasLegacyBody(cs, pagos, pendiente),
-              ],
-            );
-          },
-        );
+        return _buildPagosTaxistasLegacyBody(cs, pagos, pendiente);
       },
     );
   }
@@ -685,6 +666,16 @@ class _MisPagosState extends State<MisPagos> {
                     color: cs.onSurface,
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Transferí el total a la cuenta Open ASK de arriba antes de subir el comprobante.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: cs.onSurfaceVariant,
+                    fontSize: 12.5,
+                    height: 1.35,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -1052,228 +1043,6 @@ class _MisPagosState extends State<MisPagos> {
     }
   }
 
-  ({Color color, String label, IconData icon}) _estadoRecargaUi(
-      BuildContext context, String estado) {
-    final cs = Theme.of(context).colorScheme;
-    switch (estado) {
-      case 'pagado':
-        return (
-          color: Colors.green,
-          label: 'APROBADA',
-          icon: Icons.check_circle,
-        );
-      case 'pendiente_verificacion':
-        return (
-          color: Colors.orange,
-          label: 'EN REVISION',
-          icon: Icons.hourglass_top,
-        );
-      case 'rechazado':
-        return (
-          color: Colors.red.shade700,
-          label: 'RECHAZADA',
-          icon: Icons.cancel,
-        );
-      default:
-        return (color: cs.outline, label: estado.toUpperCase(), icon: Icons.help);
-    }
-  }
-
-  Widget _buildRecargasCreditoSection(
-    BuildContext context,
-    List<RecargaComisionTaxista> recargas,
-  ) {
-    final cs = Theme.of(context).colorScheme;
-    if (recargas.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 6),
-          Text(
-            'HISTORIAL DE RECARGAS DE CREDITO',
-            style: TextStyle(
-              color: cs.primary,
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 150,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: recargas.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final r = recargas[index];
-                final estadoUi = _estadoRecargaUi(context, r.estado);
-                final fecha = r.createdAt != null
-                    ? DateFormat('dd/MM/yyyy HH:mm').format(r.createdAt!)
-                    : 'sin fecha';
-                return Container(
-                  width: 270,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: estadoUi.color.withValues(alpha: 0.5),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(estadoUi.icon, color: estadoUi.color, size: 18),
-                          const SizedBox(width: 6),
-                          Text(
-                            estadoUi.label,
-                            style: TextStyle(
-                              color: estadoUi.color,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 11.5,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        formatter.format(r.montoDeclaradoRd),
-                        style: TextStyle(
-                          color: cs.onSurface,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        fecha,
-                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11.5),
-                      ),
-                      const Spacer(),
-                      if ((r.notaAdmin ?? '').trim().isNotEmpty)
-                        Text(
-                          'Nota: ${r.notaAdmin!.trim()}',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11.5),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildResumenRapidoRecargas(
-    BuildContext context,
-    List<RecargaComisionTaxista> recargas,
-  ) {
-    final cs = Theme.of(context).colorScheme;
-    if (recargas.isEmpty) return const SizedBox.shrink();
-
-    final RecargaComisionTaxista? ultimaAprobada = recargas
-        .where((r) => r.estado == 'pagado')
-        .cast<RecargaComisionTaxista?>()
-        .firstWhere((r) => r != null, orElse: () => null);
-    final RecargaComisionTaxista ultimaSolicitud = recargas.first;
-    final bool enRevision =
-        recargas.any((r) => r.estado == 'pendiente_verificacion');
-
-    String fechaOGuion(DateTime? dt) =>
-        dt == null ? '-' : DateFormat('dd/MM/yyyy').format(dt);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: _resumenItem(
-                context,
-                'Última aprobada',
-                ultimaAprobada != null
-                    ? '${formatter.format(ultimaAprobada.montoDeclaradoRd)} · ${fechaOGuion(ultimaAprobada.createdAt)}'
-                    : 'Sin recarga aprobada',
-              ),
-            ),
-            Container(
-              width: 1,
-              height: 38,
-              color: cs.outlineVariant.withValues(alpha: 0.5),
-            ),
-            Expanded(
-              child: _resumenItem(
-                context,
-                'Última solicitud',
-                '${formatter.format(ultimaSolicitud.montoDeclaradoRd)} · ${fechaOGuion(ultimaSolicitud.createdAt)}',
-              ),
-            ),
-            Container(
-              width: 1,
-              height: 38,
-              color: cs.outlineVariant.withValues(alpha: 0.5),
-            ),
-            Expanded(
-              child: _resumenItem(
-                context,
-                'Estado actual',
-                enRevision ? 'En revisión' : 'Sin revisión pendiente',
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _resumenItem(BuildContext context, String label, String value) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: cs.onSurfaceVariant,
-              fontSize: 10.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            value,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: cs.onSurface,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-              height: 1.2,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -1323,6 +1092,10 @@ class _MisPagosState extends State<MisPagos> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                   RaiOfflineBanner(uid: user?.uid),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: CuentaOpenAskDepositoPanel(),
+                  ),
                   _AvisoPerfilBancarioTransferencia(uid: user!.uid),
                   KeyedSubtree(
                     key: _recargaSeccionKey,
@@ -1334,8 +1107,8 @@ class _MisPagosState extends State<MisPagos> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                     child: Text(
-                      'Los viajes en efectivo se liquidan por prepago (recarga de comisión). '
-                      'El pago semanal solo incluye transferencias y tarjetas verificadas.',
+                      'Viajes en efectivo usan tu crédito RAI. '
+                      'Transferencias y tarjetas se liquidan en el pago semanal.',
                       style: TextStyle(
                         color: cs.onSurfaceVariant,
                         fontSize: 13,
@@ -1377,6 +1150,12 @@ class _PanelRecargaComisionEfectivoState
   String? _comprobanteUrl;
   double? _montoElegidoRd;
   double? _lastSaldoPrepagoCached;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(ComisionPrepagoConfigService.ensureStarted());
+  }
 
   @override
   void dispose() {
@@ -1629,14 +1408,8 @@ class _PanelRecargaComisionEfectivoState
             PagosTaxistaRepo.primerViajeComisionGratisConsumido(bill);
         final bloqueoOperativo =
             PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(bill);
-        final riesgoBloqueoProximo =
-            !bloqueoOperativo &&
-                pend <= 1e-6 &&
-                primerViajeConsumido &&
-                disponible > 1e-6 &&
-                disponible < minSaldo;
-        final saldoFaltante =
-            (minSaldo - disponible).clamp(0.0, double.infinity);
+        final bloqueoLegacy =
+            PagosTaxistaRepo.bloqueoPorComisionLegacyTope(bill);
 
         return StreamBuilder<List<RecargaComisionTaxista>>(
           stream: PagosTaxistaRepo.streamRecargasComisionPorTaxista(
@@ -1646,78 +1419,54 @@ class _PanelRecargaComisionEfectivoState
             final enRevision =
                 list.any((r) => r.estado == 'pendiente_verificacion');
 
-            final pctCom = PlataformaEconomia.comisionViajePorcentaje;
-            final pctComStr = pctCom == pctCom.roundToDouble()
-                ? pctCom.round().toString()
-                : pctCom.toStringAsFixed(1);
-            final pctTax = 100.0 - pctCom;
-            final pctTaxStr = pctTax == pctTax.roundToDouble()
-                ? pctTax.round().toString()
-                : pctTax.toStringAsFixed(1);
-
             return Container(
               margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.amber.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.amber.shade700),
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: cs.outlineVariant.withValues(alpha: 0.55),
+                ),
               ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: bloqueoOperativo
-                          ? Colors.red.withValues(alpha: 0.15)
-                          : Colors.green.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: bloqueoOperativo
-                            ? Colors.red.withValues(alpha: 0.6)
-                            : Colors.green.withValues(alpha: 0.55),
-                      ),
-                    ),
-                    child: Text(
-                      // El `as String` es necesario en kernel/release pese a
-                      // que el analyzer lo marque como redundante; sin él, la
-                      // build release falla con "Object can't be assigned to String".
-                      // ignore: unnecessary_cast
-                      (bloqueoOperativo
-                          ? (PagosTaxistaRepo.bloqueoPorComisionLegacyTope(bill)
-                              ? 'Estado: BLOQUEADO por comisión legacy (tope RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}). '
-                                  'Una recarga aprobada paga primero esa deuda; el resto suma al prepago.'
-                              : 'Estado: BLOQUEADO por saldo prepago disponible insuficiente. Te faltan ${widget.formatter.format(saldoFaltante)} para el mínimo.')
-                          : (riesgoBloqueoProximo
-                              ? 'Estado: ALERTA PREVENTIVA. Te quedan ${widget.formatter.format(disponible)} disponibles (prepago bruto ${widget.formatter.format(saldo)}) y si no recargas se bloquearán pool y viajes al agotarse.'
-                              : 'Estado: ACTIVO para operar. Tu saldo actual cumple la regla de servicio.')) as String,
-                      style: TextStyle(
-                        color: cs.onSurface,
-                        fontSize: 12,
-                        height: 1.35,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                  const CuentaOpenAskDepositoPanel(),
+                  const SizedBox(height: 16),
+                  TaxistaCreditoRaiMonederoHero(
+                    disponible: disponible,
+                    saldoBruto: saldo,
+                    reservadoGiras: reservGiras,
+                    comisionLegacyPendiente: pend,
+                    bloqueoOperativo: bloqueoOperativo,
+                    bloqueoLegacy: bloqueoLegacy,
+                    primerViajeConsumido: primerViajeConsumido,
+                    formatter: widget.formatter,
+                    minSaldoRd: minSaldo,
                   ),
-                  if (PagosTaxistaRepo.bloqueoPorComisionLegacyTope(bill)) ...[
-                    const SizedBox(height: 10),
+                  const SizedBox(height: 16),
+                  TaxistaCreditoRaiMovimientosRecientes(
+                    uidTaxista: widget.user.uid,
+                    formatter: widget.formatter,
+                  ),
+                  if (bloqueoLegacy) ...[
+                    const SizedBox(height: 14),
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(10),
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-                        borderRadius: BorderRadius.circular(10),
+                        color: Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: cs.outlineVariant.withValues(alpha: 0.75),
+                          color: Colors.red.withValues(alpha: 0.45),
                         ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Cuánto transferir (orientativo)',
+                            'Cuánto transferir',
                             style: TextStyle(
                               color: cs.onSurface,
                               fontWeight: FontWeight.w800,
@@ -1726,8 +1475,7 @@ class _PanelRecargaComisionEfectivoState
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            'Mínimo para que, al aprobar la recarga, el legacy baje debajo de RD\$'
-                            '${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)} y puedas operar: '
+                            'Mínimo para desbloquear: '
                             '${widget.formatter.format(PagosTaxistaRepo.montoMinimoRecargaParaSalirBloqueoLegacyRd(pend))}.',
                             style: TextStyle(
                               color: cs.onSurfaceVariant,
@@ -1739,9 +1487,9 @@ class _PanelRecargaComisionEfectivoState
                               PagosTaxistaRepo.montoMinimoRecargaParaSalirBloqueoLegacyRd(
                                       pend) +
                                   0.01) ...[
-                            const SizedBox(height: 6),
+                            const SizedBox(height: 4),
                             Text(
-                              'Para dejar la comisión legacy en cero: '
+                              'Para dejar legacy en cero: '
                               '${widget.formatter.format(PagosTaxistaRepo.montoParaLiquidarLegacyCompletoRd(pend))}.',
                               style: TextStyle(
                                 color: cs.onSurfaceVariant,
@@ -1751,112 +1499,6 @@ class _PanelRecargaComisionEfectivoState
                             ),
                           ],
                         ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Icon(Icons.account_balance_wallet,
-                          color: Colors.amber.shade200),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Recarga de crédito (comisión en efectivo)',
-                          maxLines: 3,
-                          softWrap: true,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Este saldo cubre la comisión del $pctComStr% sobre viajes en efectivo '
-                    '(vos te quedás con el $pctTaxStr% del total del viaje). '
-                    'Transferí a la cuenta de la empresa y, cuando tengas el bauche, '
-                    'completá los pasos más abajo. Al aprobar el admin, el monto verificado paga primero '
-                    'la comisión legacy pendiente (si hay) y el resto queda acreditado en tu prepago.',
-                    style: TextStyle(
-                        color: cs.onSurfaceVariant, fontSize: 12, height: 1.35),
-                  ),
-                  const SizedBox(height: 12),
-                  const RaiCuentaDepositoPanel(
-                    titulo: 'Cuenta para recargar crédito',
-                    padding: EdgeInsets.all(12),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Saldo prepago (bruto): ${widget.formatter.format(saldo)} '
-                    '(mín. RD\$${minSaldo.toStringAsFixed(0)})',
-                    style: TextStyle(
-                      color: Colors.amber.shade100,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Saldo disponible: ${widget.formatter.format(disponible)} '
-                    '(de un total de ${widget.formatter.format(saldo)}, '
-                    'tenés ${widget.formatter.format(reservGiras)} reservados para salidas por cupos activas).',
-                    style: TextStyle(
-                      color: cs.onSurfaceVariant,
-                      fontSize: 12.5,
-                      height: 1.35,
-                    ),
-                  ),
-                  if (pend > 1e-6) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      'Comisión legacy pendiente: ${widget.formatter.format(pend)}',
-                      style:
-                          TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
-                    ),
-                  ],
-                  if (riesgoBloqueoProximo) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: Colors.orange.withValues(alpha: 0.6)),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(Icons.warning_amber_rounded,
-                              color: Colors.orange, size: 22),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Recarga recomendada ahora: si el saldo llega a RD\$0, se bloquean pool y viajes en efectivo hasta aprobación de tu bauche.',
-                              style: TextStyle(
-                                  color: cs.onSurfaceVariant,
-                                  fontSize: 12,
-                                  height: 1.35),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  if (!primerViajeConsumido && pend < 1e-6) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      'Nota: tu primer viaje en efectivo no descuenta comisión; a partir de ahí aplica control de saldo prepago.',
-                      style: TextStyle(
-                        color: cs.onSurfaceVariant,
-                        fontSize: 11.5,
-                        height: 1.3,
                       ),
                     ),
                   ],
@@ -1900,7 +1542,8 @@ class _PanelRecargaComisionEfectivoState
                       numero: 1,
                       titulo: 'Transferir al banco',
                       detalle:
-                          'Usá los datos de la cuenta RAI de arriba. Guardá el comprobante que te da el banco o una captura clara.',
+                          'Usá la cuenta Open ASK de este mismo recuadro verde (787726249 · Banco Popular). '
+                          'Guardá el comprobante que te da el banco o una captura clara.',
                     ),
                     const SizedBox(height: 8),
                     _pasoRecarga(

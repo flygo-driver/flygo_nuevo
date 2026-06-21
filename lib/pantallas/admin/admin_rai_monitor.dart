@@ -3,6 +3,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -59,11 +60,8 @@ class _AdminRaiMonitorState extends State<AdminRaiMonitor> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        title: Text('Asistente RAI',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: AdminAppBar(
+        title: 'Asistente RAI',
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),

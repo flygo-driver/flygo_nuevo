@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../widgets/admin_drawer.dart';
+import '../../widgets/admin_app_bar.dart';
 import 'admin_expediente_chofer_utils.dart';
 import 'admin_alertas.dart';
 import 'admin_bola_pueblo_ops.dart';
@@ -25,19 +26,13 @@ class AdminCentroOperaciones extends StatelessWidget {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Centro de operaciones',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: const AdminAppBar(
+        title: 'Centro de operaciones',
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          _MetricasLiveBanner(),
+          const _MetricasLiveBanner(),
           const SizedBox(height: 16),
           Text(
             'Operación en vivo',
@@ -109,7 +104,10 @@ class AdminCentroOperaciones extends StatelessWidget {
             titulo: 'Taxistas bloqueados',
             subtitulo: 'tienePagoPendiente · prepago bajo',
             detalleFallback: 'Sin bloqueos por comisión',
-            onTap: () => _push(context, const GestionarUsuariosAdmin()),
+            onTap: () => _push(
+              context,
+              const GestionarUsuariosAdmin(modoInicial: 'bloqueados'),
+            ),
           ),
           const SizedBox(height: 24),
           Text(
@@ -140,13 +138,25 @@ class AdminCentroOperaciones extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
+          const _ColaGirasRaiCard(),
+          const SizedBox(height: 10),
           _AccesoSecundario(
             icon: Icons.account_balance_outlined,
             titulo: 'Conciliación banco RAI',
-            subtitulo: 'Extracto Popular · ref RAI-V · confirmar pagos',
+            subtitulo: 'Extracto Popular · ref RAI-V y RAI-P · confirmar pagos',
             onTap: () => _push(
               context,
               const VerificarPagos(initialTabIndex: 4),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _AccesoSecundario(
+            icon: Icons.tour_outlined,
+            titulo: 'Giras RAI · recaudo central',
+            subtitulo: 'Verificar pagos clientes · liquidar neto organizador',
+            onTap: () => _push(
+              context,
+              const VerificarPagos(initialTabIndex: 5),
             ),
           ),
           const SizedBox(height: 24),
@@ -296,6 +306,59 @@ class _ColaPagosCard extends StatelessWidget {
           count: n,
           detalle: n == 0 ? 'Sin pagos pendientes' : 'Verificar transferencias',
           onTap: onTap,
+        );
+      },
+    );
+  }
+}
+
+/// Pagos pool central pendientes + liquidaciones neto al organizador.
+class _ColaGirasRaiCard extends StatelessWidget {
+  const _ColaGirasRaiCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final pagosStream = FirebaseFirestore.instance
+        .collectionGroup('reservas')
+        .where('recaudoDestino', isEqualTo: 'rai')
+        .where('estado', isEqualTo: 'reservado')
+        .where('estadoPago', isEqualTo: 'pendiente')
+        .limit(200)
+        .snapshots();
+    final liqStream = FirebaseFirestore.instance
+        .collection('liquidaciones_pool')
+        .where('estado', isEqualTo: 'pendiente_pago')
+        .limit(200)
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: pagosStream,
+      builder: (context, snapPagos) {
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: liqStream,
+          builder: (context, snapLiq) {
+            final nPagos = snapPagos.data?.docs.length ?? 0;
+            final nLiq = snapLiq.data?.docs.length ?? 0;
+            final total = nPagos + nLiq;
+            return _ColaCard(
+              icon: Icons.beach_access_outlined,
+              color: Colors.cyan,
+              titulo: 'Giras RAI · recaudo central',
+              subtitulo: 'Pagos clientes + neto organizador',
+              count: total,
+              detalle: total == 0
+                  ? 'Sin pendientes en recaudo central'
+                  : '$nPagos pagos · $nLiq liquidaciones',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => const VerificarPagos(initialTabIndex: 5),
+                  ),
+                );
+              },
+            );
+          },
         );
       },
     );

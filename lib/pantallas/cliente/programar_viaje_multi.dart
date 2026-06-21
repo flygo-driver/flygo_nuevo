@@ -16,12 +16,13 @@ import 'package:flygo_nuevo/servicios/pay_config.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
-import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
@@ -146,17 +147,37 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   @override
   void initState() {
     super.initState();
+    unawaited(RaiUbicacionClienteService.instance.ensureStarted());
+    RaiUbicacionClienteService.instance.modo
+        .addListener(_onModoUbicacionCliente);
     unawaited(_precargarOrigenGpsSiListo());
   }
 
-  /// Origen desde GPS sin pedir permiso al SO (solo lectura; el banner del shell guía).
+  void _onModoUbicacionCliente() {
+    if (!mounted) return;
+    if (RaiUbicacionClienteService.instance.modo.value !=
+        RaiUbicacionClienteModo.listo) {
+      return;
+    }
+    unawaited(_precargarOrigenGpsSiListo());
+  }
+
+  /// Origen desde GPS: lectura pasiva; «Activar ubicación» abre el teléfono si falta permiso.
   Future<void> _precargarOrigenGpsSiListo() async {
     if (_origen != null) return;
+    final ready = await LocationPermissionService.ensureLocationReady(
+      requestIfDenied: false,
+    );
+    if (!ready.isUsable) {
+      unawaited(RaiUbicacionClienteService.instance.refrescar());
+      return;
+    }
     try {
-      final pos = await GpsService.obtenerUbicacionActual(
-        timeout: const Duration(seconds: 10),
-        maxEdadUltima: const Duration(minutes: 30),
-      );
+      final pos = ready.position ??
+          await GpsService.obtenerUbicacionActual(
+            timeout: const Duration(seconds: 10),
+            maxEdadUltima: const Duration(minutes: 30),
+          );
       if (pos == null || !mounted) return;
       setState(() {
         _origen = _LugarSel(
@@ -167,11 +188,18 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       });
       _programarCalculoAutomatico();
       unawaited(RaiUbicacionClienteService.instance.refrescar());
-    } catch (_) {}
+    } catch (_) {
+      unawaited(RaiUbicacionClienteService.instance.refrescar());
+    }
   }
+
+  bool get _necesitaAlertaUbicacionMulti =>
+      _origen == null && _destino != null;
 
   @override
   void dispose() {
+    RaiUbicacionClienteService.instance.modo
+        .removeListener(_onModoUbicacionCliente);
     _calculoDebounce?.cancel();
     _listaScroll.dispose();
     super.dispose();
@@ -669,7 +697,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
 
     if (_origen == null || _destino == null) {
-      _snack('Selecciona origen y destino.');
+      if (_origen == null &&
+          RaiUbicacionClienteService.instance.bannerActivo) {
+        _snack(LocationReadiness.kMsgEsperandoUbicacion);
+      } else {
+        _snack('Selecciona origen y destino.');
+      }
       return;
     }
 
@@ -740,10 +773,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       final bool viajeInmediato =
           TripPublishWindows.esProgramadoRecogidaCasiInmediata(
               fechaHoraViaje, nowUtc);
-
-      /// Igual que `_programarViaje`: mapa en vivo si entra en ventana de pool inmediata.
-      /// `_esAhora` refuerza el modo «múltiples paradas ahora» aunque algo falle en la heurística.
-      final bool irAViajeEnCurso = _esAhora || viajeInmediato;
+      // `_esAhora` refuerza navegación inmediata vía [forzarViajeInmediato] en el helper.
 
       DateTime? publishAtArg;
       DateTime? acceptAfterArg;
@@ -790,6 +820,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         canalAsignacion: canal,
         publishAt: publishAtArg,
         acceptAfter: acceptAfterArg,
+        forzarEsAhora: (viajeInmediato || _esAhora) ? true : null,
       );
 
       if (context.mounted) {
@@ -797,47 +828,20 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       }
 
       navegoFuera = true;
-      if (irAViajeEnCurso) {
-        if (tipoSrv == 'turismo') {
-          final fs.DocumentSnapshot<Map<String, dynamic>> turismoSnap =
-              await fs.FirebaseFirestore.instance
-                  .collection('viajes')
-                  .doc(id)
-                  .get();
-          final Map<String, dynamic> turismoData =
-              turismoSnap.data() ?? <String, dynamic>{};
-          final bool choferAsignado = (turismoData['uidTaxista'] ??
-                  turismoData['taxistaId'] ??
-                  '')
-              .toString()
-              .trim()
-              .isNotEmpty;
-          if (choferAsignado) {
-            await NavigationService.clearAndGoViajeEnCursoCliente(
-              preNav: navAntesDeCrear,
-            );
-          } else {
-            await NavigationService.clearAndGoPage(
-              preNav: navAntesDeCrear,
-              page: EsperaAsignacionTurismo(viajeId: id),
-            );
-          }
-        } else {
-          await NavigationService.clearAndGoViajeEnCursoCliente(
-            preNav: navAntesDeCrear,
-          );
-        }
-      } else {
-        final NavigatorState? nav = navAntesDeCrear ??
-            NavigationService.navigatorKey.currentState;
-        if (nav != null && nav.mounted) {
-          await nav.pushAndRemoveUntil<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => ViajeProgramadoPendiente(viajeId: id),
-            ),
-            (Route<dynamic> r) => false,
-          );
-        }
+      await NavigationService.navegarTrasCrearViajeCliente(
+        viajeId: id,
+        fechaHoraPickup: fechaHoraViaje,
+        tipoServicio: tipoSrv,
+        preNav: navAntesDeCrear,
+        forzarViajeInmediato: _esAhora,
+      );
+    } on fs.FirebaseException catch (e) {
+      if (mounted) {
+        _snack('❌ Firestore (${e.code}): ${e.message ?? e}');
+      }
+    } on StateError catch (e) {
+      if (mounted) {
+        _snack(e.message);
       }
     } catch (e) {
       if (mounted) {
@@ -1561,12 +1565,22 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           title: 'Múltiples paradas',
           backWhenCanPop: true,
         ),
-        body: Stack(
-        children: <Widget>[
-          ListView(
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const RaiUbicacionClienteBanner(),
+            Expanded(
+              child: Stack(
+                children: <Widget>[
+                  ListView(
             controller: _listaScroll,
             padding: const EdgeInsets.all(16),
             children: <Widget>[
+              if (_necesitaAlertaUbicacionMulti)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: RaiUbicacionClienteMapAlert(),
+                ),
               if (_cargando)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -1976,16 +1990,19 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               ],
             ],
           ),
-          if (_cargando && _mensajeCarga.isNotEmpty)
-            Positioned.fill(
-              child: CotizacionPrecioLoadingDimmed(
-                accentColor: _colorServicio,
-                isDark: isDark,
-                message: _mensajeCarga,
+                  if (_cargando && _mensajeCarga.isNotEmpty)
+                    Positioned.fill(
+                      child: CotizacionPrecioLoadingDimmed(
+                        accentColor: _colorServicio,
+                        isDark: isDark,
+                        message: _mensajeCarga,
+                      ),
+                    ),
+                ],
               ),
             ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }

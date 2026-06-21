@@ -33,6 +33,8 @@ import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/text_scale_service.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
+import 'package:flygo_nuevo/servicios/finance_config_service.dart';
+import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
 // 🔐 Auth / Gates
@@ -46,7 +48,7 @@ import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/historial_viajes_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/metodos_pago.dart';
 import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
@@ -217,6 +219,11 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
       // construir, el applicationId sigue siendo distinto y el flavor real
       // se detecta correctamente.
       await AppFlavor.init();
+      if (!kIsWeb &&
+          defaultTargetPlatform != TargetPlatform.windows &&
+          defaultTargetPlatform != TargetPlatform.macOS) {
+        unawaited(PoolDeepLink.install());
+      }
       await NotificationService.I.ensureInited();
       FcmService.registerForegroundHandlers();
       if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
@@ -242,6 +249,8 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
 
       unawaited(ComisionViajePctService.refresh(force: true));
       ComisionViajePctService.startPeriodicRefresh();
+      unawaited(FinanceConfigService.ensureStarted());
+      unawaited(ProductosConfigService.ensureStarted());
 
       unawaited(
         AnalyticsRai.logFunnel(
@@ -355,23 +364,11 @@ class _RaiAppState extends State<RaiApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       PushService.registerNotificationOpenHandlers();
       PushService.consumeInitialNotificationIfAny();
-      final bool isDesktop =
-          defaultTargetPlatform == TargetPlatform.windows ||
-              defaultTargetPlatform == TargetPlatform.macOS;
-      if (!isDesktop) {
-        PoolDeepLink.install();
-      }
     });
   }
 
   @override
   void dispose() {
-    final bool isDesktop =
-        defaultTargetPlatform == TargetPlatform.windows ||
-            defaultTargetPlatform == TargetPlatform.macOS;
-    if (!isDesktop) {
-      PoolDeepLink.dispose();
-    }
     super.dispose();
   }
 
@@ -532,7 +529,7 @@ class _RaiAppState extends State<RaiApp> {
               const ProgramarViaje(modoAhora: true),
           '/programar_viaje': (_) => const ProgramarViaje(modoAhora: false),
           '/programar_viaje_multi': (_) => const ProgramarViajeMulti(),
-          '/viaje_en_curso_cliente': (_) => const ViajeEnCursoCliente(),
+          '/viaje_en_curso_cliente': (_) => const ClientePantallaViajeActivo(),
           '/historial_viajes_cliente': (_) => const HistorialViajesCliente(),
           '/metodos_pago': (_) => const MetodosPago(),
           '/espera_asignacion_turismo': (context) {
@@ -660,10 +657,6 @@ class _AuthGate extends StatelessWidget {
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, authSnap) {
         final user = authSnap.data ?? FirebaseAuth.instance.currentUser;
-        if (authSnap.connectionState == ConnectionState.waiting &&
-            user == null) {
-          return _raiSplashScaffold();
-        }
         if (user == null) {
           final bool isDesktop =
               defaultTargetPlatform == TargetPlatform.windows ||
@@ -685,37 +678,9 @@ class _AuthGate extends StatelessWidget {
             }
 
             if (!snap.hasData || !snap.data!.exists) {
-              return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                future: () async {
-                  await ensureUsuarioDoc(user);
-                  return doc.get();
-                }(),
-                builder: (context, ensured) {
-                  if (ensured.connectionState != ConnectionState.done) {
-                    return _raiSplashScaffold();
-                  }
-                  if (ensured.hasError) {
-                    return Scaffold(
-                      backgroundColor: Colors.black,
-                      body: Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            'No pudimos preparar tu perfil.\n${ensured.error}',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                        ),
-                      ),
-                    );
-                  }
-                  final fresh = ensured.data;
-                  if (fresh == null || !fresh.exists) {
-                    return const SeleccionUsuario();
-                  }
-                  return _buildGateForUsuarioData(
-                      context, user, fresh.data() ?? {});
-                },
+              return _EnsureUsuarioDocGate(
+                user: user,
+                docRef: doc,
               );
             }
 
@@ -734,4 +699,69 @@ Widget _buildGateForUsuarioData(
   Map<String, dynamic> data,
 ) {
   return RaiIdentityRouter.buildGateForUsuarioData(context, user, data);
+}
+
+/// Crea `usuarios/{uid}` una sola vez (future estable; evita parpadeo).
+class _EnsureUsuarioDocGate extends StatefulWidget {
+  const _EnsureUsuarioDocGate({
+    required this.user,
+    required this.docRef,
+  });
+
+  final User user;
+  final DocumentReference<Map<String, dynamic>> docRef;
+
+  @override
+  State<_EnsureUsuarioDocGate> createState() => _EnsureUsuarioDocGateState();
+}
+
+class _EnsureUsuarioDocGateState extends State<_EnsureUsuarioDocGate> {
+  late final Future<DocumentSnapshot<Map<String, dynamic>>> _ensureFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureFuture = _load();
+  }
+
+  Future<DocumentSnapshot<Map<String, dynamic>>> _load() async {
+    await _AuthGate.ensureUsuarioDoc(widget.user);
+    return widget.docRef.get();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: _ensureFuture,
+      builder: (context, ensured) {
+        if (ensured.connectionState != ConnectionState.done) {
+          return _raiSplashScaffold();
+        }
+        if (ensured.hasError) {
+          return Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'No pudimos preparar tu perfil.\n${ensured.error}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ),
+            ),
+          );
+        }
+        final fresh = ensured.data;
+        if (fresh == null || !fresh.exists) {
+          return const SeleccionUsuario();
+        }
+        return _buildGateForUsuarioData(
+          context,
+          widget.user,
+          fresh.data() ?? {},
+        );
+      },
+    );
+  }
 }

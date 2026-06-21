@@ -5,8 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart' as fs;
 
 import '../../widgets/viaje_card.dart';
 import '../../servicios/distancia_service.dart';
-
-const int kAhoraUmbralMin = 10;
+import '../../utils/trip_publish_windows.dart';
 
 // Estados activos del cliente (excluye completado/cancelado)
 const List<String> _kEstadosActivos = <String>[
@@ -79,8 +78,8 @@ class _ListaViajes extends StatelessWidget {
     );
   }
 
-  bool _esAhora(DateTime fecha) => !fecha
-      .isAfter(DateTime.now().add(const Duration(minutes: kAhoraUmbralMin)));
+  bool _esAhora(DateTime fecha) =>
+      TripPublishWindows.esAhoraPorFechaPickup(fecha, DateTime.now());
 
   @override
   Widget build(BuildContext context) {

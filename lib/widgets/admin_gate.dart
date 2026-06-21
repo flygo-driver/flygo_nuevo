@@ -1,10 +1,13 @@
 // lib/widgets/admin_gate.dart
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 // Importa el panel admin desde donde realmente está en tu proyecto.
 import '../pantallas/admin/admin_centro_operaciones.dart';
+import '../servicios/launch_config_bootstrap.dart';
 import '../servicios/roles_service.dart';
 
 class AdminGate extends StatelessWidget {
@@ -36,7 +39,7 @@ class AdminGate extends StatelessWidget {
             .toLowerCase();
 
         if (RolesService.esRolAdmin(rolUsuario)) {
-          return const AdminCentroOperaciones();
+          return const _AdminCentroConBootstrap();
         }
 
         // 2do stream (fallback): roles/{uid}
@@ -55,7 +58,7 @@ class AdminGate extends StatelessWidget {
                 .trim()
                 .toLowerCase();
             if (RolesService.esRolAdmin(rolDoc)) {
-              return const AdminCentroOperaciones();
+              return const _AdminCentroConBootstrap();
             }
 
             // Ninguna fuente dijo admin
@@ -65,6 +68,25 @@ class AdminGate extends StatelessWidget {
       },
     );
   }
+}
+
+class _AdminCentroConBootstrap extends StatefulWidget {
+  const _AdminCentroConBootstrap();
+
+  @override
+  State<_AdminCentroConBootstrap> createState() =>
+      _AdminCentroConBootstrapState();
+}
+
+class _AdminCentroConBootstrapState extends State<_AdminCentroConBootstrap> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(LaunchConfigBootstrap.ensureProduccionSoportable());
+  }
+
+  @override
+  Widget build(BuildContext context) => const AdminCentroOperaciones();
 }
 
 class _NoAuth extends StatelessWidget {

@@ -36,6 +36,17 @@ test("bloqueoOperativoPorComisionEfectivo: comisión legacy >= umbral", () => {
   );
 });
 
+test("bloqueoOperativoPorComisionEfectivo: cualquier comisión pendiente bloquea", () => {
+  assert.equal(
+    bloqueoOperativoPorComisionEfectivo({
+      comisionPendiente: 25.5,
+      primerViajeComisionGratisConsumido: true,
+      saldoPrepagoComisionRd: 500,
+    }),
+    true,
+  );
+});
+
 test("taxistaSinBloqueoPrepagoOperativo: libre con billetera vacía", () => {
   assert.equal(taxistaSinBloqueoPrepagoOperativo({}, undefined), true);
 });

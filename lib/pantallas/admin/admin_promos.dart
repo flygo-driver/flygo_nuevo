@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
+import 'package:flygo_nuevo/widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 
 /// Panel de Promociones M×K (oculto para cliente)
 /// Doc: /config/promo_3x1  {activa:bool, porcentaje:int, modo:String "MxK", m:int, k:int}
@@ -174,11 +176,9 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        title: const Text('Promociones (M×K)',
-            style: TextStyle(color: Colors.white)),
-        centerTitle: true,
+      drawer: const AdminDrawer(),
+      appBar: const AdminAppBar(
+        title: 'Promociones (M×K)',
       ),
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
@@ -200,7 +200,7 @@ class _AdminPromosPageState extends State<AdminPromosPage> {
                         'Si está OFF, el sistema cobra precio normal.',
                         style: TextStyle(color: Colors.white60),
                       ),
-                      activeColor: Colors.greenAccent,
+                      activeThumbColor: Colors.greenAccent,
                     ),
                     const SizedBox(height: 12),
                     const Text('Presets rápidos',

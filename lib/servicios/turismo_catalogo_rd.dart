@@ -28,6 +28,30 @@ class TurismoLugar {
   });
 
   String get label => '$nombre • $ciudad';
+
+  TurismoLugar copyWith({
+    String? id,
+    String? nombre,
+    String? ciudad,
+    String? subtipo,
+    double? lat,
+    double? lon,
+    String? descripcion,
+    String? imagen,
+    int? popularidad,
+  }) {
+    return TurismoLugar(
+      id: id ?? this.id,
+      nombre: nombre ?? this.nombre,
+      ciudad: ciudad ?? this.ciudad,
+      subtipo: subtipo ?? this.subtipo,
+      lat: lat ?? this.lat,
+      lon: lon ?? this.lon,
+      descripcion: descripcion ?? this.descripcion,
+      imagen: imagen ?? this.imagen,
+      popularidad: popularidad ?? this.popularidad,
+    );
+  }
 }
 
 class TurismoCatalogoRD {
@@ -48,6 +72,93 @@ class TurismoCatalogoRD {
   static const String lago = 'LAGO';
   static const String museo = 'MUSEO';
   static const String atraccion = 'ATRACCION';
+
+  static const List<String> subtiposValidos = [
+    aeropuerto,
+    muelle,
+    zonaColonial,
+    ciudad,
+    playa,
+    resort,
+    hotel,
+    tour,
+    parque,
+    montana,
+    cascada,
+    lago,
+    museo,
+    atraccion,
+  ];
+
+  /// Orden estable de pestañas en el selector de catálogo.
+  static const List<String> ordenSubtiposCatalogo = [
+    aeropuerto,
+    muelle,
+    zonaColonial,
+    playa,
+    resort,
+    ciudad,
+    tour,
+    montana,
+    cascada,
+    atraccion,
+    parque,
+    hotel,
+    museo,
+    lago,
+  ];
+
+  /// Límites aproximados de RD (incluye islas y frontera).
+  static bool coordenadasValidasRd(double lat, double lon) {
+    if (!lat.isFinite || !lon.isFinite) return false;
+    if (lat.abs() < 1e-6 && lon.abs() < 1e-6) return false;
+    return lat >= 17.0 && lat <= 20.5 && lon >= -72.5 && lon <= -68.0;
+  }
+
+  /// Corrige lat/lon invertidos u otros errores típicos de carga manual.
+  static ({double lat, double lon})? corregirCoordenadasRd(
+    double lat,
+    double lon,
+  ) {
+    if (coordenadasValidasRd(lat, lon)) return (lat: lat, lon: lon);
+    if (coordenadasValidasRd(lon, lat)) return (lat: lon, lon: lat);
+    return null;
+  }
+
+  /// Normaliza subtipo de Firestore/admin al enum del catálogo.
+  static String normalizarSubtipo(String? raw) {
+    final sub = (raw ?? '').trim().toUpperCase().replaceAll(' ', '_');
+    if (subtiposValidos.contains(sub)) return sub;
+
+    if (sub.contains('AEROPUERTO') ||
+        sub.contains('AIRPORT') ||
+        sub.contains('SDQ') ||
+        sub.contains('PUJ') ||
+        sub.contains('STI')) {
+      return aeropuerto;
+    }
+    if (sub.contains('PLAYA') || sub.contains('BEACH')) return playa;
+    if (sub.contains('MUELLE') || sub.contains('PUERTO')) return muelle;
+    if (sub.contains('ZONA') && sub.contains('COLONIAL')) return zonaColonial;
+    if (sub.contains('CIUDAD') || sub.contains('CENTRO')) return ciudad;
+    if (sub.contains('RESORT')) return resort;
+    if (sub.contains('HOTEL')) return hotel;
+    if (sub.contains('TOUR') || sub.contains('EXCURSION')) return tour;
+    if (sub.contains('PARQUE') || sub.contains('PARK')) return parque;
+    if (sub.contains('MONTANA') || sub.contains('MONTAÑA')) return montana;
+    if (sub.contains('CASCADA') || sub.contains('SALTO')) return cascada;
+    if (sub.contains('LAGO') || sub.contains('LAGUNA')) return lago;
+    if (sub.contains('MUSEO')) return museo;
+    if (sub.contains('ATRACCION') || sub.contains('ATRACCIÓN')) {
+      return atraccion;
+    }
+    return ciudad;
+  }
+
+  /// Indica si el destino tiene coords listas para cotizar distancia.
+  static bool listoParaCotizar(TurismoLugar lugar) {
+    return corregirCoordenadasRd(lugar.lat, lugar.lon) != null;
+  }
 
   // ==========================
   // ✅ LISTA GLOBAL (MUY COMPLETA) - AHORA CON DESCRIPCIÓN

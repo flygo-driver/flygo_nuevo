@@ -1,8 +1,11 @@
 // lib/servicios/notification_service.dart
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:flygo_nuevo/app_flavor.dart';
 
 /// Notificaciones locales con sonido + anti-spam (dedupe + debounce).
 /// Requisitos:
@@ -31,6 +34,12 @@ class NotificationService {
   static const String _channelId = 'rai_driver_offers_v1'; // ✅ NUEVO ID
   static const String _channelName = 'Viajes disponibles';
   static const String _channelDesc = 'Alertas de nuevos viajes';
+
+  /// Cliente — catálogo Giras por cupos (independiente del timbre del conductor).
+  static const String _girasClienteChannelId = 'rai_giras_cupos_cliente_v1';
+  static const String _girasClienteChannelName = 'Giras por cupos';
+  static const String _girasClienteChannelDesc =
+      'Nuevas salidas y avisos del catálogo de giras';
 
   /// Requisitos:
   /// - Coloca el audio en: android/app/src/main/res/raw/notification.wav  (minúsculas)
@@ -90,6 +99,18 @@ class NotificationService {
         ),
       );
 
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _girasClienteChannelId,
+          _girasClienteChannelName,
+          description: _girasClienteChannelDesc,
+          importance: Importance.high,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound(_rawSound),
+          enableVibration: true,
+        ),
+      );
+
       // Android 13+: pedir permiso si el plugin lo expone
       try {
         await android?.requestNotificationsPermission();
@@ -106,15 +127,38 @@ class NotificationService {
     }
   }
 
+  /// Timbre de ofertas del pool: solo conductor (nunca pasajero).
+  static bool get _timbrePoolPermitido => !isClienteFlavor;
+
+  /// Timbre / bandeja del catálogo Giras por cupos: solo cliente.
+  static bool get _girasClientePermitido => isClienteFlavor;
+
+  /// Marca un viaje como ya notificado para no reproducir timbre de pool
+  /// (p. ej. el pasajero acaba de crear su propio pedido).
+  Future<void> marcarViajePropioSinTimbre(String viajeId) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return;
+    await ensureInited();
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList(_kSeenIds) ?? <String>[];
+    if (ids.contains(id)) return;
+    await _markSeen(
+      prefs,
+      ids,
+      id,
+      DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
   /// Timbre inmediato (app abierta) con el mismo WAV que el canal Android.
   Future<void> _playTimbreAsset() async {
     try {
       _timbrePlayer ??= AudioPlayer();
       await _timbrePlayer!.stop();
       await _timbrePlayer!.setReleaseMode(ReleaseMode.stop);
-      // El asset está declarado en pubspec.yaml como `assets/sounds/notification.wav`.
+      // audioplayers antepone `assets/` — no repetir en la ruta.
       await _timbrePlayer!.play(
-        AssetSource('assets/sounds/notification.wav'),
+        AssetSource('sounds/notification.wav'),
       );
     } catch (e, st) {
       debugPrint('Error timbre in-app: $e');
@@ -134,6 +178,7 @@ class NotificationService {
     required String title,
     required String body,
     required String payload,
+    bool playSound = true,
   }) async {
     await ensureInited();
     try {
@@ -148,8 +193,10 @@ class NotificationService {
         channelDescription: 'Mensajes y avisos del viaje en curso',
         importance: Importance.high,
         priority: Priority.high,
-        playSound: true,
-        sound: const RawResourceAndroidNotificationSound(_rawSound),
+        playSound: playSound,
+        sound: playSound
+            ? const RawResourceAndroidNotificationSound(_rawSound)
+            : null,
         enableVibration: true,
         styleInformation: BigTextStyleInformation(
           body,
@@ -159,7 +206,13 @@ class NotificationService {
       );
       final details = NotificationDetails(
         android: androidDetailsBody,
-        iOS: darwinDetails,
+        iOS: playSound
+            ? darwinDetails
+            : const DarwinNotificationDetails(
+                presentAlert: true,
+                presentBadge: true,
+                presentSound: false,
+              ),
       );
       final int notifId = payload.hashCode & 0x3fffffff;
       debugPrint('[FCM] showTripCommsLocal id=$notifId');
@@ -181,11 +234,136 @@ class NotificationService {
   /// había sido notificado antes). La pantalla [ViajeDisponible] evita repeticiones
   /// con `_vistosParaTimbre`.
   Future<void> playPoolOfferSoundInApp() async {
+    if (!_timbrePoolPermitido) return;
     try {
       await ensureInited();
       await _playTimbreAsset();
     } catch (e, st) {
       debugPrint('playPoolOfferSoundInApp: $e');
+      debugPrint(st.toString());
+    }
+  }
+
+  /// Timbre al abrir el catálogo Giras por cupos (cliente).
+  Future<void> playGiraCuposClienteSoundInApp() async {
+    if (!_girasClientePermitido) return;
+    try {
+      await ensureInited();
+      await _playTimbreAsset();
+    } catch (e, st) {
+      debugPrint('playGiraCuposClienteSoundInApp: $e');
+      debugPrint(st.toString());
+    }
+  }
+
+  /// Entrada al catálogo: un timbre + mensaje resumen (una vez por visita a la pantalla).
+  Future<void> notifyEntradaCatalogoGirasCliente({
+    required int salidasVisibles,
+    required int salidasNuevas,
+  }) async {
+    if (!_girasClientePermitido || salidasVisibles < 1) return;
+    await ensureInited();
+    try {
+      await HapticFeedback.mediumImpact();
+    } catch (_) {}
+    await playGiraCuposClienteSoundInApp();
+
+    final String titulo;
+    final String cuerpo;
+    if (salidasNuevas > 0) {
+      titulo = salidasNuevas == 1
+          ? 'Nueva salida por cupos'
+          : '$salidasNuevas nuevas salidas por cupos';
+      cuerpo =
+          '$salidasVisibles en el catálogo. Tocá para ver giras, tours y excursiones.';
+    } else {
+      titulo = 'Giras por cupos';
+      cuerpo =
+          '$salidasVisibles salida${salidasVisibles == 1 ? '' : 's'} disponible${salidasVisibles == 1 ? '' : 's'} para reservar.';
+    }
+
+    await _showGiraCuposClienteLocal(
+      notifId: 'entrada_giras_${DateTime.now().millisecondsSinceEpoch}'.hashCode &
+          0x7fffffff,
+      titulo: titulo,
+      cuerpo: cuerpo,
+      payload: 'giras_cupos_catalogo',
+    );
+  }
+
+  /// Nueva salida publicada mientras el cliente está en el catálogo.
+  Future<void> notifyGiraCuposCliente({
+    required String poolId,
+    required String titulo,
+    required String cuerpo,
+    bool skipSound = false,
+  }) async {
+    if (!_girasClientePermitido) return;
+    await ensureInited();
+
+    if (!skipSound) {
+      try {
+        await HapticFeedback.lightImpact();
+      } catch (_) {}
+      await playGiraCuposClienteSoundInApp();
+    }
+
+    await _showGiraCuposClienteLocal(
+      notifId: poolId.hashCode & 0x7fffffff,
+      titulo: titulo,
+      cuerpo: cuerpo,
+      payload: poolId,
+    );
+  }
+
+  Future<void> _showGiraCuposClienteLocal({
+    required int notifId,
+    required String titulo,
+    required String cuerpo,
+    required String payload,
+  }) async {
+    try {
+      const darwinDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+      final androidDetails = AndroidNotificationDetails(
+        _girasClienteChannelId,
+        _girasClienteChannelName,
+        channelDescription: _girasClienteChannelDesc,
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: false,
+        enableVibration: true,
+        styleInformation: BigTextStyleInformation(
+          cuerpo,
+          contentTitle: titulo,
+          summaryText: 'RAI Driver',
+        ),
+        category: AndroidNotificationCategory.event,
+        ticker: 'Giras por cupos',
+      );
+      await _plugin.show(
+        notifId,
+        titulo,
+        cuerpo,
+        NotificationDetails(android: androidDetails, iOS: darwinDetails),
+        payload: payload,
+      );
+    } catch (e, st) {
+      debugPrint('_showGiraCuposClienteLocal: $e');
+      debugPrint(st.toString());
+    }
+  }
+
+  /// Vibración in-app para ofertas nuevas del pool (sin repetir el WAV).
+  Future<void> vibratePoolOfferInApp() async {
+    try {
+      await HapticFeedback.heavyImpact();
+      await HapticFeedback.vibrate();
+    } catch (e, st) {
+      debugPrint('vibratePoolOfferInApp: $e');
       debugPrint(st.toString());
     }
   }
@@ -201,6 +379,7 @@ class NotificationService {
     required String cuerpo,
     bool skipSound = false,
   }) async {
+    if (!_timbrePoolPermitido) return;
     await ensureInited();
 
     final prefs = await SharedPreferences.getInstance();

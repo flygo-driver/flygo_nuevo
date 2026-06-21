@@ -97,7 +97,7 @@ class RaiDestinoDesdeVoz {
   ];
 
   static RaiDestinoDesdeVozAnalisis analizar(String raw) {
-    var text = raw.trim();
+    final text = raw.trim();
     if (text.isEmpty) {
       return RaiDestinoDesdeVozAnalisis(textoOriginal: text);
     }

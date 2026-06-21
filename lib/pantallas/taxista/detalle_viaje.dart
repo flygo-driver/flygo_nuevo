@@ -16,6 +16,8 @@ import '../../servicios/viajes_repo.dart';
 import '../../servicios/ubicacion_taxista.dart';
 import '../../servicios/roles_service.dart';
 import '../../servicios/pagos_taxista_repo.dart';
+import '../../servicios/taxista_operacion_gate.dart';
+import '../../navegacion/taxista_operacion_nav.dart';
 import '../../utils/viaje_pool_taxista_gate.dart';
 import '../../servicios/navegacion_externa_launcher.dart';
 import '../../servicios/navigation_service.dart';
@@ -176,34 +178,6 @@ class _DetalleViajeState extends State<DetalleViaje> {
     }
   }
 
-  String _mensajeClaimFallido(String res) {
-    switch (res) {
-      case 'no-existe':
-        return 'El viaje ya no existe.';
-      case 'estado-no-pendiente':
-        return 'El viaje ya no está pendiente.';
-      case 'ya-asignado':
-        return 'Ese viaje ya fue asignado.';
-      case 'acceptAfter-futuro':
-        return 'Aún no se libera.';
-      case 'publish-futuro':
-        return 'Aún no se publica.';
-      case 'reservado-otro':
-        return 'Reservado por otro taxista.';
-      case 'taxista-ocupado':
-        return 'Tienes un viaje activo.';
-      case 'bloqueado-pago-semanal':
-        return PagosTaxistaRepo.mensajeRecargaTomarViajes;
-      case 'bloqueado-comision-efectivo':
-        return PagosTaxistaRepo.mensajeRecargaTomarViajes;
-      default:
-        if (res.startsWith('permiso:')) {
-          return 'Permisos: ${res.split(':').last}';
-        }
-        return 'Error: $res';
-    }
-  }
-
   Future<void> _aceptarViaje(String viajeId) async {
     setState(() => _procesando = true);
     try {
@@ -232,6 +206,22 @@ class _DetalleViajeState extends State<DetalleViaje> {
         );
         return;
       }
+
+      final usrSnap = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user.uid)
+          .get();
+      final Map<String, dynamic> uData = usrSnap.data() ?? <String, dynamic>{};
+      final String poolModo =
+          ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(uData);
+      if (!mounted) return;
+      final bool bloqueadoPerfil =
+          await TaxistaOperacionNav.bloquearClaimSiPerfilIncompleto(
+        context,
+        uData: uData,
+        poolModoConductor: poolModo,
+      );
+      if (bloqueadoPerfil) return;
 
       final doc = await FirebaseFirestore.instance
           .collection('viajes')
@@ -330,7 +320,12 @@ class _DetalleViajeState extends State<DetalleViaje> {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(_mensajeClaimFallido(res)),
+              content: Text(
+                taxistaMensajeClaimFallido(
+                  res,
+                  poolModoConductor: poolModo,
+                ),
+              ),
               backgroundColor: Colors.orangeAccent,
             ),
           );
@@ -341,11 +336,10 @@ class _DetalleViajeState extends State<DetalleViaje> {
           return;
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_mensajeClaimFallido(res)),
-            backgroundColor: Colors.redAccent,
-          ),
+        await TaxistaOperacionNav.guiarTrasFalloClaim(
+          context,
+          res: res,
+          poolModoConductor: poolModo,
         );
         return;
       }
@@ -382,11 +376,10 @@ class _DetalleViajeState extends State<DetalleViaje> {
         );
       } else {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_mensajeClaimFallido(res)),
-            backgroundColor: Colors.redAccent,
-          ),
+        await TaxistaOperacionNav.guiarTrasFalloClaim(
+          context,
+          res: res,
+          poolModoConductor: poolModo,
         );
       }
     } catch (e) {

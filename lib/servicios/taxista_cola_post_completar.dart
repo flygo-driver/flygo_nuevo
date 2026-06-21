@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
@@ -28,6 +29,7 @@ class TaxistaColaPostCompletar {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
       final messenger = ScaffoldMessenger.maybeOf(context);
       final nav = Navigator.of(context, rootNavigator: true);
 

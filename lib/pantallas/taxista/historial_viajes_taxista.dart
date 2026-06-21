@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 
 class HistorialViajesTaxista extends StatefulWidget {
@@ -218,7 +219,14 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                             width: 2,
                           ),
                         ),
-                        child: Padding(
+                        child: InkWell(
+                          onTap: () => FacturaViaje.mostrar(
+                            context,
+                            viajeId: v.id,
+                            role: 'taxista',
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
                           padding: const EdgeInsets.all(16),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -347,6 +355,25 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                   ),
                                 ],
                               ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.receipt_long_rounded,
+                                    color: servicioColor,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Ver comprobante del viaje',
+                                    style: TextStyle(
+                                      color: servicioColor,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
                               if (v.tipoServicio == 'turismo' &&
                                   v.extras != null) ...[
                                 const SizedBox(height: 8),
@@ -385,6 +412,7 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                               ],
                             ],
                           ),
+                        ),
                         ),
                       );
                     },

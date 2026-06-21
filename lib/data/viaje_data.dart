@@ -1237,7 +1237,7 @@ class ViajeData {
         fh = DateTime.now();
       }
       final bool esAhora =
-          !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+          TripPublishWindows.esAhoraPorFechaPickup(fh, DateTime.now());
 
       tx.update(ref, <String, dynamic>{
         'estado': _estadoCanon(EstadosViaje.pendiente),

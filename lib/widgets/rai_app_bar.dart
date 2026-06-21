@@ -19,6 +19,9 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
   /// Pantallas secundarias (Cuenta → Apariencia): flecha si hay ruta anterior.
   final bool showBackWhenCanPop;
 
+  /// P. ej. [TabBar] en la pantalla principal del taxista.
+  final PreferredSizeWidget? bottom;
+
   const RaiAppBar({
     super.key,
     required this.title,
@@ -28,6 +31,7 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.leading,
     this.backWhenCanPop = false,
     this.showBackWhenCanPop = false,
+    this.bottom,
   });
 
   @override
@@ -90,9 +94,13 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
       actionsIconTheme: IconThemeData(color: fg),
       elevation: 0,
       surfaceTintColor: Colors.transparent,
+      bottom: bottom,
     );
   }
 
   @override
-  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+  Size get preferredSize {
+    final double bottomH = bottom?.preferredSize.height ?? 0;
+    return Size.fromHeight(kToolbarHeight + bottomH);
+  }
 }

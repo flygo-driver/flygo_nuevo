@@ -30,6 +30,12 @@ class FinanceConfigService {
   /// Fase 6: tarjeta AZUL en UI + callables (default off).
   static bool pagosConTarjetaAzulHabilitados = false;
 
+  /// Giras por cupos: cliente transfiere 100% a cuenta RAI (nuevas giras `recaudoModelo: central`).
+  static bool poolRecaudoCentralHabilitado = false;
+
+  /// Giras RAI-P: auto-verificar reserva cuando extracto banco ref+monto exacto (CF).
+  static bool poolRecaudoAutoVerificarConciliacion = false;
+
   static StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
   static bool _started = false;
 
@@ -68,6 +74,10 @@ class FinanceConfigService {
         _boolOr(data['qrRecaudoPopularHabilitado'], false);
     pagosConTarjetaAzulHabilitados =
         _boolOr(data['pagosConTarjetaAzulHabilitados'], false);
+    poolRecaudoCentralHabilitado =
+        _boolOr(data['poolRecaudoCentralHabilitado'], false);
+    poolRecaudoAutoVerificarConciliacion =
+        _boolOr(data['poolRecaudoAutoVerificarConciliacion'], false);
   }
 
   static bool _boolOr(dynamic raw, bool defaultValue) {

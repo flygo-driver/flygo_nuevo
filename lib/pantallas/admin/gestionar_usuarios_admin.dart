@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../servicios/admin_usuarios_lista_service.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
@@ -10,10 +11,13 @@ import 'package:flygo_nuevo/servicios/configuracion_globals_service.dart';
 import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
 import 'admin_regularizar_giras_taxista.dart';
 
-enum _TipoBusqueda { ninguna, uid, email, telefono, textoLocal }
+enum _TipoBusqueda { ninguna, uid, email, emailPrefijo, telefono, textoLocal }
 
 class GestionarUsuariosAdmin extends StatefulWidget {
-  const GestionarUsuariosAdmin({super.key});
+  const GestionarUsuariosAdmin({super.key, this.modoInicial = 'recientes'});
+
+  /// `bloqueados` = tienePagoPendiente; `bloqueados_admin` = bloqueado manual.
+  final String modoInicial;
 
   @override
   State<GestionarUsuariosAdmin> createState() => _GestionarUsuariosAdminState();
@@ -26,6 +30,12 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
   String _modoLista = 'recientes';
   int _limiteVisible = AdminUsuariosListaService.limiteInicial;
   int _ordenIdx = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _modoLista = widget.modoInicial;
+  }
 
   @override
   void dispose() {
@@ -98,6 +108,34 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error al cambiar el rol: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _uidsProcesando.remove(uid));
+    }
+  }
+
+  Future<void> _resincronizarBloqueo(String uid) async {
+    if (_uidsProcesando.contains(uid)) return;
+    setState(() => _uidsProcesando.add(uid));
+    try {
+      await PagosTaxistaRepo.sincronizarBloqueoOperativo(uid);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Bandera de bloqueo actualizada. Revisá «Bloqueados prepago» o Verificar pagos → Recargas.',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo sincronizar bloqueo: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -499,7 +537,8 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _usuariosListaStream() {
-    final limite = _modoLista == 'bloqueados'
+    final limite = _modoLista == 'bloqueados' ||
+            _modoLista == 'bloqueados_admin'
         ? AdminUsuariosListaService.limiteBloqueados
         : _limiteVisible;
     return AdminUsuariosListaService.streamLista(
@@ -514,6 +553,9 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     if (q.isEmpty) return _TipoBusqueda.ninguna;
     if (q.length >= 20) return _TipoBusqueda.uid;
     if (q.contains('@') && q.length >= 5) return _TipoBusqueda.email;
+    if (RegExp(r'^[a-zA-Z0-9._+-]{4,}$').hasMatch(q)) {
+      return _TipoBusqueda.emailPrefijo;
+    }
     final digits = q.replaceAll(RegExp(r'\D'), '');
     if (digits.length >= 7 && digits.length == q.replaceAll(' ', '').length) {
       return _TipoBusqueda.telefono;
@@ -571,12 +613,8 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Gestionar Usuarios',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: const AdminAppBar(
+        title: 'Gestionar Usuarios',
       ),
       body: Column(
         children: [
@@ -589,7 +627,7 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                   controller: _qCtrl,
                   style: TextStyle(color: AdminUi.onCard(context)),
                   decoration: InputDecoration(
-                    hintText: 'Buscar por nombre, email o UID...',
+                    hintText: 'Buscar email, prefijo (vestasopenask), UID o teléfono...',
                     hintStyle: TextStyle(
                         color:
                             AdminUi.secondary(context).withValues(alpha: 0.85)),
@@ -623,6 +661,7 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                     _modoChip('Taxistas', 'taxistas'),
                     _modoChip('Clientes', 'clientes'),
                     _modoChip('Bloqueados prepago', 'bloqueados'),
+                    _modoChip('Bloqueados ADM', 'bloqueados_admin'),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -717,6 +756,40 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
       );
     }
 
+    if (tipo == _TipoBusqueda.emailPrefijo) {
+      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: AdminUsuariosListaService.streamPorEmailPrefijo(q),
+        builder: (context, snap) => _wrapEstadoStream(
+          snap.connectionState,
+          snap.hasError,
+          snap.error,
+          onRetryFallback: null,
+          child: () {
+            final docs = snap.data?.docs ?? const [];
+            if (docs.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    'Sin usuario cuyo email empiece por «$q».\n'
+                    'Prueba el email completo con @ o el UID.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
+                ),
+              );
+            }
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              itemCount: docs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (_, i) => _buildUsuarioTile(docs[i]),
+            );
+          },
+        ),
+      );
+    }
+
     if (tipo == _TipoBusqueda.telefono) {
       final digits = q.replaceAll(RegExp(r'\D'), '');
       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -794,6 +867,7 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
         final rawDocs = snap.data?.docs ?? const [];
         final docs = _filtrarUsuarios(rawDocs);
         final puedeMas = _modoLista != 'bloqueados' &&
+            _modoLista != 'bloqueados_admin' &&
             _limiteVisible < AdminUsuariosListaService.limiteMaximo &&
             rawDocs.length >= _limiteVisible;
 
@@ -862,7 +936,8 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                   ),
                 ),
               ),
-            if (_modoLista != 'bloqueados')
+            if (_modoLista != 'bloqueados' &&
+                _modoLista != 'bloqueados_admin')
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
@@ -907,7 +982,16 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     final email = _s(m['email']).trim();
     final rol = _normalizarRolUi(_s(m['rol']));
     final bloqueado = _b(m['bloqueado']);
+    final prepagoBloq = _b(m['tienePagoPendiente']);
     final procesando = _uidsProcesando.contains(uid);
+    final String estadoEtiqueta = bloqueado
+        ? 'BLOQ. ADM'
+        : prepagoBloq
+            ? 'PREPAGO'
+            : 'OK';
+    final Color estadoColor = bloqueado || prepagoBloq
+        ? Colors.redAccent
+        : Colors.greenAccent;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -949,21 +1033,18 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: bloqueado
+                  color: (bloqueado || prepagoBloq)
                       ? Colors.red.withValues(alpha: 0.15)
                       : Colors.green.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(
-                    color: bloqueado
-                        ? Colors.redAccent.withValues(alpha: 0.5)
-                        : Colors.greenAccent.withValues(alpha: 0.4),
+                    color: estadoColor.withValues(alpha: 0.5),
                   ),
                 ),
                 child: Text(
-                  bloqueado ? 'BLOQUEADO' : 'OK',
+                  estadoEtiqueta,
                   style: TextStyle(
-                    color:
-                        bloqueado ? Colors.redAccent : Colors.greenAccent,
+                    color: estadoColor,
                     fontWeight: FontWeight.w800,
                     fontSize: 12,
                   ),
@@ -974,7 +1055,7 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
           const SizedBox(height: 10),
           Text('Rol: ${rol.isEmpty ? "—" : rol}',
               style: TextStyle(color: AdminUi.secondary(context))),
-          if (rol == Roles.taxista && _b(m['tienePagoPendiente'])) ...[
+          if (rol == Roles.taxista && prepagoBloq) ...[
             const SizedBox(height: 8),
             Container(
               padding:
@@ -987,7 +1068,8 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
               ),
               child: Text(
                 'Bloqueo automático (pool/viajes): prepago bajo o comisión legacy ≥ RD\$'
-                '${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}',
+                '${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}. '
+                'Aprobá recarga en Verificar pagos → Recargas prepago.',
                 style: TextStyle(
                   color: AdminUi.onCard(context),
                   fontSize: 11.5,
@@ -1002,6 +1084,13 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
             spacing: 10,
             runSpacing: 10,
             children: [
+              if (rol == Roles.taxista)
+                OutlinedButton.icon(
+                  onPressed:
+                      procesando ? null : () => _resincronizarBloqueo(uid),
+                  icon: const Icon(Icons.sync, size: 16),
+                  label: const Text('Sync bloqueo'),
+                ),
               _rolBtn(uid, 'cliente', rol, procesando),
               _rolBtn(uid, 'taxista', rol, procesando),
               _rolBtn(uid, 'admin', rol, procesando),

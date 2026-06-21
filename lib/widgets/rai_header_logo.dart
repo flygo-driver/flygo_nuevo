@@ -19,6 +19,9 @@ class RaiHeaderLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    final Color fallbackFg = cs.primary;
+
     final Widget image = Image.asset(
       assetPath,
       height: height,
@@ -27,6 +30,26 @@ class RaiHeaderLogo extends StatelessWidget {
       filterQuality: FilterQuality.high,
       gaplessPlayback: true,
       semanticLabel: semanticLabel,
+      errorBuilder: (BuildContext context, Object error, StackTrace? stackTrace) {
+        return Container(
+          height: height,
+          width: height,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: fallbackFg.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(height * 0.18),
+          ),
+          child: Text(
+            'R',
+            style: TextStyle(
+              color: fallbackFg,
+              fontWeight: FontWeight.w900,
+              fontSize: height * 0.58,
+              height: 1,
+            ),
+          ),
+        );
+      },
     );
 
     return SizedBox(

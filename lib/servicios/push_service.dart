@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/servicios/fcm_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/app_flavor.dart';
 
 class PushService {
   PushService._();
@@ -98,7 +99,7 @@ class PushService {
       await _fm.setForegroundNotificationPresentationOptions(
         alert: true,
         badge: true,
-        sound: true,
+        sound: !isClienteFlavor,
       );
     }
 

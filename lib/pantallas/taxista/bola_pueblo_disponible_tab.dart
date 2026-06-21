@@ -1,9 +1,10 @@
 // Pestaña "Bola" en Viaje disponible (conductor): una sola lista desplazable (evita overflow).
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
-import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_viaje_activo_page.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 
@@ -225,18 +226,11 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
             }
             final docsAll = snap.data?.docs ?? const [];
             final docs = docsAll.where((d) {
-              final m = d.data();
-              final estado = (m['estado'] ?? '').toString();
-              final ownerUid = (m['createdByUid'] ?? '').toString();
-              final uidTx = (m['uidTaxista'] ?? '').toString();
-              final uidCli = (m['uidCliente'] ?? '').toString();
-              if (estado == 'abierta' || estado == 'en_curso') return true;
-              if (estado == 'acordada') {
-                return ownerUid == user.uid ||
-                    uidTx == user.uid ||
-                    uidCli == user.uid;
-              }
-              return false;
+              return BolaPuebloRepo.visibleEnTablero(
+                d.data(),
+                user.uid,
+                bolaId: d.id,
+              );
             }).toList();
 
             if (docs.isEmpty) {
@@ -275,10 +269,10 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
                   rol: rol,
                   puedeOperarEnPool: puedeOperarPool,
                   onAbrirModoViaje: (bolaId) {
-                    Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            BolaPuebloViajeActivoPage(bolaId: bolaId),
+                    unawaited(
+                      BolaPuebloDialogs.abrirModoViajeBolaPorId(
+                        context: context,
+                        bolaId: bolaId,
                       ),
                     );
                   },

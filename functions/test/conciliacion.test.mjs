@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  debeAutoConfirmarPoolConciliacion,
   evaluarMatchConciliacionViaje,
   precioCentsViaje,
 } from "../lib/conciliacion.js";
 import { generarReferenciaRecaudoViaje } from "../lib/viaje_referencia.js";
+import { generarReferenciaRecaudoPool } from "../lib/pool_referencia.js";
 
 test("precioCentsViaje prefiere precio_cents", () => {
   assert.equal(precioCentsViaje({ precio_cents: 125000, precio: 1 }), 125000);
@@ -45,4 +47,33 @@ test("evaluarMatchConciliacionViaje rechaza ref distinta", () => {
     montoViajeCents: 50000,
   });
   assert.equal(r.ok, false);
+});
+
+test("debeAutoConfirmarPoolConciliacion solo RAI-P monto exacto con flags", () => {
+  const flagsOn = {
+    conciliacionAutomaticaHabilitada: true,
+    poolRecaudoAutoVerificarConciliacion: true,
+  };
+  const ref = generarReferenciaRecaudoPool("pool1", "res1");
+  const match = evaluarMatchConciliacionViaje({
+    referenciaMovimiento: ref,
+    montoMovimientoCents: 200000,
+    referenciaViaje: ref,
+    montoViajeCents: 200000,
+  });
+  assert.equal(debeAutoConfirmarPoolConciliacion(match.matchReglas, flagsOn), true);
+  assert.equal(
+    debeAutoConfirmarPoolConciliacion(match.matchReglas, {
+      ...flagsOn,
+      poolRecaudoAutoVerificarConciliacion: false,
+    }),
+    false,
+  );
+  assert.equal(
+    debeAutoConfirmarPoolConciliacion(
+      ["ref_exacta", "monto_discrepancia"],
+      flagsOn,
+    ),
+    false,
+  );
 });

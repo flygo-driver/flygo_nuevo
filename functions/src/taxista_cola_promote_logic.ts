@@ -53,8 +53,7 @@ export function bloqueoOperativoPorComisionEfectivo(
   minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
 ): boolean {
   const pend = comisionPendienteRdFromBilletera(billeData);
-  if (pend + 1e-9 >= UMBRAL_COMISION_LEGACY_RD) return true;
-  if (pend > 1e-6) return false;
+  if (pend > 1e-6) return true;
   if (billeData?.primerViajeComisionGratisConsumido !== true) return false;
   return saldoDisponiblePrepagoRdFromBilletera(billeData) + 1e-9 < minimoOperativoRd;
 }

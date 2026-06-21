@@ -8,10 +8,14 @@ class RaiDistanciaCotizacion {
     required this.km,
     required this.estimadoOffline,
     this.directions,
+    this.fuente = 'desconocida',
   });
 
   final double km;
   final bool estimadoOffline;
+
+  /// `directions` = Google carretera; `haversine` = línea recta (offline/fallback).
+  final String fuente;
   final DirectionsResult? directions;
 }
 
@@ -30,7 +34,10 @@ class RaiOfflineCotizacionService {
 
   static bool get estaOffline => RaiConnectivityService.instance.isOffline;
 
-  /// Distancia para cotizar: sin red usa haversine; con red intenta Directions.
+  static bool _kmValido(double km, double maxKm) =>
+      km.isFinite && km > 0 && !DistanciaService.tramoEsImposible(km, maxKm: maxKm);
+
+  /// Distancia para cotizar: con red usa **km por carretera** (Directions); sin red, haversine.
   static Future<RaiDistanciaCotizacion?> resolverDistancia({
     required double originLat,
     required double originLon,
@@ -39,6 +46,7 @@ class RaiOfflineCotizacionService {
     bool useDirections = true,
     bool withTraffic = true,
     String region = 'do',
+    double maxKmCotizable = DistanciaService.maxKmCotizableDefault,
   }) async {
     final double haversine = DistanciaService.calcularDistancia(
       originLat,
@@ -46,14 +54,14 @@ class RaiOfflineCotizacionService {
       destLat,
       destLon,
     );
-    if (haversine <= 0 || DistanciaService.tramoEsImposible(haversine)) {
-      return null;
-    }
+    if (haversine <= 0) return null;
 
     if (estaOffline || !useDirections) {
+      if (!_kmValido(haversine, maxKmCotizable)) return null;
       return RaiDistanciaCotizacion(
         km: haversine,
         estimadoOffline: estaOffline,
+        fuente: 'haversine',
       );
     }
 
@@ -66,20 +74,23 @@ class RaiOfflineCotizacionService {
         withTraffic: withTraffic,
         region: region,
       );
-      if (dir != null && dir.km > 0) {
+      if (dir != null && dir.km > 0 && _kmValido(dir.km, maxKmCotizable)) {
         return RaiDistanciaCotizacion(
           km: dir.km,
           estimadoOffline: false,
           directions: dir,
+          fuente: 'directions',
         );
       }
     } catch (_) {
       // Fallback local si Directions falla con red inestable.
     }
 
+    if (!_kmValido(haversine, maxKmCotizable)) return null;
     return RaiDistanciaCotizacion(
       km: haversine,
       estimadoOffline: false,
+      fuente: 'haversine',
     );
   }
 }

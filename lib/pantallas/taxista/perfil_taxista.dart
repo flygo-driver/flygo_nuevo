@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'panel_taxista.dart' show PerfilFotoScreen; // ya lo tienes ahí
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
 
 class PerfilTaxista extends StatelessWidget {
   const PerfilTaxista({super.key});
@@ -134,9 +135,10 @@ class PerfilTaxista extends StatelessWidget {
                                 .mensajeRecargaActivarDisponible),
                             action: SnackBarAction(
                               label: 'Mis pagos',
-                              onPressed: () {
-                                Navigator.of(context).pushNamed('/mis_pagos');
-                              },
+                              onPressed: () => TaxistaFinanzasNav.abrirMisPagos(
+                                context,
+                                scrollToRecargaSection: true,
+                              ),
                             ),
                           ),
                         );

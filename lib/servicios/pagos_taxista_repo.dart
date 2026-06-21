@@ -150,15 +150,21 @@ class PagosTaxistaRepo {
   static const String mensajeBloqueoAppSaldoRecargas =
       'Saldo prepago disponible para comisión en efectivo insuficiente (mín. RD\$200 tras el '
       'primer viaje en efectivo). Recarga en Mis pagos; al aprobar el admin se acredita. '
-      'Si tenés comisión legacy pendiente, ese mismo depósito primero baja esa deuda y el '
+      'Si tenés comisión pendiente, ese mismo depósito primero baja esa deuda y el '
       'resto queda en prepago.';
 
-  /// Legacy `comisionPendiente` ≥ tope: bloquea aunque el prepago en pantalla sea alto.
+  /// Cualquier comisión efectivo pendiente bloquea hasta regularizar con admin.
+  static const String mensajeBloqueoComisionPendienteApp =
+      'Tenés comisión en efectivo pendiente de pago a RAI. No podés tomar viajes ni publicar '
+      'giras hasta depositar y que el administrador verifique tu comprobante en Mis pagos. '
+      'El monto verificado paga primero esa deuda; el resto queda en tu prepago.';
+
+  /// Legacy `comisionPendiente` ≥ tope (mismo bloqueo; mensaje con cifra de referencia).
   static const String mensajeBloqueoComisionLegacyTopeApp =
-      'Tu comisión en efectivo pendiente (legacy) superó el tope permitido (RD\$500). Por eso '
-      'el acceso está cortado aunque veas saldo en prepago. Deposita y sube el comprobante en '
-      'Mis pagos: al aprobar el admin, el monto verificado paga primero esa comisión pendiente '
-      'y lo que sobra queda en tu prepago para los próximos viajes.';
+      'Tu comisión en efectivo pendiente superó el tope de referencia (RD\$500). El acceso '
+      'está suspendido hasta que deposites y el administrador verifique el comprobante en '
+      'Mis pagos. El monto verificado paga primero esa comisión pendiente y el resto suma '
+      'a tu prepago.';
 
   /// Suma de comisiones de giras/pool marcadas pendientes de validación admin ≥ tope.
   static const String mensajeBloqueoDeudaPoolAdminApp =
@@ -171,12 +177,10 @@ class PagosTaxistaRepo {
       'Tenés pagos semanales del servicio vencidos. Regularizá en Mis pagos para volver a operar.';
 
   static String get mensajeRecargaAccesoPantallaCompleta =>
-      'Tu acceso queda suspendido: agotaste tu saldo prepago de comisión en efectivo. '
-      'Recarga (sugerido RD\$${minSaldoPrepagoComisionRd.toStringAsFixed(0)} o más) '
-      'para seguir operando; el ${PlataformaEconomia.etiquetaPorcentajeComision()} de cada viaje en efectivo se descuenta del saldo, '
-      'o regularizar comisión legacy ≥ RD\$${umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}. '
-      'Recarga desde Mis pagos; al verificar el admin, el monto paga primero el legacy pendiente '
-      '(si hay) y el resto suma al prepago.';
+      'Tu acceso queda suspendido: sin saldo prepago suficiente o con comisión en efectivo '
+      'pendiente. Recarga (sugerido RD\$${minSaldoPrepagoComisionRd.toStringAsFixed(0)} o más) '
+      'en Mis pagos; al verificar el admin, el monto paga primero cualquier comisión pendiente '
+      'y el resto queda en prepago para seguir operando.';
 
   /// `true` si la deuda legacy alcanzó el tope (bloquea aunque el prepago bruto sea alto).
   static bool bloqueoPorComisionLegacyTope(Map<String, dynamic>? billeData) {
@@ -184,17 +188,11 @@ class PagosTaxistaRepo {
         umbralComisionLegacyBloqueoRd - 1e-6;
   }
 
-  /// Mínimo que debe aprobarse en una recarga (todo va primero a legacy) para que
-  /// [comisionPendiente] quede **debajo** del tope y se quite el bloqueo por legacy.
-  /// Coherente con [bloqueoPorComisionLegacyTope] (≥ [umbralComisionLegacyBloqueoRd] bloquea).
+  /// Con bloqueo estricto: cualquier [comisionPendiente] > 0 exige liquidar toda la deuda legacy.
   static double montoMinimoRecargaParaSalirBloqueoLegacyRd(
     double comisionPendienteRd,
   ) {
-    final p = comisionPendienteRd;
-    if (p + 1e-9 < umbralComisionLegacyBloqueoRd) return 0;
-    return double.parse(
-      (p - umbralComisionLegacyBloqueoRd + 0.01).clamp(0, 1e9).toStringAsFixed(2),
-    );
+    return montoParaLiquidarLegacyCompletoRd(comisionPendienteRd);
   }
 
   /// Monto que, si entero en recarga aprobada y va todo a legacy, deja `comisionPendiente` en 0.
@@ -223,8 +221,12 @@ class PagosTaxistaRepo {
     required Map<String, dynamic>? usuarioData,
   }) {
     if (deudaSemanalVencida) return mensajeBloqueoDeudaSemanalApp;
-    if (bloqueoPorComisionLegacyTope(billeData)) {
-      return mensajeBloqueoComisionLegacyTopeApp;
+    final pend = comisionPendienteDesdeBilletera(billeData);
+    if (pend > 1e-6) {
+      if (pend >= umbralComisionLegacyBloqueoRd - 1e-6) {
+        return mensajeBloqueoComisionLegacyTopeApp;
+      }
+      return mensajeBloqueoComisionPendienteApp;
     }
     if (bloqueoOperativoPorComisionEfectivo(billeData)) {
       return mensajeBloqueoAppSaldoRecargas;
@@ -238,14 +240,13 @@ class PagosTaxistaRepo {
     return mensajeRecargaAccesoPantallaCompleta;
   }
 
-  /// Misma regla que `bloqueoOperativoPrepago` en Cloud Functions.
+  /// Misma regla que `bloqueoOperativoPrepago` en Cloud Functions (bloqueo estricto).
   static bool bloqueoOperativoPorComisionEfectivo(
     Map<String, dynamic>? billeData, {
     double? minimoOperativoRd,
   }) {
     final pend = comisionPendienteDesdeBilletera(billeData);
-    if (pend >= umbralComisionLegacyBloqueoRd - 1e-6) return true;
-    if (pend > 1e-6) return false;
+    if (pend > 1e-6) return true;
     if (!primerViajeComisionGratisConsumido(billeData)) return false;
     final minimo = minimoOperativoRd ?? minSaldoPrepagoComisionRd;
     return saldoDisponiblePrepagoComisionDesdeBilletera(billeData) + 1e-9 <
@@ -276,15 +277,35 @@ class PagosTaxistaRepo {
     return bloqueoOperativoPorComisionEfectivo(b.data());
   }
 
-  /// Bloqueo operativo (pool, tomar viajes): saldo prepago bajo o comisión legacy ≥ tope.
+  /// Bloqueo operativo (pool, tomar viajes): saldo prepago bajo o cualquier comisión pendiente.
   /// La deuda semanal abierta se gestiona en Mis pagos y no cierra el pool por sí sola.
   static Future<bool> tieneBloqueoOperativo(String uidTaxista) async {
     return tieneBloqueoComisionEfectivo(uidTaxista);
   }
 
-  /// Sincroniza `usuarios.tienePagoPendiente` y pools según prepago / legacy (no deuda semanal).
-  static Future<void> sincronizarBloqueoOperativo(String uidTaxista) =>
-      _sincronizarBanderaPendiente(uidTaxista);
+  /// Sincroniza `usuarios.tienePagoPendiente` y pools (Cloud Function; fallback escritura admin).
+  static Future<void> sincronizarBloqueoOperativo(String uidTaxista) async {
+    final uid = uidTaxista.trim();
+    if (uid.isEmpty) return;
+    try {
+      final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+      await fx.httpsCallable('sincronizarBloqueoOperativoTaxista').call(
+        <String, dynamic>{'uidTaxista': uid},
+      );
+    } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'not-found' || e.code == 'unimplemented') {
+        await _sincronizarBanderaPendiente(uid);
+        return;
+      }
+      debugPrint(
+        '[PagosTaxistaRepo] sincronizarBloqueoOperativo CF ${e.code}: ${e.message}',
+      );
+      await _sincronizarBanderaPendiente(uid);
+    } catch (e) {
+      debugPrint('[PagosTaxistaRepo] sincronizarBloqueoOperativo: $e');
+      await _sincronizarBanderaPendiente(uid);
+    }
+  }
 
   /// Payload para bajar `comisionPendiente` (tope = saldo actual). Una sola fuente de verdad para liquidaciones.
   static Map<String, dynamic> _payloadLiquidarComisionPendiente({
@@ -488,6 +509,8 @@ class PagosTaxistaRepo {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    // Bandera visible en ADM (Gestionar usuarios → Bloqueados prepago).
+    await sincronizarBloqueoOperativo(uid);
     print(
         '[PRE_TEST] recarga documento creado uid=$uid (saldo sin cambio hasta aprobación admin; snapshot prepago=$saldo)');
     print(
@@ -882,6 +905,24 @@ class PagosTaxistaRepo {
       list.sort((a, b) => b.fechaFin.compareTo(a.fechaFin));
       return list;
     });
+  }
+
+  /// Lectura puntual (sin stream) para pantallas de bloqueo — evita parpadeos.
+  static Future<List<PagoTaxista>> obtenerPagosAbiertosTaxista(
+      String uidTaxista) async {
+    final uid = uidTaxista.trim();
+    if (uid.isEmpty) return const [];
+    try {
+      final snap = await _col.where('uidTaxista', isEqualTo: uid).get();
+      final list = snap.docs
+          .map((doc) => PagoTaxista.fromMap(doc.id, doc.data()))
+          .toList();
+      list.sort((a, b) => b.fechaFin.compareTo(a.fechaFin));
+      return list;
+    } catch (e) {
+      debugPrint('[PagosTaxistaRepo] obtenerPagosAbiertosTaxista: $e');
+      return const [];
+    }
   }
 
   static Stream<List<PagoTaxista>> streamHistorialPagos({

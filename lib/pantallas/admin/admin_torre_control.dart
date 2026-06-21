@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../servicios/admin_dashboard_service.dart';
 import '../../utils/calculos/estados.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -101,11 +102,8 @@ class _AdminTorreControlState extends State<AdminTorreControl>
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        title: Text('Torre de control',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: AdminAppBar(
+        title: 'Torre de control',
         bottom: TabBar(
           controller: _tabs,
           labelColor: AdminUi.accentGreen(context),

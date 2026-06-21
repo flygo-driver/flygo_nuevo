@@ -71,12 +71,8 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
     );
   }
 
-  bool _bolaPuraFinalizada(Map<String, dynamic> d) {
-    if ((d['estado'] ?? '').toString().trim().toLowerCase() != 'finalizada') {
-      return false;
-    }
-    final String viajeEspejo = (d['viajeEspejoId'] ?? '').toString().trim();
-    return viajeEspejo.isEmpty;
+  bool _debeOfrecerFacturaBola(Map<String, dynamic> d) {
+    return (d['estado'] ?? '').toString().trim().toLowerCase() == 'finalizada';
   }
 
   /// Solo al abrir la app: recupera factura si acaba de cerrarse hace segundos
@@ -108,7 +104,7 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
       if (snap.docs.isNotEmpty) {
         final QueryDocumentSnapshot<Map<String, dynamic>> doc = snap.docs.first;
         final Map<String, dynamic> d = doc.data();
-        if (_bolaPuraFinalizada(d) &&
+        if (_debeOfrecerFacturaBola(d) &&
             _finalizacionHaceSegundos(d) &&
             !BolaPostFacturaReopenGuard.shouldSuppressListenerPush(doc.id)) {
           _ofrecerFacturaSiCorresponde(doc.id, d, uid);
@@ -125,7 +121,7 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
       final Map<String, dynamic>? raw = change.doc.data();
       if (raw == null) continue;
       final Map<String, dynamic> d = raw;
-      if (!_bolaPuraFinalizada(d)) continue;
+      if (!_debeOfrecerFacturaBola(d)) continue;
       _ofrecerFacturaSiCorresponde(change.doc.id, d, uid);
     }
   }

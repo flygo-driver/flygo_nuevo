@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_ui_constants.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_activar_button.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 
 /// Aviso en el shell del taxista cuando falta GPS o permiso de ubicación.
 class RaiUbicacionTaxistaBanner extends StatefulWidget {
@@ -37,10 +40,6 @@ class _RaiUbicacionTaxistaBannerState extends State<RaiUbicacionTaxistaBanner> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _onPermitirTap() async {
-    await _svc.solicitarPermisoDesdeBanner();
-  }
-
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<RaiUbicacionTaxistaModo>(
@@ -52,19 +51,30 @@ class _RaiUbicacionTaxistaBannerState extends State<RaiUbicacionTaxistaBanner> {
 
         final cs = Theme.of(context).colorScheme;
         final cargando = _svc.solicitudEnCurso.value;
-        final bool sinUbicacionAun =
-            (_svc.feedbackSinUbicacion.value ?? '').trim().isNotEmpty;
-        final Color acento = sinUbicacionAun ? cs.error : cs.primary;
+        final bool alertaRoja = _svc.bannerEnAlertaRoja;
+        final Color acento = alertaRoja ? cs.error : cs.primary;
+        final Color fondo = alertaRoja
+            ? Color.alphaBlend(
+                cs.error.withValues(alpha: 0.22),
+                cs.surfaceContainerHighest,
+              )
+            : cs.primaryContainer.withValues(alpha: 0.92);
+        final Color texto = alertaRoja ? cs.onErrorContainer : cs.onPrimaryContainer;
 
         return Material(
-          color: sinUbicacionAun
-              ? cs.errorContainer.withValues(alpha: 0.92)
-              : cs.primaryContainer.withValues(alpha: 0.92),
-          elevation: 2,
-          child: SafeArea(
-            bottom: false,
-            child: InkWell(
-              onTap: cargando ? null : () => unawaited(_onPermitirTap()),
+          color: fondo,
+          elevation: alertaRoja ? 3 : 2,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: acento.withValues(alpha: alertaRoja ? 0.95 : 0.35),
+                  width: alertaRoja ? 2.5 : 1,
+                ),
+              ),
+            ),
+            child: SafeArea(
+              bottom: false,
               child: Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -72,7 +82,7 @@ class _RaiUbicacionTaxistaBannerState extends State<RaiUbicacionTaxistaBanner> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(
-                      sinUbicacionAun
+                      alertaRoja
                           ? Icons.location_off_rounded
                           : Icons.location_disabled_rounded,
                       color: acento,
@@ -85,9 +95,7 @@ class _RaiUbicacionTaxistaBannerState extends State<RaiUbicacionTaxistaBanner> {
                           Text(
                             _svc.tituloBanner,
                             style: TextStyle(
-                              color: sinUbicacionAun
-                                  ? cs.onErrorContainer
-                                  : cs.onPrimaryContainer,
+                              color: texto,
                               fontWeight: FontWeight.w800,
                               fontSize: 14,
                             ),
@@ -95,15 +103,11 @@ class _RaiUbicacionTaxistaBannerState extends State<RaiUbicacionTaxistaBanner> {
                           const SizedBox(height: 4),
                           Text(
                             cargando
-                                ? 'Confirma en el cuadro del teléfono: elige '
-                                    '«Permitir» o «Al usar la app». '
-                                    'Si cierras sin aceptar, te avisaremos.'
+                                ? RaiUbicacionUiConstants
+                                    .msgEsperandoCuadroTelefono
                                 : _svc.mensajeBannerVisible,
                             style: TextStyle(
-                              color: (sinUbicacionAun
-                                      ? cs.onErrorContainer
-                                      : cs.onPrimaryContainer)
-                                  .withValues(alpha: 0.9),
+                              color: texto.withValues(alpha: 0.92),
                               fontSize: 12,
                               height: 1.3,
                             ),
@@ -112,27 +116,9 @@ class _RaiUbicacionTaxistaBannerState extends State<RaiUbicacionTaxistaBanner> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed:
-                          cargando ? null : () => unawaited(_onPermitirTap()),
-                      style: FilledButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        minimumSize: const Size(88, 40),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                      ),
-                      child: cargando
-                          ? SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: cs.onPrimary,
-                              ),
-                            )
-                          : Text(_svc.accionPrincipal),
+                    RaiUbicacionActivarButton(
+                      rol: RaiUbicacionRol.taxista,
+                      alerta: alertaRoja,
                     ),
                   ],
                 ),

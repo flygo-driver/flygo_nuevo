@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_chofer_turismo_operativo_utils.dart';
 import 'admin_ui_theme.dart';
@@ -320,9 +321,7 @@ class _TaxistasTurismoAdminState extends State<TaxistasTurismoAdmin> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    _radioEstado(
-                      title: 'Pendiente',
-                      value: 'pendiente',
+                    RadioGroup<String>(
                       groupValue: estadoSeleccionado,
                       onChanged: (v) {
                         if (v != null) {
@@ -331,30 +330,22 @@ class _TaxistasTurismoAdminState extends State<TaxistasTurismoAdmin> {
                           });
                         }
                       },
-                    ),
-                    _radioEstado(
-                      title: 'Aprobado',
-                      value: 'aprobado',
-                      groupValue: estadoSeleccionado,
-                      onChanged: (v) {
-                        if (v != null) {
-                          setStateModal(() {
-                            estadoSeleccionado = v;
-                          });
-                        }
-                      },
-                    ),
-                    _radioEstado(
-                      title: 'Rechazado',
-                      value: 'rechazado',
-                      groupValue: estadoSeleccionado,
-                      onChanged: (v) {
-                        if (v != null) {
-                          setStateModal(() {
-                            estadoSeleccionado = v;
-                          });
-                        }
-                      },
+                      child: Column(
+                        children: [
+                          _radioEstado(
+                            title: 'Pendiente',
+                            value: 'pendiente',
+                          ),
+                          _radioEstado(
+                            title: 'Aprobado',
+                            value: 'aprobado',
+                          ),
+                          _radioEstado(
+                            title: 'Rechazado',
+                            value: 'rechazado',
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Text(
@@ -557,14 +548,8 @@ class _TaxistasTurismoAdminState extends State<TaxistasTurismoAdmin> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Choferes turismo — flota',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: AdminAppBar(
+        title: 'Choferes turismo — flota',
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(60),
           child: Padding(
@@ -942,13 +927,9 @@ class _TaxistasTurismoAdminState extends State<TaxistasTurismoAdmin> {
   Widget _radioEstado({
     required String title,
     required String value,
-    required String groupValue,
-    required ValueChanged<String?> onChanged,
   }) {
     return RadioListTile<String>(
       value: value,
-      groupValue: groupValue,
-      onChanged: onChanged,
       activeColor: AdminUi.progressAccent(context),
       title: Text(
         title,

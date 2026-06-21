@@ -6,10 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
-import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_viaje_activo_page.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
@@ -25,6 +25,15 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
 
   final DraggableScrollableController _bolaBoardSheetCtrl =
       DraggableScrollableController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await BolaPuebloRepo.reconciliarSesionBolaAtascada();
+      if (mounted) setState(() {});
+    });
+  }
 
   static const double _bolaSheetMinFrac = 0.22;
   static const double _bolaSheetMidFrac = 0.46;
@@ -72,13 +81,10 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
   }
 
   void _abrirModoViajeBola(String bolaId) {
-    final NavigatorState? nav =
-        NavigationService.navigatorKey.currentState ??
-            Navigator.of(context, rootNavigator: true);
     unawaited(
-      NavigationService.clearAndGoPage(
-        preNav: nav,
-        page: BolaPuebloViajeActivoPage(bolaId: bolaId),
+      BolaPuebloDialogs.abrirModoViajeBolaPorId(
+        context: context,
+        bolaId: bolaId,
       ),
     );
   }
@@ -299,22 +305,20 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                         builder: (context, snap) {
                           final bottomPad = BolaPuebloUi.safeBottomInset(context);
                           final docsAll = snap.data?.docs ?? const [];
+                          final Map<String, String>? bolaActivaCliente =
+                              esTaxista || snap.data == null
+                                  ? null
+                                  : BolaPuebloRepo
+                                      .bolaActivaClienteDesdeTablero(
+                                      snap.data!,
+                                      user.uid,
+                                    );
                           final docs = docsAll.where((d) {
-                            final m = d.data();
-                            final estado = (m['estado'] ?? '').toString();
-                            final ownerUid =
-                                (m['createdByUid'] ?? '').toString();
-                            final uidTx = (m['uidTaxista'] ?? '').toString();
-                            final uidCli = (m['uidCliente'] ?? '').toString();
-                            if (estado == 'abierta' || estado == 'en_curso') {
-                              return true;
-                            }
-                            if (estado == 'acordada') {
-                              return ownerUid == user.uid ||
-                                  uidTx == user.uid ||
-                                  uidCli == user.uid;
-                            }
-                            return false;
+                            return BolaPuebloRepo.visibleEnTablero(
+                              d.data(),
+                              user.uid,
+                              bolaId: d.id,
+                            );
                           }).toList();
 
                           final List<Widget> head = [
@@ -335,8 +339,10 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                 context,
                                 subtitle: esTaxista
                                     ? 'Publicá tu ruta con el botón «Voy para» o respondé a pedidos de pasajeros abajo.'
-                                    : 'Abajo ves primero conductores con ruta; después pedidos de otros pasajeros. '
-                                        '«Pedir bola» es para cuando vos necesitás el viaje.',
+                                    : bolaActivaCliente != null
+                                        ? 'Tenés una bola activa abajo. Solo podés tener una a la vez hasta que termine o la canceles.'
+                                        : 'Abajo ves primero conductores con ruta; después pedidos de otros pasajeros. '
+                                            '«Pedir bola» es para cuando vos necesitás el viaje.',
                               ),
                             ),
                             Padding(
@@ -372,55 +378,15 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                         style: BolaPuebloUi.panelBody(context),
                                       ),
                                       const SizedBox(height: 14),
-                                      FilledButton.icon(
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor:
-                                              const Color(0xFF00C853),
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 18, vertical: 16),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                                BolaPuebloUi.radiusButton),
-                                          ),
-                                          elevation: 6,
-                                          shadowColor: const Color(0xFF00E676)
-                                              .withValues(alpha: 0.65),
-                                        ).copyWith(
-                                          overlayColor: WidgetStatePropertyAll(
-                                            Colors.white
-                                                .withValues(alpha: 0.08),
-                                          ),
-                                        ),
-                                        onPressed: _guardando
-                                            ? null
-                                            : () => BolaPuebloDialogs
-                                                    .crearPublicacion(
-                                                  context: context,
-                                                  uid: user.uid,
-                                                  rol: rol,
-                                                  nombre: nombre,
-                                                  tipo: 'pedido',
-                                                  onBusy: (b) => setState(
-                                                      () => _guardando = b),
-                                                ),
-                                        icon: const Icon(Icons.add_road_rounded,
-                                            size: 22),
-                                        label: const Text(
-                                          'Pedir bola',
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w900,
-                                            letterSpacing: 0.2,
-                                            shadows: [
-                                              Shadow(
-                                                color: Color(0x5500FF95),
-                                                blurRadius: 12,
-                                                offset: Offset(0, 0),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
+                                      BolaClientePedirPedidoPanel(
+                                        bolaActiva: bolaActivaCliente,
+                                        uid: user.uid,
+                                        rol: rol,
+                                        nombre: nombre,
+                                        guardando: _guardando,
+                                        onBusy: (b) =>
+                                            setState(() => _guardando = b),
+                                        onContinuarBola: _abrirModoViajeBola,
                                       ),
                                       const SizedBox(height: 10),
                                       OutlinedButton.icon(
@@ -567,8 +533,10 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           if (docs.isEmpty) {
                             final emptyMsg = esTaxista
                                 ? 'Publicá «Voy para…» o esperá pedidos de pasajeros; las tarjetas aparecen acá.'
-                                : 'Cuando un conductor publique ruta u otro pasajero un pedido, lo verás abajo. '
-                                    'Usá «Pedir bola» arriba para publicar el tuyo.';
+                                : bolaActivaCliente != null
+                                    ? 'Tu bola activa está en el tablero abajo. Negociá o seguí el viaje desde su tarjeta.'
+                                    : 'Cuando un conductor publique ruta u otro pasajero un pedido, lo verás abajo. '
+                                        'Usá «Pedir bola» arriba para publicar el tuyo.';
                             return ListView(
                               controller: scrollController,
                               padding: EdgeInsets.only(bottom: bottomPad),
@@ -660,8 +628,9 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                   return _bolaSeccionListaCliente(
                                     col,
                                     titulo: 'Pasajeros · pedidos publicados',
-                                    subtitulo:
-                                        'Otros viajeros buscan conductor; podés ver la ruta. Para tu viaje usá «Pedir bola» arriba.',
+                                    subtitulo: bolaActivaCliente != null
+                                        ? 'Otros viajeros buscan conductor; tu pedido activo está en el tablero.'
+                                        : 'Otros viajeros buscan conductor; podés ver la ruta. Para tu viaje usá «Pedir bola» arriba.',
                                     padding: const EdgeInsets.fromLTRB(
                                         16, 18, 16, 6),
                                   );
@@ -796,8 +765,10 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           ),
                           const SizedBox(height: 22),
                           FilledButton.icon(
-                            onPressed: () =>
-                                Navigator.of(context).pushNamed('/mis_pagos'),
+                            onPressed: () => TaxistaFinanzasNav.abrirMisPagos(
+                              context,
+                              scrollToRecargaSection: true,
+                            ),
                             icon: const Icon(Icons.payment_rounded),
                             label: const Text('Ir a Mis pagos'),
                             style: FilledButton.styleFrom(
@@ -808,8 +779,8 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           ),
                           const SizedBox(height: 10),
                           OutlinedButton.icon(
-                            onPressed: () => Navigator.of(context)
-                                .pushNamed('/bloqueado_por_pagos'),
+                            onPressed: () =>
+                                TaxistaFinanzasNav.abrirBloqueadoPagos(context),
                             icon: const Icon(Icons.account_balance_outlined),
                             label: const Text('Cuenta bancaria y pasos'),
                             style: OutlinedButton.styleFrom(

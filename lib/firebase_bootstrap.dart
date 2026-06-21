@@ -61,10 +61,12 @@ class FirebaseBootstrap {
 
     if (Firebase.apps.isNotEmpty) {
       final FirebaseApp app = Firebase.app();
-      if (app.options.appId != options.appId) {
+      if (app.options.appId != options.appId ||
+          app.options.apiKey != options.apiKey) {
         debugPrint(
-          '[FirebaseBootstrap] appId incorrecto actual=${app.options.appId} '
-          'esperado=${options.appId} → reinicializando',
+          '[FirebaseBootstrap] opciones incorrectas actual appId=${app.options.appId} '
+          'apiKey=${app.options.apiKey} esperado appId=${options.appId} '
+          'apiKey=${options.apiKey} → reinicializando',
         );
         try {
           await app.delete();

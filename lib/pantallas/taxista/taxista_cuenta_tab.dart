@@ -1,14 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
-import 'package:flygo_nuevo/pantallas/cliente/apariencia.dart'
-    show AparienciaAudience;
 import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
-import 'package:flygo_nuevo/widgets/rai_cuenta_deposito_panel.dart';
+import 'package:flygo_nuevo/widgets/cuenta_open_ask_deposito_panel.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
@@ -17,7 +13,6 @@ import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/ganancia_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/historial_viajes_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
-import 'package:flygo_nuevo/servicios/auth_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
@@ -42,23 +37,6 @@ String _subtituloGananciasResumen() {
 /// Finanzas, documentos y ajustes de cuenta.
 class TaxistaCuentaTab extends StatelessWidget {
   const TaxistaCuentaTab({super.key});
-
-  Future<void> _logout(BuildContext context) async {
-    final nav = Navigator.of(context);
-    if (nav.canPop()) nav.pop();
-    try {
-      await AuthService().logout();
-    } catch (_) {}
-    if (!nav.mounted) return;
-    try {
-      nav.pushNamedAndRemoveUntil('/login_taxista', (_) => false);
-    } catch (_) {
-      nav.pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const SeleccionUsuario()),
-        (_) => false,
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -288,11 +266,9 @@ class TaxistaCuentaTab extends StatelessWidget {
                 );
               },
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: const RaiCuentaDepositoPanel(
-              titulo: 'Cuenta para depositar recarga',
-            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: CuentaOpenAskDepositoPanel(mostrarNota: true),
           ),
           _tile(
             context,
@@ -378,7 +354,7 @@ class TaxistaCuentaTab extends StatelessWidget {
             },
           ),
           const CuentaAparienciaTile(audience: AparienciaAudience.taxista),
-          if (uid != null) CuentaCerrarSesionTile(onTap: () => _logout(context)),
+          if (uid != null) const CuentaCerrarSesionTile(),
         ],
       ),
     );

@@ -51,7 +51,8 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
     if (poolOk && !contratoOk) {
       return const ContratoTaxistaFirma();
     }
-    return const TaxistaShell();
+    // en_revision u otro estado sin aprobación: documentos, no pool a ciegas.
+    return const DocumentosTaxista(onboardingObligatorio: true);
   }
 
   Future<void> _decidirRuta() async {

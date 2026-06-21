@@ -104,7 +104,7 @@ class SeleccionUsuario extends StatelessWidget {
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
                       child: Column(
                         children: [
-                          // FLAVOR SPLIT: cliente solo botón cliente, conductor solo botón taxista, all ambos
+                          // App unificada Play (all) o split: cliente / conductor
                           Visibility(
                             visible: !isConductorFlavor,
                             child: _BigButton(

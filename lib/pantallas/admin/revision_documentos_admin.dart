@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:flygo_nuevo/servicios/flygo_storage.dart';
 
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_expediente_chofer_utils.dart';
 import 'admin_ui_theme.dart';
@@ -289,14 +290,8 @@ class _RevisionDocumentosAdminState extends State<RevisionDocumentosAdmin>
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Expedientes choferes',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: AdminAppBar(
+        title: 'Expedientes choferes',
         bottom: TabBar(
           controller: _tabCtrl,
           labelColor: AdminUi.accentGreen(context),

@@ -9,6 +9,7 @@ import '../../servicios/admin_service.dart';
 // relativo porque este archivo vive junto a panel_finanzas.dart
 import '../../widgets/comision_global_chip.dart';
 import '../../widgets/admin_drawer.dart'; // ⬅️ NUEVO
+import '../../widgets/admin_app_bar.dart';
 import 'panel_finanzas.dart';
 
 String _liquidacionesErrorMsg(Object? err) {
@@ -52,14 +53,8 @@ class _AdminHomeState extends State<AdminHome>
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(), // ⬅️ Drawer con “Cerrar sesión”
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Admin — Liquidaciones',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: AdminAppBar(
+        title: 'Admin — Liquidaciones',
         bottom: TabBar(
           controller: _tab,
           labelColor: tabSelected,

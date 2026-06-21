@@ -1,11 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'dart:async';
 
 import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
+import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/widgets/taxista_onboarding_acciones_footer.dart';
 
 /// Onboarding obligatorio tras Google (o perfil incompleto).
 class CompletarRegistroTaxista extends StatefulWidget {
@@ -124,6 +127,10 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
     _snack('Completá tu registro para operar como conductor en RAI.');
   }
 
+  Future<void> _volverAlInicio() async {
+    await cerrarSesion(context);
+  }
+
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
     final u = FirebaseAuth.instance.currentUser;
@@ -207,10 +214,16 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
       child: Scaffold(
         appBar: const RaiAppBar(title: 'Completa tu registro de conductor'),
         body: SafeArea(
+          bottom: false,
           child: Form(
             key: _formKey,
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+              padding: EdgeInsets.fromLTRB(
+                20,
+                20,
+                20,
+                TaxistaOnboardingAccionesFooter.scrollBottomPadding(context),
+              ),
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               children: [
                 Text(
@@ -355,20 +368,16 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
                   validator: (v) =>
                       (v == null || v.trim().isEmpty) ? 'Requerido' : null,
                 ),
-                const SizedBox(height: 28),
-                FilledButton(
-                  onPressed: _guardando ? null : _guardar,
-                  child: _guardando
-                      ? const SizedBox(
-                          height: 22,
-                          width: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Guardar y continuar'),
-                ),
               ],
             ),
           ),
+        ),
+        bottomNavigationBar: TaxistaOnboardingAccionesFooter(
+          primaryLabel: 'Guardar y continuar',
+          primaryIcon: Icons.check_circle_outline_rounded,
+          busy: _guardando,
+          onPrimary: _guardar,
+          onSalirInicio: () => unawaited(_volverAlInicio()),
         ),
       ),
     );

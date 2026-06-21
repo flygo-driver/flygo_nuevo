@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/firebase_bootstrap.dart';
+import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
@@ -74,6 +75,20 @@ class FcmService {
           title: title,
           body: body,
           payload: payload,
+        );
+        return;
+      }
+      // Pasajero: avisos de pool / conductor sin timbre (solo bandeja si aplica).
+      if (isClienteFlavor && type == 'scheduled_trip_pool_open') {
+        final title = m.notification?.title ?? 'Tu viaje ya está en búsqueda';
+        final body = m.notification?.body ??
+            'Los conductores cercanos pueden aceptarlo ahora.';
+        final payload = jsonEncode(m.data);
+        await NotificationService.I.showTripCommsLocal(
+          title: title,
+          body: body,
+          payload: payload,
+          playSound: false,
         );
       }
     });

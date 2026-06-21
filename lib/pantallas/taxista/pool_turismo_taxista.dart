@@ -18,7 +18,10 @@ import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
+import 'package:flygo_nuevo/navegacion/taxista_operacion_nav.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -93,6 +96,20 @@ class _ItemPoolTurismo {
   );
 }
 
+class _OfertaTurismoPendiente {
+  const _OfertaTurismoPendiente({
+    required this.id,
+    required this.data,
+    required this.titulo,
+    required this.cuerpo,
+  });
+
+  final String id;
+  final Map<String, dynamic> data;
+  final String titulo;
+  final String cuerpo;
+}
+
 /// Viajes turísticos con `canalAsignacion == turismo_pool` (liberados por ADM). Solo choferes aprobados.
 class PoolTurismoTaxista extends StatefulWidget {
   const PoolTurismoTaxista({super.key});
@@ -105,6 +122,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final Set<String> _aceptandoIds = <String>{};
   final Set<String> _vistosParaTimbre = <String>{};
+  final Set<String> _ocultosPoolLocal = <String>{};
 
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreAhora;
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreProg;
@@ -114,7 +132,9 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
   late TabController _tabPool;
   bool _ignorarPrimeraEmisionTimbreAhora = true;
   bool _ignorarPrimeraEmisionTimbreProg = true;
+  bool _entradaInicialProcesada = false;
   bool _appEnForeground = true;
+  bool _flushTimbreReentradaPendiente = false;
 
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>?
       _activeTripListener;
@@ -149,9 +169,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       await _probarIndices();
       _arrancarTimbres();
       if (mounted) setState(() {});
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      if (!mounted) return;
-      await _flushTimbreOfertasParaTab(_tabPool.index);
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      if (mounted) await _flushTimbreOfertasParaTab(_tabPool.index);
     });
     _cargarUbicacionCache();
     unawaited(_refrescarEstadoGps());
@@ -312,6 +331,10 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       if (_usarFallbackSinIndiceAhora || _usarFallbackSinIndiceProg) {
         unawaited(_probarIndices());
       }
+      unawaited(Future<void>.delayed(const Duration(milliseconds: 700), () async {
+        if (!mounted) return;
+        await _flushTimbreOfertasParaTab(_tabPool.index);
+      }));
       setState(() {});
     }
     if (state == AppLifecycleState.paused ||
@@ -438,6 +461,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     _subTimbreProg?.cancel();
     _ignorarPrimeraEmisionTimbreAhora = true;
     _ignorarPrimeraEmisionTimbreProg = true;
+    _flushTimbreReentradaPendiente = _entradaInicialProcesada;
 
     final qA = _usarFallbackSinIndiceAhora ? _qFallbackBase() : _qTurismoPoolAhora();
     final qP =
@@ -450,31 +474,16 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
       if (_ignorarPrimeraEmisionTimbreAhora) {
         _ignorarPrimeraEmisionTimbreAhora = false;
-        if (_tabPool.index == 0) {
-          unawaited(_flushTimbreOfertasParaTab(0));
+        if (_entradaInicialProcesada) {
+          unawaited(_maybeFlushTrasReconexionTimbre(myUid));
+        } else {
+          unawaited(_intentarEntradaInicialPool());
         }
         return;
       }
-      if (_tabPool.index != 0) return;
 
-      for (final d in snap.docs) {
-        final data = d.data();
-        if (!_pasaFiltroAhoraLocalPool(data)) continue;
-        if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
-        final id = d.id;
-        if (_vistosParaTimbre.contains(id)) continue;
-        _vistosParaTimbre.add(id);
-        await NotificationService.I.playPoolOfferSoundInApp();
-        if (_viajeTienePrecioReal(data)) {
-          await NotificationService.I.notifyNuevoViaje(
-            viajeId: id,
-            titulo: 'Nuevo viaje turístico',
-            cuerpo:
-                '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
-            skipSound: true,
-          );
-        }
-      }
+      final nuevas = _idsOfertasNoVistasAhora(myUid);
+      await _procesarNuevasOfertasEnTabActivo(0, myUid, nuevas);
     });
 
     _subTimbreProg = qP.limit(200).snapshots().listen((snap) async {
@@ -484,31 +493,16 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
       if (_ignorarPrimeraEmisionTimbreProg) {
         _ignorarPrimeraEmisionTimbreProg = false;
-        if (_tabPool.index == 1) {
-          unawaited(_flushTimbreOfertasParaTab(1));
+        if (_entradaInicialProcesada) {
+          unawaited(_maybeFlushTrasReconexionTimbre(myUid));
+        } else {
+          unawaited(_intentarEntradaInicialPool());
         }
         return;
       }
-      if (_tabPool.index != 1) return;
 
-      for (final d in snap.docs) {
-        final data = d.data();
-        if (!_pasaFiltroProgLocalPool(data)) continue;
-        if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
-        final id = d.id;
-        if (_vistosParaTimbre.contains(id)) continue;
-        _vistosParaTimbre.add(id);
-        await NotificationService.I.playPoolOfferSoundInApp();
-        if (_viajeTienePrecioReal(data)) {
-          await NotificationService.I.notifyNuevoViaje(
-            viajeId: id,
-            titulo: 'Viaje turístico programado',
-            cuerpo:
-                '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
-            skipSound: true,
-          );
-        }
-      }
+      final nuevas = _idsOfertasNoVistasProg(myUid);
+      await _procesarNuevasOfertasEnTabActivo(1, myUid, nuevas);
     });
   }
 
@@ -536,71 +530,184 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     return n(data['precio']) > 0.009 || n(data['precioFinal'] ?? data['total']) > 0.009;
   }
 
-  Future<void> _flushTimbreOfertasParaTab(int tabIndex, {int max = 2}) async {
+  Future<void> _flushTimbreOfertasParaTab(int tabIndex) async {
     if (!_appEnForeground) return;
-    if (tabIndex == 0) {
-      await _flushTimbreAhoraDesdeSnap(max);
-    } else if (tabIndex == 1) {
-      await _flushTimbreProgDesdeSnap(max);
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (myUid.isNotEmpty && !await RolesService.getDisponibilidad(myUid)) {
+      return;
+    }
+    final pendientes = _idsOfertasNoVistasEnTab(tabIndex, myUid);
+    if (pendientes.isEmpty) return;
+
+    await NotificationService.I.playPoolOfferSoundInApp();
+    for (final item in pendientes) {
+      _vistosParaTimbre.add(item.id);
+      if (_viajeTienePrecioReal(item.data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: item.id,
+          titulo: item.titulo,
+          cuerpo: item.cuerpo,
+          skipSound: true,
+        );
+      }
     }
   }
 
-  Future<void> _flushTimbreAhoraDesdeSnap(int maxDings) async {
-    final snap = _snapTimbreAhora;
-    if (snap == null) return;
+  Future<void> _flushTimbreOfertasAlReentrarPool(String myUid) async {
+    if (!_appEnForeground) return;
+    if (myUid.isNotEmpty && !await RolesService.getDisponibilidad(myUid)) {
+      return;
+    }
+    final pendientes = <_OfertaTurismoPendiente>[
+      ..._idsOfertasNoVistasEnTab(0, myUid),
+      ..._idsOfertasNoVistasEnTab(1, myUid),
+    ];
+    if (pendientes.isEmpty) return;
+
+    await NotificationService.I.playPoolOfferSoundInApp();
+    for (final item in pendientes) {
+      _vistosParaTimbre.add(item.id);
+      if (_viajeTienePrecioReal(item.data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: item.id,
+          titulo: item.titulo,
+          cuerpo: item.cuerpo,
+          skipSound: true,
+        );
+      }
+    }
+  }
+
+  Future<void> _maybeFlushTrasReconexionTimbre(String myUid) async {
+    if (!_flushTimbreReentradaPendiente) return;
+    if (_ignorarPrimeraEmisionTimbreAhora || _ignorarPrimeraEmisionTimbreProg) {
+      return;
+    }
+    _flushTimbreReentradaPendiente = false;
+    await _flushTimbreOfertasAlReentrarPool(myUid);
+  }
+
+  Future<void> _intentarEntradaInicialPool() async {
+    if (_entradaInicialProcesada || !_appEnForeground) return;
+    if (_ignorarPrimeraEmisionTimbreAhora || _ignorarPrimeraEmisionTimbreProg) {
+      return;
+    }
+    await _procesarEntradaInicialPool();
+  }
+
+  Future<void> _procesarEntradaInicialPool() async {
+    if (_entradaInicialProcesada || !_appEnForeground) return;
+    _entradaInicialProcesada = true;
+
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    var n = 0;
+    final pendientes = <_OfertaTurismoPendiente>[
+      ..._idsOfertasNoVistasEnTab(0, myUid),
+      ..._idsOfertasNoVistasEnTab(1, myUid),
+    ];
+
+    final bool disponible = myUid.isEmpty ||
+        await RolesService.getDisponibilidad(myUid);
+
+    if (pendientes.isNotEmpty && disponible) {
+      await NotificationService.I.playPoolOfferSoundInApp();
+    }
+
+    for (final item in pendientes) {
+      _vistosParaTimbre.add(item.id);
+      if (_viajeTienePrecioReal(item.data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: item.id,
+          titulo: item.titulo,
+          cuerpo: item.cuerpo,
+          skipSound: true,
+        );
+      }
+    }
+  }
+
+  Future<void> _procesarNuevasOfertasEnTabActivo(
+    int tabIndex,
+    String myUid,
+    List<_OfertaTurismoPendiente> nuevas,
+  ) async {
+    if (!_entradaInicialProcesada || !_appEnForeground) return;
+    if (nuevas.isEmpty) return;
+    if (myUid.isNotEmpty && !await RolesService.getDisponibilidad(myUid)) {
+      return;
+    }
+
+    final List<_OfertaTurismoPendiente> fresh = nuevas
+        .where((item) => !_vistosParaTimbre.contains(item.id))
+        .toList();
+    if (fresh.isEmpty) return;
+
+    await NotificationService.I.playPoolOfferSoundInApp();
+
+    for (final item in fresh) {
+      _vistosParaTimbre.add(item.id);
+      await NotificationService.I.vibratePoolOfferInApp();
+      if (_viajeTienePrecioReal(item.data)) {
+        await NotificationService.I.notifyNuevoViaje(
+          viajeId: item.id,
+          titulo: item.titulo,
+          cuerpo: item.cuerpo,
+          skipSound: true,
+        );
+      }
+    }
+  }
+
+  List<_OfertaTurismoPendiente> _idsOfertasNoVistasEnTab(
+    int tabIndex,
+    String myUid,
+  ) {
+    if (tabIndex == 0) return _idsOfertasNoVistasAhora(myUid);
+    if (tabIndex == 1) return _idsOfertasNoVistasProg(myUid);
+    return const <_OfertaTurismoPendiente>[];
+  }
+
+  List<_OfertaTurismoPendiente> _idsOfertasNoVistasAhora(String myUid) {
+    final snap = _snapTimbreAhora;
+    if (snap == null) return const <_OfertaTurismoPendiente>[];
+    final out = <_OfertaTurismoPendiente>[];
     for (final d in snap.docs) {
-      if (n >= maxDings) return;
       final data = d.data();
       if (!_pasaFiltroAhoraLocalPool(data)) continue;
       if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
       if (_vistosParaTimbre.contains(d.id)) continue;
-      _vistosParaTimbre.add(d.id);
-      await NotificationService.I.playPoolOfferSoundInApp();
-      if (_viajeTienePrecioReal(data)) {
-        await NotificationService.I.notifyNuevoViaje(
-          viajeId: d.id,
+      out.add(
+        _OfertaTurismoPendiente(
+          id: d.id,
+          data: data,
           titulo: 'Nuevo viaje turístico',
           cuerpo:
               '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
-          skipSound: true,
-        );
-      }
-      n++;
-      if (n < maxDings) {
-        await Future<void>.delayed(const Duration(milliseconds: 380));
-      }
+        ),
+      );
     }
+    return out;
   }
 
-  Future<void> _flushTimbreProgDesdeSnap(int maxDings) async {
+  List<_OfertaTurismoPendiente> _idsOfertasNoVistasProg(String myUid) {
     final snap = _snapTimbreProg;
-    if (snap == null) return;
-    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    var n = 0;
+    if (snap == null) return const <_OfertaTurismoPendiente>[];
+    final out = <_OfertaTurismoPendiente>[];
     for (final d in snap.docs) {
-      if (n >= maxDings) return;
       final data = d.data();
       if (!_pasaFiltroProgLocalPool(data)) continue;
       if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
       if (_vistosParaTimbre.contains(d.id)) continue;
-      _vistosParaTimbre.add(d.id);
-      await NotificationService.I.playPoolOfferSoundInApp();
-      if (_viajeTienePrecioReal(data)) {
-        await NotificationService.I.notifyNuevoViaje(
-          viajeId: d.id,
+      out.add(
+        _OfertaTurismoPendiente(
+          id: d.id,
+          data: data,
           titulo: 'Viaje turístico programado',
           cuerpo:
               '${(data['origen'] ?? 'Origen')} → ${(data['destino'] ?? 'Destino')}',
-          skipSound: true,
-        );
-      }
-      n++;
-      if (n < maxDings) {
-        await Future<void>.delayed(const Duration(milliseconds: 380));
-      }
+        ),
+      );
     }
+    return out;
   }
 
   bool _disponibleParaMiPool(Map<String, dynamic> data, String myUid) {
@@ -678,38 +785,49 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         DateTime.now(),
       );
 
-  /// Mismos códigos que [ViajesRepo.claimTripWithReason] / [DetalleViaje].
   String _mensajeClaimFallidoPoolTurismo(String res) {
-    switch (res) {
-      case 'no-existe':
-        return 'El viaje ya no existe.';
-      case 'estado-no-pendiente':
-        return 'El viaje ya no está pendiente.';
-      case 'ya-asignado':
-        return 'Ese viaje ya fue asignado.';
-      case 'acceptAfter-futuro':
-        return 'Aún no se libera (acceptAfter en el futuro).';
-      case 'publish-futuro':
-        return 'Aún no se publica (publishAt en el futuro).';
-      case 'reservado-otro':
-        return 'Reservado por otro taxista.';
-      case 'taxista-ocupado':
-        return 'Tienes un viaje activo.';
-      case 'bloqueado-pago-semanal':
-      case 'bloqueado-comision-efectivo':
-        return PagosTaxistaRepo.mensajeRecargaTomarViajes;
-      case 'chofer-turismo-no-aprobado':
-        return AsignacionTurismoRepo.mensajeNoAutorizadoPoolTurismo;
-      default:
-        if (res.startsWith('permiso:')) {
-          return 'Permisos/reglas Firestore: ${res.split(':').last}';
-        }
-        if (res.startsWith('bloqueado')) {
-          return PagosTaxistaRepo.mensajeRecargaTomarViajes;
-        }
-        return 'Tu cuenta está bloqueada por saldo insuficiente o deuda '
-            'pendiente. Ve a Mis pagos para más información.';
+    if (res == 'chofer-turismo-no-aprobado') {
+      return AsignacionTurismoRepo.mensajeNoAutorizadoPoolTurismo;
     }
+    return taxistaMensajeClaimFallido(res);
+  }
+
+  bool _claimIndicaViajeYaNoDisponible(String res) {
+    switch (res) {
+      case 'ya-asignado':
+      case 'estado-no-pendiente':
+      case 'no-existe':
+      case 'reservado-otro':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  void _ocultarViajeDelPoolLocal(String viajeId) {
+    if (viajeId.isEmpty) return;
+    final changed = _ocultosPoolLocal.add(viajeId);
+    _vistosParaTimbre.add(viajeId);
+    if (changed && mounted) setState(() {});
+  }
+
+  Future<void> _revalidarViajeVisibleEnPoolTurismo({
+    required String viajeId,
+    required String myUid,
+  }) async {
+    try {
+      final snap = await fs.FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get(const fs.GetOptions(source: fs.Source.server));
+      if (!snap.exists) {
+        _ocultarViajeDelPoolLocal(viajeId);
+        return;
+      }
+      if (!_disponibleParaMiPool(snap.data() ?? <String, dynamic>{}, myUid)) {
+        _ocultarViajeDelPoolLocal(viajeId);
+      }
+    } catch (_) {}
   }
 
   Future<void> _aceptarViajeTurismo(
@@ -747,6 +865,19 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     var navegoAViajeEnCurso = false;
 
     try {
+      final usrSnap = await fs.FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(taxista.uid)
+          .get();
+      final uData = usrSnap.data() ?? <String, dynamic>{};
+      if (!mounted) return;
+      if (await TaxistaOperacionNav.bloquearClaimSiPerfilIncompleto(
+        context,
+        uData: uData,
+      )) {
+        return;
+      }
+
       final prep = await AsignacionTurismoRepo.prepararClaimPoolTurismo(
         uidChofer: taxista.uid,
         viajeId: v.id,
@@ -835,30 +966,21 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         return;
       }
 
-      final String msg = _mensajeClaimFallidoPoolTurismo(res);
-      final bool esBloqueoSaldo = res == 'bloqueado-pago-semanal' ||
-          res == 'bloqueado-comision-efectivo' ||
-          res.startsWith('bloqueado');
+      if (res == 'chofer-turismo-no-aprobado') {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(_mensajeClaimFallidoPoolTurismo(res)),
+            backgroundColor: cs.error,
+          ),
+        );
+        return;
+      }
 
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(msg),
-          backgroundColor: cs.error,
-          duration: esBloqueoSaldo
-              ? const Duration(seconds: 8)
-              : const Duration(seconds: 4),
-          action: esBloqueoSaldo
-              ? SnackBarAction(
-                  label: 'Mis pagos',
-                  textColor: Colors.white,
-                  onPressed: () {
-                    Navigator.of(context, rootNavigator: true)
-                        .pushNamed('/mis_pagos');
-                  },
-                )
-              : null,
-        ),
-      );
+      if (_claimIndicaViajeYaNoDisponible(res)) {
+        _ocultarViajeDelPoolLocal(v.id);
+      }
+
+      await TaxistaOperacionNav.guiarTrasFalloClaim(context, res: res);
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(
@@ -1009,6 +1131,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         for (final d in docs) {
           final data = d.data();
 
+          if (_ocultosPoolLocal.contains(d.id)) continue;
           if (usandoFallback && !filtroLocalSiFallback(data)) continue;
           if (!_disponibleParaMiPool(data, myUid)) continue;
 
@@ -1199,12 +1322,17 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                       children: [
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: () {
-                              Navigator.push(
+                            onPressed: () async {
+                              await Navigator.push(
                                 context,
                                 MaterialPageRoute<void>(
                                   builder: (_) => DetalleViaje(viajeId: v.id),
                                 ),
+                              );
+                              if (!mounted) return;
+                              await _revalidarViajeVisibleEnPoolTurismo(
+                                viajeId: v.id,
+                                myUid: myUid,
                               );
                             },
                             icon: Icon(Icons.info_outline, color: pal.accent),
@@ -1335,7 +1463,10 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           FilledButton.icon(
-            onPressed: () => Navigator.of(context).pushNamed('/mis_pagos'),
+            onPressed: () => TaxistaFinanzasNav.abrirMisPagos(
+              context,
+              scrollToRecargaSection: true,
+            ),
             icon: const Icon(Icons.payment_rounded),
             label: const Text('Ir a Mis pagos'),
             style: FilledButton.styleFrom(
@@ -1344,8 +1475,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
           ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
-            onPressed: () =>
-                Navigator.of(context).pushNamed('/bloqueado_por_pagos'),
+            onPressed: () => TaxistaFinanzasNav.abrirBloqueadoPagos(context),
             icon: const Icon(Icons.account_balance_outlined),
             label: const Text('Cuenta bancaria y pasos'),
           ),

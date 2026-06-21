@@ -12,7 +12,7 @@ import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/modelo/chofer_turismo.dart';
-import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
+import 'package:flygo_nuevo/navegacion/post_viaje_cliente_nav.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
@@ -1293,11 +1293,9 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
     if (!mounted) return;
 
-    await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (_) => PostViajeClienteFlow(viajeId: widget.viajeId),
-      ),
-      (Route<dynamic> r) => r.isFirst,
+    await PostViajeClienteNav.abrirFacturaYFlujo(
+      context: context,
+      viajeId: widget.viajeId,
     );
   }
 

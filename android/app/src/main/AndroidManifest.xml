@@ -86,36 +86,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-            <!-- Giras/pool: raidriver://pool?id=… (WhatsApp respaldo) -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="raidriver"
-                    android:host="pool" />
-            </intent-filter>
-
-            <!-- Giras/pool: App Links https (requiere assetlinks.json con huella release) -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="flygo-rd.web.app"
-                    android:pathPrefix="/pool" />
-            </intent-filter>
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="flygo-rd.firebaseapp.com"
-                    android:pathPrefix="/pool" />
-            </intent-filter>
         </activity>
 
         <!-- Tema normal de Flutter al volver del splash -->
@@ -127,7 +97,7 @@
             android:value="2" />
         <meta-data
             android:name="flutter_deeplinking_enabled"
-            android:value="true" />
+            android:value="false" />
 
         <!-- Google Maps / Places -->
         <meta-data

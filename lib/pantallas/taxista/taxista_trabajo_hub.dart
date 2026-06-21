@@ -1,10 +1,12 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_viaje_activo_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/toggle_disponibilidad.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
@@ -31,24 +33,16 @@ class TaxistaTrabajoHub extends StatelessWidget {
     return null;
   }
 
-  /// Espejo Bola → flujo en [bolas_pueblo]; el resto → pantalla estándar de viaje.
+  /// Negociación Bola → tablero; acordado/en curso → [ViajeEnCursoTaxista] como taxi.
   static void openViajeActivoTaxista(
     BuildContext context, {
     Map<String, dynamic>? datosViaje,
   }) {
     if (datosViaje != null &&
-        ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(datosViaje)) {
-      final bid = (datosViaje['bolaPuebloId'] ?? datosViaje['bolaId'] ?? '')
-          .toString()
-          .trim();
-      if (bid.isNotEmpty) {
-        Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => BolaPuebloViajeActivoPage(bolaId: bid),
-          ),
-        );
-        return;
-      }
+        ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
+            datosViaje)) {
+      unawaited(NavigationService.clearAndGoBolaTablero());
+      return;
     }
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(

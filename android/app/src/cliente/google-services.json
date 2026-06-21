@@ -1,0 +1,259 @@
+{
+  "project_info": {
+    "project_number": "237301602510",
+    "project_id": "flygo-rd",
+    "storage_bucket": "flygo-rd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237301602510:android:b0c833b493fdb22759589f",
+        "android_client_info": {
+          "package_name": "com.example.flygo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9hmXBF2HX5mTWlYubbL84zuONAT950w0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237301602510:android:8309c754c0f5aeff59589f",
+        "android_client_info": {
+          "package_name": "com.example.flygo_nuevo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9hmXBF2HX5mTWlYubbL84zuONAT950w0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237301602510:android:46a6a7c824dbfd7c59589f",
+        "android_client_info": {
+          "package_name": "com.flygo.rd"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "237301602510-07on0d9o7ucif0uia99th9of5ddf5eho.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd",
+            "certificate_hash": "8ce2a2206bc3903d3f6b91d134c0eec46c944abb"
+          }
+        },
+        {
+          "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9hmXBF2HX5mTWlYubbL84zuONAT950w0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237301602510:android:abf9f6fb3992a51259589f",
+        "android_client_info": {
+          "package_name": "com.flygo.rd2"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "237301602510-0dbcbabb3fqkhf487ch7cn9teok40lgj.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2",
+            "certificate_hash": "a1702a55031760aa5796c23b6532629aa4fba457"
+          }
+        },
+        {
+          "client_id": "237301602510-ced9175p3nc5829tjbnuegvg4tmsvb3f.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2",
+            "certificate_hash": "d8e8a8162a22f8537d26ae121d5a02e71024f457"
+          }
+        },
+        {
+          "client_id": "237301602510-h4lk9571iesck1139gm7508t127oot41.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2",
+            "certificate_hash": "4eb3583410904e13aeb94c3da0085f3cffd69d70"
+          }
+        },
+        {
+          "client_id": "237301602510-kk43u4d429ta9lqehadik24c2soe0fm8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2",
+            "certificate_hash": "fdaf87c71f6a84fa52965b67affc68ef22f30d7e"
+          }
+        },
+        {
+          "client_id": "237301602510-lldmuaac0gbi7r2egcfbkgov6775uvpq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2",
+            "certificate_hash": "c4e92b5e45b376597eab30e7280db331e0620130"
+          }
+        },
+        {
+          "client_id": "237301602510-m1h4bj7mjdkm6ool112vehc7d0rkdgo5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2",
+            "certificate_hash": "78cd386044eb7503abb74725e9b41e2924003712"
+          }
+        },
+        {
+          "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9hmXBF2HX5mTWlYubbL84zuONAT950w0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237301602510:android:252fd2fa5e84a57c59589f",
+        "android_client_info": {
+          "package_name": "com.flygo.rd2.conductor"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "237301602510-3uq1nhiknl74uo30bhp7oh6hhmr7rqu1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2.conductor",
+            "certificate_hash": "a1702a55031760aa5796c23b6532629aa4fba457"
+          }
+        },
+        {
+          "client_id": "237301602510-9958p0cueidh880kv8p4q5068qm065ut.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2.conductor",
+            "certificate_hash": "c4e92b5e45b376597eab30e7280db331e0620130"
+          }
+        },
+        {
+          "client_id": "237301602510-efsbm8av17srtp2qphf5pkutq5f9dk9h.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2.conductor",
+            "certificate_hash": "fdaf87c71f6a84fa52965b67affc68ef22f30d7e"
+          }
+        },
+        {
+          "client_id": "237301602510-fr3ct2gef840lq9pc7cknt5vgmp75nkh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2.conductor",
+            "certificate_hash": "4eb3583410904e13aeb94c3da0085f3cffd69d70"
+          }
+        },
+        {
+          "client_id": "237301602510-g803rfadeia5samm6j58pj0iuh8babov.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2.conductor",
+            "certificate_hash": "78cd386044eb7503abb74725e9b41e2924003712"
+          }
+        },
+        {
+          "client_id": "237301602510-p5a208bgnca24opl3k4vrgvsugbgh9ma.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.flygo.rd2.conductor",
+            "certificate_hash": "d8e8a8162a22f8537d26ae121d5a02e71024f457"
+          }
+        },
+        {
+          "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9hmXBF2HX5mTWlYubbL84zuONAT950w0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

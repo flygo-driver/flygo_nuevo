@@ -1,27 +1,31 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
-/// Admin — Fase 3/4: extracto Popular y conciliación banco ↔ viaje (solo callables CF).
+/// Admin — Fase 3/4: extracto Popular y conciliación banco ↔ viaje (callables CF).
 class ConciliacionBancoRepo {
   ConciliacionBancoRepo._();
 
   static FirebaseFunctions get _fn =>
       FirebaseFunctions.instanceFor(region: 'us-central1');
 
-  static CollectionReference<Map<String, dynamic>> get _conciliaciones =>
-      FirebaseFirestore.instance.collection('conciliaciones');
+  static Future<List<Map<String, dynamic>>> _listarPropuestas({
+    int limit = 50,
+  }) async {
+    final res = await _fn.httpsCallable('listarConciliacionesPropuestas').call(
+      <String, dynamic>{'limit': limit},
+    );
+    final data = Map<String, dynamic>.from(res.data as Map);
+    final raw = data['conciliaciones'];
+    if (raw is! List) return const [];
+    return raw
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList(growable: false);
+  }
 
+  /// Lista vía Cloud Function (Admin SDK) para evitar permission-denied en cliente.
   static Stream<List<Map<String, dynamic>>> streamPropuestas({int limit = 50}) {
-    return _conciliaciones
-        .where('estado', isEqualTo: 'propuesta')
-        .orderBy('createdAt', descending: true)
-        .limit(limit)
-        .snapshots()
-        .map(
-          (snap) => snap.docs
-              .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
-              .toList(growable: false),
-        );
+    return Stream.periodic(const Duration(seconds: 10)).asyncMap((_) async {
+      return _listarPropuestas(limit: limit);
+    }).startWith(_listarPropuestas(limit: limit));
   }
 
   static Future<Map<String, dynamic>> proponerAutomaticas({int limit = 30}) async {
@@ -67,5 +71,12 @@ class ConciliacionBancoRepo {
         'notaAdmin': notaAdmin,
       },
     );
+  }
+}
+
+extension<T> on Stream<T> {
+  Stream<T> startWith(Future<T> first) async* {
+    yield await first;
+    yield* this;
   }
 }

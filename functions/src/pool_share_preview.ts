@@ -80,6 +80,8 @@ export const getPoolSharePreview = onRequest(
         bannerUrl: str(d.bannerUrl),
         bannerVideoUrl: str(d.bannerVideoUrl),
         servicioBadge: str(d.servicioBadge),
+        shareLogoUrl: 'https://flygo-rd.web.app/pool/rai-share-card.png',
+        ogImageUrl: 'https://flygo-rd.web.app/pool/rai-share-card.png',
       });
     } catch (e) {
       logger.error("[getPoolSharePreview]", poolId, e);

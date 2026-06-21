@@ -161,6 +161,9 @@ class ActiveTripService {
       if (d['completado'] == true || EstadosViaje.esTerminal(st)) {
         return false;
       }
+      if (!ViajePoolTaxistaGate.viajeDocDebeMostrarOverlayShell(d, u)) {
+        return false;
+      }
       return true;
     } catch (e) {
       print('[VIAJE_ACTIVO] clienteTieneViajeEnSeguimiento error: $e');
@@ -190,9 +193,7 @@ class ActiveTripService {
         .snapshots()
         .map((DocumentSnapshot<Map<String, dynamic>> s) {
           final d = s.data();
-          final vid = (d?['viajeActivoId'] ?? '').toString().trim();
-          final ts = d?['updatedAt'] ?? d?['actualizadoEn'];
-          return '$vid|${ts?.toString() ?? ''}';
+          return (d?['viajeActivoId'] ?? '').toString().trim();
         })
         .distinct()
         .asyncMap((_) async {

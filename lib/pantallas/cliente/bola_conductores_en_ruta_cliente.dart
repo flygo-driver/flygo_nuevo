@@ -1,9 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
-import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_viaje_activo_page.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart';
 
@@ -149,10 +150,10 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                                 nombre: nombre,
                                 rol: 'cliente',
                                 onAbrirModoViaje: (bolaId) {
-                                  Navigator.of(context).push<void>(
-                                    MaterialPageRoute<void>(
-                                      builder: (_) => BolaPuebloViajeActivoPage(
-                                          bolaId: bolaId),
+                                  unawaited(
+                                    BolaPuebloDialogs.abrirModoViajeBolaPorId(
+                                      context: context,
+                                      bolaId: bolaId,
                                     ),
                                   );
                                 },

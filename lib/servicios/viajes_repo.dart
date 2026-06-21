@@ -22,11 +22,21 @@ import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
+import 'package:flygo_nuevo/servicios/notification_service.dart';
 
 /// Diagnóstico solo en debug: en release no expone UIDs ni estado interno por logcat.
 void _viajesRepoDebugLog(String message) {
   if (kDebugMode) debugPrint(message);
 }
+
+  /// Mensaje cuando el cliente intenta crear un segundo viaje (doble toque / reintento).
+const String kMsgClienteYaTieneViajeActivo =
+    'Ya tienes un viaje activo. Abre tu viaje en curso o espera a que termine antes de pedir otro.';
+
+const String kMsgCrearViajeSinPermisoCliente =
+    'No se pudo crear el viaje. Cierra sesión, entrá de nuevo como pasajero e intentá otra vez.';
 
 /// Resultado de [ViajesRepo.promoverColaTrasFinalizarTaxista] (callable `promoverSiguienteViaje`).
 class PromoverColaTaxistaOutcome {
@@ -134,6 +144,145 @@ class ViajesRepo {
     return (d['clienteId'] ?? '').toString().trim();
   }
 
+  /// Garantiza `usuarios/{uid}` con rol pasajero antes de crear en `viajes`
+  /// (evita permission-denied si el doc no existía o `rol` venía vacío).
+  static Future<void> _ensurePerfilClienteOperativo(String uidCliente) async {
+    final String authUid =
+        (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+    if (authUid.isEmpty || authUid != uidCliente.trim()) return;
+
+    final ref = _db.collection('usuarios').doc(uidCliente);
+    final snap = await ref.get();
+    final String email =
+        (FirebaseAuth.instance.currentUser?.email ?? '').trim();
+
+    if (!snap.exists) {
+      await ref.set(<String, dynamic>{
+        'uid': uidCliente,
+        'email': email,
+        'rol': 'cliente',
+        'registroClienteCompleto': false,
+        'fechaRegistro': FieldValue.serverTimestamp(),
+        'lastLogin': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
+    final Map<String, dynamic> data = snap.data() ?? <String, dynamic>{};
+    final String rol = AppFlavorRolGuard.rolCanonicoDesdeMaps(usuario: data);
+    if (rol == 'admin') {
+      throw StateError(
+        'Esta cuenta es de administrador. Usá la app de pasajero con otro correo.',
+      );
+    }
+    if ((data['rol'] ?? '').toString().trim().isEmpty) {
+      await ref.set(<String, dynamic>{
+        'rol': 'cliente',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
+  static dynamic _encodeTripFieldForCallable(dynamic value) {
+    if (value is Timestamp) {
+      return value.toDate().toUtc().toIso8601String();
+    }
+    if (value is FieldValue) return null;
+    if (value is List) {
+      return value.map(_encodeTripFieldForCallable).toList();
+    }
+    if (value is Map) {
+      final out = <String, dynamic>{};
+      for (final e in value.entries) {
+        out[e.key.toString()] = _encodeTripFieldForCallable(e.value);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  static Future<void> _runViajePendienteTransaction({
+    required DocumentReference<Map<String, dynamic>> doc,
+    required Map<String, dynamic> data,
+    required String uidCliente,
+    required DocumentReference<Map<String, dynamic>> userRef,
+    required bool nuevoEsAhora,
+  }) async {
+    await _db.runTransaction((tx) async {
+      final userSnap = await tx.get(userRef);
+      final Map<String, dynamic> userData =
+          userSnap.data() ?? <String, dynamic>{};
+      final vid =
+          (userData['viajeActivoId'] ?? '').toString().trim();
+      Map<String, dynamic>? viajeActivoDoc;
+      if (vid.isNotEmpty) {
+        final vSnap = await tx.get(_col.doc(vid));
+        if (vSnap.exists) {
+          viajeActivoDoc = vSnap.data() ?? <String, dynamic>{};
+          if (ViajePoolTaxistaGate.clienteViajeExistenteBloqueaNuevoPedido(
+            viajeActivoDoc,
+            uidCliente,
+            nuevoEsAhora: nuevoEsAhora,
+          )) {
+            throw StateError(kMsgClienteYaTieneViajeActivo);
+          }
+        }
+      }
+      tx.set(doc, data);
+      final Map<String, String> userPatch =
+          ViajePoolTaxistaGate.patchUsuarioTrasCrearViajeCliente(
+        uidCliente: uidCliente,
+        nuevoViajeId: doc.id,
+        nuevoEsAhora: nuevoEsAhora,
+        userData: userData,
+        viajeActivoDoc: viajeActivoDoc,
+      );
+      tx.set(
+        userRef,
+        {
+          'viajeActivoId': userPatch['viajeActivoId'],
+          'siguienteViajeId': userPatch['siguienteViajeId'],
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  static Future<void> _persistViajePendienteClienteCallable({
+    required String viajeId,
+    required Map<String, dynamic> data,
+  }) async {
+    final trip = <String, dynamic>{};
+    for (final e in data.entries) {
+      if (e.value is FieldValue) continue;
+      trip[e.key] = _encodeTripFieldForCallable(e.value);
+    }
+    trip['id'] = viajeId;
+
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('crearViajePendienteCliente');
+    try {
+      await callable.call(<String, dynamic>{
+        'viajeId': viajeId,
+        'trip': trip,
+      });
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').toLowerCase();
+      if (e.code == 'failed-precondition' && msg.contains('viaje activo')) {
+        throw StateError(kMsgClienteYaTieneViajeActivo);
+      }
+      if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
+        throw StateError(kMsgCrearViajeSinPermisoCliente);
+      }
+      rethrow;
+    }
+  }
+
   // ==============================================================
   //                           CREATE
   // ==============================================================
@@ -160,6 +309,8 @@ class ViajesRepo {
     String? canalAsignacion,
     DateTime? publishAt,
     DateTime? acceptAfter,
+    /// Tab Programar con recogida pronto: alinear `esAhora`/`programado` con pool ya abierto.
+    bool? forzarEsAhora,
     bool turismoIntentarAsignacionAutomatica = true,
 
     /// Si se publica también en `bolas_pueblo`, enlaza el viaje espejo del pool para negociación en Bola.
@@ -193,7 +344,7 @@ class ViajesRepo {
         : PlataformaEconomia.comisionViajePorcentaje;
 
     final DateTime now = DateTime.now();
-    final bool esAhora =
+    final bool esAhora = forzarEsAhora ??
         TripPublishWindows.esAhoraPorFechaPickup(fechaHora, now);
 
     // Viajes AHORA: pool y aceptación inmediatos.
@@ -345,15 +496,63 @@ class ViajesRepo {
       data['bolaNegociacionAbierta'] = true;
     }
 
-    // referenciaRecaudo: solo Cloud Function onViajeCreatedAsignarReferenciaRecaudo (flag ON).
-    await doc.set(data);
+    await _ensurePerfilClienteOperativo(uidCliente);
+    await FirebaseAuth.instance.currentUser?.getIdToken(true);
 
-    await _db.collection('usuarios').doc(uidCliente).set({
-      'viajeActivoId': doc.id,
-      'siguienteViajeId': '',
-      'updatedAt': FieldValue.serverTimestamp(),
-      'actualizadoEn': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final userRef = _db.collection('usuarios').doc(uidCliente);
+    final String authUid =
+        (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+    final bool usarCallableCliente =
+        isClienteFlavor && authUid == uidCliente.trim();
+
+    try {
+      if (usarCallableCliente) {
+        try {
+          await _persistViajePendienteClienteCallable(
+            viajeId: doc.id,
+            data: data,
+          );
+        } on FirebaseFunctionsException catch (e) {
+          if (e.code == 'not-found' || e.code == 'unimplemented') {
+            await _runViajePendienteTransaction(
+              doc: doc,
+              data: data,
+              uidCliente: uidCliente,
+              userRef: userRef,
+              nuevoEsAhora: esAhora,
+            );
+          } else {
+            rethrow;
+          }
+        }
+      } else {
+        await _runViajePendienteTransaction(
+          doc: doc,
+          data: data,
+          uidCliente: uidCliente,
+          userRef: userRef,
+          nuevoEsAhora: esAhora,
+        );
+      }
+    } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'failed-precondition' &&
+          (e.message ?? '').toLowerCase().contains('viaje activo')) {
+        throw StateError(kMsgClienteYaTieneViajeActivo);
+      }
+      if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
+        throw StateError(kMsgCrearViajeSinPermisoCliente);
+      }
+      rethrow;
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        throw StateError(kMsgCrearViajeSinPermisoCliente);
+      }
+      rethrow;
+    }
+
+    if (isClienteFlavor) {
+      unawaited(NotificationService.I.marcarViajePropioSinTimbre(doc.id));
+    }
 
     if (tipoSrvFinal == 'turismo' && turismoIntentarAsignacionAutomatica) {
       try {
@@ -383,6 +582,10 @@ class ViajesRepo {
                 (v['estado'] ?? '').toString().trim().toLowerCase();
             if (uidTx.isNotEmpty) return;
             if (estado != 'pendiente_admin') return;
+            final dynamic tsPub = v['publishAt'];
+            if (tsPub is Timestamp && tsPub.toDate().isAfter(DateTime.now())) {
+              return;
+            }
             tx.update(doc, {
               'canalAsignacion': AsignacionTurismoRepo.canalTurismoPool,
               'liberadoPoolTurismoEn': FieldValue.serverTimestamp(),
@@ -1306,6 +1509,151 @@ class ViajesRepo {
     await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
   }
 
+  /// Tras acordar tarifa Bola (viaje espejo): activa el viaje y enlaza `viajeActivoId`
+  /// del participante en sesión (cliente o taxista) para el shell y [ViajeEnCurso*].
+  /// Devuelve el id del espejo enlazado o `null` si aún no está listo.
+  static Future<String?> enlazarViajeEspejoBolaOperativo({
+    required String bolaId,
+  }) async {
+    final String bid = bolaId.trim();
+    if (bid.isEmpty) return null;
+    final String currentUid =
+        (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+    if (currentUid.isEmpty) return null;
+
+    for (int attempt = 0; attempt < 8; attempt++) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> bolaSnap =
+            await _db.collection('bolas_pueblo').doc(bid).get(
+                  attempt == 0
+                      ? const GetOptions()
+                      : const GetOptions(source: Source.server),
+                );
+        if (!bolaSnap.exists) return null;
+        final Map<String, dynamic> bd = bolaSnap.data() ?? <String, dynamic>{};
+        final String estadoBola = (bd['estado'] ?? '').toString().trim();
+        if (estadoBola != 'acordada' && estadoBola != 'en_curso') {
+          if (attempt < 7) {
+            await Future<void>.delayed(const Duration(milliseconds: 280));
+            continue;
+          }
+          return null;
+        }
+
+        final String uidTx = (bd['uidTaxista'] ?? '').toString().trim();
+        final String uidCli = (bd['uidCliente'] ?? '').toString().trim();
+        final bool soyTaxista = currentUid == uidTx;
+        final bool soyCliente = currentUid == uidCli;
+        if (!soyTaxista && !soyCliente) return null;
+
+        String viajeId = (bd['viajeEspejoId'] ?? '').toString().trim();
+        if (viajeId.isEmpty) {
+          final QuerySnapshot<Map<String, dynamic>> q = await _col
+              .where('bolaPuebloId', isEqualTo: bid)
+              .limit(1)
+              .get(
+                attempt == 0
+                    ? const GetOptions()
+                    : const GetOptions(source: Source.server),
+              );
+          if (q.docs.isEmpty) {
+            if (attempt < 7) {
+              await Future<void>.delayed(const Duration(milliseconds: 280));
+              continue;
+            }
+            return null;
+          }
+          viajeId = q.docs.first.id;
+        }
+
+        final DocumentSnapshot<Map<String, dynamic>> vSnap =
+            await _col.doc(viajeId).get(
+                  attempt == 0
+                      ? const GetOptions()
+                      : const GetOptions(source: Source.server),
+                );
+        if (!vSnap.exists) {
+          if (attempt < 7) {
+            await Future<void>.delayed(const Duration(milliseconds: 280));
+            continue;
+          }
+          return null;
+        }
+
+        final Map<String, dynamic> vd = vSnap.data() ?? <String, dynamic>{};
+        final String estadoViaje =
+            EstadosViaje.normalizar((vd['estado'] ?? '').toString());
+        final Map<String, dynamic> patchViaje = <String, dynamic>{
+          'activo': true,
+          'bolaNegociacionAbierta': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        };
+        if (uidTx.isNotEmpty) {
+          patchViaje['uidTaxista'] = uidTx;
+          patchViaje['taxistaId'] = uidTx;
+        }
+        if (uidCli.isNotEmpty) {
+          patchViaje['uidCliente'] = uidCli;
+          patchViaje['clienteId'] = uidCli;
+        }
+        if (estadoViaje == EstadosViaje.pendiente ||
+            estadoViaje == 'buscando' ||
+            (uidTx.isNotEmpty && !EstadosViaje.activos.contains(estadoViaje))) {
+          patchViaje['estado'] = EstadosViaje.aceptado;
+          patchViaje['aceptado'] = true;
+        }
+        final String codigoViaje =
+            (vd['codigoVerificacion'] ?? vd['codigo_verificacion'] ?? '')
+                .toString()
+                .trim();
+        final String codigoBola =
+            (bd['codigoVerificacionBola'] ?? '').toString().trim();
+        if (codigoViaje.isEmpty && codigoBola.isNotEmpty) {
+          patchViaje['codigoVerificacion'] = codigoBola;
+          patchViaje['codigoVerificado'] = vd['codigoVerificado'] == true;
+        }
+        await _col.doc(viajeId).set(patchViaje, SetOptions(merge: true));
+
+        if ((bd['viajeEspejoId'] ?? '').toString().trim().isEmpty) {
+          await _db.collection('bolas_pueblo').doc(bid).set(<String, dynamic>{
+            'viajeEspejoId': viajeId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+
+        final Set<String> participantes = <String>{
+          if (uidTx.isNotEmpty) uidTx,
+          if (uidCli.isNotEmpty) uidCli,
+        };
+        for (final String uid in participantes) {
+          await _db.collection('usuarios').doc(uid).set(<String, dynamic>{
+            'viajeActivoId': viajeId,
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+
+        if (uidTx.isNotEmpty) {
+          await _limpiarOtrosActivosDelTaxista(uidTx, exceptoId: viajeId);
+        }
+
+        _viajesRepoDebugLog(
+          '[BOLA_AHORRO] enlazarViajeEspejo ok bola=$bid viaje=$viajeId uid=$currentUid intento=$attempt',
+        );
+        return viajeId;
+      } catch (e, st) {
+        _viajesRepoDebugLog(
+          '[BOLA_AHORRO] enlazarViajeEspejo intento=$attempt error $e\n$st',
+        );
+        if (attempt < 7) {
+          await Future<void>.delayed(const Duration(milliseconds: 280));
+        }
+      }
+    }
+    return null;
+  }
+
   static Future<void> iniciarViaje({
     required String viajeId,
     required String uidTaxista,
@@ -1326,13 +1674,24 @@ class ViajesRepo {
   /// Conductor: registra llegada a la parada/destino actual (viaje multiparada).
   static Future<void> registrarLegMultiparadaCompletada({
     required String viajeId,
+    double? latConfirmacion,
+    double? lonConfirmacion,
   }) async {
     final id = viajeId.trim();
     if (id.isEmpty) throw Exception('Viaje inválido');
     try {
       final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
           .httpsCallable('registrarLegMultiparadaSeguro');
-      await callable.call(<String, dynamic>{'viajeId': id});
+      final Map<String, dynamic> payload = <String, dynamic>{'viajeId': id};
+      if (latConfirmacion != null &&
+          lonConfirmacion != null &&
+          latConfirmacion.isFinite &&
+          lonConfirmacion.isFinite &&
+          !(latConfirmacion == 0 && lonConfirmacion == 0)) {
+        payload['lat'] = latConfirmacion;
+        payload['lon'] = lonConfirmacion;
+      }
+      await callable.call(payload);
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
       if (msg.isNotEmpty) throw Exception(msg);
@@ -1358,6 +1717,79 @@ class ViajesRepo {
     return EstadosViaje.activos.contains(n);
   }
 
+  static Future<bool> _espejoBolaTableroOperativo(
+      Map<String, dynamic> vd) async {
+    final String bolaId =
+        (vd['bolaPuebloId'] ?? vd['bolaId'] ?? '').toString().trim();
+    final bool esBola =
+        (vd['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro' ||
+            bolaId.isNotEmpty;
+    if (!esBola) return true;
+    if (bolaId.isEmpty) return true;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await _db.collection('bolas_pueblo').doc(bolaId).get();
+      if (!snap.exists) return false;
+      final String e = (snap.data()?['estado'] ?? '').toString().trim();
+      return e != 'cancelada' && e != 'finalizada';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static Future<void> _liberarEspejoBolaHuerfano({
+    required String uid,
+    required String viajeId,
+    required Map<String, dynamic> data,
+  }) async {
+    final String bolaId =
+        (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
+    final bool esBola =
+        (data['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro' ||
+            bolaId.isNotEmpty;
+    if (!esBola) return;
+
+    var muerta = false;
+    if (bolaId.isEmpty) {
+      final String est =
+          EstadosViaje.normalizar((data['estado'] ?? '').toString());
+      muerta = EstadosViaje.esTerminal(est) ||
+          data['completado'] == true ||
+          data['activo'] != true;
+    } else {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> bSnap =
+            await _db.collection('bolas_pueblo').doc(bolaId).get();
+        if (!bSnap.exists) {
+          muerta = true;
+        } else {
+          final String be =
+              (bSnap.data()?['estado'] ?? '').toString().trim();
+          muerta = be == 'cancelada' || be == 'finalizada';
+        }
+      } catch (_) {}
+    }
+    if (!muerta) return;
+
+    try {
+      await _db.collection('usuarios').doc(uid).set(<String, dynamic>{
+        'viajeActivoId': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
+
+    if (data['activo'] == true) {
+      try {
+        await _db.collection('viajes').doc(viajeId).set(<String, dynamic>{
+          'activo': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    }
+  }
+
   /// Documento `viajes` donde el usuario es cliente o taxista y el estado es **en ruta al destino**
   /// (`en_curso` normalizado), o bien `usuarios.viajeActivoId` apunta a un viaje aún en [EstadosViaje.activos].
   static Future<DocumentSnapshot<Map<String, dynamic>>?> getViajeActivoParaUsuario(
@@ -1372,9 +1804,23 @@ class ViajesRepo {
         final vSnap = await _col.doc(vid).get();
         if (vSnap.exists &&
             _usuarioParticipaViajeDoc(vSnap.data(), u) &&
-            _viajeDocEnFlujoActivo(vSnap.data())) {
+            _viajeDocEnFlujoActivo(vSnap.data()) &&
+            await _espejoBolaTableroOperativo(vSnap.data() ?? <String, dynamic>{})) {
           print('[VIAJE_ACTIVO] match viajeActivoId=$vid');
           return vSnap;
+        }
+        if (vSnap.exists) {
+          await _liberarEspejoBolaHuerfano(
+            uid: u,
+            viajeId: vid,
+            data: vSnap.data() ?? <String, dynamic>{},
+          );
+        } else {
+          await _db.collection('usuarios').doc(u).set(<String, dynamic>{
+            'viajeActivoId': '',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
         }
       }
 
@@ -1648,7 +2094,7 @@ class ViajesRepo {
           fh = DateTime.now();
         }
         final bool esAhora =
-            !fh.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+            TripPublishWindows.esAhoraPorFechaPickup(fh, DateTime.now());
 
         final bool esTurismo =
             (d['tipoServicio'] ?? '').toString() == 'turismo';
@@ -2107,6 +2553,14 @@ class ViajesRepo {
       viajeDocSub = _db.collection('viajes').doc(id).snapshots().listen(
         (vSnap) {
           if (!vSnap.exists) {
+            unawaited(_db.collection('usuarios').doc(uidTaxista).set(
+              <String, dynamic>{
+                'viajeActivoId': '',
+                'updatedAt': FieldValue.serverTimestamp(),
+                'actualizadoEn': FieldValue.serverTimestamp(),
+              },
+              SetOptions(merge: true),
+            ));
             controller.add(null);
             return;
           }
@@ -2127,6 +2581,11 @@ class ViajesRepo {
           if (uidTxDoc != uidTaxista || !activo || !estadoActivo) {
             _diag(
                 'taxista stream hide doc=$id uidDoc=$uidTxDoc activo=$activo estadoActivo=$estadoActivo → retry');
+            unawaited(_liberarEspejoBolaHuerfano(
+              uid: uidTaxista,
+              viajeId: id,
+              data: data,
+            ));
             unawaited(_reintentarEmitViajeTaxistaEnCurso(
               controller: controller,
               viajeId: id,

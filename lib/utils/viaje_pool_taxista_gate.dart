@@ -118,6 +118,70 @@ class ViajePoolTaxistaGate {
     return true;
   }
 
+  /// Reserva futura cuyo pool aún no abrió (~45 min antes de recogida).
+  static bool esReservaProgramadaLejana(Map<String, dynamic> data) {
+    if (data['programado'] != true) return false;
+    if (data['esAhora'] == true) return false;
+    if (data['activo'] == true) return false;
+    return !ventanaPublicacionYAceptacionOk(data);
+  }
+
+  /// ¿Un viaje ya existente impide crear otro pedido del cliente?
+  static bool clienteViajeExistenteBloqueaNuevoPedido(
+    Map<String, dynamic> data,
+    String uid, {
+    required bool nuevoEsAhora,
+  }) {
+    if (!_usuarioEsClienteEnDoc(data, uid)) return false;
+    final String st =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    if (data['completado'] == true || EstadosViaje.esTerminal(st)) {
+      return false;
+    }
+    if (esReservaProgramadaLejana(data)) {
+      return !nuevoEsAhora;
+    }
+    return true;
+  }
+
+  static Map<String, String> patchUsuarioTrasCrearViajeCliente({
+    required String uidCliente,
+    required String nuevoViajeId,
+    required bool nuevoEsAhora,
+    required Map<String, dynamic>? userData,
+    required Map<String, dynamic>? viajeActivoDoc,
+  }) {
+    final String sigPrev =
+        (userData?['siguienteViajeId'] ?? '').toString().trim();
+    final String vidPrev =
+        (userData?['viajeActivoId'] ?? '').toString().trim();
+
+    String viajeActivoId = nuevoViajeId;
+    String siguienteViajeId = sigPrev;
+
+    if (vidPrev.isNotEmpty && viajeActivoDoc != null) {
+      if (esReservaProgramadaLejana(viajeActivoDoc)) {
+        if (nuevoEsAhora) {
+          if (sigPrev.isEmpty) {
+            siguienteViajeId = vidPrev;
+          }
+          viajeActivoId = nuevoViajeId;
+        } else {
+          viajeActivoId = nuevoViajeId;
+        }
+      } else if (!nuevoEsAhora &&
+          viajeDocDebeMostrarOverlayShell(viajeActivoDoc, uidCliente)) {
+        viajeActivoId = vidPrev;
+        siguienteViajeId = nuevoViajeId;
+      }
+    }
+
+    return <String, String>{
+      'viajeActivoId': viajeActivoId,
+      'siguienteViajeId': siguienteViajeId,
+    };
+  }
+
   /// Misma lógica que el filtro de la lista del pool (taxista normal / motor).
   static bool viajeTomableEnPool(
     Map<String, dynamic> data,
@@ -141,6 +205,8 @@ class ViajePoolTaxistaGate {
     }
 
     if ((data['uidTaxista'] ?? '').toString().isNotEmpty) return false;
+
+    if (_usuarioEsClienteEnDoc(data, myUid)) return false;
 
     final String estadoNorm =
         EstadosViaje.normalizar((data['estado'] ?? '').toString());
@@ -196,7 +262,7 @@ class ViajePoolTaxistaGate {
     return viajeCoincideModoConductor(data, poolModoConductor);
   }
 
-  /// Viaje espejo Bola Ahorro: negociación y ejecución van por [bolas_pueblo], no por ViajeEnCurso ni auto-router.
+  /// Viaje espejo Bola Ahorro. Negociación → tablero; operación → ViajeEnCurso*.
   static bool esViajeEspejoBolaParaFlujo(Map<String, dynamic> data) {
     if ((data['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro') {
       return true;
@@ -206,23 +272,73 @@ class ViajePoolTaxistaGate {
     return pid.isNotEmpty;
   }
 
-  /// Mientras el espejo está en pool **sin aceptar**, el taxista sigue el flujo Bola Pueblo.
-  /// Con `aceptado` o estados de ejecución, aplica el mismo flujo que un viaje pool ([ViajeEnCursoTaxista]).
+  static String bolaPuebloIdDesdeViajeDoc(Map<String, dynamic> data) {
+    return (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
+  }
+
+  /// Solo durante negociación abierta (sin conductor asignado en el espejo).
+  /// Tras acordar tarifa → mismo flujo que taxi: [ViajeEnCursoTaxista] / [ViajeEnCursoCliente].
   static bool debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
       Map<String, dynamic> data) {
     if (!esViajeEspejoBolaParaFlujo(data)) return false;
-    final estadoNorm =
+
+    final String uidTx = (data['uidTaxista'] ?? data['taxistaId'] ?? '')
+        .toString()
+        .trim();
+    final String estadoNorm =
         EstadosViaje.normalizar((data['estado'] ?? '').toString());
-    final bool aceptado = (data['aceptado'] ?? false) == true;
-    if (aceptado ||
-        estadoNorm == EstadosViaje.aceptado ||
-        estadoNorm == EstadosViaje.enCaminoPickup ||
-        estadoNorm == EstadosViaje.aBordo ||
-        estadoNorm == EstadosViaje.enCurso ||
+
+    if (estadoNorm == EstadosViaje.enCurso ||
         estadoNorm == EstadosViaje.completado) {
       return false;
     }
-    return true;
+
+    // Tras acordar tarifa: conductor asignado → Mi viaje en curso (no tablero Bola).
+    if (uidTx.isNotEmpty) {
+      if (data['bolaNegociacionAbierta'] != true) return false;
+      if (estadoNorm == EstadosViaje.aceptado ||
+          EstadosViaje.activos.contains(estadoNorm)) {
+        return false;
+      }
+    }
+
+    return data['bolaNegociacionAbierta'] == true;
+  }
+
+  /// Tras acordar tarifa → [ViajeEnCursoTaxista] / [ViajeEnCursoCliente] (igual que taxi).
+  /// Solo negociación abierta usa tablero Bola.
+  static bool clientePinBolaPermitidoEnViajeEnCurso({
+    required Map<String, dynamic> viajeData,
+    required Map<String, dynamic>? bolaData,
+  }) {
+    if (!esViajeEspejoBolaParaFlujo(viajeData)) return true;
+    if (bolaPuebloIdDesdeViajeDoc(viajeData).isEmpty) return true;
+    if (!debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(viajeData)) {
+      return true;
+    }
+
+    // Acordada / operativa: el pasajero debe ver el PIN al llegar al viaje en curso
+    // (no esperar pickupConfirmadoTaxista solo para mostrar el código).
+    if (bolaData != null) {
+      final String estadoBola =
+          (bolaData['estado'] ?? '').toString().trim().toLowerCase();
+      if (estadoBola == 'acordada' || estadoBola == 'en_curso') {
+        return true;
+      }
+    }
+
+    final String uidTx = (viajeData['uidTaxista'] ?? viajeData['taxistaId'] ?? '')
+        .toString()
+        .trim();
+    if (uidTx.isNotEmpty) {
+      final String st =
+          EstadosViaje.normalizar((viajeData['estado'] ?? '').toString());
+      if (EstadosViaje.activos.contains(st)) return true;
+    }
+
+    if (bolaData == null) return false;
+    if (!bolaData.containsKey('pickupConfirmadoTaxista')) return true;
+    return bolaData['pickupConfirmadoTaxista'] == true;
   }
 
   static bool _usuarioEsClienteEnDoc(Map<String, dynamic> data, String uid) {
@@ -267,12 +383,6 @@ class ViajePoolTaxistaGate {
     if (EstadosViaje.activos.contains(st)) return true;
 
     if (data['activo'] == true) return true;
-
-    if (esCliente &&
-        (data['tipoServicio'] ?? '').toString() == 'turismo' &&
-        st == 'pendiente_admin') {
-      return true;
-    }
 
     if (st == EstadosViaje.pendiente ||
         st == EstadosViaje.pendientePago ||

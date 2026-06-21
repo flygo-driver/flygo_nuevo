@@ -83,11 +83,17 @@ flutter:
     - assets/icon/paracaida_color.png    # Paracaídas (pantalla bienvenida)
     - assets/icon/splash_rai.png         # R + RAI + "Movilidad Inteligente" (splash)
     - assets/icon/logo_rai_vertical.png  # R arriba + RAI abajo (pantalla bienvenida)
+    - assets/icon/logo_flygo.png         # Legacy welcome_page (no login principal)
 
 # ---------- ICONO DE LA APP (R sola) ----------
 flutter_launcher_icons:
   android: true
   ios: false
+  web:
+    generate: true
+    image_path: assets/icon/logo_rai_app.png
+    background_color: "#000000"
+    theme_color: "#000000"
   adaptive_icon_background: "#000000"
   adaptive_icon_foreground: assets/icon/icono_app_R.png
   image_path: assets/icon/icono_app_R.png

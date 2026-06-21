@@ -27,6 +27,21 @@ String _textoVentanaPoolCliente(int minutos) {
   return 'Unos $minutos minutos antes de la recogida abrimos la búsqueda de conductor.';
 }
 
+String _textoVentanaPoolTurismoCliente(int minutos) {
+  if (minutos < 1) {
+    return 'Poco antes de la recogida RAI abre la asignación y el pool de choferes de turismo.';
+  }
+  if (minutos < 60) {
+    return 'Unos $minutos minutos antes de la recogida los choferes de turismo habilitados podrán ver y aceptar tu reserva.';
+  }
+  final h = minutos ~/ 60;
+  final r = minutos % 60;
+  if (r == 0) {
+    return 'Unas $h ${h == 1 ? 'hora' : 'horas'} antes de la recogida abrimos asignación RAI y pool turístico.';
+  }
+  return 'Unos $minutos minutos antes de la recogida abrimos asignación RAI y pool turístico.';
+}
+
 /// Seguimiento en vivo del viaje programado: ventana al pool, búsqueda de conductor, etc.
 class ViajeProgramadoConfirmacion extends StatefulWidget {
   const ViajeProgramadoConfirmacion({
@@ -274,6 +289,8 @@ class _ViajeProgramadoConfirmacionState
 
         final now = DateTime.now();
         final fase = _fase(data, now);
+        final bool esTurismo =
+            (data['tipoServicio'] ?? '').toString().trim() == 'turismo';
 
         if (fase == _FaseReserva.conductorAsignado) {
           _irAViajeEnCursoOnce();
@@ -297,7 +314,7 @@ class _ViajeProgramadoConfirmacionState
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Tu reserva'),
+            title: Text(esTurismo ? 'Reserva turística' : 'Tu reserva'),
             leading: IconButton(
               icon: Icon(
                 Icons.close_rounded,
@@ -348,7 +365,9 @@ class _ViajeProgramadoConfirmacionState
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Aquí ves en tiempo real cuándo tu viaje entra al pool y cuándo los conductores pueden aceptarlo.',
+                    esTurismo
+                        ? 'Aquí ves cuándo abre la asignación RAI y cuándo los choferes de turismo pueden tomar tu reserva.'
+                        : 'Aquí ves en tiempo real cuándo tu viaje entra al pool y cuándo los conductores pueden aceptarlo.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color:
                           theme.colorScheme.onSurface.withValues(alpha: 0.72),
@@ -430,6 +449,7 @@ class _ViajeProgramadoConfirmacionState
                     now: now,
                     fmtCorto: fmtCorto,
                     poolLeadMinutes: ViajesRepo.poolLeadMinutesProgramado,
+                    esTurismo: esTurismo,
                   ),
                 ],
                 const SizedBox(height: 20),
@@ -454,9 +474,13 @@ class _ViajeProgramadoConfirmacionState
                       children: [
                         Text(
                           fase == _FaseReserva.antesDelPool
-                              ? 'Podés cancelar sin problema: el viaje aún no salió al pool de conductores.'
+                              ? (esTurismo
+                                  ? 'Podés cancelar sin problema: tu viaje aún no está en asignación ni en pool turístico.'
+                                  : 'Podés cancelar sin problema: el viaje aún no salió al pool de conductores.')
                               : fase == _FaseReserva.enPool
-                                  ? 'Podés cancelar mientras ningún conductor haya aceptado el viaje.'
+                                  ? (esTurismo
+                                      ? 'Podés cancelar mientras ningún chofer de turismo haya aceptado el viaje.'
+                                      : 'Podés cancelar mientras ningún conductor haya aceptado el viaje.')
                                   : 'Podés cancelar esta solicitud mientras siga pendiente de pago.',
                           style: theme.textTheme.bodySmall?.copyWith(
                             height: 1.35,
@@ -587,6 +611,7 @@ class _TimelineReserva extends StatelessWidget {
     required this.now,
     required this.fmtCorto,
     required this.poolLeadMinutes,
+    this.esTurismo = false,
   });
 
   final _FaseReserva fase;
@@ -596,6 +621,7 @@ class _TimelineReserva extends StatelessWidget {
   final DateTime now;
   final DateFormat fmtCorto;
   final int poolLeadMinutes;
+  final bool esTurismo;
 
   @override
   Widget build(BuildContext context) {
@@ -617,15 +643,18 @@ class _TimelineReserva extends StatelessWidget {
     String subt2;
     if (fase == _FaseReserva.antesDelPool && aperturaPool != null) {
       if (now.isBefore(aperturaPool)) {
-        subt2 =
-            'Los conductores verán tu viaje a partir del ${fmtCorto.format(aperturaPool)}. Antes de esa hora la reserva queda guardada solo para vos.';
+        subt2 = esTurismo
+            ? 'RAI y los choferes de turismo verán tu reserva a partir del ${fmtCorto.format(aperturaPool)}. Antes de esa hora queda guardada solo para vos.'
+            : 'Los conductores verán tu viaje a partir del ${fmtCorto.format(aperturaPool)}. Antes de esa hora la reserva queda guardada solo para vos.';
       } else {
-        subt2 =
-            'Tu viaje entrará en la red en cuanto se cumplan las condiciones de publicación.';
+        subt2 = esTurismo
+            ? 'Tu reserva entrará en asignación en cuanto se cumplan las condiciones de publicación.'
+            : 'Tu viaje entrará en la red en cuanto se cumplan las condiciones de publicación.';
       }
     } else if (fase == _FaseReserva.enPool) {
-      subt2 =
-          'Tu viaje está visible para conductores cercanos. Te avisamos por notificación cuando uno lo acepte (si tenés alertas activas).';
+      subt2 = esTurismo
+          ? 'Tu reserva está visible para choferes de turismo habilitados. Te avisamos cuando uno la acepte (si tenés alertas activas).'
+          : 'Tu viaje está visible para conductores cercanos. Te avisamos por notificación cuando uno lo acepte (si tenés alertas activas).';
     } else {
       subt2 = '';
     }
@@ -645,9 +674,13 @@ class _TimelineReserva extends StatelessWidget {
           done: t2Done,
           current: t2Current,
           icon: Icons.groups_2_outlined,
-          title: 'En red de conductores (pool)',
+          title: esTurismo
+              ? 'Asignación / pool turístico'
+              : 'En red de conductores (pool)',
           subtitle: subt2.isEmpty
-              ? _textoVentanaPoolCliente(poolLeadMinutes)
+              ? (esTurismo
+                  ? _textoVentanaPoolTurismoCliente(poolLeadMinutes)
+                  : _textoVentanaPoolCliente(poolLeadMinutes))
               : subt2,
         ),
         _TimelineTile(
@@ -655,10 +688,14 @@ class _TimelineReserva extends StatelessWidget {
           done: t3Done,
           current: t3Current,
           icon: Icons.directions_car_outlined,
-          title: 'Conductor asignado',
+          title: esTurismo ? 'Chofer asignado' : 'Conductor asignado',
           subtitle: fase == _FaseReserva.enPool
-              ? 'Buscando conductor disponible…'
-              : 'Cuando un conductor acepte, pasarás automáticamente al mapa del viaje.',
+              ? (esTurismo
+                  ? 'Buscando chofer de turismo disponible…'
+                  : 'Buscando conductor disponible…')
+              : (esTurismo
+                  ? 'Cuando un chofer acepte, pasarás automáticamente al mapa del viaje.'
+                  : 'Cuando un conductor acepte, pasarás automáticamente al mapa del viaje.'),
           isLast: true,
         ),
       ],
@@ -859,7 +896,6 @@ class _OtrasReservasSection extends StatelessWidget {
           final m = x.data();
           if (m['programado'] != true) return false;
           if (_terminal(m)) return false;
-          if ((m['tipoServicio'] ?? '').toString() == 'turismo') return false;
           return true;
         }).toList()
           ..sort((a, b) => _asDate(a.data()['fechaHora'])

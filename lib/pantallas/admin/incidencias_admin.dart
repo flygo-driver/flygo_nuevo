@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_ui_theme.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 
 class IncidenciasAdminPage extends StatefulWidget {
@@ -51,29 +52,25 @@ class _IncidenciasAdminPageState extends State<IncidenciasAdminPage> {
                 children: [
                   ValueListenableBuilder<String>(
                     valueListenable: tipo,
-                    builder: (_, v, __) => DropdownButtonFormField<String>(
+                    builder: (_, v, __) => _adminStringDropdown(
+                      label: 'Tipo',
                       value: v,
-                      items: _tipos
-                          .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                          .toList(),
+                      items: _tipos,
                       onChanged: (nv) {
                         if (nv != null) tipo.value = nv;
                       },
-                      decoration: const InputDecoration(labelText: 'Tipo'),
                     ),
                   ),
                   const SizedBox(height: 10),
                   ValueListenableBuilder<String>(
                     valueListenable: prioridad,
-                    builder: (_, v, __) => DropdownButtonFormField<String>(
+                    builder: (_, v, __) => _adminStringDropdown(
+                      label: 'Prioridad',
                       value: v,
-                      items: _prioridades
-                          .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                          .toList(),
+                      items: _prioridades,
                       onChanged: (nv) {
                         if (nv != null) prioridad.value = nv;
                       },
-                      decoration: const InputDecoration(labelText: 'Prioridad'),
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -160,11 +157,8 @@ class _IncidenciasAdminPageState extends State<IncidenciasAdminPage> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        title: Text('Incidencias (soporte)',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: AdminAppBar(
+        title: 'Incidencias (soporte)',
         actions: [
           IconButton(
             tooltip: 'Crear incidencia',
@@ -265,6 +259,27 @@ class _IncidenciasAdminPageState extends State<IncidenciasAdminPage> {
   }
 }
 
+Widget _adminStringDropdown({
+  required String label,
+  required String value,
+  required List<String> items,
+  required ValueChanged<String?> onChanged,
+}) {
+  return InputDecorator(
+    decoration: InputDecoration(labelText: label),
+    child: DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        value: value,
+        isExpanded: true,
+        items: items
+            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+            .toList(),
+        onChanged: onChanged,
+      ),
+    ),
+  );
+}
+
 class _FilterDrop extends StatelessWidget {
   const _FilterDrop({
     required this.label,
@@ -282,10 +297,10 @@ class _FilterDrop extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: 170,
-      child: DropdownButtonFormField<String>(
+      child: _adminStringDropdown(
+        label: label,
         value: value,
-        decoration: InputDecoration(labelText: label),
-        items: items.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+        items: items,
         onChanged: (v) {
           if (v != null) onChanged(v);
         },

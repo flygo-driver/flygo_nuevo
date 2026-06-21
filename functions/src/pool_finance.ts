@@ -1,13 +1,30 @@
-import { FieldValue, getFirestore, type QueryDocumentSnapshot, type Transaction } from "firebase-admin/firestore";
+import {
+  FieldValue,
+  Timestamp,
+  getFirestore,
+  type DocumentReference,
+  type QueryDocumentSnapshot,
+  type Transaction,
+} from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
 import { getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import { getComisionPrepagoConfig } from "./finance.js";
 import {
   fetchGiraAbusoUmbral,
   mergeGiraAbusoBloqueadoSiAplica,
 } from "./gira_abuso_util.js";
+import { generarReferenciaRecaudoPool } from "./pool_referencia.js";
+import {
+  UMBRAL_COMISION_LEGACY_RD,
+  bloqueoOperativoPorComisionEfectivo,
+  comisionPendienteRdFromBilletera,
+  saldoDisponiblePrepagoRdFromBilletera,
+  saldoPrepagoRdFromBilletera,
+  saldoReservadoGirasRdFromBilletera,
+} from "./taxista_cola_promote_logic.js";
 
 const db = () => getFirestore();
 
@@ -41,18 +58,25 @@ function roleFromUserDoc(data: AnyMap | undefined): string {
   return typeof rol === "string" ? rol : "";
 }
 
-async function getRole(uid: string): Promise<string> {
-  const snap = await db().collection("usuarios").doc(uid).get();
-  let rolUsuario = roleFromUserDoc(snap.data() as AnyMap | undefined).trim().toLowerCase();
-  if (rolUsuario === "administrador") rolUsuario = "admin";
-  if (rolUsuario === "driver") rolUsuario = "taxista";
-  if (rolUsuario) return rolUsuario;
+function normalizeRoleRaw(raw: string): string {
+  let r = raw.trim().toLowerCase();
+  if (r === "administrador") r = "admin";
+  if (r === "driver") r = "taxista";
+  if (r === "user") r = "cliente";
+  return r;
+}
 
-  const rolSnap = await db().collection("roles").doc(uid).get();
-  let rolRaw = String((rolSnap.data() as AnyMap | undefined)?.rol ?? "").trim().toLowerCase();
-  if (rolRaw === "administrador") rolRaw = "admin";
-  if (rolRaw === "driver") rolRaw = "taxista";
-  return rolRaw;
+/** Lee `usuarios` + `roles`; prioriza admin/taxista si hay datos mixtos legacy. */
+async function getRole(uid: string): Promise<string> {
+  const [userSnap, rolSnap] = await Promise.all([
+    db().collection("usuarios").doc(uid).get(),
+    db().collection("roles").doc(uid).get(),
+  ]);
+  const fromUser = normalizeRoleRaw(roleFromUserDoc(userSnap.data() as AnyMap | undefined));
+  const fromRoles = normalizeRoleRaw(String((rolSnap.data() as AnyMap | undefined)?.rol ?? ""));
+  if (fromUser === "admin" || fromRoles === "admin") return "admin";
+  if (fromUser === "taxista" || fromRoles === "taxista") return "taxista";
+  return fromUser || fromRoles || "";
 }
 
 async function ensureIdempotencyStart(
@@ -151,8 +175,22 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+function poolUsaRecaudoCentral(pool: AnyMap): boolean {
+  return String(pool.recaudoModelo ?? "").trim().toLowerCase() === "central";
+}
+
+function splitRecaudoReservaTotal(
+  total: number,
+  pct: number,
+): { comisionRaiRd: number; netoOrganizadorRd: number } {
+  const bruto = Math.max(0, Number.isFinite(total) ? total : 0);
+  const comisionRaiRd = round2(bruto * (pct / 100));
+  const netoOrganizadorRd = round2(bruto - comisionRaiRd);
+  return { comisionRaiRd, netoOrganizadorRd };
+}
+
 /** Mismo % que viajes en efectivo (`config/comision`). */
-async function getComisionGiraPorcientoFromRemote(): Promise<number> {
+export async function getComisionGiraPorcientoFromRemote(): Promise<number> {
   return getComisionViajePorcentajeCached();
 }
 
@@ -173,6 +211,36 @@ function comisionRealRdFromAsientos(
   return round2(base * (pct / 100));
 }
 
+/** Comisión RAI sumando cada reserva por su `total` (asientos × precio al reservar). */
+function comisionRaiRdFromReservaDocs(
+  docs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[],
+  includeReserva: (r: AnyMap) => boolean,
+  pct: number,
+): number {
+  let sum = 0;
+  for (const d of docs) {
+    const r = (d.data() ?? {}) as AnyMap;
+    if (!includeReserva(r)) continue;
+    const total = numOr0(r.total);
+    if (total <= 0) continue;
+    sum += splitRecaudoReservaTotal(total, pct).comisionRaiRd;
+  }
+  return round2(sum);
+}
+
+function reservaEsEfectivoFirm(r: AnyMap): boolean {
+  const e = String(r.estado ?? "").toLowerCase().trim();
+  const m = String(r.metodoPago ?? "").toLowerCase().trim();
+  return e === "reservado" && m === "efectivo";
+}
+
+function reservaEsFirmeParaComision(r: AnyMap): boolean {
+  const e = String(r.estado ?? "").toLowerCase().trim();
+  const m = String(r.metodoPago ?? "").toLowerCase().trim();
+  if (e === "pagado") return true;
+  return e === "reservado" && m === "efectivo";
+}
+
 /** Cupos que cuentan para salir: pagados + reservas en efectivo (compromiso al abordar). No cuenta transferencia pendiente de comprobante. */
 function firmSeatsFromReservaDocs(
   docs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[],
@@ -186,6 +254,22 @@ function firmSeatsFromReservaDocs(
     if (!Number.isFinite(s) || s <= 0) continue;
     if (e === "pagado") firm += s;
     else if (e === "reservado" && m === "efectivo") firm += s;
+  }
+  return firm;
+}
+
+/** Cupos en efectivo reservados en app (comisión RAI vía prepago al iniciar salida central). */
+function firmEfectivoSeatsFromReservaDocs(
+  docs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[],
+): number {
+  let firm = 0;
+  for (const d of docs) {
+    const r = (d.data() ?? {}) as AnyMap;
+    const e = String(r.estado ?? "").toLowerCase().trim();
+    const m = String(r.metodoPago ?? "").toLowerCase().trim();
+    const s = Number(r.seats ?? 0);
+    if (!Number.isFinite(s) || s <= 0) continue;
+    if (e === "reservado" && m === "efectivo") firm += s;
   }
   return firm;
 }
@@ -208,6 +292,406 @@ function firmSeatsAfterConfirmPayment(
   }
   return firm;
 }
+
+function parseDateInput(raw: unknown): Date | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return new Date(raw);
+  if (typeof raw === "string" && raw.trim()) {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+
+function cuposReservaComision(
+  cuposComisionRai: number,
+  minParaConfirmar: number,
+  capacidad: number,
+): number {
+  const cap = capacidad > 0 ? capacidad : 1;
+  const minConf = minParaConfirmar > 0 ? minParaConfirmar : cap;
+  const tope = Math.min(Math.max(Math.trunc(cuposComisionRai), 1), cap);
+  return Math.min(tope, minConf, cap);
+}
+
+function taxistaRegistroPerfilCompleto(ud: AnyMap): boolean {
+  if (ud.registroTaxistaCompleto === false) return false;
+  const nombre = String(ud.nombre ?? "").trim();
+  if (nombre.length < 2) return false;
+  const telefono = String(ud.telefono ?? "").replace(/\D/g, "");
+  if (telefono.length !== 10 && !(telefono.length === 11 && telefono.startsWith("1"))) {
+    return false;
+  }
+  const placa = String(ud.placa ?? "").trim();
+  if (!placa) return false;
+  const modelo = String(ud.vehiculoModelo ?? ud.modelo ?? "").trim();
+  if (!modelo) return false;
+  const color = String(ud.vehiculoColor ?? ud.color ?? "").trim();
+  if (!color) return false;
+  const anioRaw = ud.anio ?? ud.vehiculoAnio;
+  const anio = typeof anioRaw === "number" ? anioRaw : Number(anioRaw);
+  if (!Number.isFinite(anio) || anio < 1990) return false;
+  if (ud.registroTaxistaCompleto === true) return true;
+  return false;
+}
+
+async function poolRecaudoCentralHabilitado(): Promise<boolean> {
+  try {
+    const snap = await db().collection("config").doc("finance").get();
+    return (snap.data() ?? {}).poolRecaudoCentralHabilitado === true;
+  } catch {
+    return false;
+  }
+}
+
+function mensajeGiraAbusoBloqueo(
+  creadas: number,
+  canceladas: number,
+  ratioMax: number,
+  diasHastaReinicio: number | null,
+): string {
+  const pct = creadas > 0 ? Math.round((canceladas / creadas) * 100) : 0;
+  const maxPct = Math.round(ratioMax * 100);
+  const ventana =
+    diasHastaReinicio != null && diasHastaReinicio > 0
+      ? ` El contador se reinicia solo en ${diasHastaReinicio} día(s).`
+      : "";
+  return (
+    `Has cancelado muchas salidas por cupos sin confirmar comisión ` +
+    `(${canceladas} de ${creadas} en esta ventana, ${pct}% — máximo ${maxPct}%). ` +
+    `Contacta a soporte RAI: un administrador debe regularizar tu cuenta ` +
+    `para que puedas publicar otra salida.${ventana}`
+  );
+}
+
+function trimOrNull(raw: unknown): string | null {
+  const s = String(raw ?? "").trim();
+  return s.length > 0 ? s : null;
+}
+
+function stringListOrNull(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out = raw
+    .map((e) => String(e ?? "").trim())
+    .filter((e) => e.length > 0);
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * Publicar gira por cupos: billetera + contadores + pool + ledger en una transacción (Admin SDK).
+ * El cliente ya no escribe `billeteras_taxista` (Firestore rules: solo admin).
+ */
+export const crearPoolGira = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+
+  const userPre = await db().collection("usuarios").doc(uid).get();
+  const udPre = (userPre.data() ?? {}) as AnyMap;
+  const role = await getRole(uid);
+  const perfilTaxistaOk = taxistaRegistroPerfilCompleto(udPre);
+  if (role !== "taxista" && role !== "admin" && !perfilTaxistaOk) {
+    throw new HttpsError(
+      "permission-denied",
+      "Debes iniciar sesión como taxista para publicar salidas por cupos.",
+    );
+  }
+
+  const d = (request.data ?? {}) as AnyMap;
+  const tipo = trimOrNull(d.tipo);
+  const sentido = trimOrNull(d.sentido) ?? "ida";
+  const origenTown = trimOrNull(d.origenTown);
+  const destino = trimOrNull(d.destino);
+  const fechaSalida = parseDateInput(d.fechaSalida);
+  const fechaVueltaRaw = d.fechaVuelta;
+  const fechaVuelta =
+    fechaVueltaRaw == null || fechaVueltaRaw === ""
+      ? null
+      : parseDateInput(fechaVueltaRaw);
+  const capacidad = Math.trunc(numOr0(d.capacidad));
+  const minParaConfirmar = Math.trunc(numOr0(d.minParaConfirmar));
+  const cuposComisionRai = Math.trunc(numOr0(d.cuposComisionRai));
+  const precioPorAsiento = numOr0(d.precioPorAsiento);
+  const depositPct = numOr0(d.depositPct) > 1 ? numOr0(d.depositPct) / 100 : numOr0(d.depositPct);
+  const feePct = numOr0(d.feePct) > 1 ? numOr0(d.feePct) / 100 : numOr0(d.feePct);
+
+  if (!tipo || !origenTown || !destino || !fechaSalida) {
+    throw new HttpsError("invalid-argument", "Faltan datos obligatorios de la salida.");
+  }
+  if (capacidad < 1) throw new HttpsError("invalid-argument", "Capacidad inválida.");
+  if (precioPorAsiento <= 0) {
+    throw new HttpsError("invalid-argument", "Precio por asiento inválido.");
+  }
+  const cap = capacidad > 0 ? capacidad : 1;
+  if (cuposComisionRai < 1 || cuposComisionRai > cap) {
+    throw new HttpsError("invalid-argument", `Cupos RAI para comisión debe estar entre 1 y ${cap}.`);
+  }
+  if (sentido === "ida_y_vuelta" && !fechaVuelta) {
+    throw new HttpsError("invalid-argument", "Selecciona la fecha de vuelta.");
+  }
+  if (fechaVuelta && fechaVuelta.getTime() < fechaSalida.getTime()) {
+    throw new HttpsError("invalid-argument", "La vuelta no puede ser antes de la salida.");
+  }
+
+  if (!perfilTaxistaOk) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Completá tu registro de conductor en RAI antes de publicar salidas por cupos.",
+    );
+  }
+
+  const [pct, prepagoCfg, abuso, recaudoCentral] = await Promise.all([
+    getComisionGiraPorcientoFromRemote(),
+    getComisionPrepagoConfig(),
+    fetchGiraAbusoUmbral(),
+    poolRecaudoCentralHabilitado(),
+  ]);
+  const minOperativoRd = prepagoCfg.minimoOperativoRd;
+  const mult = priceMultSentido(sentido);
+  const cuposReserva = cuposReservaComision(cuposComisionRai, minParaConfirmar, capacidad);
+  const comisionObjetivo = round2(cuposReserva * precioPorAsiento * mult * (pct / 100));
+
+  const poolRef = db().collection("viajes_pool").doc();
+  const poolId = poolRef.id;
+  const billeRef = db().collection("billeteras_taxista").doc(uid);
+  const userRef = db().collection("usuarios").doc(uid);
+  const taxistaNombre =
+    trimOrNull(request.auth.token.name) ??
+    trimOrNull(udPre.nombre) ??
+    "";
+
+  const pickupPoints = stringListOrNull(d.pickupPoints);
+  const incluye = stringListOrNull(d.incluye);
+
+  const result = await db().runTransaction(async (tx) => {
+    const [billeSnap, userSnap] = await Promise.all([tx.get(billeRef), tx.get(userRef)]);
+    const bille = (billeSnap.data() ?? {}) as AnyMap;
+    const ud = (userSnap.data() ?? {}) as AnyMap;
+    const disponiblePre = saldoDisponiblePrepagoRdFromBilletera(bille);
+
+    if (ud.tienePagoPendiente === true) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No puedes publicar salidas por cupos: hay un pago pendiente de validación. Revisa Mis pagos.",
+      );
+    }
+
+    if (!recaudoCentral) {
+      if (bloqueoOperativoPorComisionEfectivo(bille, minOperativoRd)) {
+        const pend = comisionPendienteRdFromBilletera(bille);
+        if (pend >= UMBRAL_COMISION_LEGACY_RD - 1e-6) {
+          throw new HttpsError(
+            "failed-precondition",
+            "No puedes publicar salidas por cupos: comisión en efectivo pendiente ≥ RD$500. " +
+              "Deposita y sube comprobante en Mis pagos.",
+          );
+        }
+        const falta = round2(minOperativoRd - disponiblePre);
+        throw new HttpsError(
+          "failed-precondition",
+          `No puedes publicar salidas por cupos: prepago libre RD$${disponiblePre.toFixed(2)}. ` +
+            `Necesitas al menos RD$${minOperativoRd.toFixed(0)}. ` +
+            `Recarga RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
+        );
+      }
+    }
+
+    let comisionReservar = 0;
+    const prep = saldoPrepagoRdFromBilletera(bille);
+    const res = saldoReservadoGirasRdFromBilletera(bille);
+    const disponible = disponiblePre;
+
+    if (!recaudoCentral) {
+      if (disponible + 1e-9 >= comisionObjetivo) {
+        comisionReservar = comisionObjetivo;
+      } else if (disponible + 1e-9 >= minOperativoRd) {
+        comisionReservar = round2(disponible);
+      } else {
+        const falta = round2(minOperativoRd - disponible);
+        throw new HttpsError(
+          "failed-precondition",
+          `Prepago libre RD$${disponible.toFixed(2)}. Para publicar salidas por cupos ` +
+            `recarga al menos RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
+        );
+      }
+    }
+
+    const ultimoTs = ud.ultimoReinicioContadorGiras;
+    const now = new Date();
+    let resetVentana = false;
+    if (!ultimoTs || !(ultimoTs instanceof Timestamp)) {
+      resetVentana = true;
+    } else {
+      const diffDays = Math.floor((now.getTime() - ultimoTs.toDate().getTime()) / 86_400_000);
+      if (diffDays >= 30) resetVentana = true;
+    }
+
+    let creadas = Math.max(0, Math.trunc(numOr0(ud.girasCreadasUltimoMes)));
+    let canceladas = Math.max(0, Math.trunc(numOr0(ud.girasCanceladasAntesDeIniciar)));
+    if (resetVentana) {
+      creadas = 0;
+      canceladas = 0;
+    } else if (!abuso.disabled && creadas >= abuso.minCreadas) {
+      const ratio = canceladas / (creadas > 0 ? creadas : 1);
+      if (ratio > abuso.ratioMax + 1e-9) {
+        let diasRestantes: number | null = null;
+        if (ultimoTs instanceof Timestamp) {
+          const dias = Math.floor((now.getTime() - ultimoTs.toDate().getTime()) / 86_400_000);
+          diasRestantes = Math.max(0, Math.min(30, 30 - dias));
+        }
+        const mensaje = mensajeGiraAbusoBloqueo(
+          creadas,
+          canceladas,
+          abuso.ratioMax,
+          diasRestantes != null && diasRestantes > 0 ? diasRestantes : null,
+        );
+        throw new HttpsError("failed-precondition", mensaje, {
+          tipo: "gira_abuso",
+          creadas,
+          canceladas,
+          ratioMax: abuso.ratioMax,
+          diasHastaReinicio: diasRestantes != null && diasRestantes > 0 ? diasRestantes : null,
+        });
+      }
+    }
+
+    if (resetVentana) {
+      tx.set(
+        userRef,
+        {
+          girasCreadasUltimoMes: 1,
+          girasCanceladasAntesDeIniciar: 0,
+          ultimoReinicioContadorGiras: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    } else {
+      tx.set(
+        userRef,
+        {
+          girasCreadasUltimoMes: FieldValue.increment(1),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
+    if (!recaudoCentral) {
+      const prepNuevo = round2(prep - comisionReservar);
+      const resNuevo = round2(res + comisionReservar);
+      tx.set(
+        billeRef,
+        {
+          saldoPrepagoComisionRd: prepNuevo,
+          saldoReservadoParaGiras: resNuevo,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
+    const poolData: AnyMap = {
+      tipo,
+      sentido,
+      origenTown,
+      destino,
+      fechaSalida: Timestamp.fromDate(fechaSalida),
+      capacidad,
+      minParaConfirmar,
+      precioPorAsiento,
+      pickupPoints: pickupPoints ?? [`Parque Central de ${origenTown}`],
+      depositPct: depositPct > 0 ? depositPct : 0.3,
+      feePct: feePct > 0 ? feePct : 0.1,
+      asientosReservados: 0,
+      asientosPagados: 0,
+      montoReservado: 0,
+      montoPagado: 0,
+      estado: "abierto",
+      ownerTaxistaId: uid,
+      taxistaNombre,
+      createdAt: FieldValue.serverTimestamp(),
+      cuposComisionRai,
+      comisionGiraEstimadaRd: recaudoCentral ? 0 : comisionReservar,
+      comisionGiraObjetivoRd: comisionObjetivo,
+      comisionGiraCuposReserva: cuposReserva,
+      comisionGiraPctUsado: pct,
+      prepagoComisionEtapa: recaudoCentral ? "central_recaudo" : "reservada_creacion",
+    };
+
+    if (fechaVuelta) poolData.fechaVuelta = Timestamp.fromDate(fechaVuelta);
+
+    const optionalStrings: Array<[string, unknown]> = [
+      ["agenciaNombre", d.agenciaNombre],
+      ["agenciaLogoUrl", d.agenciaLogoUrl],
+      ["bannerUrl", d.bannerUrl],
+      ["bannerVideoUrl", d.bannerVideoUrl],
+      ["puntoSalida", d.puntoSalida],
+      ["destinoPlaceId", d.destinoPlaceId],
+      ["choferTelefono", d.choferTelefono],
+      ["choferWhatsApp", d.choferWhatsApp],
+      ["bancoNombre", d.bancoNombre],
+      ["bancoCuenta", d.bancoCuenta],
+      ["bancoTipoCuenta", d.bancoTipoCuenta],
+      ["bancoTitular", d.bancoTitular],
+      ["servicioBadge", d.servicioBadge],
+      ["tipoPersonalizado", d.tipoPersonalizado],
+      ["descripcionViaje", d.descripcionViaje],
+    ];
+    for (const [key, raw] of optionalStrings) {
+      const v = trimOrNull(raw);
+      if (v) poolData[key] = v;
+    }
+    if (typeof d.puntoSalidaLat === "number" && typeof d.puntoSalidaLon === "number") {
+      poolData.puntoSalidaLat = d.puntoSalidaLat;
+      poolData.puntoSalidaLon = d.puntoSalidaLon;
+    }
+    if (typeof d.destinoLat === "number" && typeof d.destinoLon === "number") {
+      poolData.destinoLat = d.destinoLat;
+      poolData.destinoLon = d.destinoLon;
+    }
+    if (incluye) poolData.incluye = incluye;
+    if (recaudoCentral) {
+      poolData.recaudoModelo = "central";
+      poolData.montoRecaudoPct = 1;
+      poolData.montoRecaudadoRaiRd = 0;
+      poolData.montoComisionRaiRd = 0;
+      poolData.montoNetoOrganizadorRd = 0;
+    }
+
+    tx.set(poolRef, poolData);
+
+    if (!recaudoCentral && comisionReservar > 1e-9) {
+      const led = db().collection("ledger_giras").doc();
+      tx.set(led, {
+        tipo: "reserva_comision",
+        poolId,
+        uidTaxista: uid,
+        monto: comisionReservar,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    return {
+      poolId,
+      comisionReservar,
+      comisionObjetivo,
+      recaudoCentral,
+    };
+  });
+
+  let aviso: string | null = null;
+  if (result.recaudoCentral) {
+    aviso = "Recaudo central activo: los clientes pagan el total a RAI por transferencia.";
+  } else if (result.comisionReservar + 1e-9 < result.comisionObjetivo) {
+    const posibleFalta = round2(result.comisionObjetivo - result.comisionReservar);
+    aviso =
+      `Reservamos RD$${result.comisionReservar.toFixed(2)} de comisión. ` +
+      `Al iniciar con el mínimo de cupos firmes pueden faltar hasta RD$${posibleFalta.toFixed(2)} ` +
+      `de prepago libre; si no alcanza, te indicamos cuánto recargar.`;
+  }
+
+  logger.info("[crearPoolGira] ok", { uid, poolId: result.poolId, recaudoCentral: result.recaudoCentral });
+  return { poolId: result.poolId, aviso };
+});
 
 /** Registro contable `reserva_comision` al crear gira (solo backend; el cliente ya no escribe en `ledger_giras`). */
 export const appendLedgerGiraReserva = onCall(async (request) => {
@@ -338,6 +822,215 @@ export const refundGiraReservaPagoSemanal = onCall(async (request) => {
   return result;
 });
 
+type MarcarReservaPagadaTxArgs = {
+  tx: Transaction;
+  poolId: string;
+  reservaId: string;
+  uidActor: string;
+  pool: AnyMap;
+  poolRef: DocumentReference;
+  res: AnyMap;
+  resRef: DocumentReference;
+  allResDocs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[];
+  pctRemote: number;
+  /** true = admin verificó transferencia en cuenta RAI (recaudo central). */
+  aplicarSplitRecaudoCentral: boolean;
+};
+
+function marcarReservaPagadaEnTx(args: MarcarReservaPagadaTxArgs): { alreadyProcessed: boolean } {
+  const {
+    tx,
+    poolId,
+    reservaId,
+    uidActor,
+    pool,
+    poolRef,
+    res,
+    resRef,
+    allResDocs,
+    pctRemote,
+    aplicarSplitRecaudoCentral,
+  } = args;
+
+  const estadoReserva = String(res.estado ?? "");
+  if (estadoReserva === "pagado") {
+    return { alreadyProcessed: true };
+  }
+  if (estadoReserva !== "reservado") {
+    throw new HttpsError("failed-precondition", `Estado de reserva no válido: ${estadoReserva}`);
+  }
+
+  const metodo = String(res.metodoPago ?? "").trim().toLowerCase();
+  if (aplicarSplitRecaudoCentral) {
+    if (!poolUsaRecaudoCentral(pool)) {
+      throw new HttpsError("failed-precondition", "Esta salida no usa recaudo central RAI");
+    }
+    if (metodo !== "transferencia") {
+      throw new HttpsError("failed-precondition", "Solo transferencias central se verifican en cuenta RAI");
+    }
+    const estadoPago = String(res.estadoPago ?? "").trim().toLowerCase();
+    if (estadoPago === "verificado" || estadoPago === "rechazado") {
+      throw new HttpsError(
+        "failed-precondition",
+        `Estado de pago no verificable: ${estadoPago || "—"}`,
+      );
+    }
+  } else if (poolUsaRecaudoCentral(pool) && metodo === "transferencia") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Recaudo central: la transferencia la verifica RAI (admin), no el operador.",
+    );
+  }
+
+  const seats = Number(res.seats ?? 0);
+  if (!Number.isFinite(seats) || seats <= 0) {
+    throw new HttpsError("failed-precondition", "Reserva con seats inválidos");
+  }
+  const total = Number(res.total ?? 0);
+  const pag = Number(pool.asientosPagados ?? 0);
+  const minConf = Number(pool.minParaConfirmar ?? 0);
+  const estadoPool = String(pool.estado ?? "abierto");
+  const ownerTaxistaId = String(pool.ownerTaxistaId ?? "");
+  const firmSalida = firmSeatsAfterConfirmPayment(allResDocs, reservaId);
+
+  const reservaPatch: AnyMap = {
+    estado: "pagado",
+    pagadoAt: FieldValue.serverTimestamp(),
+    pagadoPor: uidActor,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  const poolPatch: AnyMap = {
+    asientosPagados: pag + seats,
+    montoPagado: Number(pool.montoPagado ?? 0) + (Number.isFinite(total) ? total : 0),
+    asientosFirmesSalida: firmSalida,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  if ((pag + seats) >= minConf && estadoPool !== "confirmado") {
+    poolPatch.estado = "confirmado";
+  }
+
+  if (aplicarSplitRecaudoCentral) {
+    const pctPool = numOr0(pool.comisionGiraPctUsado);
+    const pct = pctPool > 1e-6 ? pctPool : pctRemote;
+    const { comisionRaiRd, netoOrganizadorRd } = splitRecaudoReservaTotal(total, pct);
+    reservaPatch.estadoPago = "verificado";
+    reservaPatch.comisionRaiRd = comisionRaiRd;
+    reservaPatch.netoOrganizadorRd = netoOrganizadorRd;
+    reservaPatch.verificadoAt = FieldValue.serverTimestamp();
+    reservaPatch.verificadoPor = uidActor;
+    poolPatch.montoRecaudadoRaiRd = numOr0(pool.montoRecaudadoRaiRd) + total;
+    poolPatch.montoComisionRaiRd = numOr0(pool.montoComisionRaiRd) + comisionRaiRd;
+    poolPatch.montoNetoOrganizadorRd = numOr0(pool.montoNetoOrganizadorRd) + netoOrganizadorRd;
+
+    const ledRef = db().collection("ledger_pool_reservas").doc(`${reservaId}_recaudo_verificado`);
+    tx.set(
+      ledRef,
+      {
+        tipo: "recaudo_verificado",
+        poolId,
+        reservaId,
+        ownerTaxistaId,
+        brutoRd: total,
+        comisionPct: pct,
+        comisionRaiRd,
+        netoOrganizadorRd,
+        referenciaRecaudo: String(res.referenciaRecaudo ?? ""),
+        verificadoPor: uidActor,
+        createdAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+
+  tx.update(resRef, reservaPatch);
+  tx.update(poolRef, poolPatch);
+  return { alreadyProcessed: false };
+}
+
+/** Verifica pago central en transacción (admin manual o conciliación banco). */
+export async function ejecutarVerificacionPoolRecaudoEnTransaction(
+  tx: Transaction,
+  poolId: string,
+  reservaId: string,
+  uidActor: string,
+  pctRemote: number,
+): Promise<{ alreadyProcessed: boolean }> {
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const resRef = poolRef.collection("reservas").doc(reservaId);
+  const poolSnap = await tx.get(poolRef);
+  if (!poolSnap.exists) throw new HttpsError("not-found", "Pool no existe");
+  const pool = (poolSnap.data() ?? {}) as AnyMap;
+  const allResSnap = await tx.get(poolRef.collection("reservas").limit(500));
+  const resSnap = await tx.get(resRef);
+  if (!resSnap.exists) throw new HttpsError("not-found", "Reserva no encontrada");
+  const res = (resSnap.data() ?? {}) as AnyMap;
+
+  return marcarReservaPagadaEnTx({
+    tx,
+    poolId,
+    reservaId,
+    uidActor,
+    pool,
+    poolRef,
+    res,
+    resRef,
+    allResDocs: allResSnap.docs,
+    pctRemote,
+    aplicarSplitRecaudoCentral: true,
+  });
+}
+
+export function precioCentsPoolReserva(data: AnyMap): number {
+  const total = numOr0(data.total);
+  if (total <= 0) return 0;
+  return Math.round(total * 100);
+}
+
+/** Admin: verifica transferencia del cliente en cuenta RAI y confirma cupos (recaudo central). */
+export const verifyPoolReservaRecaudo = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "admin") {
+    throw new HttpsError("permission-denied", "Solo admin puede verificar pagos pool en cuenta RAI");
+  }
+
+  const poolId = typeof request.data?.poolId === "string" ? request.data.poolId.trim() : "";
+  const reservaId = typeof request.data?.reservaId === "string" ? request.data.reservaId.trim() : "";
+  const idemKey = typeof request.data?.idempotencyKey === "string" ? request.data.idempotencyKey.trim() : "";
+  if (!poolId) throw new HttpsError("invalid-argument", "Falta poolId");
+  if (!reservaId) throw new HttpsError("invalid-argument", "Falta reservaId");
+  if (!idemKey) throw new HttpsError("invalid-argument", "Falta idempotencyKey");
+
+  const idem = await ensureIdempotencyStart(idemKey, "verify_pool_reserva_recaudo", uidActor);
+  if (idem.done) return idem.result;
+
+  const pctRemote = await getComisionGiraPorcientoFromRemote();
+
+  const result = await db().runTransaction(async (tx) => {
+    const out = await ejecutarVerificacionPoolRecaudoEnTransaction(
+      tx,
+      poolId,
+      reservaId,
+      uidActor,
+      pctRemote,
+    );
+    return { ok: true, poolId, reservaId, ...out };
+  });
+
+  logAdminAudit({
+    action: "verify_pool_reserva_recaudo",
+    actorUid: uidActor,
+    resourceType: "pool_reserva",
+    resourceId: reservaId,
+    metadata: { poolId, result: result as AnyMap },
+  });
+
+  await markIdempotencyDone(idem.ref, result);
+  return result;
+});
+
 export const confirmPoolReservationPayment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uidActor = request.auth.uid;
@@ -356,6 +1049,7 @@ export const confirmPoolReservationPayment = onCall(async (request) => {
   const idem = await ensureIdempotencyStart(idemKey, "confirm_pool_reservation_payment", uidActor);
   if (idem.done) return idem.result;
 
+  const pctRemote = await getComisionGiraPorcientoFromRemote();
   const poolRef = db().collection("viajes_pool").doc(poolId);
   const resRef = poolRef.collection("reservas").doc(reservaId);
 
@@ -371,42 +1065,22 @@ export const confirmPoolReservationPayment = onCall(async (request) => {
     const resSnap = await tx.get(resRef);
     if (!resSnap.exists) throw new HttpsError("not-found", "Reserva no encontrada");
     const res = (resSnap.data() ?? {}) as AnyMap;
-    const estadoReserva = String(res.estado ?? "");
-    if (estadoReserva === "pagado") {
-      return { ok: true, poolId, reservaId, alreadyProcessed: true };
-    }
-    if (estadoReserva !== "reservado") {
-      throw new HttpsError("failed-precondition", `Estado de reserva no válido: ${estadoReserva}`);
-    }
 
-    const seats = Number(res.seats ?? 0);
-    if (!Number.isFinite(seats) || seats <= 0) {
-      throw new HttpsError("failed-precondition", "Reserva con seats inválidos");
-    }
-    const total = Number(res.total ?? 0);
-    const pag = Number(pool.asientosPagados ?? 0);
-    const minConf = Number(pool.minParaConfirmar ?? 0);
-    const estadoPool = String(pool.estado ?? "abierto");
-    const firmSalida = firmSeatsAfterConfirmPayment(allResSnap.docs, reservaId);
-
-    tx.update(resRef, {
-      estado: "pagado",
-      pagadoAt: FieldValue.serverTimestamp(),
-      pagadoPor: uidActor,
-      updatedAt: FieldValue.serverTimestamp(),
+    const out = marcarReservaPagadaEnTx({
+      tx,
+      poolId,
+      reservaId,
+      uidActor,
+      pool,
+      poolRef,
+      res,
+      resRef,
+      allResDocs: allResSnap.docs,
+      pctRemote,
+      aplicarSplitRecaudoCentral: false,
     });
 
-    tx.update(poolRef, {
-      asientosPagados: pag + seats,
-      montoPagado: Number(pool.montoPagado ?? 0) + (Number.isFinite(total) ? total : 0),
-      asientosFirmesSalida: firmSalida,
-      ...(((pag + seats) >= minConf && estadoPool !== "confirmado")
-        ? { estado: "confirmado" }
-        : {}),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-
-    return { ok: true, poolId, reservaId, alreadyProcessed: false };
+    return { ok: true, poolId, reservaId, ...out };
   });
 
   await markIdempotencyDone(idem.ref, result);
@@ -477,6 +1151,96 @@ export const startPoolTrip = onCall(async (request) => {
       );
     }
 
+    if (poolUsaRecaudoCentral(pool)) {
+      const etapaCentral = String(pool.prepagoComisionEtapa ?? "").trim().toLowerCase();
+      if (etapaCentral !== "central_recaudo" && etapaCentral !== "central_en_ruta") {
+        throw new HttpsError(
+          "failed-precondition",
+          "Estado de recaudo central inconsistente; contactá soporte.",
+        );
+      }
+      if (!ownerTaxistaId) {
+        throw new HttpsError("failed-precondition", "Pool sin dueño registrado");
+      }
+
+      const asientosEfectivo = firmEfectivoSeatsFromReservaDocs(allResSnap.docs);
+      const pctPool = numOr0(pool.comisionGiraPctUsado);
+      const pct = pctPool > 1e-6 ? pctPool : pctRemote;
+      const comisionEfectivoRd = comisionRaiRdFromReservaDocs(
+        allResSnap.docs,
+        reservaEsEfectivoFirm,
+        pct,
+      );
+
+      const poolUpdate: AnyMap = {
+        estado: "en_ruta",
+        asientosFirmesSalida: firmSalida,
+        asientosEfectivoComision: asientosEfectivo,
+        prepagoComisionEtapa: "central_en_ruta",
+        iniciadoAt: FieldValue.serverTimestamp(),
+        comisionEstado:
+          asientosEfectivo > 0 && comisionEfectivoRd > 1e-6
+            ? "recaudo_central_y_prepago_efectivo"
+            : "por_reserva_recaudo",
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+
+      if (comisionEfectivoRd > 1e-6) {
+        const billeRef = db().collection("billeteras_taxista").doc(ownerTaxistaId);
+        const billeSnap = await tx.get(billeRef);
+        const bille = (billeSnap.data() ?? {}) as AnyMap;
+        const prep = Math.max(0, numOr0(bille.saldoPrepagoComisionRd));
+        if (prep + 1e-9 < comisionEfectivoRd) {
+          const falta = round2(comisionEfectivoRd - prep);
+          throw new HttpsError(
+            "failed-precondition",
+            `Para iniciar con ${asientosEfectivo} cupo(s) en efectivo faltan RD$${falta.toFixed(2)} de prepago. ` +
+              "Recarga en Mis pagos → Recarga comisión (comisión RAI sobre cupos en efectivo al abordar).",
+          );
+        }
+        const descAcum = Math.max(0, numOr0(bille.comisionesDescontadas));
+        tx.set(
+          billeRef,
+          {
+            saldoPrepagoComisionRd: round2(prep - comisionEfectivoRd),
+            comisionesDescontadas: round2(descAcum + comisionEfectivoRd),
+            ultimaComisionGiraPoolId: poolId,
+            ultimaComisionGiraRd: comisionEfectivoRd,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+        const led = db().collection("ledger_giras").doc();
+        tx.set(led, {
+          tipo: "comision_efectivo_central_inicio",
+          poolId,
+          uidTaxista: ownerTaxistaId,
+          monto: comisionEfectivoRd,
+          asientosEfectivo,
+          pctUsado: pct,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        poolUpdate.comisionEfectivoPrepagoRd = comisionEfectivoRd;
+      }
+
+      tx.update(poolRef, poolUpdate);
+      logger.info("[POOL_RECAUDO] startPoolTrip central", {
+        poolId,
+        firmSalida,
+        asientosEfectivo,
+        comisionEfectivoRd,
+      });
+      return {
+        ok: true,
+        poolId,
+        alreadyStarted: false,
+        recaudoCentral: true,
+        asientosFirmes: firmSalida,
+        asientosEfectivo,
+        comisionEfectivoRd,
+      };
+    }
+
     if (!hasComisionGiraEstimadaValida(pool)) {
       logger.warn("[PRE_TEST] startPoolTrip bloqueado sin comisionGiraEstimadaRd válida", {
         poolId,
@@ -507,7 +1271,11 @@ export const startPoolTrip = onCall(async (request) => {
     const reserved = round2(Math.max(0, numOr0(pool.comisionGiraEstimadaRd)));
     const pctPool = numOr0(pool.comisionGiraPctUsado);
     const pct = pctPool > 1e-6 ? pctPool : pctRemote;
-    const comisionReal = comisionRealRdFromAsientos(pool, asientosReales, pct);
+    const comisionReal = comisionRaiRdFromReservaDocs(
+      allResSnap.docs,
+      reservaEsFirmeParaComision,
+      pct,
+    );
 
     const billeRef = db().collection("billeteras_taxista").doc(ownerTaxistaId);
     const billeSnap = await tx.get(billeRef);
@@ -745,6 +1513,44 @@ export const finalizePoolTrip = onCall(async (request) => {
       return { ok: true, poolId, alreadyFinalized: false, prepagoEnInicio: true, comisionYaDescontada: comisionYa };
     }
 
+    if (poolUsaRecaudoCentral(pool)) {
+      const netoPend = Math.max(0, numOr0(pool.montoNetoOrganizadorRd));
+      const poolUpdate: AnyMap = {
+        estado: "finalizado",
+        finalizadoAt: FieldValue.serverTimestamp(),
+        totalGira,
+        liquidacionOrganizadorEstado: netoPend > 1e-6 ? "pendiente_pago" : "sin_saldo",
+        liquidacionOrganizadorAt: FieldValue.serverTimestamp(),
+        comisionEstado: "por_reserva_recaudo",
+        montoNetoTaxista: netoPend,
+        liquidado: netoPend <= 1e-6,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (netoPend > 1e-6) {
+        const liqRef = db().collection("liquidaciones_pool").doc();
+        tx.set(liqRef, {
+          poolId,
+          ownerTaxistaId,
+          netoTotalRd: netoPend,
+          montoRecaudadoRaiRd: numOr0(pool.montoRecaudadoRaiRd),
+          montoComisionRaiRd: numOr0(pool.montoComisionRaiRd),
+          bancoNombre: String(pool.bancoNombre ?? ""),
+          bancoCuenta: String(pool.bancoCuenta ?? ""),
+          bancoTipoCuenta: String(pool.bancoTipoCuenta ?? ""),
+          bancoTitular: String(pool.bancoTitular ?? ""),
+          agenciaNombre: String(pool.agenciaNombre ?? pool.taxistaNombre ?? ""),
+          destino: String(pool.destino ?? ""),
+          estado: "pendiente_pago",
+          metodoSalida: "manual_admin",
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        poolUpdate.liquidacionPoolId = liqRef.id;
+      }
+      tx.update(poolRef, poolUpdate);
+      logger.info("[POOL_RECAUDO] finalizePoolTrip central", { poolId, netoPend });
+      return { ok: true, poolId, alreadyFinalized: false, recaudoCentral: true, netoOrganizadorPendiente: netoPend };
+    }
+
     const comisionPctAplicada = pctRemote / 100;
     const montoComision = Math.max(0, totalGira * comisionPctAplicada);
     const montoNetoTaxista = Math.max(0, totalGira - montoComision);
@@ -799,6 +1605,79 @@ export const finalizePoolTrip = onCall(async (request) => {
 
   await markIdempotencyDone(idem.ref, result);
   logger.info("[PRE_TEST] finalizePoolTrip resultado", { uidActor, poolId, result });
+  return result;
+});
+
+/** Admin: marca neto de gira central transferido al organizador. */
+export const approveLiquidacionPool = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "admin") {
+    throw new HttpsError("permission-denied", "Solo admin");
+  }
+
+  const liquidacionId =
+    typeof request.data?.liquidacionId === "string" ? request.data.liquidacionId.trim() : "";
+  const referenciaBanco =
+    typeof request.data?.referenciaBanco === "string" ? request.data.referenciaBanco.trim() : "";
+  const idemKey = typeof request.data?.idempotencyKey === "string" ? request.data.idempotencyKey.trim() : "";
+  if (!liquidacionId) throw new HttpsError("invalid-argument", "Falta liquidacionId");
+  if (!idemKey) throw new HttpsError("invalid-argument", "Falta idempotencyKey");
+
+  const idem = await ensureIdempotencyStart(idemKey, "approve_liquidacion_pool", uidActor);
+  if (idem.done) return idem.result;
+
+  const liqRef = db().collection("liquidaciones_pool").doc(liquidacionId);
+  const result = await db().runTransaction(async (tx) => {
+    const liqSnap = await tx.get(liqRef);
+    if (!liqSnap.exists) throw new HttpsError("not-found", "Liquidación no encontrada");
+    const liq = (liqSnap.data() ?? {}) as AnyMap;
+    const estado = String(liq.estado ?? "").trim().toLowerCase();
+    if (estado === "liquidado" || estado === "pagado") {
+      return { ok: true, liquidacionId, alreadyProcessed: true };
+    }
+    if (estado !== "pendiente_pago") {
+      throw new HttpsError("failed-precondition", `Estado de liquidación: ${estado || "—"}`);
+    }
+
+    const poolId = String(liq.poolId ?? "").trim();
+    const neto = numOr0(liq.netoTotalRd);
+    tx.update(liqRef, {
+      estado: "liquidado",
+      pagadoAt: FieldValue.serverTimestamp(),
+      pagadoPor: uidActor,
+      ...(referenciaBanco ? { referenciaBanco } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    if (poolId) {
+      const poolRef = db().collection("viajes_pool").doc(poolId);
+      tx.set(
+        poolRef,
+        {
+          liquidacionOrganizadorEstado: "liquidado",
+          liquidacionOrganizadorAt: FieldValue.serverTimestamp(),
+          liquidacionOrganizadorPagadoPor: uidActor,
+          liquidado: true,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
+    return { ok: true, liquidacionId, poolId, netoTotalRd: neto, alreadyProcessed: false };
+  });
+
+  logAdminAudit({
+    action: "approve_liquidacion_pool",
+    actorUid: uidActor,
+    resourceType: "liquidacion_pool",
+    resourceId: liquidacionId,
+    metadata: { referenciaBanco, result: result as AnyMap },
+  });
+
+  await markIdempotencyDone(idem.ref, result);
   return result;
 });
 
@@ -1210,7 +2089,10 @@ export const reservePoolSeats = onCall(async (request) => {
       ? Math.min(1, Math.max(0, depositPctRaw))
       : 0;
     const total = Math.max(0, precio * seats * mult);
-    const deposit = Math.max(0, total * depositPct);
+    const recaudoCentral = poolUsaRecaudoCentral(pool);
+    const deposit = recaudoCentral && metodoPago === "transferencia"
+      ? total
+      : Math.max(0, total * depositPct);
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 horas
 
     let firmSalida = firmSeatsFromReservaDocs(allResSnap.docs);
@@ -1226,7 +2108,9 @@ export const reservePoolSeats = onCall(async (request) => {
     const clienteEmail = String(ud.email ?? request.auth?.token?.email ?? "");
 
     const resRef = poolRef.collection("reservas").doc();
-    tx.set(resRef, {
+    const reservaId = resRef.id;
+
+    const reservaFields: AnyMap = {
       uidCliente,
       seats,
       estado: "reservado",
@@ -1239,7 +2123,32 @@ export const reservePoolSeats = onCall(async (request) => {
       clienteTelefono,
       clienteWhatsApp,
       clienteEmail,
-    });
+    };
+
+    let referenciaRecaudo = "";
+    let montoEsperadoRecaudoRd = 0;
+
+    if (recaudoCentral && metodoPago === "transferencia") {
+      referenciaRecaudo = generarReferenciaRecaudoPool(poolId, reservaId);
+      montoEsperadoRecaudoRd = total;
+      Object.assign(reservaFields, {
+        referenciaRecaudo,
+        recaudoDestino: "rai",
+        estadoPago: "pendiente",
+        montoEsperadoRecaudoRd,
+      });
+      const regRef = db().collection("referencias_recaudo").doc(referenciaRecaudo);
+      tx.set(regRef, {
+        tipo: "pool",
+        poolId,
+        reservaId,
+        referenciaRecaudo,
+        recaudoDestino: "rai",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    tx.set(resRef, reservaFields);
 
     const nuevoOcc = occ + seats;
     const minConf = Number(pool.minParaConfirmar ?? 0);
@@ -1255,7 +2164,14 @@ export const reservePoolSeats = onCall(async (request) => {
     }
     tx.update(poolRef, next);
 
-    return { ok: true, poolId, reservaId: resRef.id };
+    return {
+      ok: true,
+      poolId,
+      reservaId,
+      recaudoCentral,
+      referenciaRecaudo,
+      montoEsperadoRecaudoRd,
+    };
   });
 
   await markIdempotencyDone(idem.ref, result);
@@ -1359,6 +2275,153 @@ export const cancelPoolReservation = onCall(async (request) => {
 
   await markIdempotencyDone(idem.ref, result as AnyMap);
   logger.info("[PRE_TEST] cancelPoolReservation", { uidCliente, poolId, reservaId, result });
+  return result;
+});
+
+/** Admin: revierte reserva pool ya verificada en recaudo central (reembolso manual). */
+export const adminRevertPoolReservaPagada = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "admin") {
+    throw new HttpsError("permission-denied", "Solo admin");
+  }
+
+  const poolId = typeof request.data?.poolId === "string" ? request.data.poolId.trim() : "";
+  const reservaId = typeof request.data?.reservaId === "string" ? request.data.reservaId.trim() : "";
+  const motivo = typeof request.data?.motivo === "string" ? request.data.motivo.trim() : "";
+  const idemKey = typeof request.data?.idempotencyKey === "string" ? request.data.idempotencyKey.trim() : "";
+  if (!poolId) throw new HttpsError("invalid-argument", "Falta poolId");
+  if (!reservaId) throw new HttpsError("invalid-argument", "Falta reservaId");
+  if (!motivo) throw new HttpsError("invalid-argument", "Falta motivo");
+  if (!idemKey) throw new HttpsError("invalid-argument", "Falta idempotencyKey");
+
+  const idem = await ensureIdempotencyStart(idemKey, "admin_revert_pool_reserva_pagada", uidActor);
+  if (idem.done) return idem.result;
+
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const resRef = poolRef.collection("reservas").doc(reservaId);
+
+  const result = await db().runTransaction(async (tx) => {
+    const poolSnap = await tx.get(poolRef);
+    if (!poolSnap.exists) throw new HttpsError("not-found", "Pool no existe");
+    const pool = (poolSnap.data() ?? {}) as AnyMap;
+    if (!poolUsaRecaudoCentral(pool)) {
+      throw new HttpsError("failed-precondition", "Salida no usa recaudo central");
+    }
+
+    const estadoPool = String(pool.estado ?? "").trim().toLowerCase();
+    if (["en_ruta", "finalizado", "cancelado", "cancelado_por_admin"].includes(estadoPool)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No se puede revertir: la salida ya inició, finalizó o está cancelada.",
+      );
+    }
+
+    const resSnap = await tx.get(resRef);
+    if (!resSnap.exists) throw new HttpsError("not-found", "Reserva no encontrada");
+    const r = (resSnap.data() ?? {}) as AnyMap;
+
+    const estadoRes = String(r.estado ?? "").trim().toLowerCase();
+    if (estadoRes === "cancelado_admin" || estadoRes === "cancelado_cliente") {
+      return { ok: true, poolId, reservaId, alreadyReverted: true };
+    }
+    if (estadoRes !== "pagado") {
+      throw new HttpsError("failed-precondition", "Solo reservas pagadas/verificadas");
+    }
+    if (String(r.estadoPago ?? "").trim().toLowerCase() !== "verificado") {
+      throw new HttpsError("failed-precondition", "Reserva sin pago central verificado");
+    }
+
+    const seats = Math.max(0, Math.trunc(numOr0(r.seats)));
+    const total = Math.max(0, numOr0(r.total));
+    const comisionRaiRd = Math.max(0, numOr0(r.comisionRaiRd));
+    const netoOrganizadorRd = Math.max(0, numOr0(r.netoOrganizadorRd));
+    const ownerTaxistaId = String(pool.ownerTaxistaId ?? "");
+
+    const allResSnap = await tx.get(poolRef.collection("reservas").limit(500));
+    const firmSalida = firmSeatsFromReservaDocs(
+      allResSnap.docs.filter((d) => d.id !== reservaId),
+    );
+
+    const pag = Math.max(0, Math.trunc(numOr0(pool.asientosPagados)));
+    const occ = Math.max(0, Math.trunc(numOr0(pool.asientosReservados)));
+    const montoRes = Math.max(0, numOr0(pool.montoReservado));
+    const minConf = Math.max(0, Math.trunc(numOr0(pool.minParaConfirmar)));
+    const cap = Math.max(0, Math.trunc(numOr0(pool.capacidad)));
+    const newOcc = Math.max(0, occ - seats);
+    const newPag = Math.max(0, pag - seats);
+
+    const poolPatch: AnyMap = {
+      asientosReservados: newOcc,
+      asientosPagados: newPag,
+      montoReservado: Math.max(0, Number((montoRes - total).toFixed(2))),
+      montoPagado: Math.max(0, Number((numOr0(pool.montoPagado) - total).toFixed(2))),
+      montoRecaudadoRaiRd: Math.max(0, Number((numOr0(pool.montoRecaudadoRaiRd) - total).toFixed(2))),
+      montoComisionRaiRd: Math.max(0, Number((numOr0(pool.montoComisionRaiRd) - comisionRaiRd).toFixed(2))),
+      montoNetoOrganizadorRd: Math.max(
+        0,
+        Number((numOr0(pool.montoNetoOrganizadorRd) - netoOrganizadorRd).toFixed(2)),
+      ),
+      asientosFirmesSalida: firmSalida,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (estadoPool === "confirmado" && minConf > 0 && newPag < minConf) {
+      poolPatch.estado = newOcc >= minConf ? "preconfirmado" : "abierto";
+    } else if (estadoPool === "lleno" && newOcc < cap) {
+      poolPatch.estado = "abierto";
+    } else if (estadoPool === "preconfirmado" && minConf > 0 && newOcc < minConf) {
+      poolPatch.estado = "abierto";
+    }
+
+    tx.update(poolRef, poolPatch);
+    tx.update(resRef, {
+      estado: "cancelado_admin",
+      estadoPago: "reembolso_pendiente",
+      canceladoPor: uidActor,
+      canceladoEn: FieldValue.serverTimestamp(),
+      revertidoAt: FieldValue.serverTimestamp(),
+      revertidoMotivo: motivo,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    tx.set(
+      db().collection("ledger_pool_reservas").doc(`${reservaId}_recaudo_revertido`),
+      {
+        tipo: "recaudo_revertido",
+        poolId,
+        reservaId,
+        ownerTaxistaId,
+        brutoRd: total,
+        comisionRaiRd,
+        netoOrganizadorRd,
+        referenciaRecaudo: String(r.referenciaRecaudo ?? ""),
+        revertidoPor: uidActor,
+        motivo,
+        createdAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    return {
+      ok: true,
+      poolId,
+      reservaId,
+      alreadyReverted: false,
+      reembolsoPendienteRd: total,
+    };
+  });
+
+  logAdminAudit({
+    action: "admin_revert_pool_reserva_pagada",
+    actorUid: uidActor,
+    resourceType: "pool_reserva",
+    resourceId: reservaId,
+    metadata: { poolId, motivo, result: result as AnyMap },
+  });
+
+  await markIdempotencyDone(idem.ref, result as AnyMap);
   return result;
 });
 

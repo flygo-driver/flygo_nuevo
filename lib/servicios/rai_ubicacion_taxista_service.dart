@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_ui_constants.dart';
 
 /// Estado de GPS + permiso para el taxista (solo lectura del teléfono).
 enum RaiUbicacionTaxistaModo {
@@ -21,12 +21,9 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
   static final RaiUbicacionTaxistaService instance =
       RaiUbicacionTaxistaService._();
 
-  static const String _prefsListo =
-      LocationPermissionService.prefsTaxistaUbicacionListo;
-
+  @Deprecated('Usar RaiUbicacionUiConstants.msgEsperandoUbicacion')
   static const String kMsgActivarDesdeBanner =
-      'Activa el GPS y toca «Permitir» en el banner superior '
-      '(elige «Al usar la app» en el mensaje del teléfono).';
+      RaiUbicacionUiConstants.msgEsperandoUbicacion;
 
   final ValueNotifier<RaiUbicacionTaxistaModo> modo =
       ValueNotifier(RaiUbicacionTaxistaModo.permisoPendiente);
@@ -36,20 +33,32 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
   final ValueNotifier<String?> feedbackSinUbicacion = ValueNotifier(null);
 
   static const String kMsgAunSinUbicacion =
-      'Aún no tienes ubicación activa. En el mensaje del teléfono elige '
-      '«Permitir» o «Al usar la app». Si tocaste «Denegar», «No» o cerraste '
-      'el cuadro sin aceptar, toca «Permitir» otra vez.';
+      'No activaste la ubicación en el teléfono. Toca «Activar ubicación» otra vez '
+      'y elige «Al usar la app» en el mensaje del sistema.';
 
   static const String kMsgAunSinGps =
-      'Aún no tienes el GPS activo. Actívalo en ajustes del teléfono para '
-      'que RAI Conductor pueda publicar tu posición.';
+      'Aún no tienes el GPS activo. Toca «Activar ubicación» para abrir los '
+      'ajustes del teléfono y encenderlo.';
+
+  static const String kAccionActivarUbicacion =
+      RaiUbicacionUiConstants.accionActivarUbicacion;
+
+  static const String kMsgEsperandoCuadroTelefono =
+      RaiUbicacionUiConstants.msgEsperandoCuadroTelefono;
 
   StreamSubscription<ServiceStatus>? _gpsSub;
+  Timer? _refreshDebounce;
   bool _started = false;
 
   bool get ubicacionLista => modo.value == RaiUbicacionTaxistaModo.listo;
 
   bool get bannerActivo => modo.value != RaiUbicacionTaxistaModo.listo;
+
+  bool get bannerEnAlertaRoja {
+    if (modo.value == RaiUbicacionTaxistaModo.permisoBloqueado) return true;
+    if ((feedbackSinUbicacion.value ?? '').trim().isNotEmpty) return true;
+    return false;
+  }
 
   Future<void> ensureStarted() async {
     if (_started) return;
@@ -58,10 +67,17 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     try {
       _gpsSub = Geolocator.getServiceStatusStream().listen((_) {
-        unawaited(refrescar());
+        _programarRefrescar();
       });
     } catch (_) {}
     await refrescar();
+  }
+
+  void _programarRefrescar() {
+    _refreshDebounce?.cancel();
+    _refreshDebounce = Timer(const Duration(milliseconds: 450), () {
+      unawaited(refrescar());
+    });
   }
 
   void disposeService() {
@@ -69,18 +85,70 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _gpsSub?.cancel();
     _gpsSub = null;
+    _refreshDebounce?.cancel();
+    _refreshDebounce = null;
     _started = false;
+    LocationPermissionService.taxistaBannerManejaUi = false;
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(refrescar());
+      _programarRefrescar();
+      unawaited(_continuarActivacionSiUsuarioVolvioDeAjustes());
+    }
+  }
+
+  Future<void> _continuarActivacionSiUsuarioVolvioDeAjustes() async {
+    if (!await LocationPermissionService.activacionDesdeAppRaiPendiente()) {
+      return;
+    }
+    if (solicitudEnCurso.value) return;
+
+    final bool gpsOn = await Geolocator.isLocationServiceEnabled();
+    if (!gpsOn) {
+      await refrescar();
+      return;
+    }
+
+    solicitudEnCurso.value = true;
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.deniedForever) {
+        await _registrarIntentoFallido(
+          'Ubicación bloqueada. Toca «Activar ubicación» para abrir Ajustes de RAI.',
+        );
+        modo.value = RaiUbicacionTaxistaModo.permisoBloqueado;
+        await LocationPermissionService.limpiarActivacionDesdeAppRai();
+        return;
+      }
+
+      if (!GpsService.permissionUsable(perm)) {
+        await GpsService.requestPermissionExplicitUser();
+        perm = await GpsService.waitUntilPermissionUsable();
+      }
+
+      if (GpsService.permissionUsable(perm)) {
+        feedbackSinUbicacion.value = null;
+        modo.value = RaiUbicacionTaxistaModo.listo;
+        await _marcarListoEnPrefs();
+        await LocationPermissionService.limpiarActivacionDesdeAppRai();
+        return;
+      }
+
+      await _registrarIntentoFallido(kMsgAunSinUbicacion);
+      modo.value = RaiUbicacionTaxistaModo.permisoPendiente;
+    } finally {
+      solicitudEnCurso.value = false;
+      await refrescar();
     }
   }
 
   Future<void> refrescar() async {
-    final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest();
+    final bool yaConcedio = await prefsIndicaListoAntes();
+    final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest(
+      extendedAfterPriorGrant: yaConcedio,
+    );
 
     RaiUbicacionTaxistaModo next;
     if (!snap.serviceEnabled) {
@@ -88,14 +156,16 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
     } else if (snap.permission == LocationPermission.deniedForever) {
       next = RaiUbicacionTaxistaModo.permisoBloqueado;
     } else if (!GpsService.permissionUsable(snap.permission)) {
-      if (await prefsIndicaListoAntes()) {
+      if (yaConcedio) {
         final p = await GpsService.waitUntilPermissionUsable(
-          timeout: const Duration(seconds: 2),
+          timeout: const Duration(seconds: 4),
         );
         if (GpsService.permissionUsable(p)) {
           next = RaiUbicacionTaxistaModo.listo;
           feedbackSinUbicacion.value = null;
           await _marcarListoEnPrefs();
+        } else if (modo.value == RaiUbicacionTaxistaModo.listo) {
+          return;
         } else {
           next = RaiUbicacionTaxistaModo.permisoPendiente;
         }
@@ -111,41 +181,63 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
     if (modo.value != next) {
       modo.value = next;
     }
+
+    if (next == RaiUbicacionTaxistaModo.listo) {
+      feedbackSinUbicacion.value = null;
+      return;
+    }
+
+    await _restaurarFeedbackDenegadoSiCorresponde(next);
   }
 
-  Future<void> _marcarListoEnPrefs() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setBool(_prefsListo, true);
-    } catch (_) {}
-  }
-
-  Future<bool> prefsIndicaListoAntes() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      return p.getBool(_prefsListo) ?? false;
-    } catch (_) {
-      return false;
+  Future<void> _restaurarFeedbackDenegadoSiCorresponde(
+    RaiUbicacionTaxistaModo modoActual,
+  ) async {
+    if (modoActual == RaiUbicacionTaxistaModo.permisoBloqueado) {
+      feedbackSinUbicacion.value =
+          'Ubicación bloqueada. Toca «Activar ubicación» para abrir Ajustes de RAI.';
+      return;
+    }
+    if (modoActual == RaiUbicacionTaxistaModo.gpsApagado &&
+        await LocationPermissionService.ubicacionDenegadaTrasBannerEnPrefs()) {
+      feedbackSinUbicacion.value = kMsgAunSinGps;
+      return;
+    }
+    if (await LocationPermissionService.ubicacionDenegadaTrasBannerEnPrefs()) {
+      feedbackSinUbicacion.value = kMsgAunSinUbicacion;
     }
   }
 
-  Future<void> solicitarPermisoDesdeBanner() async {
+  Future<void> _registrarIntentoFallido(String mensaje) async {
+    await LocationPermissionService.marcarUbicacionDenegadaTrasBanner();
+    feedbackSinUbicacion.value = mensaje;
+  }
+
+  Future<void> _marcarListoEnPrefs() async {
+    await LocationPermissionService.marcarUbicacionConcedidaEnPrefs();
+  }
+
+  Future<bool> prefsIndicaListoAntes() async {
+    return LocationPermissionService.ubicacionConcedidaAntesEnPrefs();
+  }
+
+  Future<void> activarUbicacionDesdeApp() async {
     if (solicitudEnCurso.value) return;
+    await LocationPermissionService.marcarActivacionDesdeAppRai();
     solicitudEnCurso.value = true;
     try {
       final bool gpsOn = await Geolocator.isLocationServiceEnabled();
       if (!gpsOn) {
         await LocationPermissionService.openSystemLocationSettings();
-        if (!await Geolocator.isLocationServiceEnabled()) {
-          feedbackSinUbicacion.value = kMsgAunSinGps;
-        }
         return;
       }
 
       var perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.deniedForever) {
-        feedbackSinUbicacion.value =
-            'Ubicación bloqueada. Abre Ajustes de RAI Conductor y permite «Ubicación».';
+        await _registrarIntentoFallido(
+          'Ubicación bloqueada. Toca «Activar ubicación» para abrir Ajustes de RAI.',
+        );
+        modo.value = RaiUbicacionTaxistaModo.permisoBloqueado;
         await LocationPermissionService.openAppSettingsPage();
         return;
       }
@@ -159,15 +251,17 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
         feedbackSinUbicacion.value = null;
         modo.value = RaiUbicacionTaxistaModo.listo;
         await _marcarListoEnPrefs();
+        await LocationPermissionService.limpiarActivacionDesdeAppRai();
         return;
       }
 
       if (perm == LocationPermission.deniedForever) {
-        feedbackSinUbicacion.value =
-            'Ubicación bloqueada. Abre Ajustes de RAI Conductor y permite «Ubicación».';
+        await _registrarIntentoFallido(
+          'Ubicación bloqueada. Toca «Activar ubicación» para abrir Ajustes de RAI.',
+        );
         modo.value = RaiUbicacionTaxistaModo.permisoBloqueado;
       } else {
-        feedbackSinUbicacion.value = kMsgAunSinUbicacion;
+        await _registrarIntentoFallido(kMsgAunSinUbicacion);
         modo.value = RaiUbicacionTaxistaModo.permisoPendiente;
       }
     } finally {
@@ -175,15 +269,16 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
       await refrescar();
       if (modo.value != RaiUbicacionTaxistaModo.listo &&
           !GpsService.permissionUsable(await Geolocator.checkPermission())) {
-        feedbackSinUbicacion.value ??= kMsgAunSinUbicacion;
+        await _restaurarFeedbackDenegadoSiCorresponde(modo.value);
       }
     }
   }
 
+  Future<void> solicitarPermisoDesdeBanner() => activarUbicacionDesdeApp();
+
   String get tituloBanner {
-    final fb = feedbackSinUbicacion.value?.trim();
-    if (fb != null && fb.isNotEmpty) {
-      return 'Aún no tienes ubicación';
+    if (bannerEnAlertaRoja) {
+      return 'Ubicación requerida';
     }
     switch (modo.value) {
       case RaiUbicacionTaxistaModo.gpsApagado:
@@ -206,27 +301,19 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
   String get mensajeBanner {
     switch (modo.value) {
       case RaiUbicacionTaxistaModo.gpsApagado:
-        return 'Activa el GPS para recibir viajes y que los clientes vean tu posición.';
+        return 'Enciende el GPS del teléfono. Toca «Activar ubicación» y RAI te lleva ahí.';
       case RaiUbicacionTaxistaModo.permisoPendiente:
-        return 'RAI Conductor necesita tu ubicación para operar. '
-            'Toca «Permitir» y elige «Al usar la app» en el mensaje del teléfono.';
+        return 'Para recibir viajes y navegar, toca «Activar ubicación». '
+            'Elige «Al usar la app» en el cuadro del teléfono.';
       case RaiUbicacionTaxistaModo.permisoBloqueado:
-        return 'Ubicación bloqueada. Abre Ajustes de RAI Conductor y permite «Ubicación».';
+        return 'Toca «Activar ubicación» para abrir Ajustes de RAI y permitir ubicación.';
       case RaiUbicacionTaxistaModo.listo:
         return '';
     }
   }
 
-  String get accionPrincipal {
-    switch (modo.value) {
-      case RaiUbicacionTaxistaModo.gpsApagado:
-        return 'Activar GPS';
-      case RaiUbicacionTaxistaModo.permisoPendiente:
-        return 'Permitir';
-      case RaiUbicacionTaxistaModo.permisoBloqueado:
-        return 'Abrir ajustes';
-      case RaiUbicacionTaxistaModo.listo:
-        return '';
-    }
-  }
+  String get accionActivarUbicacion => kAccionActivarUbicacion;
+
+  @Deprecated('Usar accionActivarUbicacion')
+  String get accionPrincipal => accionActivarUbicacion;
 }

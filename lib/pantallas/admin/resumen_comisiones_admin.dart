@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../config/plataforma_economia.dart';
 import '../../servicios/comision_viaje_pct_service.dart';
 import '../../servicios/comisiones_diarias_repo.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import '../../utils/formatos_moneda.dart';
 import 'admin_ui_theme.dart';
@@ -104,14 +105,8 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Resumen de Comisiones',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: AdminAppBar(
+        title: 'Resumen de Comisiones',
         actions: const [
           Padding(
             padding: EdgeInsets.only(right: 12),

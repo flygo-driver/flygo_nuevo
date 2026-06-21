@@ -2,28 +2,23 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart' as fs;
 import 'package:flygo_nuevo/servicios/turismo_destinos_repo.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
-import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
-import 'package:flygo_nuevo/servicios/directions_service.dart';
-import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/widgets/rai_direccion_inteligente_sheet.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/rai_speech_busqueda_direccion.dart';
 import 'package:flygo_nuevo/utils/rai_aplicar_destino_desde_voz.dart';
 
+/// Destino elegido en catálogo; la cotización la hace [ProgramarViaje].
 class DestinoSeleccionado {
   final TurismoLugar lugar;
   final String tipoVehiculo;
   final int pasajeros;
-  final double distanciaKm;
-  final double precio;
   final double? latOrigen;
   final double? lonOrigen;
 
@@ -31,8 +26,6 @@ class DestinoSeleccionado {
     required this.lugar,
     required this.tipoVehiculo,
     required this.pasajeros,
-    required this.distanciaKm,
-    required this.precio,
     this.latOrigen,
     this.lonOrigen,
   });
@@ -64,7 +57,6 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   String? _tipoVehiculoSeleccionado;
   int _pasajeros = 1;
   TurismoLugar? _destinoSeleccionado;
-  bool _calculando = false;
 
   List<Map<String, dynamic>> _resultadosGoogle = [];
   bool _buscandoGoogle = false;
@@ -76,10 +68,8 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   bool _escuchando = false;
 
   final Map<String, List<TurismoLugar>> _destinosPorSubtipo = {};
-
-  // 🔥 CACHÉ para el contador de viajes
-  int? _contadorViajesCache;
-  DateTime? _contadorTimestamp;
+  List<String> _subtiposOrdenados = [];
+  bool _resolviendoDestino = false;
 
   static const Map<String, String> _subtitulos = {
     TurismoCatalogoRD.aeropuerto: 'Aeropuertos de RD',
@@ -145,36 +135,6 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     return opcion['maxPasajeros'] as int;
   }
 
-  // 🔥 Obtener contador de viajes con caché
-  Future<int> _obtenerContadorViajes() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return 1;
-
-    if (_contadorViajesCache != null &&
-        _contadorTimestamp != null &&
-        DateTime.now().difference(_contadorTimestamp!) <
-            const Duration(minutes: 5)) {
-      return _contadorViajesCache!;
-    }
-
-    try {
-      final snapshot = await fs.FirebaseFirestore.instance
-          .collection('viajes')
-          .where('uidCliente', isEqualTo: user.uid)
-          .where('completado', isEqualTo: true)
-          .count()
-          .get();
-
-      final int contador = snapshot.count ?? 0;
-      _contadorViajesCache = contador;
-      _contadorTimestamp = DateTime.now();
-
-      return contador == 0 ? 1 : contador;
-    } catch (e) {
-      return 1;
-    }
-  }
-
   List<TurismoLugar> _catalogoBase = TurismoCatalogoRD.lugares;
 
   @override
@@ -226,7 +186,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   }
 
   Future<void> _toggleVoz() async {
-    if (!_vozOk || _buscandoGoogle || _calculando) return;
+    if (!_vozOk || _buscandoGoogle) return;
     if (_escuchando) {
       await _voz.stop();
       if (mounted) setState(() => _escuchando = false);
@@ -273,41 +233,59 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       if (!mounted) return;
       setState(() {
         _catalogoBase = fusion;
-        _destinosPorSubtipo.clear();
-        _organizarCatalogo(fusion);
+        _organizarCatalogo(fusion, reinitTabs: true);
       });
     } catch (_) {
       /* catálogo estático sigue funcionando */
     }
   }
 
-  void _organizarCatalogo(List<TurismoLugar> lugares, {bool initTabs = false}) {
-    for (var lugar in lugares) {
-      _destinosPorSubtipo.putIfAbsent(lugar.subtipo, () => []).add(lugar);
+  void _organizarCatalogo(
+    List<TurismoLugar> lugares, {
+    bool initTabs = false,
+    bool reinitTabs = false,
+  }) {
+    _destinosPorSubtipo.clear();
+    for (final lugar in lugares) {
+      final subtipo = TurismoCatalogoRD.normalizarSubtipo(lugar.subtipo);
+      final normalizado = lugar.subtipo == subtipo
+          ? lugar
+          : lugar.copyWith(subtipo: subtipo);
+      _destinosPorSubtipo.putIfAbsent(subtipo, () => []).add(normalizado);
     }
-    if (!initTabs) return;
 
-    final subtiposOrdenados = [
-      TurismoCatalogoRD.aeropuerto,
-      TurismoCatalogoRD.muelle,
-      TurismoCatalogoRD.zonaColonial,
-      TurismoCatalogoRD.playa,
-      TurismoCatalogoRD.resort,
-      TurismoCatalogoRD.ciudad,
-      TurismoCatalogoRD.tour,
-      TurismoCatalogoRD.montana,
-      TurismoCatalogoRD.cascada,
-      TurismoCatalogoRD.atraccion,
-      TurismoCatalogoRD.parque,
-      TurismoCatalogoRD.hotel,
-      TurismoCatalogoRD.museo,
-      TurismoCatalogoRD.lago,
-    ].where((t) => _destinosPorSubtipo.containsKey(t)).toList();
+    for (final lista in _destinosPorSubtipo.values) {
+      lista.sort((a, b) {
+        final pop = b.popularidad.compareTo(a.popularidad);
+        if (pop != 0) return pop;
+        return a.nombre.compareTo(b.nombre);
+      });
+    }
 
-    _tabController = TabController(
-      length: subtiposOrdenados.length,
-      vsync: this,
-    );
+    final orden = [
+      ...TurismoCatalogoRD.ordenSubtiposCatalogo
+          .where((t) => _destinosPorSubtipo.containsKey(t)),
+      ..._destinosPorSubtipo.keys.where(
+        (t) => !TurismoCatalogoRD.ordenSubtiposCatalogo.contains(t),
+      ),
+    ];
+
+    if (initTabs || reinitTabs || orden.length != _subtiposOrdenados.length) {
+      final prevIndex = initTabs ? 0 : _tabController.index;
+      if (!initTabs) {
+        _tabController.dispose();
+      }
+      _subtiposOrdenados = orden;
+      _tabController = TabController(
+        length: orden.isEmpty ? 1 : orden.length,
+        vsync: this,
+        initialIndex: orden.isEmpty
+            ? 0
+            : prevIndex.clamp(0, orden.length - 1),
+      );
+    } else {
+      _subtiposOrdenados = orden;
+    }
   }
 
   @override
@@ -388,36 +366,98 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     });
   }
 
-  Future<double> _calcularDistancia(
-    double latDest,
-    double lonDest, {
-    required double latOrigen,
-    required double lonOrigen,
+  Future<void> _emitirDestinoSeleccionado({
+    required TurismoLugar lugar,
   }) async {
-    try {
-      final result = await DirectionsService.drivingDistanceKm(
-        originLat: latOrigen,
-        originLon: lonOrigen,
-        destLat: latDest,
-        destLon: lonDest,
-        withTraffic: true,
-        region: 'do',
+    final ({double lat, double lon})? origen =
+        await _resolverOrigenParaCotizar();
+    if (!mounted) return;
+    widget.onDestinoSeleccionado(
+      DestinoSeleccionado(
+        lugar: lugar,
+        tipoVehiculo: _tipoVehiculoSeleccionado!,
+        pasajeros: _pasajeros,
+        latOrigen: origen?.lat,
+        lonOrigen: origen?.lon,
+      ),
+    );
+  }
+
+  Future<void> _seleccionarDestinoGoogle(Map<String, dynamic> lugar) async {
+    if (_pasajeros > _maxPasajerosParaVehiculoActual) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
+          backgroundColor: Colors.red,
+        ),
       );
-      return result?.km ??
-          DistanciaService.calcularDistancia(
-            latOrigen,
-            lonOrigen,
-            latDest,
-            lonDest,
-          );
-    } catch (e) {
-      return DistanciaService.calcularDistancia(
-        latOrigen,
-        lonOrigen,
-        latDest,
-        lonDest,
-      );
+      return;
     }
+
+    final lugarTemp = TurismoLugar(
+      id: 'google_${lugar['placeId']}',
+      nombre: lugar['nombre'],
+      ciudad: lugar['direccion'].split(',').first.trim(),
+      lat: lugar['lat'],
+      lon: lugar['lon'],
+      subtipo: 'busqueda',
+      descripcion: lugar['direccion'],
+      imagen: null,
+      popularidad: 0,
+    );
+
+    await _emitirDestinoSeleccionado(lugar: lugarTemp);
+  }
+
+  Future<void> _seleccionarDestino(TurismoLugar destino) async {
+    if (_pasajeros > _maxPasajerosParaVehiculoActual) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (_resolviendoDestino) return;
+    setState(() {
+      _destinoSeleccionado = destino;
+      _resolviendoDestino = true;
+    });
+
+    TurismoLugar? cotizable = destino;
+    if (!TurismoCatalogoRD.listoParaCotizar(destino)) {
+      cotizable = await TurismoDestinosRepo.resolverLugarCotizable(destino);
+    } else {
+      final fixed =
+          TurismoCatalogoRD.corregirCoordenadasRd(destino.lat, destino.lon);
+      if (fixed != null &&
+          (fixed.lat != destino.lat || fixed.lon != destino.lon)) {
+        cotizable = destino.copyWith(lat: fixed.lat, lon: fixed.lon);
+      }
+    }
+
+    if (!mounted) return;
+    setState(() => _resolviendoDestino = false);
+
+    if (cotizable == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'No se pudo ubicar "${destino.nombre}" en el mapa. '
+            'Prueba buscarlo arriba o elige otro destino.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _destinoSeleccionado = cotizable);
+    await _emitirDestinoSeleccionado(lugar: cotizable);
   }
 
   /// Si el host aún no propagó coords, las obtiene aquí (con permiso si hace falta).
@@ -435,7 +475,14 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
     try {
       final ({bool serviceEnabled, LocationPermission permission}) snap =
-          await LocationPermissionService.checkServiceThenRequestIfNeeded();
+          await GpsService.readServiceAndPermissionStabilizedNoRequest(
+        extendedAfterPriorGrant:
+            await LocationPermissionService.ubicacionConcedidaAntesEnPrefs(),
+      );
+      if (!snap.serviceEnabled || !GpsService.permissionUsable(snap.permission)) {
+        unawaited(RaiUbicacionClienteService.instance.refrescar());
+        return null;
+      }
       if (snap.serviceEnabled && GpsService.permissionUsable(snap.permission)) {
         final Position? pos = await GpsService.obtenerUbicacionActual(
           timeout: const Duration(seconds: 12),
@@ -455,169 +502,6 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     } catch (_) {}
 
     return null;
-  }
-
-  void _mostrarErrorUbicacion() {
-    if (!mounted) return;
-    if (LocationPermissionService.clienteEvitaRequestPermisoAlSo) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text(
-          'Activa el GPS y concede permiso de ubicación para cotizar.',
-        ),
-        action: SnackBarAction(
-          label: 'Ajustes',
-          onPressed: () => GpsService.openAppSettings(),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _seleccionarDestinoGoogle(Map<String, dynamic> lugar) async {
-    if (_pasajeros > _maxPasajerosParaVehiculoActual) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-    setState(() {
-      _calculando = true;
-    });
-    try {
-      final ({double lat, double lon})? origen =
-          await _resolverOrigenParaCotizar();
-      if (origen == null) {
-        if (mounted) {
-          setState(() => _calculando = false);
-          _mostrarErrorUbicacion();
-        }
-        return;
-      }
-      final distancia = await _calcularDistancia(
-        lugar['lat'],
-        lugar['lon'],
-        latOrigen: origen.lat,
-        lonOrigen: origen.lon,
-      );
-      final contadorViajes = await _obtenerContadorViajes();
-
-      final precio = await TarifaServiceUnificado().calcularPrecio(
-        tipoServicio: 'turismo',
-        tipoVehiculo: _tipoVehiculoSeleccionado!,
-        subtipoTurismo: 'busqueda',
-        distanciaKm: distancia,
-        idaVuelta: false,
-        contadorViajes: contadorViajes, // ✅ AGREGADO
-      );
-      if (mounted) {
-        setState(() {
-          _calculando = false;
-        });
-
-        final lugarTemp = TurismoLugar(
-          id: 'google_${lugar['placeId']}',
-          nombre: lugar['nombre'],
-          ciudad: lugar['direccion'].split(',').first.trim(),
-          lat: lugar['lat'],
-          lon: lugar['lon'],
-          subtipo: 'busqueda',
-          descripcion: lugar['direccion'],
-          imagen: null,
-          popularidad: 0,
-        );
-
-        widget.onDestinoSeleccionado(DestinoSeleccionado(
-          lugar: lugarTemp,
-          tipoVehiculo: _tipoVehiculoSeleccionado!,
-          pasajeros: _pasajeros,
-          distanciaKm: distancia,
-          precio: precio,
-          latOrigen: origen.lat,
-          lonOrigen: origen.lon,
-        ));
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _calculando = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al calcular: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _seleccionarDestino(TurismoLugar destino) async {
-    if (_pasajeros > _maxPasajerosParaVehiculoActual) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Máximo $_maxPasajerosParaVehiculoActual pasajeros para este vehículo'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-    setState(() {
-      _destinoSeleccionado = destino;
-      _calculando = true;
-    });
-
-    try {
-      final ({double lat, double lon})? origen =
-          await _resolverOrigenParaCotizar();
-      if (origen == null) {
-        if (mounted) {
-          setState(() => _calculando = false);
-          _mostrarErrorUbicacion();
-        }
-        return;
-      }
-      final distancia = await _calcularDistancia(
-        destino.lat,
-        destino.lon,
-        latOrigen: origen.lat,
-        lonOrigen: origen.lon,
-      );
-      final contadorViajes = await _obtenerContadorViajes();
-
-      final precio = await TarifaServiceUnificado().calcularPrecio(
-        tipoServicio: 'turismo',
-        tipoVehiculo: _tipoVehiculoSeleccionado!,
-        subtipoTurismo: destino.subtipo,
-        distanciaKm: distancia,
-        idaVuelta: false,
-        contadorViajes: contadorViajes, // ✅ AGREGADO
-      );
-      if (mounted) {
-        setState(() {
-          _calculando = false;
-        });
-        widget.onDestinoSeleccionado(DestinoSeleccionado(
-          lugar: destino,
-          tipoVehiculo: _tipoVehiculoSeleccionado!,
-          pasajeros: _pasajeros,
-          distanciaKm: distancia,
-          precio: precio,
-          latOrigen: origen.lat,
-          lonOrigen: origen.lon,
-        ));
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _calculando = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al calcular: $e')),
-        );
-      }
-    }
   }
 
   @override
@@ -823,7 +707,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                         hintStyle: TextStyle(color: textSubtle),
                         prefixIcon:
                             Icon(Icons.search, color: textSubtle),
-                        suffixIcon: _buscandoGoogle
+                        suffixIcon: _buscandoGoogle || _resolviendoDestino
                             ? const Padding(
                                 padding: EdgeInsets.all(12),
                                 child: SizedBox(
@@ -854,7 +738,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                                     ),
                                   IconButton(
                                     tooltip: 'Búsqueda inteligente RAI',
-                                    icon: Icon(
+                                    icon: const Icon(
                                       Icons.auto_awesome_rounded,
                                       color: accent,
                                       size: 22,
@@ -909,19 +793,6 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                   ),
                 ],
               ),
-              if (_calculando)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  child: IgnorePointer(
-                    child: LinearProgressIndicator(
-                      minHeight: 3,
-                      color: const Color(0xFFBA68C8),
-                      backgroundColor: accent.withValues(alpha: 0.18),
-                    ),
-                  ),
-                ),
             ],
           ),
         ),
@@ -1043,7 +914,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
           unselectedLabelColor: textMuted,
           indicatorColor: accent,
           dividerColor: Colors.transparent,
-          tabs: _destinosPorSubtipo.keys.map((subtipo) {
+          tabs: _subtiposOrdenados.map((subtipo) {
             return Tab(
               icon: Icon(_iconos[subtipo] ?? Icons.place),
               text: _subtitulos[subtipo]?.split(' ').first ?? subtipo,
@@ -1053,7 +924,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
         Expanded(
           child: TabBarView(
             controller: _tabController,
-            children: _destinosPorSubtipo.keys.map((subtipo) {
+            children: _subtiposOrdenados.map((subtipo) {
               final destinos = _destinosPorSubtipo[subtipo] ?? [];
               return _buildListaDestinos(
                 destinos,

@@ -1,11 +1,16 @@
-﻿import 'dart:math' as math;
+﻿import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
+import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
@@ -78,6 +83,13 @@ class SeleccionServicio extends StatelessWidget {
   }
 
   Widget _buildContenido(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: ProductosConfigService.revision,
+      builder: (context, _, __) => _buildHome(context),
+    );
+  }
+
+  Widget _buildHome(BuildContext context) {
     // El fondo viene del Theme global (que el usuario puede personalizar
     // desde Apariencia). Los textos se calculan automáticamente por contraste
     // WCAG sobre ese fondo, así sea blanco, negro, rojo, amarillo, etc.
@@ -159,91 +171,111 @@ class SeleccionServicio extends StatelessWidget {
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
                       child: _HomePrimaryTripBlock(
                         onPedirAhora: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  const ProgramarViaje(modoAhora: true),
-                            ),
-                          );
+                          unawaited(NavigationService.push(
+                            const ProgramarViaje(modoAhora: true),
+                          ));
                         },
                         onProgramar: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  const ProgramarViaje(modoAhora: false),
-                            ),
-                          );
+                          unawaited(NavigationService.push(
+                            const ProgramarViaje(modoAhora: false),
+                          ));
                         },
                       ),
                     ),
                   ),
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _FeaturedBolaAhorroCard(
-                            onTap: () =>
-                                Navigator.of(context, rootNavigator: true)
-                                    .pushNamed(rutaBolaPueblo),
-                          ),
-                          const SizedBox(height: 10),
-                          _HomeConductoresTile(
-                            onTap: () => NavigationService.push(
-                              const BolaConductoresEnRutaClientePage(),
-                            ),
-                            accentColor: verConductoresColor,
-                          ),
-                        ],
+                  if (ProductosConfigService.muestraBola ||
+                      ProductosConfigService.muestraConductoresEnRuta)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (ProductosConfigService.muestraBola) ...[
+                              StreamBuilder<Map<String, String>?>(
+                                stream: BolaPuebloRepo.streamBolaActivaCliente(
+                                  FirebaseAuth.instance.currentUser?.uid ?? '',
+                                ),
+                                builder: (context, bolaSnap) {
+                                  final Map<String, String>? bolaActiva =
+                                      bolaSnap.data;
+                                  return _FeaturedBolaAhorroCard(
+                                    bolaActiva: bolaActiva,
+                                    onTap: () async {
+                                      if (bolaActiva != null) {
+                                        final String? id = bolaActiva['id'];
+                                        if (id != null && id.isNotEmpty) {
+                                          await BolaPuebloDialogs
+                                              .abrirModoViajeBolaPorId(
+                                            context: context,
+                                            bolaId: id,
+                                          );
+                                          return;
+                                        }
+                                      }
+                                      if (!context.mounted) return;
+                                      Navigator.of(context, rootNavigator: true)
+                                          .pushNamed(rutaBolaPueblo);
+                                    },
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                            ],
+                            if (ProductosConfigService.muestraConductoresEnRuta)
+                              _HomeConductoresTile(
+                                onTap: () => NavigationService.push(
+                                  const BolaConductoresEnRutaClientePage(),
+                                ),
+                                accentColor: verConductoresColor,
+                              ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Más opciones',
-                              style: TextStyle(
-                                color: textPrimary,
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.3,
+                  if (ProductosConfigService.hayOpcionesExtrasHome)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Más opciones',
+                                style: TextStyle(
+                                  color: textPrimary,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -0.3,
+                                ),
                               ),
                             ),
-                          ),
-                          Icon(Icons.swipe_rounded,
-                              size: 18, color: textMuted),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Desliza',
-                            style: TextStyle(
-                              color: textMuted,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
+                            Icon(Icons.swipe_rounded,
+                                size: 18, color: textMuted),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Desliza',
+                              style: TextStyle(
+                                color: textMuted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: Builder(
-                      builder: (context) {
-                        final double h = MediaQuery.sizeOf(context).height;
-                        final double stripH = (h * 0.26).clamp(196.0, 268.0);
-                        const double cardW = 168.0;
-                        return SizedBox(
-                          height: stripH,
-                          child: ListView(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            children: [
+                  if (ProductosConfigService.hayOpcionesExtrasHome)
+                    SliverToBoxAdapter(
+                      child: Builder(
+                        builder: (context) {
+                          final double h = MediaQuery.sizeOf(context).height;
+                          final double stripH =
+                              (h * 0.26).clamp(196.0, 268.0);
+                          const double cardW = 168.0;
+                          final cards = <Widget>[];
+                          if (ProductosConfigService.muestraMultiparada) {
+                            cards.add(
                               _HomeGiantServiceCard(
                                 cardWidth: cardW,
                                 gradient: const LinearGradient(
@@ -267,16 +299,18 @@ class SeleccionServicio extends StatelessWidget {
                                 badge: const Icon(Icons.alt_route,
                                     color: Colors.white, size: 16),
                                 onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          const ProgramarViajeMulti(),
-                                    ),
-                                  );
+                                  unawaited(NavigationService.push(
+                                    const ProgramarViajeMulti(),
+                                  ));
                                 },
                               ),
-                              const SizedBox(width: 10),
+                            );
+                          }
+                          if (ProductosConfigService.muestraMotor) {
+                            if (cards.isNotEmpty) {
+                              cards.add(const SizedBox(width: 10));
+                            }
+                            cards.add(
                               _HomeGiantServiceCard(
                                 cardWidth: cardW,
                                 gradient: const LinearGradient(
@@ -290,7 +324,7 @@ class SeleccionServicio extends StatelessWidget {
                                 icon: Icons.two_wheeler,
                                 iconSize: 32,
                                 customHeader: const MotorServicioAnimation(),
-                                title: 'MOTOR',
+                                title: 'MOTORES',
                                 titleSize: 18,
                                 subtitle: 'Rápido y económico',
                                 price: 'DESDE RD\$ 50',
@@ -301,18 +335,21 @@ class SeleccionServicio extends StatelessWidget {
                                 badge: const Icon(Icons.speed,
                                     color: Colors.white, size: 16),
                                 onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const ProgramarViaje(
-                                        modoAhora: true,
-                                        tipoServicio: 'motor',
-                                      ),
+                                  unawaited(NavigationService.push(
+                                    const ProgramarViaje(
+                                      modoAhora: true,
+                                      tipoServicio: 'motor',
                                     ),
-                                  );
+                                  ));
                                 },
                               ),
-                              const SizedBox(width: 10),
+                            );
+                          }
+                          if (ProductosConfigService.muestraGiras) {
+                            if (cards.isNotEmpty) {
+                              cards.add(const SizedBox(width: 10));
+                            }
+                            cards.add(
                               _HomeGiantServiceCard(
                                 cardWidth: cardW,
                                 gradient: const LinearGradient(
@@ -346,7 +383,13 @@ class SeleccionServicio extends StatelessWidget {
                                   );
                                 },
                               ),
-                              const SizedBox(width: 10),
+                            );
+                          }
+                          if (ProductosConfigService.muestraTurismo) {
+                            if (cards.isNotEmpty) {
+                              cards.add(const SizedBox(width: 10));
+                            }
+                            cards.add(
                               _HomeGiantServiceCard(
                                 cardWidth: cardW,
                                 gradient: const LinearGradient(
@@ -359,7 +402,8 @@ class SeleccionServicio extends StatelessWidget {
                                 ),
                                 icon: Icons.beach_access,
                                 iconSize: 32,
-                                customHeader: const TurismoServicioAnimation(),
+                                customHeader:
+                                    const TurismoServicioAnimation(),
                                 title: 'TURISMO',
                                 titleSize: 17,
                                 subtitle: 'Aeropuertos, hoteles',
@@ -370,14 +414,23 @@ class SeleccionServicio extends StatelessWidget {
                                 ],
                                 badge: const Icon(Icons.airplanemode_active,
                                     color: Colors.white, size: 16),
-                                onTap: () => _abrirTurismoDesdeInicio(context),
+                                onTap: () =>
+                                    _mostrarEleccionTurismo(context),
                               ),
-                            ],
-                          ),
-                        );
-                      },
+                            );
+                          }
+                          return SizedBox(
+                            height: stripH,
+                            child: ListView(
+                              scrollDirection: Axis.horizontal,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              children: cards,
+                            ),
+                          );
+                        },
+                      ),
                     ),
-                  ),
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(20, 12, 20, 22),
@@ -426,17 +479,97 @@ class SeleccionServicio extends StatelessWidget {
     );
   }
 
-  /// Turismo: pantalla de programar + selector; un toque en destino cotiza y rellena.
-  void _abrirTurismoDesdeInicio(BuildContext context) {
+  /// Turismo: elegir Ahora o Programar y abrir [ProgramarViaje].
+  Future<void> _mostrarEleccionTurismo(BuildContext context) async {
     if (!context.mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const ProgramarViaje(
-          modoAhora: true,
-          tipoServicio: 'turismo',
-        ),
-      ),
+    bool programar = false;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                8,
+                20,
+                20 + MediaQuery.paddingOf(ctx).bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Turismo RAI',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Traslados a aeropuertos, hoteles y destinos turísticos',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 16),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment<bool>(
+                        value: false,
+                        icon: Icon(Icons.bolt_rounded, size: 18),
+                        label: Text('Ahora'),
+                      ),
+                      ButtonSegment<bool>(
+                        value: true,
+                        icon: Icon(Icons.event_rounded, size: 18),
+                        label: Text('Programar'),
+                      ),
+                    ],
+                    selected: {programar},
+                    onSelectionChanged: (selection) {
+                      setModalState(() => programar = selection.first);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _abrirTurismoDesdeInicio(
+                        context,
+                        modoAhora: !programar,
+                      );
+                    },
+                    icon: const Icon(Icons.arrow_forward_rounded),
+                    label: const Text('Continuar'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFAA00FF),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
+  }
+
+  void _abrirTurismoDesdeInicio(
+    BuildContext context, {
+    required bool modoAhora,
+  }) {
+    if (!context.mounted) return;
+    unawaited(NavigationService.push(
+      ProgramarViaje(
+        modoAhora: modoAhora,
+        tipoServicio: 'turismo',
+      ),
+    ));
   }
 }
 
@@ -469,17 +602,14 @@ class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
     final det = await RaiDireccionInteligenteSheet.mostrar(context);
     if (det == null || !mounted) return;
     if (!context.mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ProgramarViaje(
-          modoAhora: !_programar,
-          destinoPrecargado: det.displayLabel,
-          latDestinoPrecargado: det.lat,
-          lonDestinoPrecargado: det.lon,
-        ),
+    unawaited(NavigationService.push(
+      ProgramarViaje(
+        modoAhora: !_programar,
+        destinoPrecargado: det.displayLabel,
+        latDestinoPrecargado: det.lat,
+        lonDestinoPrecargado: det.lon,
       ),
-    );
+    ));
   }
 
   @override
@@ -1014,9 +1144,29 @@ class _PatternPainter extends CustomPainter {
 
 /// Bola Ahorro: tarjeta destacada con contraste sobre cualquier fondo custom.
 class _FeaturedBolaAhorroCard extends StatelessWidget {
-  const _FeaturedBolaAhorroCard({required this.onTap});
+  const _FeaturedBolaAhorroCard({
+    required this.onTap,
+    this.bolaActiva,
+  });
 
   final VoidCallback onTap;
+  final Map<String, String>? bolaActiva;
+
+  String get _subtitle {
+    if (bolaActiva == null) {
+      return 'Viajes compartidos hasta 50% más baratos';
+    }
+    switch ((bolaActiva!['estado'] ?? '').toString()) {
+      case 'abierta':
+        return 'Pedido activo — tocá para ver tu bola en el tablero';
+      case 'acordada':
+        return 'Bola acordada — tocá para continuar el viaje';
+      case 'en_curso':
+        return 'Viaje en curso — tocá para abrir Mi viaje';
+      default:
+        return 'Tenés una bola activa — tocá para continuar';
+    }
+  }
 
   static const Color _lightSurface = Color(0xFFFFF4E6);
   static const Color _darkGradientMid = Color(0xFFFF6B35);
@@ -1109,7 +1259,7 @@ class _FeaturedBolaAhorroCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Viajes compartidos hasta 50% más baratos',
+                        _subtitle,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(

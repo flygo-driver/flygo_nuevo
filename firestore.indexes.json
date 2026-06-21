@@ -516,6 +516,14 @@
       "collectionGroup": "usuarios",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "bloqueado", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "usuarios",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "rol", "order": "ASCENDING" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
@@ -599,6 +607,32 @@
       "fields": [
         { "fieldPath": "referenciaRecaudo", "order": "ASCENDING" },
         { "fieldPath": "estadoPago", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservas",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "estadoPago", "order": "ASCENDING" },
+        { "fieldPath": "metodoPago", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservas",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "recaudoDestino", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "estadoPago", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "liquidaciones_pool",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     }
   ],

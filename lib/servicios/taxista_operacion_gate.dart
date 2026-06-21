@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart';
+import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 // lib/servicios/taxista_operacion_gate.dart
 // Solo lectura de flags en usuarios/{uid}: aprobación admin + documentos (sin tocar viajes/mapas).
 
@@ -148,10 +150,60 @@ bool taxistaPuedeIniciarSesionConGoogle(Map<String, dynamic> data) {
 
 /// Código de rechazo para claim/aceptar viaje pool (`null` = apto).
 /// Paridad con [assertTaxistaAptoParaClaimPool] en Cloud Functions.
+/// Misma lógica que [TaxistaEntry] / pool: docs + contrato + registro; no [puedeRecibirViajes].
 String? taxistaRechazoAceptarViajePool(Map<String, dynamic> data) {
+  if (data['bloqueado'] == true) return 'bloqueado-admin';
   if (data['registroTaxistaCompleto'] != true) return 'registro-incompleto';
-  if (data['puedeRecibirViajes'] != true) return 'no-puede-recibir-viajes';
   if (!taxistaContratoFirmado(data)) return 'contrato-no-firmado';
   if (!taxistaAprobadoParaOperarPool(data)) return 'documentos-no-aprobados';
   return null;
+}
+
+/// Mensaje en español para SnackBar / detalle al fallar [ViajesRepo.claimTripWithReason].
+String taxistaMensajeClaimFallido(
+  String res, {
+  String poolModoConductor = TaxistaPoolModoConductor.vehiculo,
+}) {
+  switch (res) {
+    case 'no-existe':
+      return 'El viaje ya no existe.';
+    case 'estado-no-pendiente':
+      return 'El viaje ya no está pendiente.';
+    case 'ya-asignado':
+      return 'Ese viaje ya fue asignado.';
+    case 'acceptAfter-futuro':
+      return 'Aún no se libera para aceptar.';
+    case 'publish-futuro':
+      return 'Aún no se publica en el pool.';
+    case 'reservado-otro':
+      return 'Reservado por otro taxista.';
+    case 'taxista-ocupado':
+      return 'Tienes un viaje activo. Finalízalo o cancélalo.';
+    case 'bloqueado-pago-semanal':
+    case 'bloqueado-comision-efectivo':
+      return PagosTaxistaRepo.mensajeRecargaTomarViajes;
+    case 'bloqueado-admin':
+      return 'Tu cuenta está bloqueada por administración. Contacta soporte.';
+    case 'registro-incompleto':
+      return 'Completa tu registro de taxista antes de aceptar viajes.';
+    case 'contrato-no-firmado':
+      return 'Debes firmar el contrato de taxista en tu cuenta.';
+    case 'documentos-no-aprobados':
+      return 'Tus documentos aún no están aprobados por administración.';
+    case 'tipo-servicio-no-coincide':
+      return poolModoConductor == TaxistaPoolModoConductor.motor
+          ? 'Este viaje es de carro/taxi. Tu perfil es de motores.'
+          : 'Este viaje es de motores. Tu perfil es vehículo.';
+    case 'no-puede-recibir-viajes':
+      return 'Tu cuenta no está habilitada para recibir viajes. '
+          'Si ya tienes documentos aprobados, contacta administración.';
+    default:
+      if (res.startsWith('permiso:')) {
+        return 'No se pudo aceptar (permisos). Intenta de nuevo o contacta soporte.';
+      }
+      if (res.startsWith('bloqueado')) {
+        return PagosTaxistaRepo.mensajeRecargaTomarViajes;
+      }
+      return 'No se pudo aceptar el viaje. Intenta de nuevo.';
+  }
 }

@@ -58,7 +58,12 @@ class ReservasProgramadasCliente extends StatelessWidget {
           : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('viajes')
-                  .where('clienteId', isEqualTo: user.uid)
+                  .where(
+                    Filter.or(
+                      Filter('clienteId', isEqualTo: user.uid),
+                      Filter('uidCliente', isEqualTo: user.uid),
+                    ),
+                  )
                   .limit(60)
                   .snapshots(),
               builder: (context, snap) {
@@ -83,8 +88,6 @@ class ReservasProgramadasCliente extends StatelessWidget {
                   final m = d.data();
                   if (m['programado'] != true) return false;
                   if (_esTerminal(m)) return false;
-                  final tipo = (m['tipoServicio'] ?? '').toString();
-                  if (tipo == 'turismo') return false;
                   return true;
                 }).toList()
                   ..sort((a, b) {
@@ -116,6 +119,8 @@ class ReservasProgramadasCliente extends StatelessWidget {
                     final fecha = _asDate(m['fechaHora']);
                     final origen = (m['origen'] ?? '').toString();
                     final destino = (m['destino'] ?? '').toString();
+                    final esTurismo =
+                        (m['tipoServicio'] ?? '').toString() == 'turismo';
                     final precio = _asDouble(
                         m['precioFinal'] ?? m['precio'] ?? m['total']);
                     final ref = d.id.length >= 6 ? d.id.substring(0, 6) : d.id;
@@ -149,6 +154,32 @@ class ReservasProgramadasCliente extends StatelessWidget {
                                     fontSize: 12,
                                   ),
                                 ),
+                                if (esTurismo) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 3,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF49F18B)
+                                          .withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xFF49F18B)
+                                            .withValues(alpha: 0.45),
+                                      ),
+                                    ),
+                                    child: const Text(
+                                      'Turismo',
+                                      style: TextStyle(
+                                        color: Color(0xFF49F18B),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                             const SizedBox(height: 8),

@@ -41,6 +41,262 @@ class BolaPuebloRepo {
     return _col.orderBy('createdAt', descending: true).limit(200).snapshots();
   }
 
+  /// Bolas cuyo espejo en `viajes` fue borrado en consola y no se pudo cerrar en Firestore.
+  static final Set<String> _bolasOcultasEspejoMuerto = <String>{};
+
+  /// ¿El cliente ya tiene pedido/acuerdo/viaje bola activo? (una sola a la vez).
+  static bool clienteTieneBolaActivaEnDoc(Map<String, dynamic> d, String uid) {
+    final String u = uid.trim();
+    if (u.isEmpty) return false;
+    final String estado = (d['estado'] ?? '').toString().trim();
+    if (estado != 'abierta' &&
+        estado != 'acordada' &&
+        estado != 'en_curso') {
+      return false;
+    }
+    final String owner = (d['createdByUid'] ?? '').toString().trim();
+    final String uidCli = (d['uidCliente'] ?? '').toString().trim();
+    final String tipo = (d['tipo'] ?? '').toString().trim().toLowerCase();
+    if (uidCli == u) return true;
+    if (owner == u && tipo == 'pedido') return true;
+    return false;
+  }
+
+  static Map<String, String>? bolaActivaClienteDesdeTablero(
+    QuerySnapshot<Map<String, dynamic>> snap,
+    String uid,
+  ) {
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in snap.docs) {
+      if (clienteTieneBolaActivaEnDoc(doc.data(), uid)) {
+        return <String, String>{
+          'id': doc.id,
+          'estado': (doc.data()['estado'] ?? '').toString().trim(),
+        };
+      }
+    }
+    return null;
+  }
+
+  static Stream<Map<String, String>?> streamBolaActivaCliente(String uid) {
+    final String u = uid.trim();
+    if (u.isEmpty) return Stream<Map<String, String>?>.value(null);
+    return streamTablero().map((snap) => bolaActivaClienteDesdeTablero(snap, u));
+  }
+
+  /// Impide un segundo pedido mientras haya bola abierta/acordada/en curso.
+  static Future<void> assertClientePuedePedirNuevaBola(String uid) async {
+    final String u = uid.trim();
+    if (u.isEmpty) throw Exception('Sesión inválida');
+
+    final QuerySnapshot<Map<String, dynamic>> qs = await _col
+        .orderBy('createdAt', descending: true)
+        .limit(200)
+        .get();
+    if (bolaActivaClienteDesdeTablero(qs, u) != null) {
+      throw Exception(
+        'Ya tenés una bola activa. Seguí ese viaje o cancelala antes de pedir otra.',
+      );
+    }
+
+    final QuerySnapshot<Map<String, dynamic>> qCli = await _col
+        .where('uidCliente', isEqualTo: u)
+        .where('estado', whereIn: <String>['acordada', 'en_curso'])
+        .limit(1)
+        .get();
+    if (qCli.docs.isNotEmpty) {
+      throw Exception(
+        'Ya tenés un acuerdo Bola en curso. Finalizalo antes de pedir otra.',
+      );
+    }
+  }
+
+  /// ¿Mostrar esta publicación en el tablero? (oculta canceladas/finalizadas).
+  static bool visibleEnTablero(
+    Map<String, dynamic> m,
+    String uid, {
+    String? bolaId,
+  }) {
+    if (bolaId != null && _bolasOcultasEspejoMuerto.contains(bolaId)) {
+      return false;
+    }
+    final String estado = (m['estado'] ?? '').toString().trim();
+    if (estado == 'cancelada' || estado == 'finalizada') return false;
+    final String ownerUid = (m['createdByUid'] ?? '').toString();
+    final String uidTx = (m['uidTaxista'] ?? '').toString();
+    final String uidCli = (m['uidCliente'] ?? '').toString();
+    if (estado == 'abierta' || estado == 'en_curso') return true;
+    if (estado == 'acordada') {
+      return ownerUid == uid || uidTx == uid || uidCli == uid;
+    }
+    return false;
+  }
+
+  static Future<bool> bolaSigueOperativa(String bolaId) async {
+    final String bid = bolaId.trim();
+    if (bid.isEmpty) return false;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await _col.doc(bid).get();
+      if (!snap.exists) return false;
+      final String e = (snap.data()?['estado'] ?? '').toString().trim();
+      return e != 'cancelada' && e != 'finalizada';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static bool _espejoViajeInactivo(Map<String, dynamic>? vd) {
+    if (vd == null) return true;
+    if (vd['completado'] == true) return true;
+    final String est = (vd['estado'] ?? '').toString().trim().toLowerCase();
+    if (est == 'cancelado' || est == 'completado') return true;
+    return vd['activo'] != true;
+  }
+
+  static Future<void> _limpiarViajeActivoIdUsuario(String uid) async {
+    try {
+      await _db.collection('usuarios').doc(uid).set(<String, dynamic>{
+        'viajeActivoId': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('[BOLA_AHORRO] limpiar viajeActivoId $uid: $e');
+    }
+  }
+
+  /// Si borraste el doc en `viajes` (consola) pero la bola sigue en `bolas_pueblo`.
+  static Future<Set<String>> _reconciliarBolasEspejoBorrado(String u) async {
+    final Set<String> ocultar = <String>{};
+    try {
+      final QuerySnapshot<Map<String, dynamic>> qs = await _col
+          .orderBy('createdAt', descending: true)
+          .limit(200)
+          .get();
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in qs.docs) {
+        final Map<String, dynamic> d = doc.data();
+        final String estado = (d['estado'] ?? '').toString().trim();
+        if (estado == 'cancelada' || estado == 'finalizada') continue;
+
+        final String owner = (d['createdByUid'] ?? '').toString();
+        final String uidTx = (d['uidTaxista'] ?? '').toString();
+        final String uidCli = (d['uidCliente'] ?? '').toString();
+        if (u != owner && u != uidTx && u != uidCli) continue;
+
+        final String viajeEspejoId =
+            (d['viajeEspejoId'] ?? '').toString().trim();
+        if (viajeEspejoId.isEmpty) continue;
+
+        final DocumentSnapshot<Map<String, dynamic>> vSnap =
+            await _db.collection('viajes').doc(viajeEspejoId).get();
+        if (vSnap.exists &&
+            !_espejoViajeInactivo(vSnap.data())) {
+          continue;
+        }
+
+        await _limpiarViajeActivoIdUsuario(u);
+
+        if (estado == 'acordada') {
+          try {
+            await doc.reference.set(<String, dynamic>{
+              'estado': 'cancelada',
+              'estadoViajeBola': 'cancelada',
+              'canceladaEn': FieldValue.serverTimestamp(),
+              'canceladaPor': u,
+              'viajeEspejoId': '',
+              'errorSyncViajeEspejo': true,
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+          } catch (e) {
+            debugPrint(
+              '[BOLA_AHORRO] cancelar bola acordada espejo muerto ${doc.id}: $e',
+            );
+            ocultar.add(doc.id);
+          }
+        } else if (estado == 'abierta') {
+          try {
+            await doc.reference.set(<String, dynamic>{
+              'viajeEspejoId': '',
+              'errorSyncViajeEspejo': true,
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+          } catch (e) {
+            debugPrint(
+              '[BOLA_AHORRO] limpiar espejo abierta ${doc.id}: $e',
+            );
+            ocultar.add(doc.id);
+          }
+        } else {
+          ocultar.add(doc.id);
+        }
+      }
+    } catch (e, st) {
+      debugPrint('[BOLA_AHORRO] _reconciliarBolasEspejoBorrado $e\n$st');
+    }
+    return ocultar;
+  }
+
+  /// Si borraste/cancelaste en consola: limpia `viajeActivoId` y cierra bolas huérfanas.
+  static Future<Set<String>> reconciliarSesionBolaAtascada({String? uid}) async {
+    final String u =
+        (uid ?? FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+    if (u.isEmpty) return <String>{};
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> userSnap =
+          await _db.collection('usuarios').doc(u).get();
+      final String vid =
+          (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isNotEmpty) {
+        final DocumentSnapshot<Map<String, dynamic>> vSnap =
+            await _db.collection('viajes').doc(vid).get();
+        if (!vSnap.exists) {
+          await _limpiarViajeActivoIdUsuario(u);
+        } else {
+          final Map<String, dynamic> vd = vSnap.data() ?? <String, dynamic>{};
+          final String bolaId = (vd['bolaPuebloId'] ?? vd['bolaId'] ?? '')
+              .toString()
+              .trim();
+          final bool esBola =
+              (vd['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro' ||
+                  bolaId.isNotEmpty;
+          if (esBola) {
+            var debeLimpiar = false;
+            if (bolaId.isEmpty) {
+              debeLimpiar = _espejoViajeInactivo(vd);
+            } else {
+              debeLimpiar = !await bolaSigueOperativa(bolaId);
+            }
+
+            if (debeLimpiar) {
+              await _limpiarViajeActivoIdUsuario(u);
+              if (vd['activo'] == true) {
+                try {
+                  await _db.collection('viajes').doc(vid).set(<String, dynamic>{
+                    'activo': false,
+                    'updatedAt': FieldValue.serverTimestamp(),
+                    'actualizadoEn': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true));
+                } catch (e) {
+                  debugPrint(
+                    '[BOLA_AHORRO] reconciliar desactivar espejo $vid: $e',
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e, st) {
+      debugPrint('[BOLA_AHORRO] reconciliar viajeActivoId $e\n$st');
+    }
+
+    final Set<String> ocultar = await _reconciliarBolasEspejoBorrado(u);
+    _bolasOcultasEspejoMuerto
+      ..clear()
+      ..addAll(ocultar);
+    return ocultar;
+  }
+
   /// Vista previa de tarifas (mismo criterio que [crearPublicacion]) para el formulario.
   static ({
     double tarifaNormalRd,
@@ -96,6 +352,9 @@ class BolaPuebloRepo {
       throw Exception('Origen y destino son obligatorios');
     }
     if (uid.trim().isEmpty) throw Exception('Sesión inválida');
+    if (t == 'pedido') {
+      await assertClientePuedePedirNuevaBola(uid);
+    }
     if (distanciaKm <= 0) throw Exception('Distancia inválida');
     final int pax = pasajeros.clamp(1, 8);
     final double tarifaNormalRd = DistanciaService.calcularPrecio(distanciaKm);
@@ -323,6 +582,7 @@ class BolaPuebloRepo {
         'bolaId': bolaId.trim(),
         'ofertaId': ofertaId.trim(),
       });
+      await ViajesRepo.enlazarViajeEspejoBolaOperativo(bolaId: bolaId);
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
       if (msg.isNotEmpty) {
@@ -395,6 +655,7 @@ class BolaPuebloRepo {
         'bolaId': bolaId.trim(),
         'ofertaId': ofertaId.trim(),
       });
+      await ViajesRepo.enlazarViajeEspejoBolaOperativo(bolaId: bolaId);
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
       if (msg.isNotEmpty) {
@@ -432,6 +693,25 @@ class BolaPuebloRepo {
     if (d['pickupConfirmadoTaxista'] == true) return false;
     if (d['codigoVerificado'] == true) return false;
     return true;
+  }
+
+  static String mensajeCancelacionParaParticipante(
+    Map<String, dynamic> d,
+    String uid,
+  ) {
+    final String canceladaPor =
+        (d['canceladaPor'] ?? '').toString().trim();
+    final String uidTx = (d['uidTaxista'] ?? '').toString().trim();
+    if (canceladaPor.isNotEmpty && canceladaPor == uid.trim()) {
+      return 'Cancelaste el acuerdo.';
+    }
+    if (canceladaPor.isNotEmpty && canceladaPor == uidTx) {
+      return 'El conductor canceló el acuerdo Bola Ahorro.';
+    }
+    if (canceladaPor.isNotEmpty) {
+      return 'El pasajero canceló el acuerdo Bola Ahorro.';
+    }
+    return 'Este acuerdo fue cancelado.';
   }
 
   /// Cliente o taxista: cancelar el acuerdo antes de confirmar abordo (sin viaje en curso).

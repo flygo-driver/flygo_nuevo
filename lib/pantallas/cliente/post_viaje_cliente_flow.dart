@@ -19,6 +19,7 @@ import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/post_viaje_rating_throttle.dart';
+import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
 import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
 import 'package:flygo_nuevo/widgets/subir_comprobante_viaje_button.dart';
 import 'package:flygo_nuevo/widgets/taxista_perfil_post_viaje_card.dart';
@@ -483,6 +484,8 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     final String metodoRaw = (d['metodoPago'] ?? v.metodoPago).toString();
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoRaw);
     final bool esTransfer = MetodoPagoViaje.esTransferencia(metodoRaw);
+    final bool usaRecaudoRai =
+        esTransfer && TransferenciaRecaudoUi.viajeUsaRecaudoEnCuentaRai(d);
     final String uidTaxista = v.uidTaxista.isNotEmpty
         ? v.uidTaxista
         : (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
@@ -517,9 +520,11 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
           Text(
             esEfectivo
                 ? 'Total a pagar al conductor en efectivo. Conserva este resumen.'
-                : esTransfer
-                    ? 'Total acordado con el conductor. Si transferiste, conserva tu comprobante.'
-                    : 'Gracias por preferir RAI.',
+                : usaRecaudoRai
+                    ? 'Total del viaje. Transferí a la cuenta corporativa de RAI con la referencia indicada.'
+                    : esTransfer
+                        ? 'Total acordado con el conductor. Si transferiste, conserva tu comprobante.'
+                        : 'Gracias por preferir RAI.',
             textAlign: TextAlign.center,
             style: const TextStyle(
                 color: Colors.white70, height: 1.4, fontSize: 14),
@@ -564,8 +569,12 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
                 if (v.nombreTaxista.isNotEmpty)
                   _kv('Conductor', v.nombreTaxista),
                 const Divider(height: 28, color: Colors.white24),
-                const Text('Monto a pagar al conductor',
-                    style: TextStyle(color: Colors.white54, fontSize: 13)),
+                Text(
+                  usaRecaudoRai
+                      ? 'Monto a transferir a RAI'
+                      : 'Monto a pagar al conductor',
+                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                ),
                 const SizedBox(height: 6),
                 Text(
                   _money(total),
@@ -581,6 +590,21 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
             ),
           ),
           if (esTransfer) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => FacturaViaje.mostrar(
+                context,
+                viajeId: v.id,
+                role: 'cliente',
+              ),
+              icon: const Icon(Icons.receipt_long_outlined, size: 20),
+              label: const Text('Ver comprobante oficial del viaje'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: const BorderSide(color: Colors.white24),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
             const SizedBox(height: 16),
             TransferenciaRecaudoUi.panel(
               viajeData: d,

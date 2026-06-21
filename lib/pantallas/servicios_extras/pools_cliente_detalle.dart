@@ -3,8 +3,11 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
+import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
+import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
@@ -20,6 +23,10 @@ class PoolsClienteDetalle extends StatefulWidget {
 
 class _PoolsClienteDetalleState extends State<PoolsClienteDetalle>
     with SingleTickerProviderStateMixin {
+  static const Color _kGiraFondo = Color(0xFF000000);
+  static const Color _kGiraPanel = Color(0xFF0A0A0A);
+  static const Color _kGiraBorde = Color(0xFFF59E0B);
+
   int _seats = 1;
   String _metodo = 'transferencia'; // 'transferencia' | 'efectivo'
   bool _saving = false;
@@ -89,6 +96,17 @@ class _PoolsClienteDetalleState extends State<PoolsClienteDetalle>
     return DateTime.now();
   }
 
+  String _sentidoLegible(String sentido) {
+    switch (sentido.trim().toLowerCase()) {
+      case 'ida_y_vuelta':
+        return 'Ida y vuelta';
+      case 'vuelta':
+        return 'Solo vuelta';
+      default:
+        return 'Solo ida';
+    }
+  }
+
   String _buildPromoTexto({
     required String origen,
     required String destino,
@@ -133,18 +151,81 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
     }
   }
 
+  BoxDecoration _panelGira({double radius = 16, double borderWidth = 1.5}) {
+    return BoxDecoration(
+      color: _kGiraPanel,
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(color: _kGiraBorde, width: borderWidth),
+    );
+  }
+
+  Widget _metodoTile({
+    required String value,
+    required String title,
+    required String subtitle,
+    required String groupValue,
+    required ValueChanged<String> onChanged,
+  }) {
+    final selected = value == groupValue;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => onChanged(value),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: selected ? _kGiraBorde.withValues(alpha: 0.14) : const Color(0xFF141414),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? _kGiraBorde : Colors.white12,
+            width: selected ? 1.6 : 1,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Icon(
+                selected ? Icons.radio_button_checked : Icons.radio_button_off,
+                color: selected ? _kGiraBorde : Colors.white54,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: Color(0xFF9CA3AF),
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _anuncioLineal(BuildContext context, String texto) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
     final marqueeText = '   $texto   •   ';
     return Container(
       width: double.infinity,
       height: 46,
-      decoration: BoxDecoration(
-        color: accent.withValues(alpha: isDark ? 0.12 : 0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: accent.withValues(alpha: 0.35)),
-      ),
+      decoration: _panelGira(radius: 12),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: LayoutBuilder(
@@ -164,8 +245,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         '$marqueeText$marqueeText$marqueeText',
                         maxLines: 1,
                         overflow: TextOverflow.visible,
-                        style: TextStyle(
-                          color: accent,
+                        style: const TextStyle(
+                          color: _kGiraBorde,
                           fontWeight: FontWeight.w700,
                           fontSize: 15,
                         ),
@@ -185,33 +266,41 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
   Widget build(BuildContext context) {
     final f = DateFormat('EEE d MMM • HH:mm', 'es');
     final poolRef = PoolRepo.pools.doc(widget.poolId);
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textSecondary =
-        isDark ? Colors.white70 : const Color(0xFF475467);
-    final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
-    final Color textFaint = isDark ? Colors.white38 : const Color(0xFF98A2B3);
-    final Color accent = isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
-    final Color scaffoldBg = isDark ? Colors.black : const Color(0xFFE8EAED);
-    final Color cardBg = isDark ? const Color(0xFF121212) : Colors.white;
-    final Color cardBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
-    final Color innerBg =
-        isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC);
-    final Color innerBorder = isDark ? Colors.white12 : const Color(0xFFE4E7EC);
-    final Color chipBg = isDark ? Colors.white12 : const Color(0xFFEFF1F5);
-    final Color liftBlue =
-        isDark ? Colors.lightBlueAccent : const Color(0xFF1570EF);
-    final Color softFill = isDark ? Colors.white10 : const Color(0xFFEFF1F5);
+    const Color textPrimary = Colors.white;
+    const Color textSecondary = Color(0xFFE5E7EB);
+    const Color textMuted = Color(0xFF9CA3AF);
+    const Color textFaint = Color(0xFF6B7280);
+    const Color accent = Color(0xFF4ADE80);
+    const Color softFill = Color(0xFF141414);
 
-    return Scaffold(
-      backgroundColor: scaffoldBg,
+    return Theme(
+      data: Theme.of(context).copyWith(
+        scaffoldBackgroundColor: _kGiraFondo,
+        dividerColor: _kGiraBorde.withValues(alpha: 0.35),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.white,
+            side: const BorderSide(color: _kGiraBorde),
+          ),
+        ),
+      ),
+      child: Scaffold(
+      backgroundColor: _kGiraFondo,
       appBar: AppBar(
-        backgroundColor: isDark ? Colors.black : Colors.white,
-        foregroundColor: textPrimary,
-        elevation: isDark ? 0 : 0.5,
-        title: Text(
+        backgroundColor: _kGiraFondo,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(2),
+          child: Container(height: 2, color: _kGiraBorde),
+        ),
+        title: const Text(
           'Detalle del viaje',
-          style: TextStyle(color: accent, fontWeight: FontWeight.w800),
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
         ),
         centerTitle: true,
       ),
@@ -222,7 +311,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
             return const Center(child: CircularProgressIndicator());
           }
           if (!snap.data!.exists) {
-            return Center(
+            return const Center(
                 child: Text('El viaje no existe.',
                     style: TextStyle(color: textMuted)));
           }
@@ -247,7 +336,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                 );
               });
             }
-            return Center(
+            return const Center(
               child: Text(
                 'Salida cancelada',
                 style: TextStyle(color: textMuted),
@@ -331,41 +420,98 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
           final total = (_seats * precioTotalPorSeat).toDouble();
           final deposito = (total * depositPct);
           final restante = (total - deposito);
+          final esCentral = PoolRecaudoCentral.esPoolCentral(d);
+          final pctComision = PoolRecaudoCentral.pctComisionPool(
+            d,
+            fallbackPct: 10,
+          );
+          final desgloseCentral = PoolRecaudoCentral.desgloseReserva(
+            pool: d,
+            asientos: _seats,
+            pctComision: pctComision,
+          );
+          final montoClienteCentral = PoolRecaudoCentral.montoRecaudoCliente(
+            pool: d,
+            totalReserva: total,
+          );
 
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              // Header
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: cardBorder),
-                ),
+                decoration: _panelGira(borderWidth: 2),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (bannerUrl.isNotEmpty || bannerVideoUrl.isNotEmpty) ...[
-                      PoolPromoStrip(
-                        bannerUrl: bannerUrl,
-                        bannerVideoUrl: bannerVideoUrl,
-                        title: titulo,
-                        height: 190,
-                        borderRadius: BorderRadius.circular(12),
-                        textPrimary: Colors.white,
-                        textMuted: textFaint,
-                        softFill: softFill,
+                    if (agenciaLogoUrl.isNotEmpty ||
+                        agenciaNombre.isNotEmpty) ...[
+                      Center(
+                        child: PoolAgencyLogoHeader(
+                          logoUrl: agenciaLogoUrl,
+                          title: agenciaNombre.isNotEmpty
+                              ? agenciaNombre
+                              : ownerLabel,
+                          accent: _kGiraBorde,
+                        ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 12),
                     ],
+                    if (bannerUrl.isNotEmpty || bannerVideoUrl.isNotEmpty) ...[
+                      Container(
+                        decoration: BoxDecoration(
+                          color: _kGiraFondo,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: _kGiraBorde, width: 2),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: PoolPromoStrip(
+                          bannerUrl: bannerUrl,
+                          bannerVideoUrl: bannerVideoUrl,
+                          title: titulo,
+                          height: 340,
+                          borderRadius: BorderRadius.circular(14),
+                          textPrimary: Colors.white,
+                          textMuted: textFaint,
+                          softFill: softFill,
+                          mediaOnly: true,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    PoolRutaRecorridoCard(
+                      origen: origen,
+                      destino: destino,
+                      paradas: pickupPoints,
+                      fechaLabel: fechaVuelta == null
+                          ? f.format(fecha)
+                          : '${f.format(fecha)} · Vuelta: ${f.format(fechaVuelta)}',
+                      sentidoLabel: _sentidoLegible(sentido),
+                      cuposLabel: '$left cupos disponibles',
+                      estiloOscuroRojo: true,
+                    ),
+                    if (incluye.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      PoolGiraIncluyeCard(
+                        items: incluye,
+                        estiloOscuroRojo: true,
+                      ),
+                    ],
+                    if (descripcionViaje.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      PoolGiraPlanLlevarCard(
+                        texto: descripcionViaje,
+                        estiloOscuroRojo: true,
+                      ),
+                    ],
+                    const SizedBox(height: 10),
                     _anuncioLineal(context, anuncioTexto),
                     const SizedBox(height: 10),
                     Row(children: [
                       Expanded(
                         child: Text(
                           titulo,
-                          style: TextStyle(
+                          style: const TextStyle(
                               color: textPrimary, fontWeight: FontWeight.w800),
                         ),
                       ),
@@ -379,89 +525,25 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                             border: Border.all(
                                 color: accent.withValues(alpha: 0.5)),
                           ),
-                          child: Text('Confirmado',
+                          child: const Text('Confirmado',
                               style: TextStyle(
                                   color: accent, fontWeight: FontWeight.w700)),
                         ),
                     ]),
-                    if (agenciaNombre.isNotEmpty ||
-                        agenciaLogoUrl.isNotEmpty) ...[
+                    if (ownerLabel.isNotEmpty &&
+                        (agenciaLogoUrl.isNotEmpty ||
+                            agenciaNombre.isNotEmpty ||
+                            taxistaNombre.isNotEmpty)) ...[
                       const SizedBox(height: 6),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 56,
-                            height: 56,
-                            decoration: BoxDecoration(
-                              color: chipBg,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: cardBorder),
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: agenciaLogoUrl.isNotEmpty
-                                ? Image.network(
-                                    agenciaLogoUrl,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, __, ___) => Icon(
-                                      Icons.business,
-                                      size: 24,
-                                      color: textSecondary,
-                                    ),
-                                  )
-                                : Icon(Icons.business,
-                                    size: 24, color: textSecondary),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  agenciaNombre.isNotEmpty
-                                      ? agenciaNombre
-                                      : ownerLabel,
-                                  style: TextStyle(
-                                    color: textPrimary,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Publicado por: $ownerLabel',
-                                  style: TextStyle(
-                                    color: textMuted,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (agenciaLogoUrl.isNotEmpty) ...[
-                        const SizedBox(height: 10),
-                        Center(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(14),
-                            child: Container(
-                              width: 180,
-                              height: 180,
-                              color: softFill,
-                              child: Image.network(
-                                agenciaLogoUrl,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => Icon(
-                                  Icons.business,
-                                  size: 64,
-                                  color: textMuted,
-                                ),
-                              ),
-                            ),
-                          ),
+                      Text(
+                        agenciaNombre.isNotEmpty
+                            ? 'Publicado por: $ownerLabel'
+                            : 'Operador: $ownerLabel',
+                        style: const TextStyle(
+                          color: textMuted,
+                          fontWeight: FontWeight.w600,
                         ),
-                      ],
+                      ),
                     ],
                     if (choferTelefono.isNotEmpty ||
                         choferWhatsApp.isNotEmpty) ...[
@@ -514,9 +596,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                           icon: const Icon(Icons.share_outlined, size: 16),
                           label: const Text('Publicar en redes'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: isDark
-                                ? const Color(0xFF7C4DFF)
-                                : const Color(0xFF5E35B1),
+                            backgroundColor: const Color(0xFF7C4DFF),
                             foregroundColor: Colors.white,
                           ),
                         ),
@@ -565,7 +645,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                       fechaVuelta == null
                           ? f.format(fecha)
                           : '${f.format(fecha)}  •  Vuelta: ${f.format(fechaVuelta)}',
-                      style: TextStyle(color: textSecondary),
+                      style: const TextStyle(color: textSecondary),
                     ),
                     const SizedBox(height: 6),
                     Row(
@@ -575,9 +655,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                             borderRadius: BorderRadius.circular(6),
                             child: LinearProgressIndicator(
                               value: cap == 0 ? 0 : (occ / cap).clamp(0, 1),
-                              backgroundColor: isDark
-                                  ? Colors.white12
-                                  : const Color(0xFFE4E7EC),
+                              backgroundColor: const Color(0xFF2A2A2A),
                               color: accent,
                               minHeight: 8,
                             ),
@@ -585,21 +663,23 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         ),
                         const SizedBox(width: 8),
                         Text('$occ/$cap',
-                            style: TextStyle(color: textSecondary)),
+                            style: const TextStyle(color: textSecondary)),
                       ],
                     ),
                     const SizedBox(height: 6),
                     Text('Punto de encuentro: $pickup',
-                        style: TextStyle(color: textSecondary)),
+                        style: const TextStyle(color: textSecondary)),
                     Text(
-                      'Pago y recorrido los coordina el operador; RAI solo intermedió tu reserva.',
-                      style: TextStyle(color: textFaint, fontSize: 12),
+                      esCentral
+                          ? PoolsProductoCopy.recaudoCentralCliente
+                          : 'Pago y recorrido los coordina el operador; RAI solo intermedió tu reserva.',
+                      style: const TextStyle(color: textFaint, fontSize: 12),
                     ),
                     Text('Quedan $left cupos',
-                        style: TextStyle(color: textSecondary)),
+                        style: const TextStyle(color: textSecondary)),
                     if (minConf > 0)
                       Text('Mínimo para confirmar: $minConf',
-                          style: TextStyle(color: textFaint)),
+                          style: const TextStyle(color: textFaint)),
                     if (!reservable) ...[
                       const SizedBox(height: 6),
                       Text(
@@ -615,43 +695,6 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         style: const TextStyle(color: Colors.orangeAccent),
                       ),
                     ],
-                    if (incluye.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Todo lo que incluye este tipo de viaje:',
-                        style: TextStyle(
-                          color: accent,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: incluye
-                            .map((e) => Chip(
-                                  label: Text(e,
-                                      style: TextStyle(color: textPrimary)),
-                                  backgroundColor: chipBg,
-                                ))
-                            .toList(),
-                      ),
-                    ],
-                    if (descripcionViaje.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        'Plan del viaje y que debes llevar:',
-                        style: TextStyle(
-                          color: liftBlue,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        descripcionViaje,
-                        style: TextStyle(color: textSecondary),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -661,30 +704,26 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
               // Selector de asientos
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: cardBorder),
-                ),
+                decoration: _panelGira(),
                 child: Row(
                   children: [
-                    Text('Asientos', style: TextStyle(color: textSecondary)),
+                    const Text('Asientos', style: TextStyle(color: textSecondary)),
                     const Spacer(),
                     IconButton(
                       onPressed:
                           (_seats > 1) ? () => setState(() => _seats--) : null,
-                      icon: Icon(Icons.remove_circle_outline,
+                      icon: const Icon(Icons.remove_circle_outline,
                           color: textSecondary),
                     ),
                     Text('$_seats',
-                        style: TextStyle(
+                        style: const TextStyle(
                             color: textPrimary, fontWeight: FontWeight.w800)),
                     IconButton(
                       onPressed: (_seats < left)
                           ? () => setState(() => _seats++)
                           : null,
                       icon:
-                          Icon(Icons.add_circle_outline, color: textSecondary),
+                          const Icon(Icons.add_circle_outline, color: textSecondary),
                     ),
                   ],
                 ),
@@ -695,29 +734,47 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
               // Precio / Depósito
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: cardBorder),
-                ),
+                decoration: _panelGira(),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                         'Precio por persona: RD\$ ${precioTotalPorSeat.toStringAsFixed(0)}',
-                        style: TextStyle(color: textSecondary)),
+                        style: const TextStyle(color: textSecondary)),
                     const SizedBox(height: 4),
                     Text('Total: RD\$ ${total.toStringAsFixed(0)}',
-                        style: TextStyle(
+                        style: const TextStyle(
                             color: textPrimary, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 6),
-                    Text(
-                        'Depósito ($ownerLabel): RD\$ ${deposito.toStringAsFixed(0)}',
-                        style: TextStyle(
-                            color: accent, fontWeight: FontWeight.w900)),
-                    Text(
-                        'Resto al abordar: RD\$ ${restante.toStringAsFixed(0)}',
-                        style: TextStyle(color: textSecondary)),
+                    if (esCentral) ...[
+                      Text(
+                        'Transferís a RAI / Open ASK: RD\$ ${montoClienteCentral.toStringAsFixed(0)}',
+                        style: const TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        'Comisión RAI (${pctComision.toStringAsFixed(0)}%) sobre esta reserva: RD\$ ${desgloseCentral.comisionRai.toStringAsFixed(0)}',
+                        style: const TextStyle(color: textSecondary),
+                      ),
+                      Text(
+                        'Neto para el organizador: RD\$ ${desgloseCentral.netoOrganizador.toStringAsFixed(0)}',
+                        style: const TextStyle(color: textSecondary),
+                      ),
+                      const Text(
+                        'La comisión se calcula por asiento vendido en RAI.',
+                        style: TextStyle(color: textFaint),
+                      ),
+                    ] else ...[
+                      Text(
+                          'Depósito ($ownerLabel): RD\$ ${deposito.toStringAsFixed(0)}',
+                          style: const TextStyle(
+                              color: accent, fontWeight: FontWeight.w900)),
+                      Text(
+                          'Resto al abordar: RD\$ ${restante.toStringAsFixed(0)}',
+                          style: const TextStyle(color: textSecondary)),
+                    ],
                   ],
                 ),
               ),
@@ -727,42 +784,82 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
               // Método de pago
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: cardBorder),
-                ),
+                decoration: _panelGira(),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Método de pago',
+                    const Text('Método de pago',
                         style: TextStyle(color: textSecondary)),
                     const SizedBox(height: 8),
-                    RadioListTile<String>(
+                    _metodoTile(
                       value: 'transferencia',
                       groupValue: _metodo,
-                      onChanged: (v) =>
-                          setState(() => _metodo = v ?? 'transferencia'),
-                      activeColor: accent,
-                      title: Text('Transferencia bancaria (Chofer/Agencia)',
-                          style: TextStyle(color: textPrimary)),
-                      subtitle: Text('Pagar depósito por transferencia',
-                          style: TextStyle(color: textMuted)),
+                      onChanged: (v) => setState(() => _metodo = v),
+                      title: esCentral
+                          ? PoolsProductoCopy.clienteTransferenciaTitulo
+                          : 'Transferencia bancaria (Chofer/Agencia)',
+                      subtitle: esCentral
+                          ? PoolsProductoCopy.clienteTransferenciaSubtitulo
+                          : 'Pagar depósito por transferencia',
                     ),
                     if (_metodo == 'transferencia') ...[
                       const SizedBox(height: 6),
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: innerBg,
+                          color: const Color(0xFF141414),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: innerBorder),
+                          border: Border.all(color: _kGiraBorde),
                         ),
-                        child: bancoCompleto
+                        child: esCentral
                             ? Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
+                                  const Text(
+                                    'Cuenta corporativa RAI / Open ASK Service',
+                                    style: TextStyle(
+                                      color: accent,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  _bankRow(
+                                    context,
+                                    'Banco',
+                                    RecargaBancariaConfig.banco,
+                                  ),
+                                  _bankRow(
+                                    context,
+                                    'No. de cuenta',
+                                    RecargaBancariaConfig.numeroCuenta,
+                                  ),
+                                  _bankRow(
+                                    context,
+                                    'Tipo de cuenta',
+                                    RecargaBancariaConfig.tipoCuenta,
+                                  ),
+                                  _bankRow(
+                                    context,
+                                    'Titular',
+                                    RecargaBancariaConfig.titular,
+                                  ),
+                                  _bankRow(
+                                    context,
+                                    'Monto a transferir',
+                                    'RD\$ ${montoClienteCentral.toStringAsFixed(0)}',
+                                  ),
+                                  const SizedBox(height: 6),
+                                  const Text(
+                                    PoolsProductoCopy.clienteCuentaRaiAntesReservar,
+                                    style: TextStyle(color: textMuted),
+                                  ),
+                                ],
+                              )
+                            : bancoCompleto
+                                ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
                                     'Cuenta para deposito (30%)',
                                     style: TextStyle(
                                       color: accent,
@@ -784,49 +881,49 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                               ),
                       ),
                       const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          if (choferWhatsApp.isNotEmpty)
-                            ElevatedButton.icon(
-                              onPressed: () => _openWhatsApp(
-                                choferWhatsApp,
-                                'Hola, quiero confirmar pago/depósito de mi cupo para $origen -> $destino.',
+                      if (!esCentral)
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            if (choferWhatsApp.isNotEmpty)
+                              ElevatedButton.icon(
+                                onPressed: () => _openWhatsApp(
+                                  choferWhatsApp,
+                                  'Hola, quiero confirmar pago/depósito de mi cupo para $origen -> $destino.',
+                                ),
+                                icon: const Icon(Icons.chat, size: 16),
+                                label: const Text('WhatsApp dueño del viaje'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green,
+                                  foregroundColor: Colors.white,
+                                ),
+                              )
+                            else if (choferTelefono.isNotEmpty)
+                              ElevatedButton.icon(
+                                onPressed: () => _openWhatsApp(
+                                  choferTelefono,
+                                  'Hola, quiero confirmar pago/depósito de mi cupo para $origen -> $destino.',
+                                ),
+                                icon: const Icon(Icons.chat, size: 16),
+                                label: const Text('WhatsApp dueño del viaje'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green,
+                                  foregroundColor: Colors.white,
+                                ),
                               ),
-                              icon: const Icon(Icons.chat, size: 16),
-                              label: const Text('WhatsApp dueño del viaje'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                                foregroundColor: Colors.white,
-                              ),
-                            )
-                          else if (choferTelefono.isNotEmpty)
-                            ElevatedButton.icon(
-                              onPressed: () => _openWhatsApp(
-                                choferTelefono,
-                                'Hola, quiero confirmar pago/depósito de mi cupo para $origen -> $destino.',
-                              ),
-                              icon: const Icon(Icons.chat, size: 16),
-                              label: const Text('WhatsApp dueño del viaje'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                                foregroundColor: Colors.white,
-                              ),
-                            ),
-                        ],
-                      ),
+                          ],
+                        ),
                     ],
-                    RadioListTile<String>(
+                    const SizedBox(height: 10),
+                    _metodoTile(
                       value: 'efectivo',
                       groupValue: _metodo,
-                      onChanged: (v) =>
-                          setState(() => _metodo = v ?? 'transferencia'),
-                      activeColor: accent,
-                      title: Text('Efectivo al abordar',
-                          style: TextStyle(color: textPrimary)),
-                      subtitle: Text('Pagas el total el día del viaje',
-                          style: TextStyle(color: textMuted)),
+                      onChanged: (v) => setState(() => _metodo = v),
+                      title: 'Efectivo al abordar',
+                      subtitle: esCentral
+                          ? 'Pagas al organizador el día de la salida; la comisión RAI sale de su recarga prepago.'
+                          : 'Pagas el total el día del viaje',
                     ),
                   ],
                 ),
@@ -867,7 +964,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                   label: Text(_saving ? 'Reservando…' : 'Reservar asientos'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: accent,
-                    foregroundColor: isDark ? Colors.black : Colors.white,
+                    foregroundColor: Colors.black,
                   ),
                 ),
               ),
@@ -876,15 +973,18 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 
               // Nota de confianza
               Text(
-                bancoCompleto
-                    ? 'Haz el deposito al chofer/agencia y envia el bauche por WhatsApp para confirmar tu asiento.'
-                    : 'Este viaje no tiene cuenta bancaria completa. Contacta al dueño del viaje por telefono/WhatsApp.',
-                style: TextStyle(color: textFaint),
+                esCentral
+                    ? PoolsProductoCopy.recaudoCentralClientePie
+                    : bancoCompleto
+                        ? 'Haz el deposito al chofer/agencia y envia el bauche por WhatsApp para confirmar tu asiento.'
+                        : 'Este viaje no tiene cuenta bancaria completa. Contacta al dueño del viaje por telefono/WhatsApp.',
+                style: const TextStyle(color: textFaint),
               ),
             ],
           );
         },
       ),
+    ),
     );
   }
 
@@ -914,7 +1014,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 
     setState(() => _saving = true);
     try {
-      await PoolRepo.reservarCupos(
+      final result = await PoolRepo.reservarCupos(
         poolId: widget.poolId,
         seats: seats,
         metodoPago: metodo,
@@ -923,15 +1023,16 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
       if (!mounted) return;
 
       if (metodo == 'transferencia') {
-        if (bancoNombre.trim().isEmpty ||
-            bancoCuenta.trim().isEmpty ||
-            bancoTipoCuenta.trim().isEmpty ||
-            bancoTitular.trim().isEmpty) {
+        if (!result.recaudoCentral &&
+            (bancoNombre.trim().isEmpty ||
+                bancoCuenta.trim().isEmpty ||
+                bancoTipoCuenta.trim().isEmpty ||
+                bancoTitular.trim().isEmpty)) {
           _snack('Este viaje no tiene datos bancarios completos.');
           return;
         }
         _mostrarInstruccionesTransferencia(
-          deposito,
+          result.recaudoCentral ? result.montoEsperadoRecaudoRd : deposito,
           origen: origen,
           destino: destino,
           choferWhatsApp: choferWhatsApp,
@@ -939,6 +1040,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
           bancoCuenta: bancoCuenta,
           bancoTipoCuenta: bancoTipoCuenta,
           bancoTitular: bancoTitular,
+          recaudoCentral: result.recaudoCentral,
+          referenciaRecaudo: result.referenciaRecaudo,
         );
       } else {
         _snack('Reserva creada. Paga en efectivo al abordar.');
@@ -1003,18 +1106,19 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
     required String bancoCuenta,
     required String bancoTipoCuenta,
     required String bancoTitular,
+    required bool recaudoCentral,
+    required String referenciaRecaudo,
   }) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: Theme.of(context).colorScheme.surface,
+      backgroundColor: const Color(0xFF111111),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (sheetContext) {
-        final isDark = Theme.of(sheetContext).brightness == Brightness.dark;
-        final textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-        final textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
-        final accent = isDark ? Colors.greenAccent : const Color(0xFF059669);
+        const textPrimary = Colors.white;
+        const textMuted = Color(0xFF9CA3AF);
+        const accent = Color(0xFF4ADE80);
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
@@ -1022,28 +1126,57 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Deposito para reservar',
-                    style: TextStyle(
+                Text(recaudoCentral ? 'Transferencia a RAI' : 'Deposito para reservar',
+                    style: const TextStyle(
                         color: accent,
                         fontSize: 18,
                         fontWeight: FontWeight.w800)),
                 const SizedBox(height: 10),
-                _bankRow(sheetContext, 'Banco', bancoNombre),
-                _bankRow(sheetContext, 'No. de cuenta', bancoCuenta),
-                _bankRow(sheetContext, 'Tipo de cuenta', bancoTipoCuenta),
-                _bankRow(sheetContext, 'Titular', bancoTitular),
+                _bankRow(
+                  sheetContext,
+                  'Banco',
+                  recaudoCentral ? RecargaBancariaConfig.banco : bancoNombre,
+                ),
+                _bankRow(
+                  sheetContext,
+                  'No. de cuenta',
+                  recaudoCentral
+                      ? RecargaBancariaConfig.numeroCuenta
+                      : bancoCuenta,
+                ),
+                _bankRow(
+                  sheetContext,
+                  'Tipo de cuenta',
+                  recaudoCentral
+                      ? RecargaBancariaConfig.tipoCuenta
+                      : bancoTipoCuenta,
+                ),
+                _bankRow(
+                  sheetContext,
+                  'Titular',
+                  recaudoCentral
+                      ? RecargaBancariaConfig.titular
+                      : bancoTitular,
+                ),
                 _bankRow(sheetContext, 'Concepto', _concepto),
+                if (recaudoCentral && referenciaRecaudo.trim().isNotEmpty)
+                  _bankRow(sheetContext, 'Referencia', referenciaRecaudo.trim()),
                 const SizedBox(height: 10),
-                Text('Monto del depósito: RD\$ ${deposito.toStringAsFixed(0)}',
-                    style: TextStyle(
+                Text(
+                    recaudoCentral
+                        ? 'Monto a transferir: RD\$ ${deposito.toStringAsFixed(0)}'
+                        : 'Monto del depósito: RD\$ ${deposito.toStringAsFixed(0)}',
+                    style: const TextStyle(
                         color: textPrimary, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 12),
                 Text(
-                  'Cuando hagas el deposito, envia el bauche por WhatsApp al chofer/agencia para validar tu cupo.',
-                  style: TextStyle(color: textMuted),
+                  recaudoCentral
+                      ? '${PoolsProductoCopy.recaudoCentralClientePasos}\n\n${PoolsProductoCopy.recaudoCentralClienteSheetCierre}'
+                      : 'Cuando hagas el deposito, envia el bauche por WhatsApp al chofer/agencia para validar tu cupo.',
+                  style: const TextStyle(color: textMuted),
                 ),
                 const SizedBox(height: 16),
-                if (choferWhatsApp.trim().isNotEmpty)
+                if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -1062,7 +1195,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                       ),
                     ),
                   ),
-                if (choferWhatsApp.trim().isNotEmpty)
+                if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
                   const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
@@ -1077,7 +1210,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     label: const Text('Entendido'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: accent,
-                      foregroundColor: isDark ? Colors.black : Colors.white,
+                      foregroundColor: Colors.black,
                     ),
                   ),
                 ),
@@ -1124,10 +1257,11 @@ class _MisReservasGiraPanel extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     if (uid.isEmpty) return const SizedBox.shrink();
 
+    final usaRecaudoCentral = PoolRecaudoCentral.esPoolCentral(poolData);
     final bool poolPermiteCancel =
         PoolRepo.giraPuedeCancelarseAntesDeIniciar(poolData);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = isDark ? Colors.greenAccent : const Color(0xFF059669);
+    const accent = Color(0xFF4ADE80);
+    const textMuted = Color(0xFF9CA3AF);
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
@@ -1142,12 +1276,12 @@ class _MisReservasGiraPanel extends StatelessWidget {
           final poolEstado =
               (poolData['estado'] ?? '').toString().trim().toLowerCase();
           if (poolEstado == 'cancelado' || poolEstado == 'cancelado_por_admin') {
-            return Padding(
-              padding: const EdgeInsets.only(top: 8),
+            return const Padding(
+              padding: EdgeInsets.only(top: 8),
               child: Text(
                 'Esta salida fue cancelada por el operador. Tus cupos ya no están activos.',
                 style: TextStyle(
-                  color: isDark ? Colors.orangeAccent : Colors.orange.shade800,
+                  color: Colors.orangeAccent,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1165,14 +1299,14 @@ class _MisReservasGiraPanel extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: accent.withValues(alpha: 0.08),
+            color: const Color(0xFF0A0A0A),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: accent.withValues(alpha: 0.35)),
+            border: Border.all(color: const Color(0xFFF59E0B)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 'Tus reservas en este viaje',
                 style: TextStyle(
                   color: accent,
@@ -1197,11 +1331,11 @@ class _MisReservasGiraPanel extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          '$seats asiento(s) · $metodo · '
-                          '${estado == 'pagado' ? 'Pago confirmado' : 'Pendiente (depósito o abordaje)'}',
-                          style: TextStyle(
-                            color: isDark ? Colors.white70 : Colors.black87,
-                          ),
+                          usaRecaudoCentral
+                              ? PoolsProductoCopy.recaudoCentralEstadoReservaCliente(r)
+                              : '$seats asiento(s) · $metodo · '
+                                  '${estado == 'pagado' ? 'Pago confirmado' : 'Pendiente (depósito o abordaje)'}',
+                          style: const TextStyle(color: textMuted),
                         ),
                       ),
                       if (puedeCancelar)

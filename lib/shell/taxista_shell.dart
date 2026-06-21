@@ -18,6 +18,7 @@ import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
+import 'package:flygo_nuevo/widgets/bola_cancelacion_listener.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
 import 'package:flygo_nuevo/widgets/taxista_registro_gate.dart';
 import 'package:flygo_nuevo/widgets/taxista_documentos_gate.dart';
@@ -36,9 +37,11 @@ class TaxistaShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return TaxistaRegistroGate(
       child: TaxistaDocumentosGate(
-        child: BolaPostFacturaListener(
-          child: _TaxistaShellScaffold(
-            openDocumentosOnLaunch: openDocumentosOnLaunch,
+        child: BolaCancelacionListener(
+          child: BolaPostFacturaListener(
+            child: _TaxistaShellScaffold(
+              openDocumentosOnLaunch: openDocumentosOnLaunch,
+            ),
           ),
         ),
       ),
@@ -222,6 +225,7 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             RaiOfflineBanner(uid: uidOffline),
+            const RaiUbicacionTaxistaBanner(),
             Expanded(
               child: ViajeEnCursoTaxista(key: _viajeEnCursoTaxistaShellKey),
             ),

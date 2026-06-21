@@ -2,10 +2,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/app_flavor.dart';
-import 'package:flygo_nuevo/servicios/google_auth.dart';
+import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 
 /// Cruza [AppFlavor] (APK instalada) con `usuarios.rol` / `roles.rol`.
+///
+/// Play unificado (`com.flygo.rd2` → flavor `all`): acepta cliente y taxista.
+/// Split futuro: `com.flygo.rd2` solo cliente, `com.flygo.rd2.conductor` solo taxista.
 class AppFlavorRolGuard {
   AppFlavorRolGuard._();
 
@@ -107,12 +110,8 @@ class AppFlavorRolGuard {
   /// Cierra sesión Auth + Google tras rechazo.
   static Future<void> cerrarSesionTrasRechazo() async {
     try {
-      await GoogleAuthService.signOut();
-    } catch (_) {
-      try {
-        await FirebaseAuth.instance.signOut();
-      } catch (_) {}
-    }
+      await cerrarSesionAuthOnly();
+    } catch (_) {}
   }
 
   static Future<void> rechazarSesionRolIncorrecto({

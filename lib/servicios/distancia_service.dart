@@ -5,6 +5,9 @@ class DistanciaService {
   static const double _tarifaPorKm = 45.0; // RD$ por km
   static const double _minimo = 150.0;
 
+  /// Tope técnico RD (interurbano largo, ej. 200–400 km por carretera).
+  static const double maxKmCotizableDefault = 800.0;
+
   // 👇 NUEVO: para que otros servicios (TarifaService) puedan ver el mínimo global
   static double get minimoGlobal => _minimo;
 
@@ -30,10 +33,10 @@ class DistanciaService {
     return double.parse(precio.toStringAsFixed(2));
   }
 
-  static bool tramoEsImposible(double km) {
+  static bool tramoEsImposible(double km, {double maxKm = maxKmCotizableDefault}) {
     if (km.isNaN || km.isInfinite) return true;
     if (km <= 0) return true;
-    return km > 350;
+    return km > maxKm;
   }
 
   static double _deg2rad(double deg) => deg * (math.pi / 180.0);

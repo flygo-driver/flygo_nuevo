@@ -16,14 +16,16 @@ import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/viajes_repo.dart';
 import '../../modelo/pago_taxista.dart';
 import '../../widgets/admin_drawer.dart';
+import '../../widgets/admin_app_bar.dart';
 import 'admin_ui_theme.dart';
+import 'admin_pool_recaudo_central_panel.dart';
 
 class VerificarPagos extends StatefulWidget {
-  /// 0 = recargas prepago, 1 = comisiones semanales, 2/3 = transferencias, 4 = conciliación banco.
+  /// 0 = recargas prepago, 1 = comisiones semanales, 2/3 = transferencias, 4 = conciliación, 5 = giras RAI.
   const VerificarPagos({
     super.key,
     this.initialTabIndex = 0,
-    this.initialFiltroRecarga = 'todos',
+    this.initialFiltroRecarga = 'pendiente_verificacion',
   });
 
   final int initialTabIndex;
@@ -51,7 +53,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
   void initState() {
     super.initState();
     final int tab = widget.initialTabIndex;
-    _tabIndex = tab < 0 ? 0 : (tab > 4 ? 4 : tab);
+    _tabIndex = tab < 0 ? 0 : (tab > 5 ? 5 : tab);
     _filtroEstadoRecarga = widget.initialFiltroRecarga.trim().isEmpty
         ? 'todos'
         : widget.initialFiltroRecarga.trim();
@@ -1000,28 +1002,8 @@ class _VerificarPagosState extends State<VerificarPagos> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        leading: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Image.asset(
-            'assets/icon/icono_app_R.png',
-            height: 28,
-            fit: BoxFit.contain,
-            errorBuilder:
-                (BuildContext context, Object error, StackTrace? stackTrace) =>
-                    SizedBox(
-              width: 28,
-              child:
-                  Icon(Icons.error, color: AdminUi.appBarFg(context), size: 20),
-            ),
-          ),
-        ),
-        title: Text('Verificar Pagos',
-            style: TextStyle(color: AdminUi.onCard(context))),
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        elevation: 0,
+      appBar: const AdminAppBar(
+        title: 'Verificar Pagos',
       ),
       body: Column(
         children: [
@@ -1056,6 +1038,11 @@ class _VerificarPagosState extends State<VerificarPagos> {
                     width: 168,
                     child: _tabButton('Conciliación banco', 4),
                   ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 148,
+                    child: _tabButton('Giras RAI', 5),
+                  ),
                 ],
               ),
             ),
@@ -1066,7 +1053,12 @@ class _VerificarPagosState extends State<VerificarPagos> {
               1 => _buildComisionesSemanales(),
               2 => _buildTransferenciasPendientes(),
               3 => _buildPagosATaxistas(),
-              _ => _buildConciliacionesBanco(),
+              4 => _buildConciliacionesBanco(),
+              _ => AdminPoolRecaudoCentralPanel(
+                  accionEnCurso: _accionEnCurso,
+                  onEjecutar: _ejecutarAccionAdmin,
+                  formatter: formatter,
+                ),
             },
           ),
         ],
@@ -1138,12 +1130,23 @@ class _VerificarPagosState extends State<VerificarPagos> {
                   );
                 }
                 if (rsnap.hasError) {
+                  final String err = '${rsnap.error}';
+                  final bool permiso = err.toLowerCase().contains('permission');
                   return Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: Text(
-                      'Recargas efectivo: ${rsnap.error}',
-                      style: const TextStyle(
-                          color: Colors.redAccent, fontSize: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          permiso
+                              ? 'Sin permiso para leer recargas. Tu cuenta debe tener rol '
+                                  '«admin» en usuarios/{tuUid} o en roles/{tuUid}, y las '
+                                  'reglas de Firestore deben estar desplegadas.'
+                              : 'Recargas efectivo: $err',
+                          style: const TextStyle(
+                              color: Colors.redAccent, fontSize: 12),
+                        ),
+                      ],
                     ),
                   );
                 }
@@ -2831,12 +2834,26 @@ class _VerificarPagosState extends State<VerificarPagos> {
           cuentaRaiUltimos4: cuentaCtrl.text,
         );
         if (!mounted) return;
+        var extra = '';
+        try {
+          final conc =
+              await ConciliacionBancoRepo.proponerAutomaticas(limit: 50);
+          if (conc['omitido'] != true) {
+            final confirmadas = conc['confirmadas'] ?? 0;
+            final propuestas = conc['propuestas'] ?? 0;
+            extra =
+                ' · Conciliación: $confirmadas giras auto-verificadas, $propuestas propuestas pendientes';
+          }
+        } catch (_) {
+          // El trigger CF también procesa movimientos nuevos.
+        }
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               'Import: ${res['creados'] ?? 0} creados, '
               '${res['omitidos'] ?? 0} omitidos, '
-              '${res['invalidos'] ?? 0} inválidos',
+              '${res['invalidos'] ?? 0} inválidos$extra',
             ),
             backgroundColor: Colors.green,
           ),
@@ -2860,9 +2877,9 @@ class _VerificarPagosState extends State<VerificarPagos> {
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
-                'Recaudo transferencia → cuenta RAI: importá el extracto Popular, '
-                'proponé matches ref RAI-V + monto, y confirmá/rechazá aquí. '
-                'La verificación del viaje ocurre solo en Cloud Functions.',
+                'Recaudo transferencia → cuenta RAI: importá el extracto Popular. '
+                'Giras RAI-P con ref + monto exacto se verifican solas (auto). '
+                'Viajes RAI-V y discrepancias de monto quedan como propuesta para confirmar/rechazar aquí.',
                 style: TextStyle(
                   color: AdminUi.onCard(context),
                   fontSize: 13,
@@ -2900,8 +2917,9 @@ class _VerificarPagosState extends State<VerificarPagos> {
                             SnackBar(
                               content: Text(
                                 'Propuestas: ${res['propuestas'] ?? 0} · '
+                                'Giras auto-verificadas: ${res['confirmadas'] ?? 0} · '
                                 'Omitidos: ${res['omitidos'] ?? 0} · '
-                                'Sin viaje: ${res['sinViaje'] ?? 0}',
+                                'Sin match: ${res['sinMatch'] ?? res['sinViaje'] ?? 0}',
                               ),
                               backgroundColor: Colors.green,
                             ),
@@ -2924,11 +2942,18 @@ class _VerificarPagosState extends State<VerificarPagos> {
             stream: ConciliacionBancoRepo.streamPropuestas(),
             builder: (context, snap) {
               if (snap.hasError) {
+                final err = '${snap.error}';
+                final permiso = err.toLowerCase().contains('permission');
                 return Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      'Conciliaciones: ${snap.error}',
+                      permiso
+                          ? 'Sin permiso para conciliaciones. Tu cuenta debe ser admin '
+                              '(rol «admin» en usuarios o roles, o isAdmin: true). '
+                              'Si acabas de actualizar reglas, ejecutá '
+                              'firebase deploy --only firestore:rules y reiniciá ADM.'
+                          : 'Conciliaciones: $err',
                       style: const TextStyle(color: Colors.red),
                       textAlign: TextAlign.center,
                     ),
@@ -2962,6 +2987,11 @@ class _VerificarPagosState extends State<VerificarPagos> {
                   final id = (c['id'] ?? '').toString();
                   final ref = (c['referenciaRecaudo'] ?? '').toString();
                   final viajeId = (c['viajeId'] ?? '').toString();
+                  final poolId = (c['poolId'] ?? '').toString();
+                  final reservaId = (c['reservaId'] ?? '').toString();
+                  final tipoConc =
+                      (c['tipo'] ?? 'viaje_entrada').toString();
+                  final esPool = tipoConc == 'pool_reserva_entrada';
                   final movId = (c['movimientoBancoId'] ?? '').toString();
                   final diff = c['diferenciaCents'];
                   final reglas = (c['matchReglas'] as List?)
@@ -2999,7 +3029,9 @@ class _VerificarPagosState extends State<VerificarPagos> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            'Viaje #${_shortDocId(viajeId)} · Mov. ${_shortDocId(movId)}',
+                            esPool
+                                ? 'Gira pool #${_shortDocId(poolId)} · Reserva #${_shortDocId(reservaId)} · Mov. ${_shortDocId(movId)}'
+                                : 'Viaje #${_shortDocId(viajeId)} · Mov. ${_shortDocId(movId)}',
                             style: TextStyle(
                               color: AdminUi.secondary(context),
                               fontSize: 12,

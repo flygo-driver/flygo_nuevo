@@ -1,10 +1,12 @@
 // lib/pantallas/admin/admin_tarifas.dart
 
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_tarifas_tramos_panel.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 
 import 'admin_ui_theme.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 
 class AdminTarifas extends StatefulWidget {
@@ -485,28 +487,14 @@ class _AdminTarifasState extends State<AdminTarifas> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AdminUi.scaffold(context),
-      drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Administrar Tarifas',
-            style: TextStyle(color: AdminUi.onCard(context))),
-      ),
-      body: _cargando
-          ? Center(
-              child: CircularProgressIndicator(
-                  color: AdminUi.progressAccent(context)))
-          : Form(
-              key: _formKey,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: <Widget>[
-                  _buildSeccion('🚗 VEHÍCULOS NORMALES', <Widget>[
+  Widget _buildTarifasLocalesContent() {
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _buildSeccion('🚗 VEHÍCULOS NORMALES', <Widget>[
                     Text('Carro',
                         style: TextStyle(color: AdminUi.secondary(context))),
                     Row(children: <Widget>[
@@ -678,7 +666,7 @@ class _AdminTarifasState extends State<AdminTarifas> {
                     onPressed: _guardando ? null : _guardar,
                     icon: const Icon(Icons.save),
                     label:
-                        Text(_guardando ? 'Guardando...' : 'Guardar Tarifas'),
+                        Text(_guardando ? 'Guardando...' : 'Guardar tarifas locales'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor:
                           Theme.of(context).colorScheme.primaryContainer,
@@ -687,8 +675,82 @@ class _AdminTarifasState extends State<AdminTarifas> {
                       minimumSize: const Size(double.infinity, 50),
                     ),
                   ),
-                ],
-              ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AdminUi.scaffold(context),
+      drawer: const AdminDrawer(),
+      appBar: const AdminAppBar(
+        title: 'Tarifas + Tramos',
+      ),
+      body: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.green.shade700,
+                        Colors.green.shade900,
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.alt_route, color: Colors.white, size: 28),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'TRAMOS LARGA DISTANCIA (40 / 80 / 140 km)\n'
+                          'Scroll abajo para tarifas locales base/por km',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13.5,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const AdminTarifasTramosPanel(embedded: true),
+                const SizedBox(height: 24),
+                Divider(
+                  thickness: 2,
+                  color: AdminUi.borderSubtle(context),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'TARIFAS LOCALES (base · por km · mínimo)',
+                  style: TextStyle(
+                    color: AdminUi.onCard(context),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (_cargando)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 32),
+                    child: Center(
+                      child: CircularProgressIndicator(
+                          color: AdminUi.progressAccent(context)),
+                    ),
+                  )
+                else
+                  _buildTarifasLocalesContent(),
+              ],
             ),
     );
   }

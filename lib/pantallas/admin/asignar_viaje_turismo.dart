@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -129,12 +130,8 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text('Asignar chofer de turismo',
-            style: TextStyle(color: AdminUi.onCard(context))),
+      appBar: const AdminAppBar(
+        title: 'Asignar chofer de turismo',
       ),
       body: Column(
         children: [

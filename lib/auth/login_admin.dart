@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
 class LoginAdmin extends StatefulWidget {
   const LoginAdmin({super.key});
@@ -217,8 +218,16 @@ class _LoginAdminState extends State<LoginAdmin> {
         backgroundColor: cs.surface,
         foregroundColor: onSurf,
         elevation: 0,
-        title: Text('Acceso Admin', style: titleStyle),
         centerTitle: true,
+        automaticallyImplyLeading: false,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const RaiHeaderLogo(height: 28),
+            const SizedBox(width: 10),
+            Text('Acceso Admin', style: titleStyle),
+          ],
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(20),

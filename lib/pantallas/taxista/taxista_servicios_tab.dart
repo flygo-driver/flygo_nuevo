@@ -169,11 +169,11 @@ class TaxistaServiciosTab extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 10),
             child: ListTile(
               leading: Icon(Icons.people_alt_outlined, color: cs.primary),
-              title: Text(
+              title: const Text(
                 PoolsProductoCopy.salidasMis,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: Text(
+              subtitle: const Text(
                 'Giras, excursiones y grupos · cupos y reservas',
               ),
               trailing: Icon(Icons.chevron_right, color: cs.outline),
@@ -191,11 +191,11 @@ class TaxistaServiciosTab extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 10),
             child: ListTile(
               leading: Icon(Icons.add_circle_outline, color: cs.primary),
-              title: Text(
+              title: const Text(
                 PoolsProductoCopy.publicarTitulo,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: Text(
+              subtitle: const Text(
                 PoolsProductoCopy.tipos,
               ),
               trailing: Icon(Icons.chevron_right, color: cs.outline),

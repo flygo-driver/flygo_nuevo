@@ -25,6 +25,8 @@ import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart'
 // Tus servicios/componentes
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
@@ -32,9 +34,11 @@ import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
+import 'package:flygo_nuevo/widgets/cotizacion_desglose_panel.dart';
 import 'package:flygo_nuevo/widgets/programar_viaje_futuro_animation.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
@@ -192,6 +196,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   double comisionCalculada = 0.0;
   double gananciaTaxistaCalculada = 0.0;
   bool _precioEsEstimadoOffline = false;
+  Map<String, dynamic>? _cotizacionDesglose;
+  String _distanciaFuente = '';
 
   bool ubicacionObtenida = false;
   bool _cargando = false;
@@ -211,6 +217,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   bool _locPermDeniedForever = false;
   bool _cargandoUbicacion = true;
+  bool _mapMyLocationEnabled = false;
 
   // Live GPS
   StreamSubscription<Position>? _posSub;
@@ -397,11 +404,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       // Programar cálculo automático después de que el mapa esté listo
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _programarCalculoAutomatico();
+        _intentarCalculoTrasOrigenListo();
       });
     }
 
     _initUbicacionParaMapa();
+    unawaited(RaiUbicacionClienteService.instance.ensureStarted());
+    RaiUbicacionClienteService.instance.modo
+        .addListener(_onModoUbicacionCliente);
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _expandSheet());
     _nudgeCtrl.repeat(reverse: true);
@@ -483,6 +493,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   @override
   void dispose() {
+    RaiUbicacionClienteService.instance.modo
+        .removeListener(_onModoUbicacionCliente);
     _posSub?.cancel();
     _nudgeTimer?.cancel();
     _nudgeCtrl.dispose();
@@ -491,6 +503,48 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     _programarMapGestureEndDebounce?.cancel();
     LocationPermissionService.stopGentleRetry();
     super.dispose();
+  }
+
+  /// Tras «Permitir» en el banner (una sola vez), retoma GPS y cotiza si ya hay ruta.
+  void _onModoUbicacionCliente() {
+    if (!mounted) return;
+    if (RaiUbicacionClienteService.instance.modo.value !=
+        RaiUbicacionClienteModo.listo) {
+      return;
+    }
+    unawaited(_retomarTrasUbicacionLista());
+  }
+
+  Future<void> _retomarTrasUbicacionLista() async {
+    LocationPermissionService.stopGentleRetry();
+    if (_origenMap == null || !_mapMyLocationEnabled) {
+      await _initUbicacionParaMapa();
+    }
+    if (!mounted) return;
+    _intentarCalculoTrasOrigenListo();
+  }
+
+  bool _tieneOrigenParaCalculo() {
+    if (widget.modoAhora) {
+      if (_origenMap != null) return true;
+      if (latCliente != null && lonCliente != null) return true;
+      return false;
+    }
+    if (_origenBuscarDireccion) {
+      return _origenDetManual != null || origenManual.trim().isNotEmpty;
+    }
+    return _origenMap != null;
+  }
+
+  void _intentarCalculoTrasOrigenListo() {
+    if (!mounted || !_tieneDestinoParaCalculo() || !_tieneOrigenParaCalculo()) {
+      return;
+    }
+    if (tipoServicio == 'turismo' && _destinoTurismoSeleccionado != null) {
+      unawaited(_cotizarTurismoTrasElegirDestino(forzar: true));
+      return;
+    }
+    _programarCalculoAutomatico();
   }
 
   Future<void> _expandSheet() async {
@@ -591,7 +645,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       return;
     }
     if (!basic.canUseLocation) {
-      setState(() => _cargandoUbicacion = false);
+      setState(() {
+        _cargandoUbicacion = false;
+        _mapMyLocationEnabled = false;
+      });
       LocationPermissionService.startGentleRetry(() {
         if (!mounted) return;
         unawaited(_initUbicacionParaMapa());
@@ -609,8 +666,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       _origenMap = here;
       _updateOrigenMarker(here);
 
-      setState(() => _cargandoUbicacion = false);
-      unawaited(RaiUbicacionClienteService.instance.refrescar());
+      setState(() {
+        _cargandoUbicacion = false;
+        _mapMyLocationEnabled = true;
+      });
 
       await _programarMapAnimate(
         (c) => c.animateCamera(
@@ -621,6 +680,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       );
       _didCenterOnce = true;
 
+      await _posSub?.cancel();
       _posSub = Geolocator.getPositionStream(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.medium,
@@ -641,16 +701,16 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             mounted &&
             _tieneDestinoParaCalculo() &&
             !ubicacionObtenida) {
-          _programarCalculoAutomatico();
+          _intentarCalculoTrasOrigenListo();
         }
       });
 
-      // Viaje ahora: al quedar listo el GPS, si ya había destino (Places / mapa / turismo), calcular
-      if (mounted && widget.modoAhora && _tieneDestinoParaCalculo()) {
+      // Al quedar listo el GPS, si ya había origen+destino, calcular (viaje ahora o programar).
+      if (mounted && _tieneDestinoParaCalculo()) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          _dibujarRutaSiHayDestino();
-          _programarCalculoAutomatico();
+          unawaited(_dibujarRutaSiHayDestino());
+          _intentarCalculoTrasOrigenListo();
         });
       }
     } catch (_) {
@@ -685,7 +745,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   }
 
   Future<void> _centrarEnMiUbicacion() async {
-    if (_origenMap == null) return;
+    if (_origenMap == null) {
+      await RaiUbicacionClienteService.instance.ensureStarted();
+      if (!RaiUbicacionClienteService.instance.ubicacionLista) {
+        await RaiUbicacionClienteService.instance.activarUbicacionDesdeApp();
+      }
+      await _initUbicacionParaMapa();
+      if (_origenMap == null) return;
+    }
     _didCenterOnce = true;
     await _programarMapAnimate(
       (c) => c.animateCamera(CameraUpdate.newLatLng(_origenMap!)),
@@ -739,7 +806,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     if (mounted) setState(() {});
 
     if (_origenMap != null) {
-      _programarCalculoAutomatico();
+      _intentarCalculoTrasOrigenListo();
     }
   }
 
@@ -865,44 +932,46 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         await servicio.construirPromoSnapshot(contadorViajes);
 
     try {
-      if (tipoServicio == 'normal') {
-        return await servicio.calcularPrecio(
-          tipoServicio: tipoServicio,
-          tipoVehiculo: tipoVehiculo,
-          distanciaKm: distancia,
-          idaVuelta: idaVuelta,
-          peaje: peaje,
-          contadorViajes: contadorViajes,
-        );
+      Future<({double precio, Map<String, dynamic>? desglose})> cotizar() {
+        if (tipoServicio == 'normal') {
+          return servicio.calcularPrecioConDesglose(
+            tipoServicio: tipoServicio,
+            tipoVehiculo: tipoVehiculo,
+            distanciaKm: distancia,
+            idaVuelta: idaVuelta,
+            peaje: peaje,
+            contadorViajes: contadorViajes,
+          );
+        }
+        if (tipoServicio == 'motor') {
+          return servicio.calcularPrecioConDesglose(
+            tipoServicio: tipoServicio,
+            distanciaKm: distancia,
+            idaVuelta: idaVuelta,
+            peaje: peaje,
+            contadorViajes: contadorViajes,
+          );
+        }
+        if (tipoServicio == 'turismo') {
+          final String vehiculo = _tipoVehiculoTurismo;
+          final String subtipo =
+              _destinoTurismoSeleccionado?.subtipo ?? 'CIUDAD';
+          return servicio.calcularPrecioConDesglose(
+            tipoServicio: tipoServicio,
+            tipoVehiculo: vehiculo,
+            subtipoTurismo: subtipo,
+            distanciaKm: distancia,
+            idaVuelta: idaVuelta,
+            peaje: peaje,
+            contadorViajes: contadorViajes,
+          );
+        }
+        return Future.value((precio: 0.0, desglose: null));
       }
 
-      if (tipoServicio == 'motor') {
-        return await servicio.calcularPrecio(
-          tipoServicio: tipoServicio,
-          distanciaKm: distancia,
-          idaVuelta: idaVuelta,
-          peaje: peaje,
-          contadorViajes: contadorViajes,
-        );
-      }
-
-      if (tipoServicio == 'turismo') {
-        // 🔥 CORREGIDO: Usar el tipo de vehículo correctamente
-        final String vehiculo = _tipoVehiculoTurismo;
-        final String subtipo = _destinoTurismoSeleccionado?.subtipo ?? 'CIUDAD';
-
-        return await servicio.calcularPrecio(
-          tipoServicio: tipoServicio,
-          tipoVehiculo: vehiculo,
-          subtipoTurismo: subtipo,
-          distanciaKm: distancia,
-          idaVuelta: idaVuelta,
-          peaje: peaje,
-          contadorViajes: contadorViajes,
-        );
-      }
-
-      return 0.0;
+      final result = await cotizar();
+      _cotizacionDesglose = result.desglose;
+      return result.precio;
     } catch (e) {
       if (mounted) _snack('Error calculando precio: $e');
       return 0.0;
@@ -914,6 +983,24 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     _cotizacionSeq++;
     precioCalculado = 0;
     _precioEsEstimadoOffline = false;
+    _cotizacionDesglose = null;
+    _distanciaFuente = '';
+    ubicacionObtenida = false;
+    comisionCalculada = 0;
+    gananciaTaxistaCalculada = 0;
+    distanciaKm = 0;
+    _cargando = false;
+    _vistaResumenCotizada = false;
+  }
+
+  /// Invalida precio previo sin borrar destino (p. ej. nuevo lugar en autocomplete).
+  void _invalidarPrecioCalculado() {
+    _calculoDebounce?.cancel();
+    _cotizacionSeq++;
+    precioCalculado = 0;
+    _precioEsEstimadoOffline = false;
+    _cotizacionDesglose = null;
+    _distanciaFuente = '';
     ubicacionObtenida = false;
     comisionCalculada = 0;
     gananciaTaxistaCalculada = 0;
@@ -944,7 +1031,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   Future<void> _obtenerUbicacionYCalcularPrecio(
       {bool automatico = false}) async {
-    if (_cargando) return;
+    if (tipoServicio == 'turismo' && _destinoTurismoSeleccionado != null) {
+      unawaited(_cotizarTurismoTrasElegirDestino(forzar: true));
+      return;
+    }
+    if (_cargando && !automatico) return;
+    if (_cargando && automatico) {
+      _cotizacionSeq++;
+    }
 
     if (!widget.modoAhora &&
         _origenBuscarDireccion &&
@@ -953,14 +1047,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       return;
     }
 
-    final bool tieneOrigen = widget.modoAhora
-        ? _origenMap != null
-        : (_origenBuscarDireccion
-            ? (_origenDetManual != null || origenManual.trim().isNotEmpty)
-            : _origenMap != null);
-    final tieneDestino = latDestino != null ||
-        _destinoDet != null ||
-        _destinoTurismoSeleccionado != null;
+    final bool tieneOrigen = _tieneOrigenParaCalculo();
+    final bool tieneDestino = _tieneDestinoParaCalculo();
 
     if (!tieneOrigen || !tieneDestino) return;
 
@@ -983,6 +1071,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             _snack(LocationReadiness.kMsgEsperandoUbicacion);
           }
           _setCargaFalseSiCorre(runId);
+          if (automatico && _tieneDestinoParaCalculo()) {
+            unawaited(RaiUbicacionClienteService.instance.refrescar());
+          }
           return;
         }
         if (ready.position != null) {
@@ -1039,6 +1130,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             _snack(LocationReadiness.kMsgEsperandoUbicacion);
           }
           _setCargaFalseSiCorre(runId);
+          if (automatico && _tieneDestinoParaCalculo()) {
+            unawaited(RaiUbicacionClienteService.instance.refrescar());
+          }
           return;
         }
         final posicion = ready.position!;
@@ -1083,6 +1177,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       double dist = 0;
       DirectionsResult? dir;
+      final servicio = TarifaServiceUnificado();
+      await servicio.recargar();
+      final maxKm = servicio.distanciaMaximaCotizableKm;
       final RaiDistanciaCotizacion? distRes =
           await RaiOfflineCotizacionService.resolverDistancia(
         originLat: origenLat,
@@ -1090,15 +1187,22 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         destLat: dLat,
         destLon: dLon,
         useDirections: kUseDirectionsForDistance,
+        maxKmCotizable: maxKm,
       );
       if (distRes == null || distRes.km <= 0) {
-        if (!automatico) _snack("❌ No se pudo calcular una distancia válida.");
+        if (!automatico) {
+          _snack(
+            '❌ No se pudo calcular distancia válida '
+            '(máx. ${maxKm.toStringAsFixed(0)} km por carretera).',
+          );
+        }
         _setCargaFalseSiCorre(runId);
         return;
       }
       dist = distRes.km;
       dir = distRes.directions;
       final bool estimadoOffline = distRes.estimadoOffline;
+      final String distanciaFuente = distRes.fuente;
 
       final List<LatLng> routeLatLng = dir?.path ?? const <LatLng>[];
       _peajeCtrl.text = _peaje.toStringAsFixed(0);
@@ -1125,6 +1229,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         distanciaKm = dist;
         precioCalculado = precioCents / 100.0;
         _precioEsEstimadoOffline = estimadoOffline;
+        _distanciaFuente = distanciaFuente;
         comisionCalculada = comisionCents / 100.0;
         gananciaTaxistaCalculada = gananciaCents / 100.0;
         ubicacionObtenida = true;
@@ -1433,7 +1538,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     return false;
   }
 
-  /// Un toque en el catálogo: escribe destino, distancia, precio y muestra resumen.
+  /// Un toque en el catálogo: destino + vehículo; cotiza en [_cotizarTurismoTrasElegirDestino].
   Future<void> _aplicarSeleccionTurismo(DestinoSeleccionado seleccion) async {
     String vehiculoValido = seleccion.tipoVehiculo;
     const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
@@ -1453,12 +1558,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       lonCliente = _origenMap!.longitude;
     }
 
-    final double precio = seleccion.precio;
-    final int precioCents = (precio * 100).round();
-    final int comisionCents =
-        PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
-
     if (!mounted) return;
+    _calculoDebounce?.cancel();
     setState(() {
       _destinoTurismoSeleccionado = seleccion.lugar;
       _tipoVehiculoTurismo = vehiculoValido;
@@ -1468,12 +1569,16 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       lonDestino = seleccion.lugar.lon;
       destinoTexto = seleccion.lugar.nombre;
       destino = seleccion.lugar.nombre;
-      distanciaKm = seleccion.distanciaKm;
-      precioCalculado = precio;
-      comisionCalculada = comisionCents / 100.0;
-      gananciaTaxistaCalculada = precioCalculado - comisionCalculada;
-      ubicacionObtenida =
-          latCliente != null && lonCliente != null && latDestino != null;
+
+      precioCalculado = 0;
+      _precioEsEstimadoOffline = false;
+      _cotizacionDesglose = null;
+      _distanciaFuente = '';
+      distanciaKm = 0;
+      comisionCalculada = 0;
+      gananciaTaxistaCalculada = 0;
+      ubicacionObtenida = false;
+      _vistaResumenCotizada = false;
 
       if (_origenMap != null) {
         _updateOrigenMarker(_origenMap!);
@@ -1491,26 +1596,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             zIndexInt: 1,
           ),
         );
-
-      _cargando = false;
-      _vistaResumenCotizada = precio > 0 && ubicacionObtenida;
     });
 
-    if (_origenMap != null && latDestino != null && lonDestino != null) {
-      await _dibujarRutaReal(
-        oLat: _origenMap!.latitude,
-        oLon: _origenMap!.longitude,
-        dLat: latDestino!,
-        dLon: lonDestino!,
-        previewOnly: true,
-      );
-    }
-
-    if (precio > 0 && ubicacionObtenida) {
-      _animarSheetParaResumenCotizado();
-    } else {
-      _programarCalculoAutomatico();
-    }
+    await _cotizarTurismoTrasElegirDestino(forzar: true);
   }
 
   /// Origen para cotizar turismo (mapa, GPS o última posición conocida).
@@ -1555,88 +1643,110 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   /// Cotiza turismo al elegir destino (buscador o catálogo) sin depender de que
   /// [_origenMap] ya estuviera listo antes del debounce genérico.
-  Future<void> _cotizarTurismoTrasElegirDestino() async {
+  Future<void> _cotizarTurismoTrasElegirDestino({bool forzar = false}) async {
     final TurismoLugar? dest = _destinoTurismoSeleccionado;
     if (dest == null || latDestino == null || lonDestino == null) return;
-    if (_cargando) return;
+    if (_cargando && !forzar) return;
+    _calculoDebounce?.cancel();
+    if (_cargando && forzar) _cotizacionSeq++;
 
     final int runId = _cotizacionSeq;
     if (!mounted) return;
     setState(() => _cargando = true);
 
     try {
-      final ({double lat, double lon})? origen =
-          await _resolverOrigenParaCotizarTurismo();
-      if (origen == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text(
-                'Activa el GPS y concede permiso de ubicación para cotizar.',
-              ),
-              action: SnackBarAction(
-                label: 'Ajustes',
-                onPressed: () => GpsService.openAppSettings(),
-              ),
-            ),
-          );
+      await () async {
+        final ({double lat, double lon})? origen =
+            await _resolverOrigenParaCotizarTurismo();
+        if (origen == null) {
+          unawaited(RaiUbicacionClienteService.instance.refrescar());
+          if (mounted) {
+            _snack(
+              widget.modoAhora
+                  ? 'Permite tu ubicación en el banner superior para cotizar.'
+                  : 'Activa el GPS y concede permiso de ubicación para cotizar.',
+            );
+          }
+          return;
         }
-        return;
-      }
 
-      latCliente = origen.lat;
-      lonCliente = origen.lon;
-      _origenMap = LatLng(origen.lat, origen.lon);
-      _updateOrigenMarker(_origenMap!);
+        latCliente = origen.lat;
+        lonCliente = origen.lon;
+        _origenMap = LatLng(origen.lat, origen.lon);
+        _updateOrigenMarker(_origenMap!);
 
-      double dist = 0;
-      bool estimadoOffline = false;
-      final RaiDistanciaCotizacion? distRes =
-          await RaiOfflineCotizacionService.resolverDistancia(
-        originLat: origen.lat,
-        originLon: origen.lon,
-        destLat: latDestino!,
-        destLon: lonDestino!,
-        useDirections: true,
-      );
-      if (distRes == null || distRes.km <= 0) {
-        if (mounted) {
-          _snack('No se pudo calcular la distancia al destino.');
+        double dist = 0;
+        bool estimadoOffline = false;
+        String distanciaFuente = '';
+        final servicioDist = TarifaServiceUnificado();
+        await servicioDist.recargar();
+        final RaiDistanciaCotizacion? distRes =
+            await RaiOfflineCotizacionService.resolverDistancia(
+          originLat: origen.lat,
+          originLon: origen.lon,
+          destLat: latDestino!,
+          destLon: lonDestino!,
+          useDirections: true,
+          maxKmCotizable: servicioDist.distanciaMaximaCotizableKm,
+        );
+        if (distRes == null || distRes.km <= 0) {
+          if (mounted) {
+            _snack('No se pudo calcular la distancia al destino.');
+          }
+          return;
         }
-        return;
-      }
-      dist = distRes.km;
-      estimadoOffline = distRes.estimadoOffline;
+        dist = distRes.km;
+        estimadoOffline = distRes.estimadoOffline;
+        distanciaFuente = distRes.fuente;
 
-      final double precioDouble =
-          await _calcularPrecioPorTipo(dist, idaYVuelta, peaje: _peaje);
-      final int precioCents = (precioDouble * 100).round();
-      final int comisionCents =
-          PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
+        final double precioDouble =
+            await _calcularPrecioPorTipo(dist, idaYVuelta, peaje: _peaje);
+        if (precioDouble <= 0) {
+          if (mounted) {
+            _snack('No se pudo calcular el precio para este destino.');
+          }
+          return;
+        }
+        final int precioCents = (precioDouble * 100).round();
+        final int comisionCents =
+            PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
 
-      if (!mounted || runId != _cotizacionSeq) return;
+        if (!mounted || runId != _cotizacionSeq) return;
 
-      setState(() {
-        distanciaKm = dist;
-        precioCalculado = precioCents / 100.0;
-        _precioEsEstimadoOffline = estimadoOffline;
-        comisionCalculada = comisionCents / 100.0;
-        gananciaTaxistaCalculada = precioCalculado - comisionCalculada;
-        ubicacionObtenida = true;
-        _cargando = false;
-        _vistaResumenCotizada = precioCalculado > 0;
-      });
+        setState(() {
+          distanciaKm = dist;
+          precioCalculado = precioCents / 100.0;
+          _precioEsEstimadoOffline = estimadoOffline;
+          _distanciaFuente = distanciaFuente;
+          comisionCalculada = comisionCents / 100.0;
+          gananciaTaxistaCalculada = precioCalculado - comisionCalculada;
+          ubicacionObtenida = true;
+          _cargando = false;
+          _vistaResumenCotizada = precioCalculado > 0;
+        });
 
-      await _dibujarRutaReal(
-        oLat: origen.lat,
-        oLon: origen.lon,
-        dLat: latDestino!,
-        dLon: lonDestino!,
-        previewOnly: true,
+        await _dibujarRutaReal(
+          oLat: origen.lat,
+          oLon: origen.lon,
+          dLat: latDestino!,
+          dLon: lonDestino!,
+          previewOnly: true,
+        );
+
+        if (precioCalculado > 0) {
+          _animarSheetParaResumenCotizado();
+        }
+      }().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          throw TimeoutException('cotizacion_turismo');
+        },
       );
-
-      if (precioCalculado > 0) {
-        _animarSheetParaResumenCotizado();
+    } on TimeoutException {
+      if (mounted) {
+        _snack(
+          'La cotización tardó demasiado. Revisa tu conexión o el GPS e intenta de nuevo.',
+        );
       }
     } catch (e) {
       if (mounted) _snack('Error al cotizar: $e');
@@ -1684,11 +1794,21 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         ),
       );
 
-    await _cotizarTurismoTrasElegirDestino();
+    await _cotizarTurismoTrasElegirDestino(forzar: true);
   }
 
   // ✅ MÉTODO PARA MOSTRAR SELECTOR DE DESTINOS TURÍSTICOS
   Future<void> _mostrarSelectorDestinosTuristicos() async {
+    if (!mounted) return;
+    await RaiUbicacionClienteService.instance.ensureStarted();
+    try {
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null && latCliente == null && _origenMap == null) {
+        latCliente = last.latitude;
+        lonCliente = last.longitude;
+        _origenMap = LatLng(last.latitude, last.longitude);
+      }
+    } catch (_) {}
     if (!mounted) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -1736,7 +1856,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       return;
     }
     if (!ubicacionObtenida || latCliente == null || latDestino == null) {
-      messenger.showSnackBar(const SnackBar(content: Text(kMsgCalcFirst)));
+      if (!ubicacionObtenida &&
+          RaiUbicacionClienteService.instance.bannerActivo) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text(LocationReadiness.kMsgEsperandoUbicacion)),
+        );
+      } else {
+        messenger.showSnackBar(const SnackBar(content: Text(kMsgCalcFirst)));
+      }
       return;
     }
     if (!widget.modoAhora) {
@@ -1754,6 +1881,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
 
     if (await _bloquearSiTaxista()) return;
+
+    if (await ActiveTripService.clienteTieneViajeEnSeguimiento(u.uid)) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text(kMsgClienteYaTieneViajeActivo)),
+      );
+      return;
+    }
 
     setState(() => _cargando = true);
     NavigatorState? navAntesDeCrear =
@@ -1828,6 +1962,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (_promoSnapshotCotizacion != null) {
         extras['promoSnapshot'] = _promoSnapshotCotizacion;
       }
+      if (_cotizacionDesglose != null && _cotizacionDesglose!.isNotEmpty) {
+        extras['cotizacionDesglose'] = _cotizacionDesglose;
+      }
 
       final id = await ViajesRepo.crearViajePendiente(
         uidCliente: u.uid,
@@ -1848,8 +1985,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         distanciaKm: distanciaKm > 0 ? distanciaKm : null,
         tipoServicio: tipoServicio,
         subtipoTurismo: tipoServicio == 'turismo'
-            ? _tipoVehiculoTurismo
+            ? (_destinoTurismoSeleccionado?.subtipo ??
+                widget.subtipoTurismo ??
+                '')
             : widget.subtipoTurismo,
+        forzarEsAhora: viajeInmediato ? true : null,
         catalogoTurismoId: tipoServicio == 'turismo'
             ? _destinoTurismoSeleccionado?.id
             : widget.catalogoTurismoId,
@@ -1866,46 +2006,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         SnackBar(content: Text("✅ Viaje $accion — #${id.substring(0, 6)}")),
       );
 
-      if (viajeInmediato) {
-        if (tipoServicio == 'turismo') {
-          final fs.DocumentSnapshot<Map<String, dynamic>> turismoSnap =
-              await fs.FirebaseFirestore.instance
-                  .collection('viajes')
-                  .doc(id)
-                  .get();
-          final Map<String, dynamic> turismoData =
-              turismoSnap.data() ?? <String, dynamic>{};
-          final bool choferAsignado = (turismoData['uidTaxista'] ??
-                  turismoData['taxistaId'] ??
-                  '')
-              .toString()
-              .trim()
-              .isNotEmpty;
-          if (choferAsignado) {
-            await NavigationService.clearAndGoViajeEnCursoCliente(
-              preNav: navAntesDeCrear,
-            );
-          } else {
-            await NavigationService.clearAndGoPage(
-              preNav: navAntesDeCrear,
-              page: EsperaAsignacionTurismo(viajeId: id),
-            );
-          }
-        } else {
-          await NavigationService.clearAndGoViajeEnCursoCliente(
-            preNav: navAntesDeCrear,
-          );
-        }
-      } else {
-        await NavigationService.clearAndGoPage(
-          preNav: navAntesDeCrear,
-          page: ViajeProgramadoPendiente(viajeId: id),
-        );
-      }
+      await NavigationService.navegarTrasCrearViajeCliente(
+        viajeId: id,
+        fechaHoraPickup: fechaProgramadaUtc,
+        tipoServicio: tipoServicio,
+        preNav: navAntesDeCrear,
+      );
     } on fs.FirebaseException catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('❌ Firestore (${e.code}): ${e.message ?? e}')),
       );
+    } on StateError catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('❌ Error al guardar el viaje: $e')),
@@ -2652,6 +2764,36 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   ),
                 ),
                 RaiCotizacionOfflineHint(visible: _precioEsEstimadoOffline),
+                if (distanciaKm > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      _cotizacionDesglose?['esLargaDistancia'] == true
+                          ? 'Viaje interurbano · ${FormatosMoneda.km(distanciaKm)}'
+                          : 'Viaje local · ${FormatosMoneda.km(distanciaKm)}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: textSecondary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                if (_distanciaFuente == 'directions')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Distancia por carretera (RD)',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: textMuted, fontSize: 11.5),
+                    ),
+                  ),
+                if (_cotizacionDesglose != null)
+                  CotizacionDesglosePanel(
+                    desglose: _cotizacionDesglose!,
+                    textColor: textPrimary,
+                    mutedColor: textMuted,
+                  ),
                 if (!widget.modoAhora) ...[
                   const SizedBox(height: 10),
                   SizedBox(
@@ -3012,7 +3154,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             setState(() {
               _tipoVehiculoTurismo = v ?? 'carro';
             });
-            _programarCalculoAutomatico();
+            _intentarCalculoTrasOrigenListo();
           },
         ),
       ),
@@ -3118,7 +3260,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           title: tipoServicio == 'turismo' ? 'Turismo RAI' : 'Programar Viaje',
           backWhenCanPop: true,
         ),
-        body: Stack(
+        body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const RaiUbicacionClienteBanner(),
+          Expanded(
+            child: Stack(
         children: [
           Positioned.fill(
             child: AbsorbPointer(
@@ -3128,7 +3275,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   target: LatLng(18.4861, -69.9312),
                   zoom: 12,
                 ),
-                myLocationEnabled: true,
+                myLocationEnabled: _mapMyLocationEnabled && !_cargandoUbicacion,
                 myLocationButtonEnabled: false,
                 zoomControlsEnabled: false,
                 markers: _markers,
@@ -3164,14 +3311,43 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             )
           else if (_locPermDeniedForever)
             Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
+              top: 8,
+              left: 16,
+              right: 16,
+              child: RaiUbicacionClienteMapAlert(
+                mapFloating: mapFloating,
+                permisoBloqueadoEnPantalla: true,
+              ),
+            )
+          else if (_cargando &&
+              (widget.modoAhora || tipoServicio == 'turismo') &&
+              _tieneDestinoParaCalculo())
+            Positioned(
+              top: 8,
               left: 16,
               right: 16,
               child: _Banner(
-                  mapFloating: mapFloating,
-                  text: 'Activa la ubicación en Ajustes del sistema.',
-                  icon: Icons.location_off,
-                ),
+                mapFloating: mapFloating,
+                text: 'Calculando precio de tu viaje…',
+                icon: Icons.payments_outlined,
+              ),
+            )
+          else if ((widget.modoAhora || tipoServicio == 'turismo') &&
+              _tieneDestinoParaCalculo() &&
+              !ubicacionObtenida &&
+              !_cargandoUbicacion &&
+              !_cargando)
+            Positioned(
+              top: 8,
+              left: 16,
+              right: 16,
+              child: RaiUbicacionClienteMapAlert(
+                mapFloating: mapFloating,
+                obteniendoGps:
+                    RaiUbicacionClienteService.instance.modo.value ==
+                            RaiUbicacionClienteModo.listo &&
+                        _origenMap == null,
+              ),
             ),
           Positioned(
             right: 16,
@@ -3739,8 +3915,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                                 det.lat;
                                                             lonCliente =
                                                                 det.lon;
-                                                            ubicacionObtenida =
-                                                                true;
                                                             _origenMap = LatLng(
                                                                 det.lat,
                                                                 det.lon);
@@ -3748,7 +3922,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                                 _origenMap!);
                                                             setState(() {});
                                                             await _dibujarRutaSiHayDestino();
-                                                            _programarCalculoAutomatico();
+                                                            _intentarCalculoTrasOrigenListo();
                                                           },
                                                           onTextChanged: (t) {
                                                             setState(() {
@@ -3758,7 +3932,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                               origenTexto = '';
                                                               _invalidarCotizacion();
                                                             });
-                                                            _programarCalculoAutomatico();
+                                                            _intentarCalculoTrasOrigenListo();
                                                           },
                                                         ),
                                                         const SizedBox(
@@ -4147,7 +4321,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                         );
                                                       }
 
-                                                      _programarCalculoAutomatico();
+                                                      _invalidarPrecioCalculado();
+                                                      if (mounted) setState(() {});
+                                                      _intentarCalculoTrasOrigenListo();
                                                     },
                                                     onTextChanged: (t) {
                                                       _markers.removeWhere(
@@ -4164,7 +4340,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                         destinoTexto = '';
                                                         _invalidarCotizacion();
                                                       });
-                                                      _programarCalculoAutomatico();
+                                                      _intentarCalculoTrasOrigenListo();
                                                     },
                                                   ),
                                                 ],
@@ -4431,7 +4607,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                                           value) ??
                                                                   0.0;
                                                             });
-                                                            _programarCalculoAutomatico();
+                                                            _intentarCalculoTrasOrigenListo();
                                                           },
                                                         ),
                                                       ),
@@ -4570,7 +4746,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               setState(() {
                                                 idaYVuelta = v;
                                               });
-                                              _programarCalculoAutomatico();
+                                              _intentarCalculoTrasOrigenListo();
                                             },
                                           ),
                                         ],
@@ -4640,7 +4816,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 setState(() {
                                                   tipoVehiculo = v ?? 'Carro';
                                                 });
-                                                _programarCalculoAutomatico();
+                                                _intentarCalculoTrasOrigenListo();
                                               },
                                             ),
                                           ),
@@ -5072,8 +5248,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             },
           ),
         ],
+            ),
+          ),
+        ],
       ),
-      ),
+    ),
     );
       },
     );

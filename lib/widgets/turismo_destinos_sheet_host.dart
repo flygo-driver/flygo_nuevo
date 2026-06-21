@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 
 /// Abre el selector de turismo al instante; la ubicación se completa en segundo plano
@@ -43,6 +44,7 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
       _lat = widget.seedLat;
       _lon = widget.seedLon;
     }
+    unawaited(RaiUbicacionClienteService.instance.ensureStarted());
     unawaited(_cargarUbicacionEnSegundoPlano());
   }
 
@@ -67,9 +69,13 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
 
     try {
       final ({bool serviceEnabled, LocationPermission permission}) snap =
-          await LocationPermissionService.checkServiceThenRequestIfNeeded();
+          await GpsService.readServiceAndPermissionStabilizedNoRequest(
+        extendedAfterPriorGrant:
+            await LocationPermissionService.ubicacionConcedidaAntesEnPrefs(),
+      );
       if (!mounted) return;
       if (!snap.serviceEnabled || !GpsService.permissionUsable(snap.permission)) {
+        unawaited(RaiUbicacionClienteService.instance.refrescar());
         return;
       }
 

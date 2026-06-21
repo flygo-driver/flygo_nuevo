@@ -1,6 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flygo_nuevo/servicios/auth_service.dart';
+import 'package:flygo_nuevo/servicios/logout.dart';
 
 /// Pantalla amable de verificación (email/password). Reutilizable en gate y rutas.
 class VerificaCorreoScreen extends StatefulWidget {
@@ -75,9 +75,7 @@ class _VerificaCorreoScreenState extends State<VerificaCorreoScreen> {
     if (_cerrandoSesion) return;
     setState(() => _cerrandoSesion = true);
     try {
-      await AuthService().logout();
-      if (!mounted) return;
-      Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+      await cerrarSesion(context);
     } finally {
       if (mounted) setState(() => _cerrandoSesion = false);
     }

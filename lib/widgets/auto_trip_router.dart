@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
@@ -216,7 +216,9 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
           _goOnce(() async {
             await Navigator.of(context, rootNavigator: true)
                 .pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
+              MaterialPageRoute(
+                builder: (_) => const ClientePantallaViajeActivo(),
+              ),
               (route) => false,
             );
           });
@@ -260,7 +262,9 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
       if (!_clienteDebeEntrarViajeEnCurso(v)) return;
       _goOnce(() async {
         await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const ViajeEnCursoCliente()),
+          MaterialPageRoute(
+            builder: (_) => const ClientePantallaViajeActivo(),
+          ),
           (route) => false,
         );
       });

@@ -13,6 +13,7 @@ import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 import 'package:flygo_nuevo/servicios/flygo_storage.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
+import 'package:flygo_nuevo/widgets/taxista_onboarding_acciones_footer.dart';
 
 /// Firestore:
 /// usuarios/{uid} {
@@ -565,6 +566,9 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
   @override
   Widget build(BuildContext context) {
     final colorEstado = _estadoColor(docsEstado);
+    final bool onboardingSalida =
+        widget.onboardingObligatorio && !_renovacionObligatoria;
+    const double footerReserva = 118;
 
     final scaffold = Scaffold(
       backgroundColor: Colors.black,
@@ -579,16 +583,14 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       body: _cargando
           ? const Center(
               child: CircularProgressIndicator(color: Colors.greenAccent))
-          : Stack(
+          : ListView(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                footerReserva + MediaQuery.paddingOf(context).bottom,
+              ),
               children: [
-                ListView(
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    12,
-                    16,
-                    110 + MediaQuery.paddingOf(context).bottom,
-                  ),
-                  children: [
                     if (widget.onboardingObligatorio && !_renovacionObligatoria) ...[
                       Container(
                         width: double.infinity,
@@ -738,35 +740,17 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                       style: TextStyle(color: Colors.white54),
                     ),
                   ],
-                ),
-
-                // Botón fijo inferior (SafeArea: no tapa ni queda bajo la barra/gestos del sistema)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: SafeArea(
-                    top: false,
-                    minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: SizedBox(
-                      height: 52,
-                      child: ElevatedButton.icon(
-                        onPressed: _subiendo ? null : _enviarRevision,
-                        icon: const Icon(Icons.send),
-                        label: const Text('Enviar a revisión'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.green,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                          textStyle: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 16),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+            ),
+      bottomNavigationBar: _cargando
+          ? null
+          : TaxistaOnboardingAccionesFooter(
+              primaryLabel: 'Enviar a revisión',
+              primaryIcon: Icons.send_rounded,
+              busy: _subiendo,
+              onPrimary: _enviarRevision,
+              mostrarSalirInicio: onboardingSalida,
+              fondoOscuro: true,
+              primaryClaroSobreOscuro: true,
             ),
     );
 

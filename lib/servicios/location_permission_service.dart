@@ -1,9 +1,8 @@
 // lib/servicios/location_permission_service.dart
 // Gestión central de permisos y frescura de ubicación (GPS + permisos).
 //
-// Política: lectura pasiva ([requestIfDenied:false] por defecto). El diálogo del SO
-// solo desde [RaiUbicacionClienteBanner] / [RaiUbicacionTaxistaBanner] vía
-// [GpsService.requestPermissionExplicitUser]. Ver [deboPedirPermisoAlSistemaAhora].
+// Política: lectura pasiva por defecto. El diálogo del SO solo desde
+// «Activar ubicación» ([RaiUbicacionActivarButton] / servicios cliente+taxista).
 //
 // ignore_for_file: avoid_print
 
@@ -17,6 +16,7 @@ import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_ui_constants.dart';
 
 /// Resultado del chequeo básico (solo “al usar la app”, sin “siempre”).
 class LocationBasicResult {
@@ -64,8 +64,7 @@ class LocationReadiness {
       !staleOrInvalid;
 
   static const String kMsgEsperandoUbicacion =
-      'Aún no tienes ubicación activa. Activa el GPS y permite ubicación '
-      'en el banner superior (Permitir → Al usar la app).';
+      RaiUbicacionUiConstants.msgEsperandoUbicacion;
 }
 
 class LocationPermissionService {
@@ -79,6 +78,14 @@ class LocationPermissionService {
 
   /// Diálogo in-app «Permitir siempre» ya mostrado (taxista o cliente).
   static const String prefsAlwaysPromptHandled = 'rai_ubicacion_always_prompt_v1';
+
+  /// Tocó «Activar ubicación» en RAI y no concedió → banner rojo hasta permitir.
+  static const String prefsUbicacionDenegadaTrasBanner =
+      'rai_ubicacion_denegada_banner_v1';
+
+  /// Flujo iniciado desde el botón único de RAI (GPS/permiso/ajustes); al volver a la app se continúa solo.
+  static const String prefsActivacionDesdeAppRai =
+      'rai_ubicacion_activacion_desde_app_v1';
 
   /// Cliente: el banner del shell ya guía; no duplicar SnackBars al cotizar.
   static bool clienteBannerManejaUi = false;
@@ -126,10 +133,65 @@ class LocationPermissionService {
   }
 
   static Future<void> _marcarClienteUbicacionListoEnPrefs() async {
+    await marcarUbicacionConcedidaEnPrefs();
+  }
+
+  /// Una sola instalación: cliente y conductor comparten el mismo permiso del SO.
+  static Future<void> marcarUbicacionConcedidaEnPrefs() async {
     try {
       final p = await SharedPreferences.getInstance();
       await p.setBool(prefsClienteUbicacionListo, true);
+      await p.setBool(prefsTaxistaUbicacionListo, true);
+      await p.setBool(prefsUbicacionDenegadaTrasBanner, false);
+      await p.setBool(prefsActivacionDesdeAppRai, false);
     } catch (_) {}
+  }
+
+  /// Usuario tocó el botón único «Activar ubicación» en RAI.
+  static Future<void> marcarActivacionDesdeAppRai() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(prefsActivacionDesdeAppRai, true);
+    } catch (_) {}
+  }
+
+  static Future<bool> activacionDesdeAppRaiPendiente() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getBool(prefsActivacionDesdeAppRai) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> limpiarActivacionDesdeAppRai() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(prefsActivacionDesdeAppRai, false);
+    } catch (_) {}
+  }
+
+  static Future<void> marcarUbicacionDenegadaTrasBanner() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(prefsUbicacionDenegadaTrasBanner, true);
+    } catch (_) {}
+  }
+
+  static Future<void> limpiarUbicacionDenegadaTrasBanner() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(prefsUbicacionDenegadaTrasBanner, false);
+    } catch (_) {}
+  }
+
+  static Future<bool> ubicacionDenegadaTrasBannerEnPrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getBool(prefsUbicacionDenegadaTrasBanner) ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<bool> taxistaUbicacionListaAntes() async {
@@ -142,10 +204,7 @@ class LocationPermissionService {
   }
 
   static Future<void> marcarTaxistaUbicacionListoEnPrefs() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setBool(prefsTaxistaUbicacionListo, true);
-    } catch (_) {}
+    await marcarUbicacionConcedidaEnPrefs();
   }
 
   static Future<bool> _alwaysPromptHandledBefore() async {

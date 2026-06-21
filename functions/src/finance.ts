@@ -243,17 +243,16 @@ export async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: n
 }
 
 /**
- * Pool / aceptar viaje: deuda legacy ≥ 500; o prepago activo (primer efectivo ya consumido y sin deuda legacy)
- * con **saldo disponible** por debajo del mínimo operativo (`config/comision_prepago`, default RD$200).
- * Mientras quede `comisionPendiente` legacy (>0 y <500), no exigimos saldo prepago (migración suave).
+ * Pool / aceptar viaje: bloqueo estricto (modelo empresarial).
+ * - Cualquier `comisionPendiente` > 0 → bloqueo inmediato (sin zona gris 0–500).
+ * - Tras el 1.er viaje efectivo gratis: saldo prepago disponible < mínimo operativo → bloqueo.
  */
 function bloqueoOperativoPrepago(
   data: AnyMap | undefined,
   minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
 ): boolean {
   const pend = comisionPendienteRdFromBilletera(data);
-  if (pend + 1e-9 >= UMBRAL_COMISION_LEGACY_RD) return true;
-  if (pend > 1e-6) return false;
+  if (pend > 1e-6) return true;
   if (data?.primerViajeComisionGratisConsumido !== true) return false;
   return saldoDisponiblePrepagoRdFromBilletera(data) + 1e-9 < minimoOperativoRd;
 }
@@ -415,6 +414,25 @@ async function notificarSaldoPrepagoPreventivo(
     );
   } catch (e) {
     console.error("[notificarSaldoPrepagoPreventivo]", uid, e);
+  }
+}
+
+async function notificarComisionPendienteInmediata(
+  uid: string,
+  pendAntes: number,
+  pendDespues: number,
+): Promise<void> {
+  const eps = 1e-6;
+  try {
+    if (pendAntes > eps || pendDespues <= eps) return;
+    await enviarPushComisionTaxista(
+      uid,
+      "Cuenta suspendida — comisión pendiente",
+      `Quedó RD$${pendDespues.toFixed(2)} en comisión efectivo pendiente. Deposita y envía comprobante en Mis pagos; al verificar el admin podrás volver a operar.`,
+      "taxista_comision_pendiente_bloqueo",
+    );
+  } catch (e) {
+    console.error("[notificarComisionPendienteInmediata]", uid, e);
   }
 }
 
@@ -1789,6 +1807,7 @@ export const onBilleteraTaxistaWritten = onDocumentWritten("billeteras_taxista/{
   }
   await notificarSaldoPrepagoPreventivo(uid, pendDespues, saldoAntes, saldoDespues, prepagoActivo);
   await notificarSaldoPrepagoInsuficiente(uid, pendDespues, saldoAntes, saldoDespues);
+  await notificarComisionPendienteInmediata(uid, pendAntes, pendDespues);
   await notificarLegacyComisionTope(uid, pendAntes, pendDespues);
 });
 
@@ -1855,6 +1874,30 @@ export const onUsuarioTaxistaBloqueoComision = onDocumentWritten("usuarios/{uid}
     saldoPrepagoRd: saldo.toFixed(2),
     comisionPendienteRd: pend.toFixed(2),
   });
+});
+
+/** Taxista (propio uid) o admin: escribe `usuarios.tienePagoPendiente` vía Admin SDK. */
+export const sincronizarBloqueoOperativoTaxista = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const actorUid = request.auth.uid;
+  const targetRaw = request.data?.uidTaxista;
+  const targetUid =
+    typeof targetRaw === "string" && targetRaw.trim() ? targetRaw.trim() : actorUid;
+
+  if (targetUid !== actorUid) {
+    const actorRole = await getRole(actorUid);
+    if (actorRole !== "admin") {
+      throw new HttpsError("permission-denied", "Solo admin puede sincronizar otro taxista");
+    }
+  } else {
+    const selfRole = await getRole(actorUid);
+    if (selfRole !== "taxista" && selfRole !== "admin") {
+      throw new HttpsError("permission-denied", "Solo taxista o admin");
+    }
+  }
+
+  const tienePagoPendiente = await syncTaxistaBloqueoOperativo(targetUid);
+  return { ok: true, uidTaxista: targetUid, tienePagoPendiente };
 });
 
 /** Endpoint liviano para escritorio: valida sesión admin y entrega resumen sin usar Firestore SDK en cliente. */

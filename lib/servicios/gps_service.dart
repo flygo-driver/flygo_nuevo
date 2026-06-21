@@ -64,6 +64,19 @@ class GpsService {
       return p;
     }
 
+    // Tras volver de segundo plano Android a veces reporta denied un instante.
+    if (await _ubicacionListaEnPrefs()) {
+      p = await waitUntilPermissionUsable(
+        timeout: const Duration(seconds: 4),
+      );
+      if (permissionUsable(p)) {
+        debugPrint(
+          '[GPS] requestPermissionExplicitUser: prefs listo → usable sin diálogo ($p)',
+        );
+        return p;
+      }
+    }
+
     _lastGeolocatorRequestPermissionAt = DateTime.now();
     debugPrint(
         '[GPS] requestPermissionExplicitUser → Geolocator.requestPermission()');
@@ -178,7 +191,9 @@ class GpsService {
   /// Si en un dispositivo extremo aún fallara, subir [_kDeniedStabilizeAttempts] o
   /// el gap en una iteración futura (evitar backoff infinito en UI thread).
   static Future<({bool serviceEnabled, LocationPermission permission})>
-      readServiceAndPermissionStabilizedNoRequest() async {
+      readServiceAndPermissionStabilizedNoRequest({
+    bool extendedAfterPriorGrant = false,
+  }) async {
     LocationPermission p = await Geolocator.checkPermission();
     debugPrint('[GPS] readNoRequest: checkPermission() => $p');
 
@@ -194,17 +209,25 @@ class GpsService {
       return (serviceEnabled: false, permission: p);
     }
 
+    final bool extended = extendedAfterPriorGrant ||
+        await _ubicacionListaEnPrefs();
+    final int maxAttempts =
+        extended ? 28 : _kDeniedStabilizeAttempts;
+    final Duration gap = extended
+        ? const Duration(milliseconds: 150)
+        : _kDeniedStabilizeGap;
+
     if (p == LocationPermission.denied) {
-      await Future<void>.delayed(_kPermissionStabilizeDelay);
+      await Future<void>.delayed(
+        extended ? const Duration(milliseconds: 200) : _kPermissionStabilizeDelay,
+      );
       p = await Geolocator.checkPermission();
-      for (var i = 0;
-          i < _kDeniedStabilizeAttempts && p == LocationPermission.denied;
-          i++) {
-        await Future<void>.delayed(_kDeniedStabilizeGap);
+      for (var i = 0; i < maxAttempts && p == LocationPermission.denied; i++) {
+        await Future<void>.delayed(gap);
         final LocationPermission q = await Geolocator.checkPermission();
         if (q != p) {
           debugPrint(
-            '[GPS] readNoRequest: relectura ${i + 1}/$_kDeniedStabilizeAttempts => $q',
+            '[GPS] readNoRequest: relectura ${i + 1}/$maxAttempts => $q',
           );
         }
         p = q;

@@ -165,14 +165,13 @@ class AdminChoferTurismoOperativo {
 
   static Future<bool> consultarBloqueoPagos(String uid) async {
     final FirebaseFirestore db = FirebaseFirestore.instance;
-    final results = await Future.wait([
+    final List<DocumentSnapshot<Map<String, dynamic>>> results =
+        await Future.wait<DocumentSnapshot<Map<String, dynamic>>>([
       db.collection('usuarios').doc(uid).get(),
       db.collection('billeteras_taxista').doc(uid).get(),
     ]);
-    final DocumentSnapshot<Map<String, dynamic>> uSnap =
-        results[0] as DocumentSnapshot<Map<String, dynamic>>;
-    final DocumentSnapshot<Map<String, dynamic>> bSnap =
-        results[1] as DocumentSnapshot<Map<String, dynamic>>;
+    final DocumentSnapshot<Map<String, dynamic>> uSnap = results[0];
+    final DocumentSnapshot<Map<String, dynamic>> bSnap = results[1];
 
     return !PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
       uSnap.data(),

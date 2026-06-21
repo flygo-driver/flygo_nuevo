@@ -231,14 +231,42 @@ export const aceptarOfertaBola = onCall(async (request) => {
       ganancia_cents: gananciaCents,
       estado: "aceptado",
       aceptado: true,
+      activo: true,
       codigoVerificacion: codigo,
       codigoVerificado: false,
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
     };
 
+    const primaryViajeId = viajesSnap.docs[0].id;
     for (const v of viajesSnap.docs) {
       await v.ref.set(viajePatch, { merge: true });
+    }
+
+    await db.collection("usuarios").doc(uidTaxista).set(
+      {
+        viajeActivoId: primaryViajeId,
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    await db.collection("usuarios").doc(uidCliente).set(
+      {
+        viajeActivoId: primaryViajeId,
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    if (!String(pub.viajeEspejoId ?? "").trim()) {
+      await pubRef.set(
+        {
+          viajeEspejoId: primaryViajeId,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
     }
   }
 
@@ -391,14 +419,42 @@ export const aceptarContraofertaClienteBola = onCall(async (request) => {
       ganancia_cents: gananciaCents,
       estado: "aceptado",
       aceptado: true,
+      activo: true,
       codigoVerificacion: codigo,
       codigoVerificado: false,
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
     };
 
+    const primaryViajeId = viajesSnap.docs[0].id;
     for (const v of viajesSnap.docs) {
       await v.ref.set(viajePatch, { merge: true });
+    }
+
+    await db.collection("usuarios").doc(uidTaxista).set(
+      {
+        viajeActivoId: primaryViajeId,
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    await db.collection("usuarios").doc(uidCliente).set(
+      {
+        viajeActivoId: primaryViajeId,
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    if (!String(pub.viajeEspejoId ?? "").trim()) {
+      await pubRef.set(
+        {
+          viajeEspejoId: primaryViajeId,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
     }
   }
 

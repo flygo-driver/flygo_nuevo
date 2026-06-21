@@ -3,46 +3,215 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gira — RAI Pasajero</title>
-  <meta name="description" content="Reservá cupos de esta gira en RAI Pasajero." />
+  <meta name="color-scheme" content="light dark" />
+  <title>Gira por cupos — RAI Pasajero</title>
+  <meta name="description" content="Reservá cupos de esta gira en RAI Pasajero. Pago a Open ASK Service SRL (RAI)." />
+
+  <!-- Open Graph / WhatsApp / Facebook — siempre logo RAI, nunca Flutter -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="RAI Driver" />
+  <meta property="og:title" content="Gira por cupos — RAI Pasajero" id="ogTitle" />
+  <meta property="og:description" content="Reservá cupos en RAI Pasajero. Transferencia a Open ASK Service SRL." id="ogDesc" />
+  <meta property="og:image" content="https://flygo-rd.web.app/pool/rai-share-card.png" id="ogImage" />
+  <meta property="og:image:alt" content="RAI Driver — Movilidad inteligente" />
+  <meta property="og:url" content="https://flygo-rd.web.app/pool/" id="ogUrl" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Gira por cupos — RAI Pasajero" id="twTitle" />
+  <meta name="twitter:description" content="Reservá cupos en RAI Pasajero." id="twDesc" />
+  <meta name="twitter:image" content="https://flygo-rd.web.app/pool/rai-share-card.png" id="twImage" />
+
+  <link rel="icon" type="image/png" href="/pool/rai-logo.png" />
+
   <style>
-    body { font-family: system-ui, sans-serif; margin: 0; background: #101010; color: #eee; }
-    .wrap { max-width: 420px; margin: 0 auto; padding: 20px 16px 32px; }
-    .banner { width: 100%; border-radius: 12px; margin: 12px 0; display: none; max-height: 200px; object-fit: cover; }
-    h1 { font-size: 1.25rem; margin: 0 0 8px; }
-    .route { font-size: 1.1rem; font-weight: 700; color: #00e676; }
-    .meta { color: #aaa; font-size: 0.95rem; line-height: 1.5; margin: 8px 0; }
-    .badge { display: inline-block; background: #1e3a2f; color: #00e676; padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; }
-    a.btn {
-      display: block; margin-top: 12px; padding: 14px 20px; text-align: center;
-      font-weight: 700; text-decoration: none; border-radius: 8px;
+    :root {
+      --sunset: #ff7a45;
+      --coral: #ff5e62;
+      --ocean: #00c9a7;
+      --lagoon: #5bc0be;
+      --sand: #ffe08a;
+      --bg: #071018;
+      --card: rgba(17, 24, 39, 0.94);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --border: rgba(0, 201, 167, 0.35);
+      --shadow: rgba(255, 122, 69, 0.22);
     }
-    .primary { background: #00c853; color: #000; }
-    .secondary { background: #333; color: #fff; border: 1px solid #555; }
-    p.muted { color: #aaa; font-size: 0.9rem; line-height: 1.45; }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #fff8f0;
+        --card: rgba(255, 255, 255, 0.96);
+        --text: #0f172a;
+        --muted: #475569;
+        --border: rgba(255, 122, 69, 0.35);
+        --shadow: rgba(255, 94, 98, 0.18);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background:
+        radial-gradient(900px 480px at 95% -5%, rgba(255, 224, 138, 0.35), transparent 55%),
+        radial-gradient(700px 420px at 0% 0%, rgba(0, 201, 167, 0.22), transparent 50%),
+        radial-gradient(600px 400px at 50% 100%, rgba(255, 122, 69, 0.15), transparent 55%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 440px; margin: 0 auto; padding: 20px 16px 36px; }
+    .brand {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+    }
+    .brand img {
+      width: 56px; height: 56px; border-radius: 16px;
+      box-shadow: 0 10px 28px var(--shadow);
+      border: 2px solid rgba(255, 255, 255, 0.15);
+    }
+    .brand strong { display: block; font-size: 1.08rem; letter-spacing: 0.02em; }
+    .brand span { color: var(--muted); font-size: 0.85rem; }
+    .verano-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-bottom: 12px; padding: 6px 12px; border-radius: 999px;
+      background: linear-gradient(135deg, var(--coral), var(--sunset));
+      color: #fff; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.08em;
+      box-shadow: 0 6px 18px rgba(255, 94, 98, 0.35);
+    }
+    .card {
+      background: var(--card);
+      border: 2px solid transparent;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28);
+      background-clip: padding-box;
+      position: relative;
+    }
+    .card::before {
+      content: "";
+      position: absolute; inset: 0; border-radius: 20px; padding: 2px;
+      background: linear-gradient(135deg, var(--sunset), var(--sand), var(--ocean));
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+    .hero {
+      position: relative; min-height: 180px; background: linear-gradient(135deg, var(--sunset), var(--sand), var(--ocean));
+      display: none;
+    }
+    .hero img {
+      width: 100%; height: 220px; object-fit: cover; display: block;
+    }
+    .hero::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(180deg, rgba(255,122,69,0.15) 0%, rgba(7,16,24,0.82) 100%);
+    }
+    .hero-badge {
+      position: absolute; top: 12px; left: 12px; z-index: 2;
+      background: rgba(0,0,0,0.55); border: 1px solid var(--border);
+      border-radius: 999px; padding: 6px 10px; font-size: 0.75rem; font-weight: 700;
+      color: var(--lagoon);
+    }
+    .hero-verano {
+      position: absolute; top: 12px; right: 12px; z-index: 2;
+      background: linear-gradient(135deg, var(--coral), var(--sunset));
+      border-radius: 999px; padding: 6px 10px; font-size: 0.72rem; font-weight: 900;
+      color: #fff; letter-spacing: 0.06em;
+    }
+    .body { padding: 18px 16px 20px; position: relative; z-index: 1; }
+    .badge {
+      display: inline-block; margin-bottom: 10px;
+      background: rgba(0, 201, 167, 0.14); color: var(--ocean);
+      padding: 5px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 800;
+      border: 1px solid var(--border);
+    }
+    h1 { margin: 0 0 6px; font-size: 1.38rem; line-height: 1.2; font-weight: 900; }
+    .route {
+      font-size: 1.05rem; font-weight: 800;
+      background: linear-gradient(90deg, var(--sunset), var(--ocean));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      margin: 0 0 12px;
+    }
+    .meta { color: var(--muted); font-size: 0.94rem; line-height: 1.55; margin: 0 0 14px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .chip {
+      font-size: 0.78rem; font-weight: 700; padding: 6px 10px; border-radius: 999px;
+      background: rgba(91, 192, 190, 0.12); border: 1px solid var(--border); color: var(--text);
+    }
+    a.btn {
+      display: block; margin-top: 10px; padding: 14px 18px; text-align: center;
+      font-weight: 800; text-decoration: none; border-radius: 12px;
+    }
+    .primary {
+      background: linear-gradient(135deg, var(--sunset), var(--ocean));
+      color: #fff; box-shadow: 0 12px 28px rgba(0, 201, 167, 0.28);
+    }
+    .secondary {
+      background: rgba(127, 127, 127, 0.12); color: var(--text);
+      border: 1px solid var(--border);
+    }
+    p.muted { color: var(--muted); font-size: 0.88rem; line-height: 1.45; margin-top: 14px; }
     .err { color: #ff8a80; }
-    .skel { color: #666; }
+    .skel { color: #64748b; }
+    .pay-note {
+      margin-top: 12px; padding: 12px; border-radius: 12px;
+      background: linear-gradient(135deg, rgba(255,122,69,0.1), rgba(0,201,167,0.1));
+      border: 1px solid var(--border);
+      color: var(--muted); font-size: 0.86rem; line-height: 1.45;
+    }
+    .cuenta-box {
+      margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+      background: rgba(0, 201, 167, 0.08); border: 1px solid var(--border);
+      font-size: 0.82rem; font-weight: 800; line-height: 1.4;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <p class="badge">Gira por cupos · RAI</p>
-    <h1 id="titulo" class="skel">Cargando gira…</h1>
-    <p id="ruta" class="route skel">—</p>
-    <img id="banner" class="banner" alt="Banner de la gira" />
-    <p id="detalle" class="meta skel"></p>
-    <p id="status" class="muted"></p>
-    <a id="openApp" class="btn primary" href="#">Abrir en RAI Pasajero</a>
-    <a id="playStore" class="btn secondary" href="https://play.google.com/store/apps/details?id=com.flygo.rd2">
-      Descargar RAI Pasajero en Google Play
-    </a>
-    <p class="muted">En Play buscá <strong>RAI Pasajero</strong>. El enlace de WhatsApp es para pasajeros, no para RAI Conductor.</p>
+    <div class="brand">
+      <img src="rai-logo.png" alt="RAI Driver" />
+      <div>
+        <strong>RAI Driver</strong>
+        <span>Giras por cupos · Open ASK Service SRL</span>
+      </div>
+    </div>
+
+    <div class="verano-pill">☀ GIRA VERANO · TROPICAL</div>
+
+    <div class="card">
+      <div class="hero" id="hero">
+        <div class="hero-badge">RAI · Gira por cupos</div>
+        <div class="hero-verano">GIRA VERANO</div>
+        <img id="banner" alt="Banner de la gira" />
+      </div>
+      <div class="body">
+        <span class="badge">Reserva en la app</span>
+        <h1 id="titulo" class="skel">Cargando gira…</h1>
+        <p id="ruta" class="route skel">—</p>
+        <div class="chips" id="chips"></div>
+        <p id="detalle" class="meta skel"></p>
+        <div class="pay-note">
+          El pago por transferencia va a <strong>Open ASK Service SRL (RAI)</strong>, no a la cuenta personal del operador.
+        </div>
+        <div class="cuenta-box">
+          Open ASK Service SRL · Banco Popular · Cuenta Corriente · 787726249
+        </div>
+        <p id="status" class="muted"></p>
+        <a id="openApp" class="btn primary" href="#">Abrir en RAI Pasajero</a>
+        <a id="playStore" class="btn secondary" href="https://play.google.com/store/apps/details?id=com.flygo.rd2">
+          Descargar RAI Pasajero en Google Play
+        </a>
+      </div>
+    </div>
+
+    <p class="muted">En Play buscá <strong>RAI Pasajero</strong>. El enlace es para pasajeros que reservan cupos.</p>
   </div>
+
   <script>
     (function () {
       var PLAY = 'https://play.google.com/store/apps/details?id=com.flygo.rd2';
-      var PREVIEW_CF =
-        'https://us-central1-flygo-rd.cloudfunctions.net/getPoolSharePreview';
+      var PREVIEW_CF = 'https://us-central1-flygo-rd.cloudfunctions.net/getPoolSharePreview';
+      var RAI_OG = 'https://flygo-rd.web.app/pool/rai-share-card.png';
       var params = new URLSearchParams(window.location.search);
       var id = (params.get('id') || '').trim();
       var isAndroid = /Android/i.test(navigator.userAgent);
@@ -50,13 +219,13 @@
       var titulo = document.getElementById('titulo');
       var ruta = document.getElementById('ruta');
       var detalle = document.getElementById('detalle');
+      var chips = document.getElementById('chips');
       var banner = document.getElementById('banner');
+      var hero = document.getElementById('hero');
       var status = document.getElementById('status');
       var openBtn = document.getElementById('openApp');
 
-      var appScheme = id
-        ? 'raidriver://pool?id=' + encodeURIComponent(id)
-        : 'raidriver://pool';
+      var appScheme = id ? 'raidriver://pool?id=' + encodeURIComponent(id) : 'raidriver://pool';
       var intentUrl = id
         ? 'intent://pool?id=' + encodeURIComponent(id) +
           '#Intent;scheme=raidriver;package=com.flygo.rd2;S.browser_fallback_url=' +
@@ -65,6 +234,23 @@
           encodeURIComponent(PLAY) + ';end';
 
       openBtn.href = isAndroid ? intentUrl : appScheme;
+
+      function setMeta(title, desc, url) {
+        document.title = title;
+        document.getElementById('ogTitle').setAttribute('content', title);
+        document.getElementById('ogDesc').setAttribute('content', desc);
+        document.getElementById('ogImage').setAttribute('content', RAI_OG);
+        document.getElementById('ogUrl').setAttribute('content', url);
+        document.getElementById('twTitle').setAttribute('content', title);
+        document.getElementById('twDesc').setAttribute('content', desc);
+        document.getElementById('twImage').setAttribute('content', RAI_OG);
+      }
+
+      setMeta(
+        'Gira por cupos — RAI Pasajero',
+        'Reservá cupos en RAI Pasajero. Pago a Open ASK Service SRL.',
+        id ? ('https://flygo-rd.web.app/pool?id=' + encodeURIComponent(id)) : 'https://flygo-rd.web.app/pool/'
+      );
 
       function fmtFecha(iso) {
         if (!iso) return '—';
@@ -77,32 +263,52 @@
         } catch (e) { return iso; }
       }
 
+      function addChip(text) {
+        var el = document.createElement('span');
+        el.className = 'chip';
+        el.textContent = text;
+        chips.appendChild(el);
+      }
+
       function renderPreview(p) {
-        titulo.textContent = (p.agenciaNombre || 'Gira') + ' · cupos';
-        titulo.classList.remove('skel');
-        ruta.textContent = (p.origenTown || '—') + ' → ' + (p.destino || '—');
-        ruta.classList.remove('skel');
+        var agencia = p.agenciaNombre || 'Gira';
+        var title = agencia + ' · cupos RAI';
+        var route = (p.origenTown || '—') + ' → ' + (p.destino || '—');
         var precio = Number(p.precioPorAsiento) || 0;
         var left = Number(p.cuposDisponibles);
         if (!Number.isFinite(left)) left = 0;
+        var desc = route + ' · RD$ ' + precio.toFixed(0) + ' por asiento · ' + left + ' cupos';
+
+        titulo.textContent = title;
+        titulo.classList.remove('skel');
+        ruta.textContent = route;
+        ruta.classList.remove('skel');
         detalle.innerHTML =
           '<strong>Salida:</strong> ' + fmtFecha(p.fechaSalida) + '<br>' +
           '<strong>Precio por asiento:</strong> RD$ ' + precio.toFixed(0) + '<br>' +
           '<strong>Cupos disponibles:</strong> ' + left + ' / ' + (p.capacidad || '—') + '<br>' +
           '<strong>Estado:</strong> ' + (p.estado || '—');
         detalle.classList.remove('skel');
+
+        chips.innerHTML = '';
+        addChip(fmtFecha(p.fechaSalida));
+        addChip('RD$ ' + precio.toFixed(0));
+        addChip(left + ' cupos');
+
+        setMeta(title, desc, 'https://flygo-rd.web.app/pool?id=' + encodeURIComponent(id));
+
         if (p.bannerUrl) {
           banner.src = p.bannerUrl;
-          banner.style.display = 'block';
+          hero.style.display = 'block';
         }
-        status.textContent =
-          'Reservá en la app RAI Pasajero. Si ya la tenés instalada, tocá el botón verde.';
+
+        status.textContent = 'Reservá en RAI Pasajero. Si ya la tenés instalada, tocá el botón verde.';
       }
 
       if (!id) {
         titulo.textContent = 'Enlace incompleto';
         titulo.classList.remove('skel');
-        status.innerHTML = '<span class="err">Falta el id de la gira. Pedí el link de nuevo al conductor.</span>';
+        status.innerHTML = '<span class="err">Falta el id de la gira. Pedí el link de nuevo.</span>';
         openBtn.style.display = 'none';
         return;
       }
@@ -125,7 +331,7 @@
           }
         })
         .catch(function () {
-          titulo.textContent = 'Gira por cupos';
+          titulo.textContent = 'Gira por cupos · RAI';
           titulo.classList.remove('skel');
           ruta.textContent = 'RAI Pasajero';
           ruta.classList.remove('skel');

@@ -9,6 +9,7 @@ export * from "./wallet.js";
 export * from "./boarding.js";
 export * from "./multiparada.js";
 export * from "./publish.js";
+export * from "./viaje_create_cliente.js";
 export * from "./finance.js";
 export * from "./liquidacion_semanal.js";
 export * from "./pool_finance.js";

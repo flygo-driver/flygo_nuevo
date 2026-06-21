@@ -48,11 +48,11 @@ export function taxistaContratoFirmado(u: AnyMap): boolean {
 
 /** Valida elegibilidad para claim pool (aceptarViajeSeguro y rutas equivalentes). */
 export function assertTaxistaAptoParaClaimPool(u: AnyMap): void {
+  if (u.bloqueado === true) {
+    throw new HttpsError("failed-precondition", "bloqueado-admin");
+  }
   if (u.registroTaxistaCompleto !== true) {
     throw new HttpsError("failed-precondition", "registro-incompleto");
-  }
-  if (u.puedeRecibirViajes !== true) {
-    throw new HttpsError("failed-precondition", "no-puede-recibir-viajes");
   }
   if (!taxistaContratoFirmado(u)) {
     throw new HttpsError("failed-precondition", "contrato-no-firmado");

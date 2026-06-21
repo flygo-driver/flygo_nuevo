@@ -48,7 +48,7 @@ class RaiAsistenteLauncher {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => const ProgramarViaje(
-              modoAhora: false,
+              modoAhora: true,
               tipoServicio: 'turismo',
             ),
           ),

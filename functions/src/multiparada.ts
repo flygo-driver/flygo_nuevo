@@ -161,6 +161,8 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
     const visitadas = Array.isArray(d.multiparadaParadasVisitadas)
       ? [...(d.multiparadaParadasVisitadas as AnyMap[])]
       : [];
+    const latGps = numCoord(request.data?.lat);
+    const lonGps = numCoord(request.data?.lon);
     visitadas.push({
       legIndex,
       label: leg.label,
@@ -169,6 +171,9 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
       esFinal: leg.esFinal,
       visitadoEn: new Date().toISOString(),
       registradoPor: uid,
+      ...(latGps != null && lonGps != null
+        ? { gpsLat: latGps, gpsLon: lonGps }
+        : {}),
     });
 
     const newDone = legIndex + 1;

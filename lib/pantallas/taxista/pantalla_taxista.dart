@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+
 import 'panel_taxista.dart';
 
 /// PantallaTaxista es un wrapper del panel principal de taxista.
@@ -14,12 +16,10 @@ class PantallaTaxista extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
-      return Scaffold(
+      return const Scaffold(
         backgroundColor: Colors.black,
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          foregroundColor: Colors.greenAccent,
-          title: const Text('RAI Driver — Taxista'),
+        appBar: RaiAppBar(
+          title: 'RAI Driver — Taxista',
           centerTitle: true,
         ),
         body: const Center(

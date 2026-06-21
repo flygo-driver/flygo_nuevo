@@ -3,23 +3,15 @@
 // applicationId del paquete Android/iOS, con fallback al --dart-define.
 //
 // Valores soportados:
-//   - 'cliente'   -> APK construida solo para pasajero (RAI Pasajero)
-//   - 'conductor' -> APK construida solo para taxista  (RAI Conductor)
-//   - 'all'       -> debug local sin --flavor: muestra ambos botones
+//   - 'cliente'   -> solo pasajero (com.flygo.rd2, --flavor cliente)
+//   - 'conductor' -> solo taxista (com.flygo.rd2.conductor)
+//   - 'all'       -> unificada (solo --dart-define o debug sin package conocido)
 //
-// === Por qué autodetectar desde el applicationId ===
-// El comando `flutter build apk --release --dart-define=APP_FLAVOR=cliente`
-// (sin --flavor) hace que Gradle construya AMBOS APKs (cliente + conductor),
-// pero a los dos les inyecta APP_FLAVOR=cliente — entonces el APK del
-// conductor se comporta como cliente. Bug muy fácil de cometer.
+// === Split pruebas / dos APK ===
+// Build pasajero: `--flavor cliente`  → applicationId com.flygo.rd2
+// Build chofer:   `--flavor conductor` → applicationId com.flygo.rd2.conductor
 //
-// Solución: el applicationId SIEMPRE es distinto entre flavors:
-//   - com.flygo.rd2          → cliente (RAI Pasajero)
-//   - com.flygo.rd2.conductor → conductor (RAI Conductor)
-//
-// Leemos el packageName con `package_info_plus` y derivamos el flavor real,
-// independiente del --dart-define. Así NUNCA se confunde el cliente con el
-// conductor en el mismo build.
+// Autodetectamos desde applicationId (no confiar solo en --dart-define).
 
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -60,13 +52,14 @@ class AppFlavor {
     }
   }
 
+  static const String _playStorePasajeroPackage = 'com.flygo.rd2';
+  static const String _playStoreConductorPackage = 'com.flygo.rd2.conductor';
+
   /// Mapea el applicationId al nombre de flavor.
-  /// Devuelve null si no es un paquete conocido (debug local sin --flavor).
+  /// Devuelve null si no es un paquete conocido (emulador / debug sin flavor).
   static String? _flavorFromPackageName(String pkg) {
-    // RAI Conductor — applicationId del taxista.
-    if (pkg == 'com.flygo.rd2.conductor') return 'conductor';
-    // RAI Pasajero — applicationId del cliente.
-    if (pkg == 'com.flygo.rd2') return 'cliente';
+    if (pkg == _playStoreConductorPackage) return 'conductor';
+    if (pkg == _playStorePasajeroPackage) return 'cliente';
     return null;
   }
 

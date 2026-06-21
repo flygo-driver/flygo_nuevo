@@ -11,7 +11,10 @@ import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flygo_nuevo/utils/pool_gira_cancelar_ui.dart';
+import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
+import 'package:flygo_nuevo/widgets/pool_recaudo_central_taxista_panel.dart';
 
 import 'pools_taxista_reservas.dart';
 import 'pools_taxista_crear.dart';
@@ -236,80 +239,8 @@ Contactanos por esta via para mas informacion y confirmacion.
   Future<bool> _confirmarCancelarGira(
     BuildContext context,
     Map<String, dynamic> d,
-  ) async {
-    final bool conReservas = PoolRepo.giraTieneReservasActivas(d);
-    final occ = ((d['asientosReservados'] ?? 0) as num).toInt();
-    final pag = ((d['asientosPagados'] ?? 0) as num).toInt();
-
-    if (!conReservas) {
-      final bool? ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('¿Cancelar esta salida?'),
-          content: const Text(
-            'Aún no hay reservas. Se devolverá el prepago reservado al publicar.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('No'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Sí, cancelar'),
-            ),
-          ],
-        ),
-      );
-      return ok == true;
-    }
-
-    final TextEditingController confirmCtrl = TextEditingController();
-    try {
-      final bool? ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Cancelar salida con reservas'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Hay $occ cupo(s) reservado(s) y $pag pago(s) registrado(s). '
-                  'Los pasajeros perderán la reserva. El prepago de comisión de esta salida '
-                  'se devuelve a tu billetera. Esta acción no se puede deshacer.',
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: confirmCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Escribe CANCELAR para confirmar',
-                  ),
-                  textCapitalization: TextCapitalization.characters,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Volver'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Cancelar salida'),
-            ),
-          ],
-        ),
-      );
-      if (ok != true) return false;
-      return confirmCtrl.text.trim().toUpperCase() == 'CANCELAR';
-    } finally {
-      confirmCtrl.dispose();
-    }
-  }
+  ) =>
+      confirmarCancelarGiraSalida(context, d);
 
   Future<void> _operarPool(
     BuildContext context, {
@@ -326,14 +257,25 @@ Contactanos por esta via para mas informacion y confirmacion.
         final okIniciar = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text(PoolsProductoCopy.accionConfirmarComision),
+            title: Text(
+              preview.recaudoCentral
+                  ? PoolsProductoCopy.accionConfirmarInicioCentralTitulo
+                  : PoolsProductoCopy.accionConfirmarComision,
+            ),
             content: Text(
-              '${PoolsProductoCopy.accionConfirmarComisionSub}.\n\n'
-              'Cupos firmes en RAI: ${preview.cuposFirmesRai}\n'
-              'Comisión estimada: RD\$ ${preview.comisionEstimadaRd.toStringAsFixed(0)} '
-              '(${preview.pctComision.toStringAsFixed(0)}% × esos asientos).\n'
-              '${preview.excesoDevolucionRd > 0.01 ? 'Se devuelve RD\$ ${preview.excesoDevolucionRd.toStringAsFixed(0)} de prepago apartado al publicar (apartado RD\$ ${preview.comisionReservadaRd.toStringAsFixed(0)}).\n' : ''}'
-              '${PoolsProductoCopy.ventasFueraNoCuentan}',
+              preview.recaudoCentral
+                  ? PoolsProductoCopy.accionConfirmarInicioCentralCuerpo(
+                      cuposFirmes: preview.cuposFirmesRai,
+                      asientosEfectivo: preview.asientosEfectivo,
+                      comisionEfectivoRd: preview.comisionEfectivoRd,
+                      pctComision: preview.pctComision,
+                    )
+                  : '${PoolsProductoCopy.accionConfirmarComisionSub}.\n\n'
+                      'Cupos firmes en RAI: ${preview.cuposFirmesRai}\n'
+                      'Comisión estimada: RD\$ ${preview.comisionEstimadaRd.toStringAsFixed(0)} '
+                      '(${preview.pctComision.toStringAsFixed(0)}% × esos asientos).\n'
+                      '${preview.excesoDevolucionRd > 0.01 ? 'Se devuelve RD\$ ${preview.excesoDevolucionRd.toStringAsFixed(0)} de prepago apartado al publicar (apartado RD\$ ${preview.comisionReservadaRd.toStringAsFixed(0)}).\n' : ''}'
+                      '${PoolsProductoCopy.ventasFueraNoCuentan}',
             ),
             actions: [
               TextButton(
@@ -350,7 +292,13 @@ Contactanos por esta via para mas informacion y confirmacion.
         if (okIniciar != true) return;
 
         final r = await PoolRepo.iniciarViajePoolSeguro(poolId: poolId);
-        if (r['legacy'] != true) {
+        if (r['recaudoCentral'] == true) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(PoolsProductoCopy.accionInicioCentralOk),
+            ),
+          );
+        } else if (r['legacy'] != true) {
           final cr = (r['comisionReal'] as num?)?.toDouble();
           final ar = (r['asientosReales'] as num?)?.toInt() ?? 0;
           if (cr != null) {
@@ -389,9 +337,21 @@ Contactanos por esta via para mas informacion y confirmacion.
         } else {
           unawaited(AnalyticsRai.logGiraCompleted());
         }
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Salida cerrada en RAI.')),
-        );
+        final netoPend =
+            (r['netoOrganizadorPendiente'] as num?)?.toDouble() ?? 0;
+        if (r['recaudoCentral'] == true && netoPend > 0.01) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                PoolsProductoCopy.accionFinalizarCentralNetoPendiente,
+              ),
+            ),
+          );
+        } else {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Salida cerrada en RAI.')),
+          );
+        }
       } else if (action == 'cancelar') {
         const motivo = 'Cancelado por chofer';
         final r = await PoolRepo.cancelarViajePoolSeguro(
@@ -701,10 +661,17 @@ Contactanos por esta via para mas informacion y confirmacion.
                       'Pagados: $pag  •  Ingreso asegurado: RD\$ ${ingresoAseg.toStringAsFixed(0)}',
                       style: TextStyle(color: textSecondary),
                     ),
-                    Text(
-                      'Proyectado: RD\$ ${ingresoProj.toStringAsFixed(0)}  •  Payout neto: RD\$ ${neto.toStringAsFixed(0)}',
-                      style: TextStyle(color: textSecondary),
-                    ),
+                    if (PoolRecaudoCentral.esPoolCentral(d)) ...[
+                      PoolRecaudoCentralTaxistaPanel(
+                        poolData: d,
+                        compact: true,
+                      ),
+                    ] else ...[
+                      Text(
+                        'Proyectado: RD\$ ${ingresoProj.toStringAsFixed(0)}  •  Payout neto: RD\$ ${neto.toStringAsFixed(0)}',
+                        style: TextStyle(color: textSecondary),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Row(
                       children: [

@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/auth/rai_identity_resolve.dart';
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
@@ -16,9 +17,11 @@ import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
 import 'package:flygo_nuevo/widgets/verify_email_gate.dart';
 
-/// Splash unificado post-arranque nativo.
+/// Splash unificado post-arranque nativo (misma imagen que [flutter_native_splash]).
 class RaiIdentitySplash extends StatelessWidget {
   const RaiIdentitySplash({super.key, this.subtitle});
+
+  static const String _splashAsset = 'assets/icon/splash_rai.png';
 
   final String? subtitle;
 
@@ -27,6 +30,9 @@ class RaiIdentitySplash extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double logoWidth =
+        (MediaQuery.sizeOf(context).width * 0.72).clamp(200.0, 340.0);
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Column(
@@ -48,9 +54,10 @@ class RaiIdentitySplash extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Image.asset(
-                    'assets/icon/logo_rai_vertical.png',
-                    width: 150,
-                    height: 150,
+                    _splashAsset,
+                    width: logoWidth,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.high,
                   ),
                   if (subtitle != null && subtitle!.isNotEmpty) ...[
                     const SizedBox(height: 24),
@@ -131,27 +138,53 @@ class RaiDesktopNonAdminWall extends StatelessWidget {
 }
 
 /// Puerta taxista: prepago/deuda → email → [child] (p. ej. [TaxistaEntry]).
-class RaiTaxistaAccessGate extends StatelessWidget {
+class RaiTaxistaAccessGate extends StatefulWidget {
   const RaiTaxistaAccessGate({super.key, required this.child});
 
   final Widget child;
 
   @override
+  State<RaiTaxistaAccessGate> createState() => _RaiTaxistaAccessGateState();
+}
+
+class _RaiTaxistaAccessGateState extends State<RaiTaxistaAccessGate> {
+  late final Future<bool> _puedeTrabajarFuture;
+  String? _uid;
+
+  @override
+  void initState() {
+    super.initState();
+    _uid = FirebaseAuth.instance.currentUser?.uid;
+    _puedeTrabajarFuture = _resolverAcceso(_uid);
+  }
+
+  static Future<bool> _resolverAcceso(String? uid) async {
+    final u = (uid ?? '').trim();
+    if (u.isEmpty) return false;
+    try {
+      await PagosTaxistaRepo.sincronizarBloqueoOperativo(u);
+      return await PagosTaxistaRepo.puedeTrabajar(u);
+    } catch (e) {
+      debugPrint('[RAI_IDENTITY] resolverAcceso error=$e');
+      return false;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final uid = _uid;
     if (uid == null || uid.isEmpty) {
       return const SeleccionUsuario();
     }
 
     return FutureBuilder<bool>(
-      future: PagosTaxistaRepo.puedeTrabajar(uid),
+      future: _puedeTrabajarFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return RaiIdentitySplash.scaffold();
         }
 
-        final bool puedeTrabajar =
-            !snapshot.hasError && snapshot.data == true;
+        final bool puedeTrabajar = snapshot.data == true;
         debugPrint(
           '[RAI_IDENTITY] taxista uid=$uid puedeTrabajar=$puedeTrabajar '
           'err=${snapshot.hasError}',
@@ -161,7 +194,7 @@ class RaiTaxistaAccessGate extends StatelessWidget {
           return const BloqueadoPorPagos();
         }
 
-        return VerifyEmailGate(childWhenVerified: child);
+        return VerifyEmailGate(childWhenVerified: widget.child);
       },
     );
   }
@@ -175,34 +208,14 @@ class RaiIdentityRouter {
       defaultTargetPlatform == TargetPlatform.windows ||
       defaultTargetPlatform == TargetPlatform.macOS;
 
+  /// Evita parpadeo: el [FutureBuilder] de términos no se recrea en cada
+  /// snapshot de `usuarios/{uid}` (p. ej. lastLogin, tienePagoPendiente).
   static Widget buildGateForUsuarioData(
     BuildContext context,
     User user,
     Map<String, dynamic> data,
   ) {
-    final rol = RaiIdentityResolve.rolDesdeUsuarioData(data);
-    debugPrint('[RAI_IDENTITY] gate uid=${user.uid} rol=$rol');
-
-    return FutureBuilder<bool>(
-      future: LegalAcceptanceService.hasAccepted(user.uid),
-      builder: (context, legalSnap) {
-        if (legalSnap.connectionState == ConnectionState.waiting) {
-          return RaiIdentitySplash.scaffold();
-        }
-
-        if (legalSnap.data != true) {
-          return TermsPolicyScreen(
-            requireAcceptance: true,
-            onAccepted: () {
-              Navigator.of(context)
-                  .pushNamedAndRemoveUntil('/auth_check', (r) => false);
-            },
-          );
-        }
-
-        return _buildAfterLegal(context, user, data, rol);
-      },
-    );
+    return RaiUsuarioIdentityGate(user: user, data: data);
   }
 
   static Widget _buildAfterLegal(
@@ -270,6 +283,14 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'taxista') {
+      final uSnap = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user.uid)
+          .get();
+      final data = uSnap.data() ?? <String, dynamic>{};
+      if (!TaxistaRegistroPerfilData.taxistaRegistroPerfilCompleto(data)) {
+        return const CompletarRegistroTaxista();
+      }
       return const RaiTaxistaAccessGate(child: TaxistaEntry());
     }
 
@@ -280,5 +301,70 @@ class RaiIdentityRouter {
     }
 
     return const SeleccionUsuario();
+  }
+}
+
+/// Puerta legal + rol estable ante actualizaciones Firestore del perfil.
+class RaiUsuarioIdentityGate extends StatefulWidget {
+  const RaiUsuarioIdentityGate({
+    super.key,
+    required this.user,
+    required this.data,
+  });
+
+  final User user;
+  final Map<String, dynamic> data;
+
+  @override
+  State<RaiUsuarioIdentityGate> createState() => _RaiUsuarioIdentityGateState();
+}
+
+class _RaiUsuarioIdentityGateState extends State<RaiUsuarioIdentityGate> {
+  late Future<bool> _legalFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _legalFuture = LegalAcceptanceService.hasAccepted(widget.user.uid);
+  }
+
+  @override
+  void didUpdateWidget(RaiUsuarioIdentityGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.user.uid != widget.user.uid) {
+      _legalFuture = LegalAcceptanceService.hasAccepted(widget.user.uid);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rol = RaiIdentityResolve.rolDesdeUsuarioData(widget.data);
+    debugPrint('[RAI_IDENTITY] gate uid=${widget.user.uid} rol=$rol');
+
+    return FutureBuilder<bool>(
+      future: _legalFuture,
+      builder: (context, legalSnap) {
+        if (legalSnap.connectionState == ConnectionState.waiting) {
+          return RaiIdentitySplash.scaffold();
+        }
+
+        if (legalSnap.data != true) {
+          return TermsPolicyScreen(
+            requireAcceptance: true,
+            onAccepted: () {
+              Navigator.of(context)
+                  .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+            },
+          );
+        }
+
+        return RaiIdentityRouter._buildAfterLegal(
+          context,
+          widget.user,
+          widget.data,
+          rol,
+        );
+      },
+    );
   }
 }

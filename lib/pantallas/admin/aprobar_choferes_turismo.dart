@@ -8,6 +8,7 @@ import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_expediente_chofer_utils.dart';
 import 'admin_solicitud_turismo_utils.dart';
@@ -404,14 +405,8 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo>
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Solicitudes turismo',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: AdminAppBar(
+        title: 'Solicitudes turismo',
         bottom: TabBar(
           controller: _tabCtrl,
           labelColor: Colors.deepPurpleAccent,

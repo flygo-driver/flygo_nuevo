@@ -8,6 +8,7 @@ import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
 class ConfirmarViajePage extends StatefulWidget {
   final String origenTexto;
@@ -185,22 +186,20 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('✅ Viaje confirmado: ${id.substring(0, 6)}…')),
       );
-      final bool esProgramadoConfirm =
-          _fechaHora.isAfter(DateTime.now().add(const Duration(minutes: 10)));
-      if (esProgramadoConfirm) {
-        await NavigationService.clearAndGoPage(
-          preNav: navAntesDeCrear,
-          page: ViajeProgramadoPendiente(viajeId: id),
-        );
-      } else {
-        await NavigationService.clearAndGoViajeEnCursoCliente(
-          preNav: navAntesDeCrear,
-        );
-      }
+      await NavigationService.navegarTrasCrearViajeCliente(
+        viajeId: id,
+        fechaHoraPickup: fechaUtc,
+        preNav: navAntesDeCrear,
+      );
     } on FirebaseException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('❌ Firestore (${e.code}): ${e.message ?? e}')),
+      );
+    } on StateError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -214,8 +213,10 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
 
   @override
   Widget build(BuildContext context) {
-    final bool esProgramado =
-        _fechaHora.isAfter(DateTime.now().add(const Duration(minutes: 10)));
+    final bool esProgramado = !TripPublishWindows.esAhoraPorFechaPickup(
+      _fechaHora,
+      DateTime.now(),
+    );
 
     return Scaffold(
       backgroundColor: Colors.black,

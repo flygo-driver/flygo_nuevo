@@ -9,18 +9,46 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
-import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
-import 'package:flygo_nuevo/servicios/configuracion_globals_service.dart';
-import 'package:flygo_nuevo/servicios/comision_prepago_config_service.dart';
 import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
-import 'package:flygo_nuevo/servicios/taxista_billetera_gira_prepago.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
+import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 
 class CrearPoolResult {
   const CrearPoolResult({required this.poolId, this.aviso});
   final String poolId;
   /// Solo si la reserva al publicar fue menor que la comisión objetivo (cupos mínimos).
   final String? aviso;
+}
+
+class PoolReservaResult {
+  const PoolReservaResult({
+    required this.poolId,
+    required this.reservaId,
+    this.recaudoCentral = false,
+    this.referenciaRecaudo = '',
+    this.montoEsperadoRecaudoRd = 0,
+  });
+
+  final String poolId;
+  final String reservaId;
+  final bool recaudoCentral;
+  final String referenciaRecaudo;
+  final double montoEsperadoRecaudoRd;
+
+  factory PoolReservaResult.fromCallableData(Object? raw) {
+    if (raw is! Map) {
+      return const PoolReservaResult(poolId: '', reservaId: '');
+    }
+    final m = Map<String, dynamic>.from(raw);
+    return PoolReservaResult(
+      poolId: (m['poolId'] ?? '').toString(),
+      reservaId: (m['reservaId'] ?? '').toString(),
+      recaudoCentral: m['recaudoCentral'] == true,
+      referenciaRecaudo: (m['referenciaRecaudo'] ?? '').toString(),
+      montoEsperadoRecaudoRd:
+          ((m['montoEsperadoRecaudoRd'] ?? 0) as num).toDouble(),
+    );
+  }
 }
 
 /// Vista previa de comisión al iniciar gira (cupos firmes en RAI).
@@ -31,6 +59,9 @@ class GiraInicioComisionPreview {
     required this.comisionReservadaRd,
     required this.excesoDevolucionRd,
     required this.pctComision,
+    this.recaudoCentral = false,
+    this.asientosEfectivo = 0,
+    this.comisionEfectivoRd = 0,
   });
 
   final int cuposFirmesRai;
@@ -38,6 +69,9 @@ class GiraInicioComisionPreview {
   final double comisionReservadaRd;
   final double excesoDevolucionRd;
   final double pctComision;
+  final bool recaudoCentral;
+  final int asientosEfectivo;
+  final double comisionEfectivoRd;
 }
 
 class PoolRepo {
@@ -47,16 +81,6 @@ class PoolRepo {
 
   static const String _msgGiraLegacySinComisionEstimada =
       'Esta salida fue creada con una versión anterior del sistema. Por favor, cancélala y crea una nueva.';
-
-  static bool _poolTieneComisionGiraEstimada(Map<String, dynamic>? p) {
-    final v = p?['comisionGiraEstimadaRd'];
-    if (v is num && v.isFinite && v > 1e-9) return true;
-    if (v is String) {
-      final d = double.tryParse(v);
-      return d != null && d.isFinite && d > 1e-9;
-    }
-    return false;
-  }
 
   static double _round2(double v) =>
       double.parse(v.clamp(0, 1e12).toStringAsFixed(2));
@@ -101,18 +125,31 @@ class PoolRepo {
     return firm;
   }
 
-  static double _multSentido(String sentido) =>
-      sentido.trim().toLowerCase() == 'ida_y_vuelta' ? 2.0 : 1.0;
+  /// Solo asientos efectivo firmes (recaudo central: comisión prepago al iniciar).
+  static int cuposEfectivoFirmesDesdeReservas(
+    Iterable<Map<String, dynamic>> reservas,
+  ) {
+    var n = 0;
+    for (final r in reservas) {
+      final e = (r['estado'] ?? '').toString().toLowerCase().trim();
+      final m = (r['metodoPago'] ?? '').toString().toLowerCase().trim();
+      final s = ((r['seats'] ?? 0) as num).toInt();
+      if (s <= 0 || m != 'efectivo') continue;
+      if (e == 'pagado' || e == 'reservado') n += s;
+    }
+    return n;
+  }
 
   static double comisionRdDesdeCupos({
     required Map<String, dynamic> pool,
     required int cupos,
     required double pct,
   }) {
-    if (cupos <= 0) return 0;
-    final precio = ((pool['precioPorAsiento'] ?? 0) as num).toDouble();
-    final mult = _multSentido((pool['sentido'] ?? '').toString());
-    return _round2(cupos * precio * mult * (pct / 100.0));
+    return PoolRecaudoCentral.comisionRaiRd(
+      pool: pool,
+      asientos: cupos,
+      pctComision: pct,
+    );
   }
 
   /// Lectura pool + reservas para diálogo antes de iniciar.
@@ -125,25 +162,40 @@ class PoolRepo {
     }
     final pool = poolSnap.data() ?? <String, dynamic>{};
     final resSnap = await pools.doc(poolId).collection('reservas').get();
-    final firm = cuposFirmesRaiDesdeReservas(
-      resSnap.docs.map((d) => d.data()),
-    );
+    final reservasList = resSnap.docs.map((d) => d.data()).toList();
+    final firm = cuposFirmesRaiDesdeReservas(reservasList);
     final cap = ((pool['capacidad'] ?? 0) as num).toInt();
     final cupos = cap > 0 ? firm.clamp(0, cap) : firm;
     final pct = ((pool['comisionGiraPctUsado'] as num?)?.toDouble() ??
             PlataformaEconomia.comisionViajePorcentaje)
         .clamp(0.0, 100.0);
-    final comisionEst =
-        comisionRdDesdeCupos(pool: pool, cupos: cupos, pct: pct);
+    final recaudoCentral = PoolRecaudoCentral.esPoolCentral(pool);
+    final asientosEfectivo = recaudoCentral
+        ? (cap > 0
+            ? cuposEfectivoFirmesDesdeReservas(reservasList).clamp(0, cap)
+            : cuposEfectivoFirmesDesdeReservas(reservasList))
+        : 0;
+    final comisionEst = recaudoCentral
+        ? comisionRdDesdeCupos(
+            pool: pool,
+            cupos: asientosEfectivo,
+            pct: pct,
+          )
+        : comisionRdDesdeCupos(pool: pool, cupos: cupos, pct: pct);
     final reservada =
         _round2(((pool['comisionGiraEstimadaRd'] ?? 0) as num).toDouble());
-    final exceso = _round2((reservada - comisionEst).clamp(0.0, 1e12));
+    final exceso = recaudoCentral
+        ? 0.0
+        : _round2((reservada - comisionEst).clamp(0.0, 1e12));
     return GiraInicioComisionPreview(
       cuposFirmesRai: cupos,
       comisionEstimadaRd: comisionEst,
       comisionReservadaRd: reservada,
       excesoDevolucionRd: exceso,
       pctComision: pct,
+      recaudoCentral: recaudoCentral,
+      asientosEfectivo: asientosEfectivo,
+      comisionEfectivoRd: recaudoCentral ? comisionEst : 0,
     );
   }
 
@@ -240,173 +292,28 @@ class PoolRepo {
       throw 'Completá tu registro de conductor en RAI antes de publicar salidas por cupos.';
     }
 
-    await ComisionViajePctService.refresh(force: true);
-    await ConfiguracionGlobalsService.refreshGiraComision(force: true);
-    final abuso = await ConfiguracionGlobalsService.fetchGiraAbusoUmbral();
-
-    await ComisionPrepagoConfigService.ensureStarted();
-    final double pct = PlataformaEconomia.comisionViajePorcentaje;
-    final double factor = pct / 100.0;
-    final double mult = _multSentido(sentido);
     final int cap = capacidad > 0 ? capacidad : 1;
     if (cuposComisionRai < 1 || cuposComisionRai > cap) {
       throw 'Cupos RAI para comisión debe estar entre 1 y $cap.';
     }
-    final int cuposReserva = cuposReservaComision(
-      cuposComisionRai: cuposComisionRai,
-      minParaConfirmar: minParaConfirmar,
-      capacidad: capacidad,
-    );
-    final double comisionObjetivo = _round2(
-      cuposReserva.toDouble() * precioPorAsiento * mult * factor,
-    );
-    final double minOperativoRd = ComisionPrepagoConfigService.minimoOperativoRd;
 
-    print(
-      '[PRE_TEST] crearPool inicio uid=${u.uid} comisionObjetivo=$comisionObjetivo '
-      'cuposReserva=$cuposReserva pct=$pct minOperativo=$minOperativoRd '
-      'abuso_ratioMax=${abuso.ratioMax} abuso_minCreadas=${abuso.minCreadas} abuso_disabled=${abuso.disabled}',
-    );
-
-    final poolRef = pools.doc();
-    final poolId = poolRef.id;
-    final billeRef = _db.collection('billeteras_taxista').doc(u.uid);
-    final userRef = _db.collection('usuarios').doc(u.uid);
-
-    double comisionReservar = 0;
-
-    await _db.runTransaction((tx) async {
-      final billeSnap = await tx.get(billeRef);
-      final userSnap = await tx.get(userRef);
-      final bille = billeSnap.data();
-      final ud = userSnap.data() ?? <String, dynamic>{};
-      final disponiblePre =
-          TaxistaBilleteraGiraPrepago.saldoDisponiblePrepagoComisionRd(bille);
-
-      if (ud['tienePagoPendiente'] == true) {
-        throw 'No puedes publicar salidas por cupos: hay un pago pendiente de validación. '
-            'Revisa Mis pagos.';
-      }
-      if (TaxistaBilleteraGiraPrepago.bloqueoOperativoComoPool(
-        billetera: bille,
-        usuario: ud,
-      )) {
-        final pend =
-            TaxistaBilleteraGiraPrepago.comisionPendienteLegacyRd(bille);
-        if (pend >= 500 - 1e-6) {
-          throw 'No puedes publicar salidas por cupos: comisión en efectivo pendiente ≥ RD\$500. '
-              'Deposita y sube comprobante en Mis pagos.';
-        }
-        final falta = _round2(minOperativoRd - disponiblePre);
-        throw 'No puedes publicar salidas por cupos: prepago libre RD\$${disponiblePre.toStringAsFixed(2)}. '
-            'Necesitas al menos RD\$${minOperativoRd.toStringAsFixed(0)}. '
-            'Recarga RD\$${falta.toStringAsFixed(2)} en Mis pagos → Recarga comisión.';
-      }
-
-      final prep = TaxistaBilleteraGiraPrepago.saldoPrepagoComisionRd(bille);
-      final res = TaxistaBilleteraGiraPrepago.saldoReservadoParaGiras(bille);
-      final disponible = disponiblePre;
-
-      if (disponible + 1e-9 >= comisionObjetivo) {
-        comisionReservar = comisionObjetivo;
-      } else if (disponible + 1e-9 >= minOperativoRd) {
-        // Pool operativo OK: reserva el prepago libre (no exige cupo máximo al publicar).
-        comisionReservar = _round2(disponible);
-      } else {
-        final falta = _round2(minOperativoRd - disponible);
-        throw 'Prepago libre RD\$${disponible.toStringAsFixed(2)}. Para publicar salidas por cupos '
-            'recarga al menos RD\$${falta.toStringAsFixed(2)} en Mis pagos → Recarga comisión.';
-      }
-      final Timestamp? ultimoTs = ud['ultimoReinicioContadorGiras'] as Timestamp?;
-      final now = DateTime.now();
-      bool resetVentana = false;
-      if (ultimoTs == null) {
-        resetVentana = true;
-      } else {
-        final diff = now.difference(ultimoTs.toDate()).inDays;
-        if (diff >= 30) resetVentana = true;
-      }
-
-      int creadas = (ud['girasCreadasUltimoMes'] as num?)?.toInt() ?? 0;
-      int canceladas = (ud['girasCanceladasAntesDeIniciar'] as num?)?.toInt() ?? 0;
-      if (resetVentana) {
-        creadas = 0;
-        canceladas = 0;
-      } else {
-        if (!abuso.disabled && creadas >= abuso.minCreadas) {
-          final ratio = canceladas / (creadas > 0 ? creadas : 1);
-          if (ratio > abuso.ratioMax + 1e-9) {
-            int? diasRestantes;
-            if (ultimoTs != null) {
-              final int dias =
-                  now.difference(ultimoTs.toDate()).inDays;
-              diasRestantes = (30 - dias).clamp(0, 30);
-            }
-            throw PoolGiraAbusoBloqueo(
-              creadas: creadas,
-              canceladas: canceladas,
-              ratioMax: abuso.ratioMax,
-              diasHastaReinicio:
-                  diasRestantes != null && diasRestantes > 0
-                      ? diasRestantes
-                      : null,
-            );
-          }
-        }
-      }
-
-      if (resetVentana) {
-        tx.set(
-          userRef,
-          <String, dynamic>{
-            'girasCreadasUltimoMes': 1,
-            'girasCanceladasAntesDeIniciar': 0,
-            'ultimoReinicioContadorGiras': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      } else {
-        tx.set(
-          userRef,
-          <String, dynamic>{
-            'girasCreadasUltimoMes': FieldValue.increment(1),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      }
-
-      print(
-        '[PRE_TEST] crearPool saldos en tx uid=${u.uid} poolId=$poolId prepAntes=$prep '
-        'reservAntes=$res disponibleAntes=$disponible',
-      );
-
-      final prepNuevo = _round2(prep - comisionReservar);
-      final resNuevo = _round2(res + comisionReservar);
-      tx.set(
-        billeRef,
-        <String, dynamic>{
-          'saldoPrepagoComisionRd': prepNuevo,
-          'saldoReservadoParaGiras': resNuevo,
-          'updatedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-
-      final data = <String, dynamic>{
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    try {
+      final callable = fx.httpsCallable('crearPoolGira');
+      final res = await callable.call(<String, dynamic>{
         'tipo': tipo,
         'sentido': sentido,
         'origenTown': origenTown.trim(),
         'destino': destino.trim(),
-        'fechaSalida': Timestamp.fromDate(fechaSalida),
-        if (fechaVuelta != null) 'fechaVuelta': Timestamp.fromDate(fechaVuelta),
+        'fechaSalida': fechaSalida.millisecondsSinceEpoch,
+        if (fechaVuelta != null)
+          'fechaVuelta': fechaVuelta.millisecondsSinceEpoch,
         'capacidad': capacidad,
         'minParaConfirmar': minParaConfirmar,
+        'cuposComisionRai': cuposComisionRai,
         'precioPorAsiento': precioPorAsiento,
-        'pickupPoints': (pickupPoints != null && pickupPoints.isNotEmpty)
-            ? pickupPoints
-            : ['Parque Central de $origenTown'],
+        if (pickupPoints != null && pickupPoints.isNotEmpty)
+          'pickupPoints': pickupPoints,
         'depositPct': depositPct,
         'feePct': feePct,
         if (agenciaNombre != null && agenciaNombre.trim().isNotEmpty)
@@ -452,64 +359,59 @@ class PoolRepo {
               .toList(),
         if (descripcionViaje != null && descripcionViaje.trim().isNotEmpty)
           'descripcionViaje': descripcionViaje.trim(),
-        'asientosReservados': 0,
-        'asientosPagados': 0,
-        'montoReservado': 0.0,
-        'montoPagado': 0.0,
-        'estado': 'abierto',
-        'ownerTaxistaId': u.uid,
-        'taxistaNombre': u.displayName ?? '',
-        'createdAt': FieldValue.serverTimestamp(),
-        'cuposComisionRai': cuposComisionRai,
-        'comisionGiraEstimadaRd': comisionReservar,
-        'comisionGiraObjetivoRd': comisionObjetivo,
-        'comisionGiraCuposReserva': cuposReserva,
-        'comisionGiraPctUsado': pct,
-        'prepagoComisionEtapa': 'reservada_creacion',
-      };
-
-      tx.set(poolRef, data);
-
-      print(
-        '[PRE_TEST] crearPool saldos post-reserva uid=${u.uid} poolId=$poolId prep=$prepNuevo '
-        'reserv=$resNuevo',
-      );
-      print(
-        '[GIRA_PREPAGO] crearPool tx ok poolId=$poolId reservada=$comisionReservar objetivo=$comisionObjetivo',
-      );
-    });
-
-    try {
-      final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
-      await fx.httpsCallable('appendLedgerGiraReserva').call(<String, dynamic>{
-        'poolId': poolId,
-        'idempotencyKey': 'ledger_reserva_$poolId',
       });
-      print('[PRE_TEST] appendLedgerGiraReserva ok poolId=$poolId uid=${u.uid}');
-    } catch (e, st) {
-      print(
-        '[PRE_TEST][ERROR] appendLedgerGiraReserva poolId=$poolId uid=${u.uid} err=$e',
+
+      final raw = res.data;
+      if (raw is! Map) {
+        throw 'Respuesta inválida al publicar la salida.';
+      }
+      final data = Map<String, dynamic>.from(raw);
+      final poolId = (data['poolId'] ?? '').toString().trim();
+      if (poolId.isEmpty) {
+        throw 'No se recibió el identificador de la salida publicada.';
+      }
+      final avisoRaw = data['aviso'];
+      final aviso = avisoRaw?.toString().trim();
+
+      print('[GIRA_PREPAGO] crearPoolGira ok poolId=$poolId uid=${u.uid}');
+
+      unawaited(
+        AnalyticsRai.logGiraCreated(
+          comisionEstimada: 0,
+          capacidad: capacidad,
+          precioPorAsiento: precioPorAsiento,
+        ),
       );
-      print('[PRE_TEST][ERROR] stack=$st');
-    }
 
-    unawaited(
-      AnalyticsRai.logGiraCreated(
-        comisionEstimada: comisionReservar,
-        capacidad: capacidad,
-        precioPorAsiento: precioPorAsiento,
-      ),
-    );
-
-    String? aviso;
-    if (comisionReservar + 1e-9 < comisionObjetivo) {
-      final posibleFalta = _round2(comisionObjetivo - comisionReservar);
-      aviso =
-          'Reservamos RD\$${comisionReservar.toStringAsFixed(2)} de comisión. '
-          'Al iniciar con el mínimo de cupos firmes pueden faltar hasta RD\$${posibleFalta.toStringAsFixed(2)} '
-          'de prepago libre; si no alcanza, te indicamos cuánto recargar.';
+      return CrearPoolResult(
+        poolId: poolId,
+        aviso: aviso != null && aviso.isNotEmpty ? aviso : null,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      final details = e.details;
+      if (details is Map &&
+          (details['tipo'] ?? '').toString() == 'gira_abuso') {
+        throw PoolGiraAbusoBloqueo(
+          creadas: ((details['creadas'] ?? 0) as num).toInt(),
+          canceladas: ((details['canceladas'] ?? 0) as num).toInt(),
+          ratioMax: ((details['ratioMax'] ?? 0.5) as num).toDouble(),
+          diasHastaReinicio: details['diasHastaReinicio'] == null
+              ? null
+              : ((details['diasHastaReinicio'] as num).toInt()),
+        );
+      }
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) throw msg;
+      if (e.code == 'permission-denied') {
+        throw 'No se pudo publicar la salida (permisos). '
+            'Verifica que iniciaste sesión como conductor o contacta soporte.';
+      }
+      if (e.code == 'not-found' || e.code == 'unimplemented') {
+        throw 'La función de publicación no está disponible. '
+            'Actualiza la app o contacta soporte RAI.';
+      }
+      throw 'Error al publicar la salida (${e.code}).';
     }
-    return CrearPoolResult(poolId: poolId, aviso: aviso);
   }
 
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamPoolsCliente({
@@ -627,7 +529,7 @@ class PoolRepo {
     }
   }
 
-  static Future<void> reservarCupos({
+  static Future<PoolReservaResult> reservarCupos({
     required String poolId,
     required int seats,
     required String metodoPago,
@@ -636,13 +538,14 @@ class PoolRepo {
     if (u == null) throw 'Debes iniciar sesión';
     final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
     final callable = fx.httpsCallable('reservePoolSeats');
-    await callable.call(<String, dynamic>{
+    final resp = await callable.call(<String, dynamic>{
       'poolId': poolId,
       'seats': seats,
       'metodoPago': metodoPago,
       'idempotencyKey':
           '${poolId}_${u.uid}_${DateTime.now().millisecondsSinceEpoch}',
     });
+    return PoolReservaResult.fromCallableData(resp.data);
   }
 
   static Future<void> marcarReservaPagada({
@@ -693,6 +596,60 @@ class PoolRepo {
     });
   }
 
+  /// Admin: verifica transferencia del cliente en cuenta RAI (recaudo central).
+  static Future<void> verifyPoolReservaRecaudoAdmin({
+    required String poolId,
+    required String reservaId,
+    String? idempotencyKey,
+  }) async {
+    final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+        ? idempotencyKey.trim()
+        : 'verify_${poolId}_${reservaId}_${DateTime.now().millisecondsSinceEpoch}';
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    await fx.httpsCallable('verifyPoolReservaRecaudo').call(<String, dynamic>{
+      'poolId': poolId,
+      'reservaId': reservaId,
+      'idempotencyKey': key,
+    });
+  }
+
+  /// Admin: revierte reserva pool verificada (reembolso manual al cliente).
+  static Future<void> adminRevertPoolReservaPagada({
+    required String poolId,
+    required String reservaId,
+    required String motivo,
+    String? idempotencyKey,
+  }) async {
+    final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+        ? idempotencyKey.trim()
+        : 'revert_${poolId}_${reservaId}_${DateTime.now().millisecondsSinceEpoch}';
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    await fx.httpsCallable('adminRevertPoolReservaPagada').call(<String, dynamic>{
+      'poolId': poolId,
+      'reservaId': reservaId,
+      'motivo': motivo.trim(),
+      'idempotencyKey': key,
+    });
+  }
+
+  /// Admin: neto transferido al organizador tras cerrar gira central.
+  static Future<void> approveLiquidacionPoolAdmin({
+    required String liquidacionId,
+    String? referenciaBanco,
+    String? idempotencyKey,
+  }) async {
+    final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+        ? idempotencyKey.trim()
+        : 'liq_${liquidacionId}_${DateTime.now().millisecondsSinceEpoch}';
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    await fx.httpsCallable('approveLiquidacionPool').call(<String, dynamic>{
+      'liquidacionId': liquidacionId,
+      if (referenciaBanco != null && referenciaBanco.trim().isNotEmpty)
+        'referenciaBanco': referenciaBanco.trim(),
+      'idempotencyKey': key,
+    });
+  }
+
   static Future<Map<String, dynamic>> iniciarViajePoolSeguro({
     required String poolId,
     String? idempotencyKey,
@@ -701,7 +658,7 @@ class PoolRepo {
     if (u == null) throw 'Debes iniciar sesión como taxista';
 
     final poolSnap = await pools.doc(poolId).get();
-    if (!_poolTieneComisionGiraEstimada(poolSnap.data())) {
+    if (!PoolRecaudoCentral.poolPuedeIniciarEnApp(poolSnap.data())) {
       throw _msgGiraLegacySinComisionEstimada;
     }
 

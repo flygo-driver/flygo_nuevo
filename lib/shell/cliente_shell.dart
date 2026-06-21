@@ -13,6 +13,7 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
+import 'package:flygo_nuevo/widgets/bola_cancelacion_listener.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_fidelidad_milestone_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_listener.dart';
@@ -22,9 +23,10 @@ import 'package:flygo_nuevo/widgets/cliente_registro_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_detalle.dart';
-import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/shell/cliente_pool_deep_link_bridge.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
+import 'package:flygo_nuevo/servicios/productos_config_service.dart';
+import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 
 /// Shell del cliente: barra inferior fija; cada pestaña usa un [Navigator] anidado
 /// (pantallas con [Navigator.push] no tapan Inicio / Mis viajes / etc.).
@@ -56,10 +58,12 @@ class ClienteShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const ClienteRegistroGate(
-      child: BolaPostFacturaListener(
-        child: ClientePostViajeListener(
-          child: ClienteFidelidadMilestoneListener(
-            child: _ClienteShellScaffold(),
+      child: BolaCancelacionListener(
+        child: BolaPostFacturaListener(
+          child: ClientePostViajeListener(
+            child: ClienteFidelidadMilestoneListener(
+              child: _ClienteShellScaffold(),
+            ),
           ),
         ),
       ),
@@ -98,32 +102,42 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
   void _abrirGiraDeepLinkEnExperiencias(String poolId) {
     final String id = poolId.trim();
-    if (id.isEmpty || !_shellListoParaDeepLinkGira()) return;
+    if (id.isEmpty) return;
     if (_lastDeepLinkPoolOpened == id) return;
-    _lastDeepLinkPoolOpened = id;
 
-    setState(() => _index = _kTabExperiencias);
+    void pushDetalle({required int attempt}) {
+      if (!mounted || !_shellListoParaDeepLinkGira()) {
+        if (attempt < 40) {
+          Future<void>.delayed(const Duration(milliseconds: 150), () {
+            if (mounted) pushDetalle(attempt: attempt + 1);
+          });
+        }
+        return;
+      }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_shellListoParaDeepLinkGira()) return;
       final NavigatorState? tabNav =
           _navigatorKeys[_kTabExperiencias].currentState;
-      if (tabNav == null) return;
-
-      // Si el tab solo tiene Experiencias (raíz), apilar lista + detalle.
-      final bool soloRaiz = !tabNav.canPop();
-      if (soloRaiz) {
-        tabNav.push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => const PoolsClienteLista(tipo: 'todos'),
-          ),
-        );
+      if (tabNav == null) {
+        if (attempt < 40) {
+          Future<void>.delayed(const Duration(milliseconds: 150), () {
+            if (mounted) pushDetalle(attempt: attempt + 1);
+          });
+        }
+        return;
       }
+
       tabNav.push<void>(
         MaterialPageRoute<void>(
           builder: (_) => PoolsClienteDetalle(poolId: id),
         ),
       );
+      _lastDeepLinkPoolOpened = id;
+      ClientePoolDeepLinkBridge.markNavigationComplete(id);
+    }
+
+    setState(() => _index = _kTabExperiencias);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      pushDetalle(attempt: 0);
     });
   }
 
@@ -133,9 +147,12 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     ClientePoolDeepLinkBridge.bindShell(
       isReady: _shellListoParaDeepLinkGira,
       openPool: _abrirGiraDeepLinkEnExperiencias,
+      onNavigationComplete: PoolDeepLink.markNavigationComplete,
     );
     RaiConnectivityService.instance.ensureStarted();
     unawaited(RaiUbicacionClienteService.instance.ensureStarted());
+    unawaited(ProductosConfigService.ensureStarted());
+    unawaited(FinanceConfigService.ensureStarted());
 
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) {
@@ -279,6 +296,7 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             RaiOfflineBanner(uid: uidOffline),
+            const RaiUbicacionClienteBanner(),
             Expanded(
               child: ClientePantallaViajeActivo(
                 viajeEnCursoKey: _viajeEnCursoShellKey,

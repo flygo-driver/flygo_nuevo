@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../servicios/pool_repo.dart';
+import '../../utils/pool_recaudo_central.dart';
+import '../../utils/pools_producto_copy.dart';
+import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 import 'verificar_pagos.dart';
@@ -123,12 +126,68 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
     await _ejecutarAccion(() async {
       final messenger = ScaffoldMessenger.of(context);
       if (action == 'iniciar') {
+        final preview = await PoolRepo.previewComisionAlIniciar(poolId);
+        if (!context.mounted) return;
+        if (preview.recaudoCentral) {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: AdminUi.dialogSurface(ctx),
+              title: Text(
+                PoolsProductoCopy.accionConfirmarInicioCentralTitulo,
+                style: TextStyle(color: AdminUi.onCard(ctx)),
+              ),
+              content: Text(
+                PoolsProductoCopy.accionConfirmarInicioCentralCuerpo(
+                  cuposFirmes: preview.cuposFirmesRai,
+                  asientosEfectivo: preview.asientosEfectivo,
+                  comisionEfectivoRd: preview.comisionEfectivoRd,
+                  pctComision: preview.pctComision,
+                ),
+                style: TextStyle(color: AdminUi.secondary(ctx), height: 1.4),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text('Cancelar',
+                      style: TextStyle(color: AdminUi.secondary(ctx))),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Iniciar salida'),
+                ),
+              ],
+            ),
+          );
+          if (ok != true) return;
+        }
         await PoolRepo.iniciarViajePoolSeguro(poolId: poolId);
-        messenger.showSnackBar(const SnackBar(content: Text('Viaje iniciado')));
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              preview.recaudoCentral
+                  ? PoolsProductoCopy.accionInicioCentralOk
+                  : 'Viaje iniciado',
+            ),
+          ),
+        );
       } else if (action == 'finalizar') {
-        await PoolRepo.finalizarViajePoolSeguro(poolId: poolId);
-        messenger
-            .showSnackBar(const SnackBar(content: Text('Viaje finalizado')));
+        final r = await PoolRepo.finalizarViajePoolSeguro(poolId: poolId);
+        final netoPend =
+            (r['netoOrganizadorPendiente'] as num?)?.toDouble() ?? 0;
+        if (r['recaudoCentral'] == true && netoPend > 0.01) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                PoolsProductoCopy.adminFinalizarCentralNetoPendiente,
+              ),
+            ),
+          );
+        } else {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Viaje finalizado')),
+          );
+        }
       } else if (action == 'cancelar') {
         await PoolRepo.cancelarViajePoolSeguro(
           poolId: poolId,
@@ -294,7 +353,12 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
           minChildSize: 0.35,
           maxChildSize: 0.92,
           builder: (_, scroll) {
-            return Column(
+            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: PoolRepo.pools.doc(poolId).snapshots(),
+              builder: (context, poolSnap) {
+                final pool = poolSnap.data?.data() ?? const {};
+                final recaudoCentral = PoolRecaudoCentral.esPoolCentral(pool);
+                return Column(
               children: [
                 const SizedBox(height: 8),
                 Container(
@@ -311,7 +375,9 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Reservas',
+                          recaudoCentral
+                              ? 'Reservas · recaudo central RAI'
+                              : 'Reservas',
                           style: TextStyle(
                             color: AdminUi.onCard(ctx),
                             fontWeight: FontWeight.w700,
@@ -367,11 +433,24 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                         itemCount: docs.length,
                         itemBuilder: (_, i) {
-                          final r = docs[i].data();
+                          final doc = docs[i];
+                          final r = doc.data();
+                          final reservaId = doc.id;
                           final seats = (r['seats'] ?? 0).toString();
                           final est = (r['estado'] ?? '').toString();
-                          final uid = (r['uidCliente'] ?? '').toString();
+                          final estL = est.toLowerCase();
+                          final uid = (r['clienteNombre'] ?? r['uidCliente'] ?? '')
+                              .toString();
                           final total = ((r['total'] ?? 0) as num).toDouble();
+                          final ref = (r['referenciaRecaudo'] ?? '').toString();
+                          final estadoPago = (r['estadoPago'] ?? '').toString();
+                          final pendienteCentral = recaudoCentral &&
+                              estL == 'reservado' &&
+                              estadoPago.toLowerCase() == 'pendiente' &&
+                              ref.isNotEmpty;
+                          final pagadaCentral = recaudoCentral &&
+                              estL == 'pagado' &&
+                              estadoPago.toLowerCase() == 'verificado';
                           return Card(
                             color: AdminUi.card(context),
                             shape: RoundedRectangleBorder(
@@ -379,18 +458,161 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                               side: BorderSide(
                                   color: AdminUi.borderSubtle(context)),
                             ),
-                            child: ListTile(
-                              title: Text(
-                                '$est · $seats asiento(s) · RD\$ ${total.toStringAsFixed(0)}',
-                                style: TextStyle(
-                                    color: AdminUi.onCard(context),
-                                    fontSize: 14),
-                              ),
-                              subtitle: Text(
-                                uid.isEmpty ? '—' : uid,
-                                style: TextStyle(
-                                    color: AdminUi.muted(context),
-                                    fontSize: 12),
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '$est · $seats asiento(s) · RD\$ ${total.toStringAsFixed(0)}',
+                                    style: TextStyle(
+                                        color: AdminUi.onCard(context),
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 14),
+                                  ),
+                                  if (uid.isNotEmpty)
+                                    Text(
+                                      uid,
+                                      style: TextStyle(
+                                          color: AdminUi.muted(context),
+                                          fontSize: 12),
+                                    ),
+                                  if (ref.isNotEmpty)
+                                    Text(
+                                      'Ref: $ref · Pago: ${estadoPago.isEmpty ? "—" : estadoPago}',
+                                      style: TextStyle(
+                                          color: AdminUi.secondary(context),
+                                          fontSize: 11),
+                                    ),
+                                  if (pendienteCentral || pagadaCentral) ...[
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 8,
+                                      children: [
+                                        if (pendienteCentral)
+                                          FilledButton.icon(
+                                            onPressed: _accionEnCurso
+                                                ? null
+                                                : () => _ejecutarAccion(() async {
+                                                      await PoolRepo
+                                                          .verifyPoolReservaRecaudoAdmin(
+                                                        poolId: poolId,
+                                                        reservaId: reservaId,
+                                                      );
+                                                      if (context.mounted) {
+                                                        ScaffoldMessenger.of(
+                                                                context)
+                                                            .showSnackBar(
+                                                          const SnackBar(
+                                                            content: Text(
+                                                              'Pago verificado en RAI',
+                                                            ),
+                                                          ),
+                                                        );
+                                                      }
+                                                    }),
+                                            icon: const Icon(Icons.verified,
+                                                size: 16),
+                                            label: const Text('Verificar RAI'),
+                                          ),
+                                        if (pagadaCentral)
+                                          OutlinedButton.icon(
+                                            onPressed: _accionEnCurso
+                                                ? null
+                                                : () async {
+                                                    final motivoCtrl =
+                                                        TextEditingController();
+                                                    try {
+                                                      final ok =
+                                                          await showDialog<bool>(
+                                                        context: context,
+                                                        builder: (dCtx) =>
+                                                            AlertDialog(
+                                                          title: const Text(
+                                                              'Revertir y reembolsar'),
+                                                          content: TextField(
+                                                            controller:
+                                                                motivoCtrl,
+                                                            decoration:
+                                                                const InputDecoration(
+                                                              labelText:
+                                                                  'Motivo (obligatorio)',
+                                                            ),
+                                                            maxLines: 2,
+                                                          ),
+                                                          actions: [
+                                                            TextButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                      dCtx,
+                                                                      false),
+                                                              child: const Text(
+                                                                  'Cancelar'),
+                                                            ),
+                                                            FilledButton(
+                                                              onPressed: () =>
+                                                                  Navigator.pop(
+                                                                      dCtx,
+                                                                      true),
+                                                              child: const Text(
+                                                                  'Confirmar'),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      );
+                                                      if (ok != true) return;
+                                                      final motivo =
+                                                          motivoCtrl.text
+                                                              .trim();
+                                                      if (motivo.isEmpty) {
+                                                        if (context.mounted) {
+                                                          ScaffoldMessenger.of(
+                                                                  context)
+                                                              .showSnackBar(
+                                                            const SnackBar(
+                                                              content: Text(
+                                                                'Indica un motivo',
+                                                              ),
+                                                              backgroundColor:
+                                                                  Colors.orange,
+                                                            ),
+                                                          );
+                                                        }
+                                                        return;
+                                                      }
+                                                      await _ejecutarAccion(
+                                                          () async {
+                                                        await PoolRepo
+                                                            .adminRevertPoolReservaPagada(
+                                                          poolId: poolId,
+                                                          reservaId: reservaId,
+                                                          motivo: motivo,
+                                                        );
+                                                        if (context.mounted) {
+                                                          ScaffoldMessenger.of(
+                                                                  context)
+                                                              .showSnackBar(
+                                                            const SnackBar(
+                                                              content: Text(
+                                                                'Reserva revertida — reembolso manual pendiente',
+                                                              ),
+                                                            ),
+                                                          );
+                                                        }
+                                                      });
+                                                    } finally {
+                                                      motivoCtrl.dispose();
+                                                    }
+                                                  },
+                                            icon: const Icon(
+                                                Icons.undo_outlined,
+                                                size: 16),
+                                            label: const Text('Revertir pago'),
+                                          ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                           );
@@ -400,6 +622,8 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                   ),
                 ),
               ],
+            );
+              },
             );
           },
         );
@@ -418,14 +642,8 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: AppBar(
-        backgroundColor: AdminUi.scaffold(context),
-        foregroundColor: AdminUi.appBarFg(context),
-        iconTheme: IconThemeData(color: AdminUi.appBarFg(context)),
-        title: Text(
-          'Salidas por cupos (admin)',
-          style: TextStyle(color: AdminUi.onCard(context)),
-        ),
+      appBar: const AdminAppBar(
+        title: 'Salidas por cupos (admin)',
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -443,31 +661,48 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Control de viajes_pool: estados, cupos y acciones (confirmar comisión / cerrar catálogo, cerrar salida, cancelar). '
-                    'Confirmar comisión exige cupos firmes en RAI (pagados o efectivo reservado). '
-                    'Si una salida ya cerró en RAI y hay que corregir, usa «Anular cierre (admin)». '
-                    'Las comisiones 10% pendientes de transferencia se validan en Verificar pagos.',
+                    'Control de viajes_pool: estados, cupos y acciones. '
+                    'Recaudo central RAI: cliente paga 100% a Open ASK; verificás en '
+                    'Verificar pagos → Giras RAI; al cerrar la salida liquidás neto al organizador. '
+                    'Legacy: comisiones pendientes en Verificar pagos → Comisiones salidas.',
                     style: TextStyle(
                         color: AdminUi.secondary(context),
                         fontSize: 12,
                         height: 1.35),
                   ),
                   const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute<void>(
-                            builder: (_) => const VerificarPagos(
-                              initialTabIndex: 2,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) => const VerificarPagos(
+                                initialTabIndex: 5,
+                              ),
                             ),
-                          ),
-                        );
-                      },
-                      child: const Text('Ir a comisiones de salidas'),
-                    ),
+                          );
+                        },
+                        child: const Text('Giras RAI · recaudo'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) => const VerificarPagos(
+                                initialTabIndex: 2,
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Text('Comisiones legacy'),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -594,6 +829,13 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                     final puedeAnularTrasFinalizar = estadoL == 'finalizado';
                     final yaAnuladaTrasFinal =
                         d['anuladaTrasFinalizar'] == true;
+                    final recaudoCentral = PoolRecaudoCentral.esPoolCentral(d);
+                    final recaudadoRai =
+                        ((d['montoRecaudadoRaiRd'] ?? 0) as num).toDouble();
+                    final netoOrg =
+                        ((d['montoNetoOrganizadorRd'] ?? 0) as num).toDouble();
+                    final liqEstado =
+                        (d['liquidacionOrganizadorEstado'] ?? '').toString();
 
                     final green = AdminUi.accentGreen(context);
                     final blue =
@@ -640,7 +882,8 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                             fontSize: 13),
                                       ),
                                       Text(
-                                        'Tipo: ${tipo.isEmpty ? "—" : tipo} · Estado: $estado',
+                                        'Tipo: ${tipo.isEmpty ? "—" : tipo} · Estado: $estado'
+                                        '${recaudoCentral ? " · Recaudo central RAI" : ""}',
                                         style: TextStyle(
                                             color: AdminUi.muted(context),
                                             fontSize: 12),
@@ -657,6 +900,18 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                             color: AdminUi.secondary(context),
                                             fontSize: 12),
                                       ),
+                                      if (recaudoCentral) ...[
+                                        Text(
+                                          'Recaudado RAI: RD\$ ${recaudadoRai.toStringAsFixed(0)} · '
+                                          'Neto org.: RD\$ ${netoOrg.toStringAsFixed(0)}'
+                                          '${liqEstado.isNotEmpty ? " · Liq.: $liqEstado" : ""}',
+                                          style: TextStyle(
+                                            color: AdminUi.progressAccent(context),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
                                       if (d['cuposComisionRai'] != null)
                                         Text(
                                           'Comisión RAI: solo cupos vendidos en la app · tope ${d['cuposComisionRai']} cupos'

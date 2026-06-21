@@ -5,8 +5,6 @@ import 'package:flygo_nuevo/servicios/comision_prepago_config_service.dart';
 class TaxistaBilleteraGiraPrepago {
   TaxistaBilleteraGiraPrepago._();
 
-  static const double _umbralComisionLegacyBloqueoRd = 500;
-
   static double comisionPendienteLegacyRd(Map<String, dynamic>? data) {
     final v = data?['comisionPendiente'];
     if (v is num) return v.toDouble();
@@ -24,8 +22,7 @@ class TaxistaBilleteraGiraPrepago {
   }) {
     if (usuario != null && usuario['tienePagoPendiente'] == true) return true;
     final pend = comisionPendienteLegacyRd(billetera);
-    if (pend >= _umbralComisionLegacyBloqueoRd - 1e-6) return true;
-    if (pend > 1e-6) return false;
+    if (pend > 1e-6) return true;
     if (!primerViajeComisionGratisConsumido(billetera)) return false;
     final double minimo = ComisionPrepagoConfigService.minimoOperativoRd;
     return saldoDisponiblePrepagoComisionRd(billetera) + 1e-9 < minimo;

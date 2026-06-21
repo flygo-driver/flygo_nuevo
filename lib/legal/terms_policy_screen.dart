@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart';
+import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class TermsPolicyScreen extends StatefulWidget {
@@ -61,6 +62,14 @@ class _TermsPolicyScreenState extends State<TermsPolicyScreen> {
         title: 'Términos y política',
         centerTitle: true,
         showBackWhenCanPop: !widget.requireAcceptance,
+        actions: widget.requireAcceptance
+            ? [
+                TextButton(
+                  onPressed: _saving ? null : () => cerrarSesion(context),
+                  child: const Text('Volver al inicio'),
+                ),
+              ]
+            : null,
       ),
       body: SafeArea(
         child: Column(

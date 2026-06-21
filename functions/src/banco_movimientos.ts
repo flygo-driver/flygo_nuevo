@@ -28,8 +28,10 @@ function normalizeRole(raw: unknown): string {
 
 async function getRole(uid: string): Promise<string> {
   const u = await db().collection("usuarios").doc(uid).get();
-  const r1 = normalizeRole((u.data() as AnyMap | undefined)?.rol);
-  if (r1) return r1;
+  const uData = u.data() as AnyMap | undefined;
+  const r1 = normalizeRole(uData?.rol);
+  if (r1 === "admin") return "admin";
+  if (uData?.isAdmin === true || uData?.admin === true) return "admin";
   const r = await db().collection("roles").doc(uid).get();
   return normalizeRole((r.data() as AnyMap | undefined)?.rol);
 }

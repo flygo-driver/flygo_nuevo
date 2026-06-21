@@ -33,8 +33,10 @@ import 'package:flygo_nuevo/pantallas/admin/revision_documentos_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/gestionar_usuarios_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/reportes_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_tarifas.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_tarifas_tramos.dart';
 import 'package:flygo_nuevo/pantallas/admin/configuracion_viaje_comision_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/incidencias_admin.dart';
+import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
 class AdminDrawer extends StatelessWidget {
   const AdminDrawer({super.key});
@@ -87,7 +89,7 @@ class AdminDrawer extends StatelessWidget {
           padding: EdgeInsets.zero,
           children: [
             ListTile(
-              leading: Icon(Icons.admin_panel_settings, color: iconNeutral),
+              leading: const RaiHeaderLogo(height: 32),
               title: Text('Panel Administrativo', style: titleStyle),
               subtitle: Text(
                 'RAI Driver — Administración',
@@ -206,7 +208,22 @@ class AdminDrawer extends StatelessWidget {
               leading: Icon(Icons.attach_money, color: iconNeutral),
               title: Text('Tarifas',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                'Pestaña Tramos distancia + tarifas locales',
+                style: subtleStyle,
+              ),
               onTap: () => _push(context, const AdminTarifas()),
+            ),
+            ListTile(
+              leading: Icon(Icons.alt_route,
+                  color: isLight ? Colors.green.shade700 : Colors.greenAccent),
+              title: Text('Tramos larga distancia',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w700)),
+              subtitle: Text(
+                'Mismo panel Tarifas — tramos arriba en verde',
+                style: subtleStyle,
+              ),
+              onTap: () => _push(context, const AdminTarifasTramos()),
             ),
             ListTile(
               leading: Icon(Icons.local_offer, color: iconNeutral),

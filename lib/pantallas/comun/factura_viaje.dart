@@ -36,10 +36,15 @@ class FacturaViaje extends StatelessWidget {
     super.key,
     required this.viajeId,
     this.role = 'cliente',
+    this.autoCerrarAlContinuar = false,
   });
 
   final String viajeId;
   final String role;
+
+  /// Tras finalizar viaje: cierra sola cuando el pago quedó resuelto (o el
+  /// conductor ya vio el comprobante) y deja seguir post-viaje / cola.
+  final bool autoCerrarAlContinuar;
 
   /// Helper para abrir la factura desde cualquier parte de la app.
   /// Usa `rootNavigator` para que el modal viva por encima de los Navigators
@@ -48,10 +53,15 @@ class FacturaViaje extends StatelessWidget {
     BuildContext context, {
     required String viajeId,
     String role = 'cliente',
+    bool autoCerrarAlContinuar = false,
   }) {
     return Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<void>(
-        builder: (_) => FacturaViaje(viajeId: viajeId, role: role),
+        builder: (_) => FacturaViaje(
+          viajeId: viajeId,
+          role: role,
+          autoCerrarAlContinuar: autoCerrarAlContinuar,
+        ),
         fullscreenDialog: true,
       ),
     );
@@ -93,6 +103,7 @@ class FacturaViaje extends StatelessWidget {
               viajeId: viajeId,
               data: data,
               role: role,
+              autoCerrarAlContinuar: autoCerrarAlContinuar,
             );
           },
         ),
@@ -101,16 +112,137 @@ class FacturaViaje extends StatelessWidget {
   }
 }
 
-class _FacturaContent extends StatelessWidget {
+/// Post-viaje: cuándo puede cerrarse la factura y seguir (recibo/cola/inicio).
+bool facturaViajeListaParaContinuarFlujo({
+  required Map<String, dynamic> data,
+  required String role,
+}) {
+  if (!viajeDocCompletado(data)) return false;
+
+  final String metodo =
+      (data['metodoPago'] ?? 'Efectivo').toString().trim();
+
+  if (role == 'taxista') return true;
+
+  if (MetodoPagoViaje.esEfectivo(metodo)) return true;
+
+  if (MetodoPagoViaje.esTarjeta(metodo)) {
+    final String ep =
+        (data['estadoPago'] ?? '').toString().trim().toLowerCase();
+    final dynamic pay = data['payment'];
+    final String ps = pay is Map
+        ? (pay['status'] ?? '').toString().trim().toLowerCase()
+        : '';
+    return ep == 'verificado' || ps == 'captured';
+  }
+
+  if (MetodoPagoViaje.esTransferencia(metodo)) {
+    if (data['transferenciaConfirmada'] == true) return true;
+    final String ep =
+        (data['estadoPago'] ?? '').toString().trim().toLowerCase();
+    if (ep == 'verificado') return true;
+    final String url =
+        (data['comprobanteTransferenciaUrl'] ?? '').toString().trim();
+    if (url.isNotEmpty) return true;
+    return false;
+  }
+
+  return true;
+}
+
+class _FacturaContent extends StatefulWidget {
   const _FacturaContent({
     required this.viajeId,
     required this.data,
     required this.role,
+    this.autoCerrarAlContinuar = false,
   });
 
   final String viajeId;
   final Map<String, dynamic> data;
   final String role;
+  final bool autoCerrarAlContinuar;
+
+  @override
+  State<_FacturaContent> createState() => _FacturaContentState();
+}
+
+class _FacturaContentState extends State<_FacturaContent> {
+  bool _autoCierreProgramado = false;
+  bool _listaParaContinuarPrev = false;
+  bool _facturaCerrada = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _revisarAutoCierre());
+  }
+
+  @override
+  void didUpdateWidget(covariant _FacturaContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.data != widget.data ||
+        oldWidget.autoCerrarAlContinuar != widget.autoCerrarAlContinuar) {
+      _revisarAutoCierre();
+    }
+  }
+
+  void _cerrarFactura({String? snack}) {
+    if (_facturaCerrada || !mounted) return;
+    _facturaCerrada = true;
+    if (snack != null && snack.isNotEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text(snack), duration: const Duration(seconds: 2)),
+      );
+    }
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  void _revisarAutoCierre() {
+    if (!widget.autoCerrarAlContinuar ||
+        _autoCierreProgramado ||
+        _facturaCerrada) {
+      return;
+    }
+
+    final bool lista = facturaViajeListaParaContinuarFlujo(
+      data: widget.data,
+      role: widget.role,
+    );
+    if (!lista) {
+      _listaParaContinuarPrev = false;
+      return;
+    }
+
+    final bool transicion = !_listaParaContinuarPrev;
+    _listaParaContinuarPrev = true;
+    _autoCierreProgramado = true;
+
+    final Duration delay = transicion &&
+            !MetodoPagoViaje.esEfectivo(
+                (widget.data['metodoPago'] ?? 'Efectivo').toString()) &&
+            widget.role == 'cliente'
+        ? const Duration(milliseconds: 900)
+        : const Duration(milliseconds: 2200);
+
+    Future<void>.delayed(delay, () {
+      if (!mounted || _facturaCerrada) return;
+      final String msg = widget.role == 'taxista'
+          ? 'Comprobante listo. Volviendo al trabajo…'
+          : MetodoPagoViaje.esTransferencia(
+                  (widget.data['metodoPago'] ?? '').toString()) &&
+              widget.data['transferenciaConfirmada'] != true
+          ? 'Comprobante recibido. Puedes seguir; RAI validará el pago.'
+          : 'Pago listo. Continuando…';
+      _cerrarFactura(snack: msg);
+    });
+  }
+
+  Map<String, dynamic> get data => widget.data;
+  String get viajeId => widget.viajeId;
+  String get role => widget.role;
 
   double _toDouble(dynamic v) {
     if (v is num) return v.toDouble();
@@ -664,9 +796,11 @@ class _FacturaContent extends StatelessWidget {
         ),
         const SizedBox(height: 20),
         FilledButton.icon(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () => _cerrarFactura(),
           icon: const Icon(Icons.check_circle_outline_rounded),
-          label: const Text('Entendido, cerrar comprobante'),
+          label: Text(
+            widget.autoCerrarAlContinuar ? 'Continuar' : 'Entendido, cerrar comprobante',
+          ),
           style: FilledButton.styleFrom(
             minimumSize: const Size.fromHeight(52),
             backgroundColor: cs.primary,
@@ -1104,7 +1238,10 @@ class _SectionTransferencia extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (snap != null) {
+    if (snap != null &&
+        snap!.banco.isNotEmpty &&
+        snap!.cuenta.isNotEmpty &&
+        snap!.titular.isNotEmpty) {
       return _renderConDatos(context, snap!);
     }
     if (uidTaxista.isEmpty) {
