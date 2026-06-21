@@ -1,10 +1,12 @@
 // lib/servicios/asignacion_turismo_repo.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/error_reporting.dart';
 
 /// Datos para [ViajesRepo.claimTripWithReason] tras validar pool turístico.
 class DatosClaimPoolTurismo {
@@ -304,6 +306,64 @@ class AsignacionTurismoRepo {
   /// Valor de `canalAsignacion` cuando administración libera el viaje al pool turístico (choferes aprobados).
   static const String canalTurismoPool = 'turismo_pool';
 
+  /// Viaje turístico publicado en pool turístico (choferes aprobados pueden aceptar).
+  static bool viajeEnPoolTurismoPublico(Map<String, dynamic> vData) {
+    if ((vData['tipoServicio'] ?? '').toString() != 'turismo') return false;
+    final canal = (vData['canalAsignacion'] ?? '').toString().trim();
+    return canal == canalTurismoPool;
+  }
+
+  /// Pasa de cola ADM (`admin`) al pool turístico cuando no hay chofer asignado.
+  /// Devuelve `true` si el documento quedó en `turismo_pool`.
+  static Future<bool> liberarViajeAlPoolTurismoSiAplica({
+    required String viajeId,
+    bool omitirVentanaPublicacion = false,
+  }) async {
+    if (viajeId.trim().isEmpty) return false;
+    final DocumentReference<Map<String, dynamic>> vRef =
+        _db.collection('viajes').doc(viajeId);
+    var liberado = false;
+    await _db.runTransaction((Transaction tx) async {
+      liberado = false;
+      final snap = await tx.get(vRef);
+      if (!snap.exists) return;
+      final v = snap.data()!;
+
+      if ((v['tipoServicio'] ?? '').toString() != 'turismo') return;
+
+      final uidTx =
+          (v['uidTaxista'] ?? v['taxistaId'] ?? '').toString().trim();
+      if (uidTx.isNotEmpty) return;
+
+      final canal = (v['canalAsignacion'] ?? 'admin').toString().trim();
+      if (canal != 'admin') return;
+
+      final estadoRaw = (v['estado'] ?? '').toString();
+      final estadoNorm = EstadosViaje.normalizar(estadoRaw);
+      final bool estadoOk = estadoRaw == 'pendiente_admin' ||
+          estadoNorm == EstadosViaje.pendiente ||
+          estadoNorm == EstadosViaje.pendientePago;
+      if (!estadoOk) return;
+
+      if (!omitirVentanaPublicacion) {
+        final now = DateTime.now();
+        final tsAA = v['acceptAfter'];
+        if (tsAA is Timestamp && now.isBefore(tsAA.toDate())) return;
+        final tsPub = v['publishAt'];
+        if (tsPub is Timestamp && tsPub.toDate().isAfter(now)) return;
+      }
+
+      tx.update(vRef, {
+        'canalAsignacion': canalTurismoPool,
+        'liberadoPoolTurismoEn': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      });
+      liberado = true;
+    });
+    return liberado;
+  }
+
   static int pasajerosRequeridosDesdeViaje(Map<String, dynamic> vData) =>
       _pasajerosRequeridos(vData);
 
@@ -313,6 +373,8 @@ class AsignacionTurismoRepo {
     if ((vData['uidTaxista'] ?? vData['taxistaId'] ?? '').toString().isNotEmpty) {
       return false;
     }
+    final canal = (vData['canalAsignacion'] ?? 'admin').toString().trim();
+    if (canal != 'admin') return false;
     final String estado = (vData['estado'] ?? '').toString();
     if (estado == 'pendiente_admin') return true;
     return estado == EstadosViaje.pendiente && vData['republicado'] == true;
@@ -459,8 +521,74 @@ class AsignacionTurismoRepo {
   /// Tras crear un viaje turístico en `pendiente_admin`, intenta asignar el chofer
   /// aprobado más cercano con vehículo compatible y capacidad suficiente.
   /// No altera precio, método de pago ni extras (facturación intacta).
-  /// Devuelve el UID del chofer si hubo éxito, o `null` si debe intervenir ADM.
+  /// Devuelve el UID del chofer si hubo éxito, o `null` si debe intervenir ADM / pool.
   static Future<String?> intentarAsignacionAutomatica({
+    required String viajeId,
+    double radioKm = 55,
+    int maxCandidatos = 18,
+  }) async {
+    final _CallableTurismoOutcome callable =
+        await _intentarAsignacionTurismoCallable(
+      viajeId: viajeId,
+      radioKm: radioKm,
+    );
+    if (callable.reachedServer) {
+      return callable.uidChofer;
+    }
+
+    return _intentarAsignacionAutomaticaLocal(
+      viajeId: viajeId,
+      radioKm: radioKm,
+      maxCandidatos: maxCandidatos,
+    );
+  }
+
+  static Future<_CallableTurismoOutcome> _intentarAsignacionTurismoCallable({
+    required String viajeId,
+    required double radioKm,
+  }) async {
+    if (viajeId.trim().isEmpty) {
+      return const _CallableTurismoOutcome(reachedServer: false);
+    }
+    try {
+      final HttpsCallable callable =
+          FirebaseFunctions.instanceFor(region: 'us-central1')
+              .httpsCallable('intentarAsignacionTurismoSeguro');
+      final HttpsCallableResult<dynamic> res =
+          await callable.call(<String, dynamic>{
+        'viajeId': viajeId.trim(),
+        'radioKm': radioKm,
+      });
+      final Map<String, dynamic> data =
+          Map<String, dynamic>.from(res.data as Map<dynamic, dynamic>);
+      if (data['ok'] != true) {
+        return const _CallableTurismoOutcome(reachedServer: false);
+      }
+      final String uid = (data['uidChofer'] ?? '').toString().trim();
+      return _CallableTurismoOutcome(
+        reachedServer: true,
+        uidChofer: uid.isNotEmpty ? uid : null,
+      );
+    } on FirebaseFunctionsException catch (e, st) {
+      if (e.code != 'not-found' && e.code != 'failed-precondition') {
+        await ErrorReporting.reportError(
+          e,
+          stack: st,
+          context: 'intentarAsignacionTurismoSeguro',
+        );
+      }
+      return const _CallableTurismoOutcome(reachedServer: false);
+    } catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'intentarAsignacionTurismoSeguro',
+      );
+      return const _CallableTurismoOutcome(reachedServer: false);
+    }
+  }
+
+  static Future<String?> _intentarAsignacionAutomaticaLocal({
     required String viajeId,
     double radioKm = 55,
     int maxCandidatos = 18,
@@ -491,7 +619,7 @@ class AsignacionTurismoRepo {
 
     final QuerySnapshot<Map<String, dynamic>> q = await _db
         .collection('choferes_turismo')
-        .where('estado', isEqualTo: 'aprobado')
+        .where('estado', whereIn: <String>['aprobado', 'activo'])
         .where('disponible', isEqualTo: true)
         .limit(40)
         .get();
@@ -531,6 +659,8 @@ class AsignacionTurismoRepo {
       );
       if (ok) return doc.id;
     }
+
+    await liberarViajeAlPoolTurismoSiAplica(viajeId: viajeId);
     return null;
   }
 
@@ -687,4 +817,14 @@ class AsignacionTurismoRepo {
     }
     return asignado;
   }
+}
+
+class _CallableTurismoOutcome {
+  final bool reachedServer;
+  final String? uidChofer;
+
+  const _CallableTurismoOutcome({
+    required this.reachedServer,
+    this.uidChofer,
+  });
 }

@@ -14,16 +14,43 @@ function numCoord(v: unknown): number | null {
   return null;
 }
 
+function destinoCoordsMultiparada(
+  d: AnyMap,
+): { lat: number; lon: number } | null {
+  let lat = numCoord(d.latDestino);
+  let lon = numCoord(d.lonDestino ?? d.lngDestino);
+  if (lat != null && lon != null && !(lat === 0 && lon === 0)) {
+    return { lat, lon };
+  }
+
+  const readRuta = (raw: unknown): { lat: number; lon: number } | null => {
+    if (!Array.isArray(raw)) return null;
+    for (let i = raw.length - 1; i >= 0; i--) {
+      const item = raw[i];
+      if (!item || typeof item !== "object") continue;
+      const m = item as AnyMap;
+      const rol = String(m.rol ?? "").trim().toLowerCase();
+      if (rol !== "destino" && rol !== "destino_final") continue;
+      const la = numCoord(m.lat);
+      const lo = numCoord(m.lon ?? m.lng);
+      if (la != null && lo != null) return { lat: la, lon: lo };
+    }
+    return null;
+  };
+
+  const extras = d.extras;
+  if (extras && typeof extras === "object") {
+    const fromExtras = readRuta((extras as AnyMap).rutaPuntos);
+    if (fromExtras) return fromExtras;
+  }
+  return readRuta(d.rutaPuntos);
+}
+
 /** Paradas intermedias + destino final. */
 export function totalLegsMultiparada(d: AnyMap): number {
   const wps = d.waypoints;
   if (!Array.isArray(wps) || wps.length === 0) return 0;
-  const latD = numCoord(d.latDestino);
-  const lonD = numCoord(d.lonDestino ?? d.lngDestino);
-  if (latD == null || lonD == null || (latD === 0 && lonD === 0)) {
-    return wps.length;
-  }
-  return wps.length + 1;
+  return destinoCoordsMultiparada(d) != null ? wps.length + 1 : wps.length;
 }
 
 export function esViajeMultiparada(d: AnyMap): boolean {
@@ -48,11 +75,10 @@ function legEsperada(
     const label = String(w.label ?? `Parada ${legIndex + 1}`).trim() || `Parada ${legIndex + 1}`;
     return { label, lat, lon, esFinal: false };
   }
-  const lat = numCoord(d.latDestino);
-  const lon = numCoord(d.lonDestino ?? d.lngDestino);
-  if (lat == null || lon == null) return null;
+  const dest = destinoCoordsMultiparada(d);
+  if (dest == null) return null;
   const label = String(d.destino ?? "Destino final").trim() || "Destino final";
-  return { label, lat, lon, esFinal: true };
+  return { label, lat: dest.lat, lon: dest.lon, esFinal: true };
 }
 
 export function assertMultiparadaCompletaParaFinalizar(d: AnyMap): void {
@@ -77,6 +103,24 @@ export function assertMultiparadaCompletaParaFinalizar(d: AnyMap): void {
 export function multiparadaInitPatch(d: AnyMap): Record<string, unknown> | null {
   const total = totalLegsMultiparada(d);
   if (total <= 0) return null;
+  const done =
+    typeof d.multiparadaLegCompletadas === "number"
+      ? Math.trunc(d.multiparadaLegCompletadas as number)
+      : 0;
+  const visitadas = Array.isArray(d.multiparadaParadasVisitadas)
+    ? d.multiparadaParadasVisitadas
+    : [];
+  // No borrar paradas ya confirmadas al pasar a `en_curso`.
+  if (done > 0 || visitadas.length > 0) {
+    return {
+      multiparadaLegsTotal: total,
+      multiparadaLegCompletadas: done,
+      multiparadaParadasVisitadas: visitadas,
+      multiparadaCompleta: d.multiparadaCompleta === true || done >= total,
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    };
+  }
   return {
     multiparadaLegsTotal: total,
     multiparadaLegCompletadas: 0,

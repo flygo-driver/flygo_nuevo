@@ -25,8 +25,10 @@ class RaiSpeechBusquedaDireccion {
   bool get isListening => _escuchando;
   String? get ultimoFallo => _ultimoFallo;
 
-  /// Igual que `_initVoz` del asistente RAI flotante.
+  /// Solo al tocar el micrófono ([toggleListen]). No llamar desde [initState] de
+  /// pantallas de cotización: [SpeechToText.initialize] dispara el permiso del SO.
   Future<bool> initialize() async {
+    if (_initialized) return true;
     try {
       final ok = await _speech.initialize(
         onStatus: (s) {

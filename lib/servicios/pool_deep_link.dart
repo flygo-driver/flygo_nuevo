@@ -15,6 +15,9 @@ import 'pool_deep_link_uri_stub.dart'
 class PoolDeepLink {
   PoolDeepLink._();
 
+  /// Token interno: abrir catálogo «Giras por cupos» (sin id de salida).
+  static const String girasListaMarker = '__giras_cupos__';
+
   static final AppLinks _appLinks = AppLinks();
   static StreamSubscription<Uri>? _sub;
   static Timer? _pendingRetryTimer;
@@ -125,19 +128,31 @@ class PoolDeepLink {
 
   static void _enqueueOpen(Uri uri) {
     final String? id = PoolShareLink.parsePoolId(uri);
-    if (id == null || id.isEmpty) return;
+    if (id != null && id.isNotEmpty) {
+      _openPoolTarget(id);
+      return;
+    }
+    if (PoolShareLink.esEnlaceGirasCupos(uri)) {
+      _openPoolTarget(girasListaMarker);
+    }
+  }
 
+  static void _openPoolTarget(String target) {
     if (isConductorFlavor) {
       _conductorDeepLinkHint =
           'Este enlace es para pasajeros. Abrilo con RAI Pasajero (Google Play) '
-          'para ver la gira y reservar cupos.';
+          'para ver giras por cupos y reservar.';
       return;
     }
 
-    _pendingPoolId = id;
+    _pendingPoolId = target;
     _openGeneration++;
     final int generation = _openGeneration;
-    ClientePoolDeepLinkBridge.enqueuePoolId(id);
+    if (target == girasListaMarker) {
+      ClientePoolDeepLinkBridge.enqueueGirasLista();
+    } else {
+      ClientePoolDeepLinkBridge.enqueuePoolId(target);
+    }
 
     for (final int delayMs in _retryDelaysMs) {
       Future<void>.delayed(Duration(milliseconds: delayMs), () {
@@ -158,6 +173,10 @@ class PoolDeepLink {
       return;
     }
 
-    ClientePoolDeepLinkBridge.tryOpenPool(id);
+    if (id == girasListaMarker) {
+      ClientePoolDeepLinkBridge.tryOpenGirasLista();
+    } else {
+      ClientePoolDeepLinkBridge.tryOpenPool(id);
+    }
   }
 }

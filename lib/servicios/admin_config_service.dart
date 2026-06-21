@@ -75,5 +75,20 @@ class AdminConfigService {
       'motivo': motivo,
     });
   }
+
+  static Future<void> updateComisionIncentivosTaxistaConfig({
+    required bool activo,
+    required String ventana,
+    required List<Map<String, dynamic>> escalones,
+    required String motivo,
+  }) async {
+    final c = _fx.httpsCallable('updateComisionIncentivosTaxistaConfig');
+    await c.call(<String, dynamic>{
+      'activo': activo,
+      'ventana': ventana,
+      'escalones': escalones,
+      'motivo': motivo,
+    });
+  }
 }
 

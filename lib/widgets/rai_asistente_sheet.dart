@@ -29,7 +29,6 @@ class _RaiAsistenteSheetState extends State<RaiAsistenteSheet> {
   List<DetalleLugar> _direcciones = [];
   bool _enviando = false;
   bool _escuchando = false;
-  bool _vozDisponible = false;
   RaiPerfilClienteEstado? _perfil;
 
   static const _chipsRapidos = [
@@ -61,7 +60,6 @@ class _RaiAsistenteSheetState extends State<RaiAsistenteSheet> {
         ),
       ),
     );
-    unawaited(_initVoz());
     unawaited(_cargarPerfilYBienvenida());
   }
 
@@ -85,15 +83,6 @@ class _RaiAsistenteSheetState extends State<RaiAsistenteSheet> {
         );
       });
       _scrollAlFinal();
-    }
-  }
-
-  Future<void> _initVoz() async {
-    try {
-      final ok = await _voz.initialize();
-      if (mounted) setState(() => _vozDisponible = ok);
-    } catch (_) {
-      if (mounted) setState(() => _vozDisponible = false);
     }
   }
 
@@ -319,13 +308,13 @@ class _RaiAsistenteSheetState extends State<RaiAsistenteSheet> {
   }
 
   Future<void> _toggleVoz() async {
-    if (!_vozDisponible || _enviando) return;
+    if (_enviando) return;
     if (_escuchando) {
       await _voz.stop();
       if (mounted) setState(() => _escuchando = false);
       return;
     }
-    await _voz.toggleListen(
+    final ok = await _voz.toggleListen(
       onListeningChanged: (active) {
         if (mounted) setState(() => _escuchando = active);
       },
@@ -340,6 +329,14 @@ class _RaiAsistenteSheetState extends State<RaiAsistenteSheet> {
         }
       },
     );
+    if (!ok && mounted) {
+      final msg = _voz.ultimoFallo?.trim();
+      if (msg != null && msg.isNotEmpty) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    }
   }
 
   Future<void> _usarDestino(DetalleLugar d, {required bool motor}) async {
@@ -735,15 +732,14 @@ class _RaiAsistenteSheetState extends State<RaiAsistenteSheet> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (_vozDisponible)
-            IconButton.filledTonal(
-              onPressed: _enviando ? null : _toggleVoz,
-              icon: Icon(
-                _escuchando ? Icons.mic_rounded : Icons.mic_none_rounded,
-                color: _escuchando ? cs.error : null,
-              ),
-              tooltip: _escuchando ? 'Detener' : 'Hablar',
+          IconButton.filledTonal(
+            onPressed: _enviando ? null : _toggleVoz,
+            icon: Icon(
+              _escuchando ? Icons.mic_rounded : Icons.mic_none_rounded,
+              color: _escuchando ? cs.error : null,
             ),
+            tooltip: _escuchando ? 'Detener' : 'Hablar',
+          ),
           Expanded(
             child: TextField(
               controller: _inputCtrl,

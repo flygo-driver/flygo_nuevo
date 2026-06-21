@@ -25,8 +25,7 @@ import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
-import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
-import 'package:flygo_nuevo/pantallas/taxista/post_viaje_taxista_flow.dart';
+import 'package:flygo_nuevo/navegacion/post_viaje_taxista_nav.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
@@ -45,6 +44,7 @@ import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
 import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
+import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
 void logDbg(String msg) {
@@ -443,6 +443,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     try {
       Viaje operativo = await _asegurarEnCursoParaMultiparada(v);
       if (!mounted) return;
+      if (mounted) {
+        setState(() {
+          _aplicarProgresoMultiparadaDesdeViaje(operativo);
+          _cachedViaje = operativo;
+        });
+      }
+      final int totalOperativo =
+          _destinosOrdenadosMultiparada(operativo).length;
+      if (_multiLegCompletadas >= totalOperativo ||
+          operativo.multiparadaCompleta) {
+        return;
+      }
       final (double, double)? ping = _taxistaPosCola.value;
       await ViajesRepo.registrarLegMultiparadaCompletada(
         viajeId: operativo.id,
@@ -664,10 +676,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         const SizedBox(height: 12),
         _btnPrimario(
           icon: const Icon(Icons.check_circle_outline, size: 24),
-          label: const Text(
-            'LLEGUÉ AQUÍ — SIGUIENTE DESTINO',
+          label: Text(
+            leg.esFinal
+                ? 'LLEGUÉ EN PARADA ${hechos + 1} DE $total · FINAL'
+                : 'LLEGUÉ EN PARADA ${hechos + 1} DE $total',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
           ),
           backgroundColor: Colors.deepOrange,
           onPressed: _actionBusy
@@ -2207,6 +2221,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
 
     try {
+      // Evita que TaxistaShell quite ViajeEnCurso antes de factura/post-viaje.
+      ActiveTripService.mantenerOverlayViajeEnShell(const Duration(minutes: 3));
+
       print('[FINALIZAR] invocando ViajesRepo.completarViajePorTaxista');
       try {
         try {
@@ -2258,6 +2275,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           );
         }
+        ActiveTripService.cancelarMantenimientoOverlayViaje();
         _actionBusy = false;
         return;
       } catch (e, st) {
@@ -2270,6 +2288,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           );
         }
+        ActiveTripService.cancelarMantenimientoOverlayViaje();
         _actionBusy = false;
         return;
       }
@@ -2410,35 +2429,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
       _stopGps();
 
-      if (!mounted) return;
-      // Mostrar factura visual antes de salir hacia la cola del taxista.
-      // No interfiere: si se cierra normalmente o por back, el flujo continúa.
-      await FacturaViaje.mostrar(
-        context,
-        viajeId: v.id,
-        role: 'taxista',
-        autoCerrarAlContinuar: true,
-      );
-      if (!mounted) return;
       final Map<String, dynamic>? semillaViaje =
           await FirebaseFirestore.instance
               .collection('viajes')
               .doc(v.id)
               .get()
               .then((DocumentSnapshot<Map<String, dynamic>> s) => s.data());
-      if (!mounted) return;
-      await Navigator.of(context, rootNavigator: true).push<void>(
-        MaterialPageRoute<void>(
-          fullscreenDialog: true,
-          builder: (_) => PostViajeTaxistaFlow(
-            viajeId: v.id,
-            uidTaxista: uid,
-            viajeDataSemilla: semillaViaje,
-          ),
-        ),
+
+      print('[FINALIZAR] abriendo factura + post-viaje taxista viajeId=${v.id}');
+      await PostViajeTaxistaNav.abrirFacturaYFlujo(
+        context: mounted ? context : null,
+        viajeId: v.id,
+        uidTaxista: uid,
+        viajeDataSemilla: semillaViaje,
       );
     } catch (e, st) {
       print('[FINALIZAR] _finalizarViaje catch outer $e $st');
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           messenger
@@ -3940,6 +3947,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                         ),
                       ),
                     ),
+                    if (_mensajeOrientacionFlujo(v, estadoBase)
+                        case final String orientacionMapa?)
+                      Positioned(
+                        top: MediaQuery.paddingOf(context).top + 8,
+                        left: 12,
+                        right: 12,
+                        child: ViajeFlujoOrientacionBanner(
+                          mensaje: orientacionMapa,
+                        ),
+                      ),
                     DraggableScrollableSheet(
                       controller: _viajeSheetCtrl,
                       minChildSize: _kViajeSheetMin,
@@ -4093,11 +4110,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
+  String? _mensajeOrientacionFlujo(Viaje v, String estadoBase) =>
+      viajeFlujoOrientacionMensajeTaxista(
+        estadoBase: estadoBase,
+        navegacionPickupIniciada: _navegacionIniciada,
+        navegacionDestinoIniciada: _navegacionDestinoIniciada,
+        codigoVerificado: v.codigoVerificado,
+        esMultiparada: _esMultiparada(v),
+        multiparadaRutaCompleta: _multiparadaRutaCompleta(v),
+      );
+
   // ==================== BARRA DE ACCIONES ====================
 
   Widget _actionBar(Viaje v, String estadoBase) {
+    final String? orientacion = _mensajeOrientacionFlujo(v, estadoBase);
     final String actionStateKey =
-        '$estadoBase|${_navegacionIniciada ? 1 : 0}|${_navegacionDestinoIniciada ? 1 : 0}|${_clienteCerca ? 1 : 0}|${v.codigoVerificado ? 1 : 0}';
+        '$estadoBase|${_navegacionIniciada ? 1 : 0}|${_navegacionDestinoIniciada ? 1 : 0}|${_clienteCerca ? 1 : 0}|${v.codigoVerificado ? 1 : 0}|${orientacion ?? ''}';
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -4120,7 +4148,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         child: Column(
           key: ValueKey<String>(actionStateKey),
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: _getActionButtons(v, estadoBase),
+          children: <Widget>[
+            if (orientacion != null) ...<Widget>[
+              ViajeFlujoOrientacionBanner(mensaje: orientacion),
+              const SizedBox(height: 12),
+            ],
+            ..._getActionButtons(v, estadoBase),
+          ],
         ),
       ),
     );

@@ -810,6 +810,7 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin() &&
         docId != "comision_prepago" &&
         docId != "comision" &&
+        docId != "comision_incentivos_taxista" &&
         docId != "promo_3x1" &&
         docId != "promociones";
     }
@@ -823,6 +824,18 @@ service cloud.firestore {
     // Configuración crítica: comisiones prepago (solo vía Cloud Functions; el cliente solo lee).
     match /config/comision_prepago {
       allow read: if isAuth();
+      allow create, update, delete: if false;
+    }
+
+    // Incentivos comisión por volumen (solo callable admin + Admin SDK en finalizar).
+    match /config/comision_incentivos_taxista {
+      allow read: if isAuth();
+      allow create, update, delete: if false;
+    }
+
+    // Contador de viajes completados por ventana (solo Admin SDK escribe).
+    match /taxistas_stats/{uid} {
+      allow read: if isAuth() && (request.auth.uid == uid || isAdmin());
       allow create, update, delete: if false;
     }
 
@@ -1144,6 +1157,28 @@ service cloud.firestore {
     // Gestión de incidencias (soporte): solo administración.
     match /incidencias/{incidenciaId} {
       allow read, create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Mensajes cliente → operaciones turismo (panel ADM en tiempo real).
+    match /turismo_mensajes_adm/{msgId} {
+      allow read: if isAdmin();
+      allow create: if isAuth() &&
+        request.resource.data.uidCliente == request.auth.uid &&
+        request.resource.data.leidoPorAdm == false &&
+        request.resource.data.mensaje is string &&
+        request.resource.data.mensaje.size() > 0 &&
+        request.resource.data.mensaje.size() <= 500 &&
+        request.resource.data.viajeId is string &&
+        request.resource.data.viajeId.size() > 0 &&
+        exists(/databases/$(database)/documents/viajes/$(request.resource.data.viajeId)) &&
+        get(/databases/$(database)/documents/viajes/$(request.resource.data.viajeId)).data.tipoServicio == 'turismo' &&
+        (
+          get(/databases/$(database)/documents/viajes/$(request.resource.data.viajeId)).data.uidCliente == request.auth.uid ||
+          get(/databases/$(database)/documents/viajes/$(request.resource.data.viajeId)).data.clienteId == request.auth.uid
+        );
+      allow update: if isAdmin() &&
+        changedOnly(['leidoPorAdm', 'leidoEn']);
       allow delete: if false;
     }
 

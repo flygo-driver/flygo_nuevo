@@ -6,11 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
+import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/rai_back_button.dart';
+import 'package:flygo_nuevo/widgets/turismo_mensaje_operaciones_panel.dart';
 
 String _textoVentanaPoolCliente(int minutos) {
   if (minutos < 1) {
@@ -76,6 +78,8 @@ enum _FaseReserva {
 class _ViajeProgramadoConfirmacionState
     extends State<ViajeProgramadoConfirmacion> {
   Timer? _tick;
+  Timer? _turismoProgramadoPoolTimer;
+  bool _turismoProgramadoPoolEnCurso = false;
   bool _navegoAlMapa = false;
   bool _cancelando = false;
 
@@ -189,7 +193,76 @@ class _ViajeProgramadoConfirmacionState
   @override
   void dispose() {
     _tick?.cancel();
+    _stopTurismoProgramadoPoolTimer();
     super.dispose();
+  }
+
+  bool _esViajeTurismoProgramado(Map<String, dynamic> d) {
+    if ((d['tipoServicio'] ?? '').toString().trim() != 'turismo') return false;
+    if (d['programado'] == true) return true;
+    return d['esAhora'] != true;
+  }
+
+  bool _ventanaPublicacionAbierta(Map<String, dynamic> d, DateTime now) {
+    final DateTime? acceptAfter = _ts(d['acceptAfter']);
+    final DateTime? publishAt = _ts(d['publishAt']);
+    final bool acceptOk =
+        acceptAfter == null || !now.isBefore(acceptAfter);
+    final bool publishOk = publishAt == null || !now.isBefore(publishAt);
+    return acceptOk && publishOk;
+  }
+
+  void _stopTurismoProgramadoPoolTimer() {
+    _turismoProgramadoPoolTimer?.cancel();
+    _turismoProgramadoPoolTimer = null;
+  }
+
+  /// Turismo programado: al abrir ventana (`publishAt`), auto-asignar o liberar al pool (callable).
+  void _syncTurismoProgramadoAlPool(Map<String, dynamic> data) {
+    if (!_esViajeTurismoProgramado(data)) {
+      _stopTurismoProgramadoPoolTimer();
+      return;
+    }
+
+    final String taxistaId =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
+    if (taxistaId.isNotEmpty) {
+      _stopTurismoProgramadoPoolTimer();
+      return;
+    }
+
+    if (AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data)) {
+      _stopTurismoProgramadoPoolTimer();
+      return;
+    }
+
+    if (!_ventanaPublicacionAbierta(data, DateTime.now())) {
+      _stopTurismoProgramadoPoolTimer();
+      return;
+    }
+
+    if (_turismoProgramadoPoolTimer != null) return;
+
+    unawaited(_intentarTurismoProgramadoPoolSilencioso());
+    _turismoProgramadoPoolTimer = Timer.periodic(
+      const Duration(seconds: 35),
+      (_) => unawaited(_intentarTurismoProgramadoPoolSilencioso()),
+    );
+  }
+
+  Future<void> _intentarTurismoProgramadoPoolSilencioso() async {
+    if (_turismoProgramadoPoolEnCurso || !mounted) return;
+    _turismoProgramadoPoolEnCurso = true;
+    try {
+      await AsignacionTurismoRepo.intentarAsignacionAutomatica(
+        viajeId: widget.viajeId,
+        radioKm: 55,
+      );
+    } catch (_) {
+      // El stream del viaje reflejará asignación o turismo_pool.
+    } finally {
+      _turismoProgramadoPoolEnCurso = false;
+    }
   }
 
   static DateTime? _ts(dynamic raw) {
@@ -291,6 +364,13 @@ class _ViajeProgramadoConfirmacionState
         final fase = _fase(data, now);
         final bool esTurismo =
             (data['tipoServicio'] ?? '').toString().trim() == 'turismo';
+        final bool turismoEnPoolPublico =
+            esTurismo && AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data);
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _syncTurismoProgramadoAlPool(data);
+        });
 
         if (fase == _FaseReserva.conductorAsignado) {
           _irAViajeEnCursoOnce();
@@ -450,9 +530,24 @@ class _ViajeProgramadoConfirmacionState
                     fmtCorto: fmtCorto,
                     poolLeadMinutes: ViajesRepo.poolLeadMinutesProgramado,
                     esTurismo: esTurismo,
+                    turismoEnPoolPublico: turismoEnPoolPublico,
                   ),
                 ],
                 const SizedBox(height: 20),
+                if (esTurismo &&
+                    fase != _FaseReserva.cancelado &&
+                    fase != _FaseReserva.completado)
+                  TurismoMensajeOperacionesPanel(
+                    viajeId: widget.viajeId,
+                    origenPantalla: 'reserva_programada',
+                    titulo: '¿Dudas o urgencia con tu reserva?',
+                    subtitulo:
+                        'Operaciones turismo ve tu mensaje al instante en el panel admin.',
+                  ),
+                if (esTurismo &&
+                    fase != _FaseReserva.cancelado &&
+                    fase != _FaseReserva.completado)
+                  const SizedBox(height: 20),
                 _OtrasReservasSection(
                     excluirId: widget.viajeId, accent: accent),
                 if (_puedeCancelarReserva(fase)) ...[
@@ -612,6 +707,7 @@ class _TimelineReserva extends StatelessWidget {
     required this.fmtCorto,
     required this.poolLeadMinutes,
     this.esTurismo = false,
+    this.turismoEnPoolPublico = false,
   });
 
   final _FaseReserva fase;
@@ -622,6 +718,7 @@ class _TimelineReserva extends StatelessWidget {
   final DateFormat fmtCorto;
   final int poolLeadMinutes;
   final bool esTurismo;
+  final bool turismoEnPoolPublico;
 
   @override
   Widget build(BuildContext context) {
@@ -652,9 +749,16 @@ class _TimelineReserva extends StatelessWidget {
             : 'Tu viaje entrará en la red en cuanto se cumplan las condiciones de publicación.';
       }
     } else if (fase == _FaseReserva.enPool) {
-      subt2 = esTurismo
-          ? 'Tu reserva está visible para choferes de turismo habilitados. Te avisamos cuando uno la acepte (si tenés alertas activas).'
-          : 'Tu viaje está visible para conductores cercanos. Te avisamos por notificación cuando uno lo acepte (si tenés alertas activas).';
+      if (esTurismo && turismoEnPoolPublico) {
+        subt2 =
+            'Tu reserva está visible en Pool turístico para choferes habilitados. Te avisamos cuando uno la acepte.';
+      } else if (esTurismo) {
+        subt2 =
+            'RAI asigna chofer aprobado o publica en pool turístico. Esto puede tardar unos segundos…';
+      } else {
+        subt2 =
+            'Tu viaje está visible para conductores cercanos. Te avisamos por notificación cuando uno lo acepte (si tenés alertas activas).';
+      }
     } else {
       subt2 = '';
     }

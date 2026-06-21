@@ -3,6 +3,12 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 import { logAdminAudit } from "./audit.js";
 import { invalidateComisionViajePctCache } from "./comision_viaje_pct.js";
+import {
+  invalidateComisionIncentivosCache,
+  parseComisionIncentivosConfig,
+  type EscalonIncentivo,
+  type VentanaIncentivo,
+} from "./comision_incentivos_taxista.js";
 
 type AnyMap = Record<string, unknown>;
 
@@ -371,5 +377,101 @@ export const setComisionPorcentaje = onCall(async (request) => {
   });
 
   return { ok: true, porcentaje };
+});
+
+function parseEscalonesInput(raw: unknown): EscalonIncentivo[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new HttpsError("invalid-argument", "escalones requerido (array no vacio)");
+  }
+  if (raw.length > 12) {
+    throw new HttpsError("invalid-argument", "maximo 12 escalones");
+  }
+  const out: EscalonIncentivo[] = [];
+  const seen = new Set<number>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const m = item as AnyMap;
+    const viajesMinimos = Math.trunc(Number(m.viajesMinimos));
+    const comisionPct = Number(m.comisionPct);
+    const etiqueta = String(m.etiqueta ?? "").trim();
+    if (!Number.isFinite(viajesMinimos) || viajesMinimos < 1 || viajesMinimos > 999) {
+      throw new HttpsError("invalid-argument", "viajesMinimos invalido (1–999)");
+    }
+    if (!Number.isFinite(comisionPct) || comisionPct < 0 || comisionPct > 100) {
+      throw new HttpsError("invalid-argument", "comisionPct invalido (0–100)");
+    }
+    if (seen.has(viajesMinimos)) {
+      throw new HttpsError("invalid-argument", `viajesMinimos duplicado: ${viajesMinimos}`);
+    }
+    seen.add(viajesMinimos);
+    out.push({
+      viajesMinimos,
+      comisionPct,
+      etiqueta: etiqueta || `Nivel ${viajesMinimos}`,
+    });
+  }
+  if (out.length === 0) {
+    throw new HttpsError("invalid-argument", "escalones vacio tras validacion");
+  }
+  out.sort((a, b) => a.viajesMinimos - b.viajesMinimos);
+  return out;
+}
+
+/**
+ * Incentivos por volumen de viajes completados (`config/comision_incentivos_taxista`).
+ * El conteo se actualiza en `finalizarViajeSeguro` (Admin SDK).
+ */
+export const updateComisionIncentivosTaxistaConfig = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+  await assertAdmin(uid);
+
+  const motivo = String(request.data?.motivo ?? "").trim();
+  if (motivo.length < 6) throw new HttpsError("invalid-argument", "Motivo requerido (min 6 caracteres)");
+
+  const activo = request.data?.activo === true;
+  const ventanaRaw = String(request.data?.ventana ?? "semana").trim().toLowerCase();
+  const ventana: VentanaIncentivo = ventanaRaw === "mes" ? "mes" : "semana";
+  const escalones = parseEscalonesInput(request.data?.escalones);
+
+  if (activo && escalones.length === 0) {
+    throw new HttpsError("invalid-argument", "Activo requiere al menos un escalon");
+  }
+
+  const ref = db().collection("config").doc("comision_incentivos_taxista");
+  const beforeSnap = await ref.get();
+  const before = safeJson(beforeSnap.data() ?? {});
+
+  const patch = {
+    activo,
+    ventana,
+    escalones,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  await ref.set(patch, { merge: true });
+
+  invalidateComisionIncentivosCache();
+
+  const afterSnap = await ref.get();
+  const after = safeJson(afterSnap.data() ?? {});
+  const parsed = parseComisionIncentivosConfig(after);
+
+  await writeHistory({
+    configKey: "config/comision_incentivos_taxista",
+    changedBy: uid,
+    motivo,
+    before,
+    after,
+  });
+
+  logAdminAudit({
+    action: "update_comision_incentivos_taxista_config",
+    actorUid: uid,
+    resourceType: "config",
+    resourceId: "config/comision_incentivos_taxista",
+    metadata: { activo, ventana, escalones: escalones.length },
+  });
+
+  return { ok: true, activo: parsed.activo, ventana: parsed.ventana, escalones: parsed.escalones };
 });
 

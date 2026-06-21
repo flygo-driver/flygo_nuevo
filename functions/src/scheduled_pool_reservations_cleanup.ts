@@ -67,6 +67,8 @@ export const scheduledCleanupExpiredPoolReservations = onSchedule(
           const exp = r.expiresAt;
           if (!(exp instanceof Timestamp) || exp.toMillis() >= now.toMillis()) return;
 
+          if (String(r.comprobanteUrl ?? "").trim()) return;
+
           const seats = Number(r.seats ?? 0);
           const total = Number(r.total ?? 0);
           if (!Number.isFinite(seats) || seats <= 0) return;

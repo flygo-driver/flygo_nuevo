@@ -75,14 +75,23 @@ abstract final class PoolsProductoCopy {
 
   static const String recaudoCentralClientePasos =
       '1. Reservá tus asientos.\n'
-      '2. Transferí el total a la cuenta de RAI con la referencia que te damos.\n'
-      '3. Guardá el comprobante del banco — RAI concilia el pago.\n'
-      '4. RAI confirma tu cupo en la app cuando el pago está verificado.\n'
+      '2. Transferí el total a la cuenta de RAI (datos abajo).\n'
+      '3. Elegí la foto de tu comprobante (bauche).\n'
+      '4. Tocá «Enviar bauche a RAI» para que validemos tu pago.\n'
       'No envíes el bauche al chofer: el dinero va a RAI, no a su cuenta.';
 
   static const String recaudoCentralClientePie =
-      'Reservá, pagá el total a RAI con tu referencia y guardá el comprobante. '
-      'No hace falta enviar bauche al organizador.';
+      'Reservá, transferí a la cuenta de RAI y enviá tu bauche desde la app. '
+      'RAI confirmará tu asiento al validar el depósito.';
+
+  static const String clienteBauchePasoTitulo = 'Paso 2 — Subí tu bauche';
+  static const String clienteBauchePasoSubtitulo =
+      'Después de transferir, elegí la foto del comprobante y tocá «Enviar bauche a RAI».';
+  static const String clienteBaucheEnviadoOk =
+      'Bauche enviado. RAI revisará tu pago y confirmará tus cupos.';
+  static const String clienteBaucheSheetTitulo = 'Deposita y envía tu bauche';
+  static const String clienteBaucheCuentaTitulo =
+      'Paso 1 — Cuenta donde depositar';
 
   static const String recaudoCentralClienteSheetCierre =
       'Cuando RAI verifique tu transferencia, el organizador confirmará tu cupo en la app. '
@@ -113,7 +122,12 @@ abstract final class PoolsProductoCopy {
       return 'Cupos confirmados — pago verificado en RAI';
     }
     if (metodo == 'transferencia') {
-      return 'Pendiente — transferí el total a RAI y guardá tu comprobante';
+      final comp = (r['comprobanteUrl'] ?? '').toString().trim();
+      final ep = (r['estadoPago'] ?? '').toString().trim().toLowerCase();
+      if (comp.isNotEmpty || ep == 'comprobante_enviado') {
+        return 'Recibo enviado — RAI validará tu pago y confirmará cupos';
+      }
+      return 'Pendiente — transferí a RAI y enviá tu bauche desde la app';
     }
     if (metodo == 'efectivo') {
       return 'Reservado — pagás RD\$ ${_totalReserva(r)} en efectivo al abordar '

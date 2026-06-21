@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 class ComprobanteTransferenciaService {
@@ -102,6 +103,181 @@ class ComprobanteTransferenciaService {
         mensaje: 'No se pudo subir el comprobante: $e',
       );
     }
+  }
+
+  /// Bauche/recibo de transferencia para reserva de asiento en gira por cupos.
+  ///
+  /// Flujo recomendado en UI: [seleccionarImagenComprobante] → preview →
+  /// [enviarComprobantePoolReserva].
+  static Future<Uint8List?> seleccionarImagenComprobante(
+    BuildContext context,
+  ) async {
+    final ImageSource? source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Tomar foto del bauche'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Elegir de galería'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return null;
+
+    try {
+      final XFile? file = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 80,
+      );
+      if (file == null) return null;
+      return file.readAsBytes();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo elegir la imagen: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  /// Sube bytes ya elegidos y reporta al backend (sin abrir el picker).
+  static Future<ResultadoSubidaComprobante> enviarComprobantePoolReserva({
+    required String poolId,
+    required String reservaId,
+    required Uint8List imageBytes,
+  }) async {
+    final User? u = FirebaseAuth.instance.currentUser;
+    if (u == null) {
+      return const ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Debes iniciar sesión para enviar el bauche.',
+      );
+    }
+    if (poolId.isEmpty || reservaId.isEmpty) {
+      return const ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Reserva inválida.',
+      );
+    }
+    if (imageBytes.isEmpty) {
+      return const ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Elegí una foto del bauche antes de enviar.',
+      );
+    }
+
+    try {
+      final String path =
+          'comprobantes/${u.uid}/$reservaId/pool_${poolId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final Reference ref = FirebaseStorage.instance.ref(path);
+      await ref.putData(
+        imageBytes,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+      final String url = await ref.getDownloadURL();
+      if (url.isEmpty) {
+        return const ResultadoSubidaComprobante(
+          ok: false,
+          mensaje: 'No se pudo obtener la URL del comprobante.',
+        );
+      }
+
+      await PoolRepo.reportarComprobanteReservaSeguro(
+        poolId: poolId,
+        reservaId: reservaId,
+        comprobanteUrl: url,
+      );
+
+      return ResultadoSubidaComprobante(ok: true, comprobanteUrl: url);
+    } on FirebaseException catch (e) {
+      return ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Error (${e.code}): ${e.message ?? 'No se pudo subir.'}',
+      );
+    } catch (e) {
+      return ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'No se pudo enviar el bauche: $e',
+      );
+    }
+  }
+
+  /// Atajo one-shot (picker + envío). Preferir el flujo en dos pasos en giras.
+  static Future<ResultadoSubidaComprobante> subirYReportarPoolReserva({
+    required String poolId,
+    required String reservaId,
+    ImageSource source = ImageSource.camera,
+  }) async {
+    final User? u = FirebaseAuth.instance.currentUser;
+    if (u == null) {
+      return const ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Debes iniciar sesión para subir el comprobante.',
+      );
+    }
+    if (poolId.isEmpty || reservaId.isEmpty) {
+      return const ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Reserva inválida.',
+      );
+    }
+
+    try {
+      final XFile? file = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 80,
+      );
+      if (file == null) {
+        return _kResultCancelled;
+      }
+
+      final Uint8List bytes = await file.readAsBytes();
+      return enviarComprobantePoolReserva(
+        poolId: poolId,
+        reservaId: reservaId,
+        imageBytes: bytes,
+      );
+    } on FirebaseException catch (e) {
+      return ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'Error (${e.code}): ${e.message ?? 'No se pudo subir.'}',
+      );
+    } catch (e) {
+      return ResultadoSubidaComprobante(
+        ok: false,
+        mensaje: 'No se pudo subir el comprobante: $e',
+      );
+    }
+  }
+
+  static void mostrarFeedbackPoolReserva(
+    BuildContext context,
+    ResultadoSubidaComprobante r,
+  ) {
+    if (!context.mounted) return;
+    if (r.cancelled) return;
+    if (r.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Recibo enviado. RAI revisará tu pago y confirmará tu asiento.',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+      return;
+    }
+    mostrarFeedback(context, r);
   }
 
   /// Igual que [subirYReportar] pero para Bola Ahorro (`bolas_pueblo/{id}`).

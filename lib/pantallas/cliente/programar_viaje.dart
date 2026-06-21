@@ -39,6 +39,7 @@ import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_desglose_panel.dart';
+import 'package:flygo_nuevo/widgets/promo_mxk_cliente_panel.dart';
 import 'package:flygo_nuevo/widgets/programar_viaje_futuro_animation.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
@@ -2721,7 +2722,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     style: TextStyle(color: textMuted, fontSize: 12),
                   ),
                 ],
-                const SizedBox(height: 18),
+                PromoMxKClientePanel(
+                  promoSnapshot: _promoSnapshotCotizacion,
+                  promoOmitidaPorLargaDistancia:
+                      _cotizacionDesglose?['promoOmitidaPorLargaDistancia'] == true,
+                  textColor: textPrimary,
+                  mutedColor: textMuted,
+                ),
+                const SizedBox(height: 4),
                 Text(
                   'TOTAL A PAGAR',
                   textAlign: TextAlign.center,

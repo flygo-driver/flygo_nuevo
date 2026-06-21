@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/pantallas/admin/admin_regularizar_giras_taxista.dart
 import 'package:flygo_nuevo/pantallas/admin/admin_rai_monitor.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_torre_control.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_turismo_destinos.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_turismo_control.dart';
 import 'package:flygo_nuevo/pantallas/admin/viajes_turismo_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/taxistas_turismo_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/aprobar_choferes_turismo.dart';
@@ -35,6 +36,7 @@ import 'package:flygo_nuevo/pantallas/admin/reportes_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_tarifas.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_tarifas_tramos.dart';
 import 'package:flygo_nuevo/pantallas/admin/configuracion_viaje_comision_admin.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_comision_incentivos_taxista.dart';
 import 'package:flygo_nuevo/pantallas/admin/incidencias_admin.dart';
 import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
@@ -205,6 +207,17 @@ class AdminDrawer extends StatelessWidget {
               onTap: () => _push(context, const ConfiguracionViajeComisionAdmin()),
             ),
             ListTile(
+              leading: Icon(Icons.emoji_events_outlined,
+                  color: isLight ? Colors.amber.shade800 : Colors.amberAccent),
+              title: Text('Incentivos comisión taxista',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                'Menor % por volumen de viajes',
+                style: subtleStyle,
+              ),
+              onTap: () => _push(context, const AdminComisionIncentivosTaxista()),
+            ),
+            ListTile(
               leading: Icon(Icons.attach_money, color: iconNeutral),
               title: Text('Tarifas',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
@@ -350,9 +363,22 @@ class AdminDrawer extends StatelessWidget {
               onTap: () => _push(context, const AprobarChoferesTurismo()),
             ),
             ListTile(
+              leading: Icon(Icons.radar,
+                  color: isLight ? Colors.deepPurple : Colors.purpleAccent),
+              title: Text('Control turismo',
+                  style: titleStyle.copyWith(fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                'Pedidos en vivo y mensajes cliente',
+                style: subtleStyle,
+              ),
+              onTap: () => _push(context, const AdminTurismoControl()),
+            ),
+            ListTile(
               leading: Icon(Icons.travel_explore, color: iconNeutral),
-              title: Text('Viajes Turismo',
+              title: Text('Viajes Turismo — Asignación',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+              subtitle: Text('Cola admin · asignar o liberar pool',
+                  style: subtleStyle),
               onTap: () => _push(context, const ViajesTurismoAdmin()),
             ),
             ListTile(

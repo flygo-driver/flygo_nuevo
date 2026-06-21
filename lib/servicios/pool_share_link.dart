@@ -48,6 +48,33 @@ class PoolShareLink {
     return null;
   }
 
+  /// Enlace a giras por cupos sin id concreto (catálogo en app).
+  static bool esEnlaceGirasCupos(Uri uri) {
+    if (parsePoolId(uri) != null) return false;
+    final schemeL = uri.scheme.toLowerCase();
+    if (schemeL == scheme && uri.host.toLowerCase() == 'pool') {
+      return true;
+    }
+    if (schemeL == 'https' && _isPoolHttpsHost(uri.host)) {
+      final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+      if (segs.isEmpty || segs.first.toLowerCase() == 'pool') {
+        return true;
+      }
+    }
+    final view = uri.queryParameters['view']?.trim().toLowerCase();
+    return view == 'giras' || view == 'cupos';
+  }
+
+  /// URL para compartir catálogo giras (sin id de salida).
+  static String httpsGirasCuposUrl() {
+    return Uri(
+      scheme: 'https',
+      host: httpsHost,
+      path: '/pool',
+      queryParameters: const <String, String>{'view': 'giras'},
+    ).toString();
+  }
+
   static String? _parsePoolIdHttps(Uri uri) {
     if (uri.scheme.toLowerCase() != 'https') return null;
     if (!_isPoolHttpsHost(uri.host)) return null;
@@ -70,7 +97,7 @@ class PoolShareLink {
 🔗 Ver y reservar cupos (RAI Pasajero):
 $web
 
-Sin la app: buscá «RAI Pasajero» en Google Play o instalá desde el mismo enlace.
+Abrí el enlace con la app RAI Pasajero instalada y vas directo a Giras por cupos.
 Respaldo: $app''';
   }
 }

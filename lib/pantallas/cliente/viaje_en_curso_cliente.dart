@@ -44,6 +44,7 @@ import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
 import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
 
 // ===== Helpers =====
 LatLng _latLng(double lat, double lon) => LatLng(lat, lon);
@@ -246,6 +247,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   bool? _lastPickupProximity;
   bool _subiendoComprobanteTransfer = false;
   bool _cancelandoViajeCliente = false;
+  bool _clienteNavDestinoUsado = false;
+  int _clienteNavOrientacionLegDismissed = -1;
 
   /// Re-asignación turismo tras cancelación del chofer (misma cadencia que [EsperaAsignacionTurismo]).
   Timer? _turismoReasignacionTimer;
@@ -647,8 +650,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   Widget _buildClienteZonaAccionesSticky(
     Viaje v,
     String estadoBase,
-    bool cancelarHabilitado,
-  ) {
+    bool cancelarHabilitado, {
+    String? orientacionFlujo,
+  }) {
     final bool multiparada =
         _clienteNavegacionMultiparadaActiva(v, estadoBase);
     final bool mostrarNavDestino = estadoBase == EstadosViaje.enCurso &&
@@ -665,6 +669,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (orientacionFlujo != null) ...[
+          ViajeFlujoOrientacionBanner(mensaje: orientacionFlujo),
+          const SizedBox(height: 10),
+        ],
         if (multiparada) ...[
           _bloqueNavegacionMultiparadaCliente(v),
           const SizedBox(height: 10),
@@ -1200,6 +1208,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   Future<void> abrirNavegacionAlDestino(Viaje v) async {
     if (!_isValidCoord(v.latDestino, v.lonDestino)) return;
     if (!mounted) return;
+    _marcarClienteNavOrientacionOk();
 
     final List<({double lat, double lon, String label})> paradas =
         _paradasIntermediasResueltas(v);
@@ -1540,9 +1549,44 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }
   }
 
+  void _marcarClienteNavOrientacionOk({bool multiparada = false}) {
+    if (!mounted) return;
+    setState(() {
+      _clienteNavDestinoUsado = true;
+      if (multiparada) {
+        _clienteNavOrientacionLegDismissed = _multiLegCompletadas;
+      }
+    });
+  }
+
+  String? _mensajeOrientacionCliente(
+    Viaje v,
+    String estadoBase, {
+    required bool mostrarCodigoCliente,
+  }) {
+    final bool multiparada =
+        _clienteNavegacionMultiparadaActiva(v, estadoBase);
+    final bool mostrarNavDestino = estadoBase == EstadosViaje.enCurso &&
+        !multiparada &&
+        (_isValidCoord(v.latDestino, v.lonDestino) || _simCasa);
+    return viajeFlujoOrientacionMensajeCliente(
+      estadoBase: estadoBase,
+      codigoVerificado: v.codigoVerificado,
+      mostrarCodigoCliente: mostrarCodigoCliente,
+      mostrarNavDestino: mostrarNavDestino,
+      clienteNavDestinoUsado: _clienteNavDestinoUsado,
+      multiparadaActiva: multiparada,
+      multiparadaCompleta: _multiparadaRutaCompletaCliente(v),
+      multiparadaLegHechos: _multiLegCompletadas,
+      clienteNavOrientacionLegDismissed: _clienteNavOrientacionLegDismissed,
+      tieneTaxista: v.uidTaxista.isNotEmpty,
+    );
+  }
+
   Future<void> _navegarDestinoMultiparadaCliente(Viaje v) async {
     final leg = _destinoMultiActualCliente(v);
     if (leg == null || !mounted) return;
+    _marcarClienteNavOrientacionOk(multiparada: true);
     final int total = _destinosOrdenadosMultiparadaCliente(v).length;
     final int paso = _multiLegCompletadas + 1;
     await showNavegacionWazeMapsSheet(
@@ -4280,6 +4324,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
                     if (_multiNavLoadedForViajeId != v.id) {
                       _multiNavLoadedForViajeId = v.id;
+                      _clienteNavDestinoUsado = false;
+                      _clienteNavOrientacionLegDismissed = -1;
                       _syncMultiLegClienteDesdeViaje(v);
                     } else {
                       _syncMultiLegClienteDesdeViaje(v);
@@ -4511,6 +4557,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       estadoBase,
                       codigoVerificacion,
                       data,
+                    );
+                    final String? orientacionFlujo =
+                        _mensajeOrientacionCliente(
+                      v,
+                      estadoBase,
+                      mostrarCodigoCliente: mostrarCodigoCliente,
                     );
 
                     // ===== DETECCIÓN DE CERCANÍA (solo fase pickup; en `en_curso` el cliente en
@@ -4974,6 +5026,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             ],
                           ),
                         ),
+                        if (orientacionFlujo != null)
+                          Positioned(
+                            top: MediaQuery.paddingOf(context).top + 8,
+                            left: 12,
+                            right: 12,
+                            child: ViajeFlujoOrientacionBanner(
+                              mensaje: orientacionFlujo,
+                            ),
+                          ),
                         DraggableScrollableSheet(
                           controller: _viajeSheetCtrl,
                           minChildSize: _kViajeSheetMin,
@@ -5034,6 +5095,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     v,
                                     estadoBase,
                                     cancelarHabilitado,
+                                    orientacionFlujo: orientacionFlujo,
                                   ),
                                   _viajeSheetDivider(),
 

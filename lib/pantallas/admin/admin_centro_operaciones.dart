@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../servicios/pagos_taxista_repo.dart';
+import '../../servicios/turismo_control_adm_repo.dart';
 import '../../widgets/admin_drawer.dart';
 import '../../widgets/admin_app_bar.dart';
 import 'admin_expediente_chofer_utils.dart';
@@ -12,6 +13,7 @@ import 'admin_bola_pueblo_ops.dart';
 import 'admin_home.dart';
 import 'admin_torre_control.dart';
 import 'admin_ui_theme.dart';
+import 'admin_turismo_control.dart';
 import 'aprobar_choferes_turismo.dart';
 import 'gestionar_usuarios_admin.dart';
 import 'revision_documentos_admin.dart';
@@ -127,6 +129,11 @@ class AdminCentroOperaciones extends StatelessWidget {
           const SizedBox(height: 16),
           _ColaExpedientesCard(onTap: () => _push(context, const RevisionDocumentosAdmin())),
           const SizedBox(height: 10),
+          const SizedBox(height: 10),
+          _ColaTurismoPedidosCard(
+            onTap: () => _push(context, const AdminTurismoControl()),
+          ),
+          const SizedBox(height: 10),
           _ColaTurismoCard(onTap: () => _push(context, const AprobarChoferesTurismo())),
           const SizedBox(height: 10),
           _ColaLiquidacionesCard(onTap: () => _push(context, const AdminHome())),
@@ -228,6 +235,54 @@ class _ColaExpedientesCard extends StatelessWidget {
               ? 'Sin pendientes'
               : '$motores motor · $bola bola · ${filtrados.length - motores - bola} normal',
           onTap: onTap,
+        );
+      },
+    );
+  }
+}
+
+class _ColaTurismoPedidosCard extends StatelessWidget {
+  final VoidCallback onTap;
+  const _ColaTurismoPedidosCard({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: TurismoControlAdmRepo.streamViajesTurismo(limit: 80),
+      builder: (context, snapViajes) {
+        int sinChofer = 0;
+        for (final doc in snapViajes.data?.docs ?? const []) {
+          final d = doc.data();
+          final uid =
+              (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+          if (uid.isNotEmpty) continue;
+          final estado = (d['estado'] ?? '').toString();
+          if (estado == 'cancelado' ||
+              estado == 'completado' ||
+              d['completado'] == true) {
+            continue;
+          }
+          sinChofer++;
+        }
+        return StreamBuilder<int>(
+          stream: TurismoControlAdmRepo.streamConteoMensajesNoLeidos(),
+          builder: (context, snapMsg) {
+            final msg = snapMsg.data ?? 0;
+            final detalle = msg > 0
+                ? '$sinChofer sin chofer · $msg mensaje${msg == 1 ? '' : 's'} nuevo${msg == 1 ? '' : 's'}'
+                : sinChofer == 0
+                    ? 'Sin pedidos pendientes de chofer'
+                    : '$sinChofer pedido${sinChofer == 1 ? '' : 's'} sin chofer';
+            return _ColaCard(
+              icon: Icons.radar,
+              color: Colors.deepPurpleAccent,
+              titulo: 'Control turismo',
+              subtitulo: 'Pedidos cliente en vivo + mensajes',
+              count: sinChofer + msg,
+              detalle: detalle,
+              onTap: onTap,
+            );
+          },
         );
       },
     );

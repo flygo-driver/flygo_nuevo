@@ -2178,6 +2178,59 @@ export const reservePoolSeats = onCall(async (request) => {
   return result;
 });
 
+/** Cliente reporta foto/PDF del bauche de transferencia para validar su asiento. */
+export const reportPoolReservaComprobante = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidCliente = request.auth.uid;
+  const poolId = typeof request.data?.poolId === "string" ? request.data.poolId.trim() : "";
+  const reservaId = typeof request.data?.reservaId === "string" ? request.data.reservaId.trim() : "";
+  const comprobanteUrl = String(request.data?.comprobanteUrl ?? "").trim();
+  if (!poolId) throw new HttpsError("invalid-argument", "Falta poolId");
+  if (!reservaId) throw new HttpsError("invalid-argument", "Falta reservaId");
+  if (!comprobanteUrl || comprobanteUrl.length < 12) {
+    throw new HttpsError("invalid-argument", "Falta comprobanteUrl valido");
+  }
+
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const resRef = poolRef.collection("reservas").doc(reservaId);
+
+  await db().runTransaction(async (tx) => {
+    const resSnap = await tx.get(resRef);
+    if (!resSnap.exists) throw new HttpsError("not-found", "Reserva no encontrada");
+    const r = (resSnap.data() ?? {}) as AnyMap;
+
+    if (String(r.uidCliente ?? "").trim() !== uidCliente) {
+      throw new HttpsError("permission-denied", "No autorizado para esta reserva");
+    }
+
+    const estadoRes = String(r.estado ?? "").trim().toLowerCase();
+    if (estadoRes !== "reservado") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Solo se puede subir comprobante en reservas pendientes de pago",
+      );
+    }
+
+    const metodo = String(r.metodoPago ?? "").trim().toLowerCase();
+    if (metodo !== "transferencia") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Comprobante solo aplica a reservas por transferencia",
+      );
+    }
+
+    tx.update(resRef, {
+      comprobanteUrl,
+      comprobanteReportadoAt: FieldValue.serverTimestamp(),
+      comprobanteReportadoPor: uidCliente,
+      estadoPago: "comprobante_enviado",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return { ok: true, poolId, reservaId };
+});
+
 /** Cliente cancela su reserva (`estado: reservado`) antes de que la gira salga en ruta. */
 export const cancelPoolReservation = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");

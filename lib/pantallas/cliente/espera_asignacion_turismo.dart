@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -21,6 +21,7 @@ import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
+import 'package:flygo_nuevo/widgets/turismo_mensaje_operaciones_panel.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Contacto para asignación turismo (sin chofer disponible / urgencia ADM).
@@ -39,6 +40,9 @@ class EsperaAsignacionTurismo extends StatefulWidget {
 
 class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     with SingleTickerProviderStateMixin {
+  static const double _kEsperaSheetMin = 0.24;
+  static const double _kEsperaSheetInitial = 0.42;
+
   late AnimationController _controller;
   late Animation<double> _pulseAnimation;
   GoogleMapController? _map;
@@ -993,6 +997,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
             style: TextStyle(color: Colors.white70, fontSize: 12),
           ),
           const SizedBox(height: 12),
+          TurismoMensajeOperacionesPanel(viajeId: widget.viajeId),
+          const SizedBox(height: 12),
           _soporteTile(
             icon: Icons.chat,
             color: const Color(0xFF25D366),
@@ -1399,72 +1405,100 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
       zoom: pickup != null ? 13 : 11,
     );
 
-    return Column(
+    return Stack(
       children: [
-        Expanded(
-          flex: 11,
-          child: ClipRRect(
-            borderRadius: const BorderRadius.vertical(
-              bottom: Radius.circular(20),
-            ),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                GoogleMap(
-                  initialCameraPosition: camaraInicial,
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: false,
-                  zoomControlsEnabled: false,
-                  compassEnabled: true,
-                  mapToolbarEnabled: false,
-                  markers: _markersFor(data),
-                  polylines: _polylines,
-                  onMapCreated: (GoogleMapController c) {
-                    _map = c;
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) unawaited(_ajustarCamara(data));
-                    });
-                  },
-                ),
-                Positioned(
-                  top: 10,
-                  left: 12,
-                  right: 12,
-                  child: _chipEstadoMapa(data),
-                ),
-                Positioned(
-                  right: 12,
-                  bottom: 12,
-                  child: FloatingActionButton.small(
-                    heroTag: 'turismo_espera_centrar',
-                    backgroundColor: Colors.black.withValues(alpha: 0.78),
-                    foregroundColor: Colors.purpleAccent,
-                    onPressed: () => unawaited(_ajustarCamara(data)),
-                    child: const Icon(Icons.my_location),
-                  ),
-                ),
-              ],
-            ),
+        Positioned.fill(
+          child: GoogleMap(
+            initialCameraPosition: camaraInicial,
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            compassEnabled: true,
+            mapToolbarEnabled: false,
+            markers: _markersFor(data),
+            polylines: _polylines,
+            onMapCreated: (GoogleMapController c) {
+              _map = c;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) unawaited(_ajustarCamara(data));
+              });
+            },
           ),
         ),
-        Expanded(
-          flex: 10,
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0xFF2A1B3D), Color(0xFF1A0F2A), Colors.black],
+        Positioned(
+          top: MediaQuery.paddingOf(context).top + 8,
+          left: 12,
+          right: 12,
+          child: _chipEstadoMapa(data),
+        ),
+        Positioned(
+          right: 12,
+          bottom: MediaQuery.sizeOf(context).height * _kEsperaSheetInitial + 8,
+          child: FloatingActionButton.small(
+            heroTag: 'turismo_espera_centrar',
+            backgroundColor: Colors.black.withValues(alpha: 0.78),
+            foregroundColor: Colors.purpleAccent,
+            onPressed: () => unawaited(_ajustarCamara(data)),
+            child: const Icon(Icons.my_location),
+          ),
+        ),
+        DraggableScrollableSheet(
+          minChildSize: _kEsperaSheetMin,
+          maxChildSize: 0.92,
+          initialChildSize: _kEsperaSheetInitial,
+          snap: true,
+          snapSizes: const <double>[
+            _kEsperaSheetMin,
+            _kEsperaSheetInitial,
+            0.58,
+            0.92,
+          ],
+          builder: (sheetCtx, scrollController) {
+            final bottomInset = MediaQuery.viewPaddingOf(sheetCtx).bottom;
+            return DecoratedBox(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFF2A1B3D),
+                    Color(0xFF1A0F2A),
+                    Colors.black,
+                  ],
+                ),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x66000000),
+                    blurRadius: 18,
+                    offset: Offset(0, -6),
+                  ),
+                ],
               ),
-            ),
-            child: SafeArea(
-              top: false,
-              child: CustomScrollView(
-                slivers: [
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-                    sliver: SliverList(
-                      delegate: SliverChildListDelegate([
+              child: ListView(
+                controller: scrollController,
+                padding: EdgeInsets.fromLTRB(20, 8, 20, 16 + bottomInset),
+                children: [
+                  Center(
+                    child: Container(
+                      width: 44,
+                      height: 5,
+                      margin: const EdgeInsets.only(bottom: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                  ),
+                  Text(
+                    'Desliza hacia arriba para ver detalles',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   SizedBox(
                     height: 72,
                     child: Stack(
@@ -1493,16 +1527,17 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     ),
                   ),
                   const SizedBox(height: 8),
-
                   if (choferAsignado) ...[
                     _buildChoferAsignadoHero(data),
                     const SizedBox(height: 16),
                   ] else ...[
                     Center(
                       child: Text(
-                        estadoRaw.toLowerCase() == 'pendiente_admin'
-                            ? 'Buscando chofer turístico'
-                            : '✅ ¡Viaje solicitado!',
+                        AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data)
+                            ? 'En pool turístico'
+                            : estadoRaw.toLowerCase() == 'pendiente_admin'
+                                ? 'Buscando chofer turístico'
+                                : '✅ ¡Viaje solicitado!',
                         style: const TextStyle(
                           color: Colors.greenAccent,
                           fontSize: 22,
@@ -1513,9 +1548,13 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     const SizedBox(height: 8),
                     Center(
                       child: Text(
-                        estadoRaw.toLowerCase() == 'pendiente_admin'
-                            ? 'Asignación automática con choferes aprobados.\nSi no hay disponibles, administración o soporte te ayudan.'
-                            : 'Buscando el mejor chofer para ti',
+                        AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data)
+                            ? 'Choferes de turismo aprobados ven tu viaje en «Pool turístico».\n'
+                                'Te avisamos en cuanto uno lo acepte.'
+                            : estadoRaw.toLowerCase() == 'pendiente_admin'
+                                ? 'Primero asignación automática con choferes aprobados.\n'
+                                    'Si no hay disponibles, pasa al pool turístico.'
+                                : 'Buscando el mejor chofer para ti',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white70,
@@ -1524,7 +1563,31 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                         ),
                       ),
                     ),
-                    if (estadoRaw.toLowerCase() == 'pendiente_admin') ...[
+                    if (AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data)) ...[
+                      const SizedBox(height: 12),
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.withValues(alpha: 0.22),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: Colors.tealAccent
+                                    .withValues(alpha: 0.55)),
+                          ),
+                          child: const Text(
+                            'Visible para choferes turismo en la app',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ] else if (estadoRaw.toLowerCase() == 'pendiente_admin') ...[
                       const SizedBox(height: 12),
                       Center(
                         child: Container(
@@ -1551,8 +1614,6 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     ],
                     const SizedBox(height: 24),
                   ],
-
-                  // Barra de progreso
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -1581,7 +1642,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                               child: Text(
                                 choferAsignado
                                     ? 'Chofer confirmado · abriendo viaje…'
-                                    : 'Asignando chofer (auto + ADM)…',
+                                    : 'Asignando chofer (auto + pool turístico)…',
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(color: Colors.white70),
@@ -1601,7 +1662,6 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                       ],
                     ),
                   ),
-
                   if (!choferAsignado) ...[
                     const SizedBox(height: 12),
                     _buildChoferesDisponiblesPanel(data),
@@ -1610,10 +1670,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     const SizedBox(height: 12),
                     _buildSoporteAsignacionesPanel(context),
                   ],
-
                   const SizedBox(height: 24),
-
-                  // Detalles del viaje
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -1624,7 +1681,6 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     ),
                     child: Column(
                       children: [
-                        // Viaje ID
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -1648,46 +1704,33 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                             ),
                           ],
                         ),
-
                         const SizedBox(height: 16),
-
-                        // Origen y destino
                         _infoRow(Icons.flag, 'Origen', origen),
                         const SizedBox(height: 8),
                         _infoRow(Icons.flag, 'Destino', destino,
                             color: Colors.greenAccent),
-
                         const SizedBox(height: 12),
-
-                        // Más detalles
                         if (fechaHora != null) ...[
                           _infoRow(Icons.calendar_today, 'Fecha',
                               _formatFecha(fechaHora)),
                           const SizedBox(height: 8),
                         ],
-
                         _infoRow(
                             Icons.directions_car, 'Vehículo', tipoVehiculo),
-
                         if (pasajeros != null) ...[
                           const SizedBox(height: 8),
                           _infoRow(
                               Icons.people_outline, 'Pasajeros', pasajeros),
                         ],
-
                         const SizedBox(height: 8),
                         _infoRow(Icons.payments_outlined, 'Método de pago',
                             metodoPago),
-
                         if (distancia > 0) ...[
                           const SizedBox(height: 8),
                           _infoRow(Icons.straighten, 'Distancia',
                               FormatosMoneda.km(distancia)),
                         ],
-
                         const Divider(color: Colors.white24, height: 24),
-
-                        // Precio
                         Row(
                           children: [
                             const Expanded(
@@ -1719,10 +1762,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 24),
-
-                  // Botón Cancelar
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -1742,14 +1782,10 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                       ),
                     ),
                   ),
-
-                      ]),
-                    ),
-                  ),
                 ],
               ),
-            ),
-          ),
+            );
+          },
         ),
       ],
     );

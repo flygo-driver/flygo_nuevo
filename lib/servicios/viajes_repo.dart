@@ -570,29 +570,6 @@ class ViajesRepo {
             SetOptions(merge: true),
           );
           await _ensureChatForTrip(doc.id);
-        } else {
-          // Fallback: si no hubo asignación inmediata por ADM, publicar en pool turístico.
-          await _db.runTransaction((tx) async {
-            final snap = await tx.get(doc);
-            if (!snap.exists) return;
-            final v = snap.data() ?? <String, dynamic>{};
-            final String uidTx =
-                (v['uidTaxista'] ?? v['taxistaId'] ?? '').toString();
-            final String estado =
-                (v['estado'] ?? '').toString().trim().toLowerCase();
-            if (uidTx.isNotEmpty) return;
-            if (estado != 'pendiente_admin') return;
-            final dynamic tsPub = v['publishAt'];
-            if (tsPub is Timestamp && tsPub.toDate().isAfter(DateTime.now())) {
-              return;
-            }
-            tx.update(doc, {
-              'canalAsignacion': AsignacionTurismoRepo.canalTurismoPool,
-              'liberadoPoolTurismoEn': FieldValue.serverTimestamp(),
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            });
-          });
         }
       } catch (e, st) {
         // Sin bloquear la creación del viaje; ADM puede asignar después.
@@ -1147,6 +1124,26 @@ class ViajesRepo {
         if (cierraNegBola) {
           vPatch['bolaNegociacionAbierta'] = false;
         }
+
+        final String canalAsign =
+            (d['canalAsignacion'] ?? 'pool').toString().trim();
+        if (tipoServicio == 'turismo' &&
+            canalAsign == AsignacionTurismoRepo.canalTurismoPool) {
+          final String uidCliente =
+              (d['uidCliente'] ?? d['clienteId'] ?? '').toString().trim();
+          if (uidCliente.isNotEmpty) {
+            tx.set(
+              _db.collection('usuarios').doc(uidCliente),
+              {
+                'viajeActivoId': vRef.id,
+                'updatedAt': FieldValue.serverTimestamp(),
+                'actualizadoEn': FieldValue.serverTimestamp(),
+              },
+              SetOptions(merge: true),
+            );
+          }
+        }
+
         tx.update(vRef, vPatch);
 
         tx.set(

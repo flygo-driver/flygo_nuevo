@@ -13,7 +13,10 @@ import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/ganancia_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/historial_viajes_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
+import 'package:flygo_nuevo/pantallas/taxista/taxista_promociones.dart';
+import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/taxista_promociones_ui.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
@@ -22,14 +25,12 @@ import 'package:flygo_nuevo/widgets/configuracion_bancaria.dart';
 String _pctLabel(double p) =>
     p == p.roundToDouble() ? p.round().toString() : p.toStringAsFixed(1);
 
-String _subtituloBilleteraComision() {
-  final c = PlataformaEconomia.comisionViajePorcentaje;
+String _subtituloRepartoComision(double c) {
   final t = 100.0 - c;
   return 'Saldo ${_pctLabel(t)} %, comisión ${_pctLabel(c)} %';
 }
 
-String _subtituloGananciasResumen() {
-  final c = PlataformaEconomia.comisionViajePorcentaje;
+String _subtituloGananciasComision(double c) {
   final t = 100.0 - c;
   return 'Totales y reparto ${_pctLabel(t)}/${_pctLabel(c)}';
 }
@@ -155,7 +156,13 @@ class TaxistaCuentaTab extends StatelessWidget {
               },
             ),
           if (uid != null)
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            StreamBuilder<double>(
+              stream: ComisionViajePctService.streamPorcentajeVigente(),
+              initialData: PlataformaEconomia.comisionViajePorcentaje,
+              builder: (context, pctSnap) {
+                final double pctCom =
+                    pctSnap.data ?? PlataformaEconomia.comisionViajePorcentaje;
+                return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('billeteras_taxista')
                   .doc(uid)
@@ -249,6 +256,17 @@ class TaxistaCuentaTab extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       Text(
+                        'Comisión vigente en efectivo: ${TaxistaPromocionesUi.pctLabel(pctCom)}% '
+                        '(se descuenta del prepago al finalizar cada viaje).',
+                        style: TextStyle(
+                          color: cs.primary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          height: 1.35,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
                         bloqueado
                             ? 'Te faltan ${FormatosMoneda.rd(faltante)} para recuperar mínimo RD\$200.'
                             : 'Mantén el saldo por encima de RD\$200 para no bloquear viajes/pool.',
@@ -265,6 +283,8 @@ class TaxistaCuentaTab extends StatelessWidget {
                   ),
                 );
               },
+            );
+              },
             ),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -272,10 +292,35 @@ class TaxistaCuentaTab extends StatelessWidget {
           ),
           _tile(
             context,
-            icon: Icons.account_balance_wallet_outlined,
-            title: 'Billetera',
-            subtitle: _subtituloBilleteraComision(),
-            page: const BilleteraTaxista(),
+            icon: Icons.local_offer_outlined,
+            title: 'Promociones y comisión',
+            subtitle: 'Comisión RAI vigente y promo M×K para clientes',
+            page: const TaxistaPromocionesScreen(),
+          ),
+          StreamBuilder<double>(
+            stream: ComisionViajePctService.streamPorcentajeVigente(),
+            initialData: PlataformaEconomia.comisionViajePorcentaje,
+            builder: (context, pctSnap) {
+              final c = pctSnap.data ?? PlataformaEconomia.comisionViajePorcentaje;
+              return Column(
+                children: [
+                  _tile(
+                    context,
+                    icon: Icons.account_balance_wallet_outlined,
+                    title: 'Billetera',
+                    subtitle: _subtituloRepartoComision(c),
+                    page: const BilleteraTaxista(),
+                  ),
+                  _tile(
+                    context,
+                    icon: Icons.monetization_on_outlined,
+                    title: 'Ganancias',
+                    subtitle: _subtituloGananciasComision(c),
+                    page: const GananciaTaxista(),
+                  ),
+                ],
+              );
+            },
           ),
           _tile(
             context,
@@ -298,13 +343,6 @@ class TaxistaCuentaTab extends StatelessWidget {
             title: 'Historial de viajes',
             subtitle: null,
             page: const HistorialViajesTaxista(),
-          ),
-          _tile(
-            context,
-            icon: Icons.monetization_on_outlined,
-            title: 'Ganancias',
-            subtitle: _subtituloGananciasResumen(),
-            page: const GananciaTaxista(),
           ),
           _tile(
             context,

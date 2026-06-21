@@ -154,18 +154,20 @@ class _ViajesTurismoAdminState extends State<ViajesTurismoAdmin> {
         return;
       }
 
-      await FirebaseFirestore.instance.collection('viajes').doc(id).update(
-        <String, dynamic>{
-          'canalAsignacion': AsignacionTurismoRepo.canalTurismoPool,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        },
+      final bool okLiberar =
+          await AsignacionTurismoRepo.liberarViajeAlPoolTurismoSiAplica(
+        viajeId: id,
+        omitirVentanaPublicacion: true,
       );
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Viaje liberado al pool turístico'),
-          backgroundColor: Colors.green,
+        SnackBar(
+          content: Text(
+            okLiberar
+                ? 'Viaje liberado al pool turístico'
+                : 'No se pudo liberar (estado o chofer ya asignado).',
+          ),
+          backgroundColor: okLiberar ? Colors.green : Colors.orange,
         ),
       );
     } on FirebaseException catch (e) {

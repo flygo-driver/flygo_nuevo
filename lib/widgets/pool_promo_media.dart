@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/utils/pool_gira_tropical_theme.dart';
 import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -72,6 +73,83 @@ class _PoolPromoImageFullScreenPage extends StatelessWidget {
   }
 }
 
+/// Modos de apertura según plataforma (Safari iOS / Chrome Android).
+List<LaunchMode> _poolPromoVideoExternalLaunchModes() {
+  if (kIsWeb) {
+    return const [LaunchMode.platformDefault, LaunchMode.externalApplication];
+  }
+  switch (defaultTargetPlatform) {
+    case TargetPlatform.iOS:
+      return const [
+        LaunchMode.externalApplication,
+        LaunchMode.inAppBrowserView,
+        LaunchMode.platformDefault,
+      ];
+    case TargetPlatform.android:
+      return const [
+        LaunchMode.externalApplication,
+        LaunchMode.platformDefault,
+        LaunchMode.inAppBrowserView,
+      ];
+    default:
+      return const [
+        LaunchMode.externalApplication,
+        LaunchMode.platformDefault,
+      ];
+  }
+}
+
+/// Abre URL de video promocional fuera de la app (Safari / Chrome).
+Future<bool> openPoolPromoVideoUrlExternally(Uri uri) async {
+  for (final mode in _poolPromoVideoExternalLaunchModes()) {
+    try {
+      final ok = await launchUrl(uri, mode: mode);
+      if (ok) return true;
+    } catch (_) {
+      // Siguiente modo
+    }
+  }
+  return false;
+}
+
+/// Abre video fuera de la app con SnackBar y fallback al portapapeles.
+Future<void> openPoolPromoVideoExternallyWithFeedback(
+  BuildContext context,
+  String videoUrl, {
+  bool popRouteFirst = false,
+}) async {
+  final raw = videoUrl.trim();
+  final uri = Uri.tryParse(raw);
+  if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Enlace de video no válido.')),
+    );
+    return;
+  }
+
+  final messenger = ScaffoldMessenger.of(context);
+  if (popRouteFirst) {
+    final nav = Navigator.of(context);
+    if (nav.canPop()) nav.pop();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+
+  final ok = await openPoolPromoVideoUrlExternally(uri);
+  if (ok) {
+    final msg = (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)
+        ? 'Abriendo video en Safari…'
+        : 'Abriendo video en el navegador…';
+    messenger.showSnackBar(SnackBar(content: Text(msg)));
+    return;
+  }
+
+  await Clipboard.setData(ClipboardData(text: raw));
+  final failMsg = (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)
+      ? 'No se pudo abrir Safari. Enlace copiado — pegalo en Safari.'
+      : 'No se pudo abrir el reproductor. Enlace copiado — pegalo en Chrome.';
+  messenger.showSnackBar(SnackBar(content: Text(failMsg)));
+}
+
 /// Reproductor simple en diálogo (video promocional del pool).
 void showPoolPromoVideoDialog(
   BuildContext context, {
@@ -108,6 +186,7 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
   bool _inited = false;
   String? _error;
   bool _codecLikelyUnsupported = false;
+  bool _openingExternal = false;
 
   static bool _urlLooksLikeMov(String url) {
     final u = url.toLowerCase();
@@ -178,9 +257,32 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
   }
 
   Future<void> _openVideoExternally() async {
-    final u = Uri.tryParse(widget.videoUrl.trim());
-    if (u == null) return;
-    await launchUrl(u, mode: LaunchMode.externalApplication);
+    if (_openingExternal) return;
+    setState(() => _openingExternal = true);
+    await openPoolPromoVideoExternallyWithFeedback(
+      context,
+      widget.videoUrl,
+      popRouteFirst: true,
+    );
+  }
+
+  Widget _externalOpenButton(Color onSurface) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      child: OutlinedButton.icon(
+        onPressed: _openingExternal ? null : _openVideoExternally,
+        icon: _openingExternal
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.open_in_new, size: 18),
+        label: Text(
+          _openingExternal ? 'Abriendo…' : 'Abrir video fuera de la app',
+        ),
+      ),
+    );
   }
 
   @override
@@ -237,7 +339,7 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                     textAlign: TextAlign.center,
                   ),
                 ),
-              if (_error != null) ...[
+              if (_error != null)
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
@@ -245,16 +347,8 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                     style: TextStyle(color: onSurface.withValues(alpha: 0.9)),
                     textAlign: TextAlign.center,
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: OutlinedButton.icon(
-                    onPressed: _openVideoExternally,
-                    icon: const Icon(Icons.open_in_browser, size: 20),
-                    label: const Text('Abrir video fuera de la app'),
-                  ),
-                ),
-              ] else if (!_inited)
+                )
+              else if (!_inited)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 48),
                   child: CircularProgressIndicator(),
@@ -317,18 +411,7 @@ class _PoolVideoDialogBodyState extends State<_PoolVideoDialogBody> {
                     ],
                   ),
                 ),
-              if (_inited && _error == null)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: _openVideoExternally,
-                    icon: Icon(Icons.open_in_new,
-                        size: 18, color: onSurface.withValues(alpha: 0.7)),
-                    label: Text('Abrir fuera',
-                        style:
-                            TextStyle(color: onSurface.withValues(alpha: 0.7))),
-                  ),
-                ),
+              _externalOpenButton(onSurface),
             ],
           ),
         ),
@@ -810,6 +893,14 @@ class PoolPromoStrip extends StatelessWidget {
                       ),
                     ),
                   ),
+            if (hasV)
+              Positioned(
+                top: hasI ? null : 10,
+                right: hasI ? null : 10,
+                left: hasI ? 10 : null,
+                bottom: hasI ? (_heroMode ? 88 : 36) : null,
+                child: _PoolPromoAbrirFueraChip(videoUrl: v),
+              ),
             if (!_heroMode)
                 Positioned(
                 left: 8,
@@ -865,6 +956,48 @@ class PoolPromoStrip extends StatelessWidget {
       ),
       padding: const EdgeInsets.all(2.5),
       child: media,
+    );
+  }
+}
+
+/// Chip sobre el banner: abre el video en Safari/Chrome sin pasar por el diálogo.
+class _PoolPromoAbrirFueraChip extends StatelessWidget {
+  const _PoolPromoAbrirFueraChip({required this.videoUrl});
+
+  final String videoUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      borderRadius: BorderRadius.circular(999),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () =>
+            openPoolPromoVideoExternallyWithFeedback(context, videoUrl),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.open_in_new,
+                size: 14,
+                color: Colors.white.withValues(alpha: 0.95),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Abrir fuera',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

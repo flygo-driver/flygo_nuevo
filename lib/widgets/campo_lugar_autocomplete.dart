@@ -90,7 +90,6 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   List<DetalleLugar> _candidatosVozResueltos = const [];
 
   final RaiSpeechBusquedaDireccion _voz = RaiSpeechBusquedaDireccion();
-  bool _vozOk = false;
   bool _escuchando = false;
 
   @override
@@ -99,10 +98,6 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     WidgetsBinding.instance.addObserver(this);
     final init = (widget.initialText ?? '').trim();
     if (init.isNotEmpty) _controller.text = init;
-
-    if (widget.asistenteDireccionHabilitado) {
-      unawaited(_initVoz());
-    }
 
     _focus.addListener(() {
       if (!_focus.hasFocus) {
@@ -122,28 +117,20 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     if (_entry != null) _refreshOverlay();
   }
 
-  Future<void> _initVoz() async {
-    try {
-      final ok = await _voz.initialize();
-      if (mounted) setState(() => _vozOk = ok);
-    } catch (_) {}
-  }
-
   void _onVozListeningChanged(bool active) {
     if (!mounted) return;
     setState(() => _escuchando = active);
   }
 
   Future<void> _toggleVoz() async {
-    // Misma guarda que el asistente FAB (_vozDisponible + no enviar mientras carga).
-    if (!_vozOk || _loading) return;
+    if (_loading) return;
     if (_escuchando) {
       await _voz.stop();
       if (mounted) setState(() => _escuchando = false);
       return;
     }
     _focus.requestFocus();
-    await _voz.toggleListen(
+    final ok = await _voz.toggleListen(
       onListeningChanged: _onVozListeningChanged,
       onResult: (words, isFinal) {
         if (!mounted) return;
@@ -160,6 +147,14 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
         }
       },
     );
+    if (!ok && mounted) {
+      final msg = _voz.ultimoFallo?.trim();
+      if (msg != null && msg.isNotEmpty) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    }
   }
 
   /// Dictado terminado → resolver dirección → [onPlaceSelected] → cotización en el padre.
@@ -816,7 +811,7 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                     : Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (widget.asistenteDireccionHabilitado && _vozOk)
+                          if (widget.asistenteDireccionHabilitado)
                             IconButton(
                               tooltip: _escuchando
                                   ? 'Detener dictado'

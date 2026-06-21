@@ -62,6 +62,8 @@
 			<string>whatsapp</string>
 			<string>waze</string>
 			<string>comgooglemaps</string>
+			<!-- Giras: video promocional fuera de la app (Safari; https no requiere declaración) -->
+			<string>googlechromes</string>
 		</array>
 		<key>NSCameraUsageDescription</key>
 		<string>Necesitamos acceso a la cámara para tomar tu foto de perfil.</string>

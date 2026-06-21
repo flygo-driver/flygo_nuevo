@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../servicios/pool_repo.dart';
+import '../../widgets/admin_pool_comprobante_dialog.dart';
 import 'admin_ui_theme.dart';
 
 /// Pagos pool central pendientes + liquidaciones neto al organizador (admin).
@@ -94,7 +95,6 @@ class _PagosPoolPendientesList extends StatelessWidget {
         .collectionGroup('reservas')
         .where('recaudoDestino', isEqualTo: 'rai')
         .where('estado', isEqualTo: 'reservado')
-        .where('estadoPago', isEqualTo: 'pendiente')
         .limit(40);
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -117,7 +117,13 @@ class _PagosPoolPendientesList extends StatelessWidget {
         if (!snap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        final docs = snap.data!.docs;
+        final docs = snap.data!.docs.where((doc) {
+          final ep =
+              (doc.data()['estadoPago'] ?? '').toString().trim().toLowerCase();
+          return ep == 'pendiente' ||
+              ep == 'comprobante_enviado' ||
+              ep.isEmpty;
+        }).toList();
         if (docs.isEmpty) {
           return Text(
             'No hay transferencias pool pendientes de verificar.',
@@ -130,6 +136,8 @@ class _PagosPoolPendientesList extends StatelessWidget {
             final poolId = doc.reference.parent.parent?.id ?? '';
             final reservaId = doc.id;
             final ref = (r['referenciaRecaudo'] ?? '').toString();
+            final comprobante = (r['comprobanteUrl'] ?? '').toString().trim();
+            final estadoPago = (r['estadoPago'] ?? '').toString();
             final total = ((r['total'] ?? 0) as num).toDouble();
             final seats = ((r['seats'] ?? 0) as num).toInt();
             final cliente = (r['clienteNombre'] ?? 'Cliente').toString();
@@ -177,13 +185,26 @@ class _PagosPoolPendientesList extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       'Cliente: $cliente\n'
-                      'Referencia: ${ref.isEmpty ? "—" : ref}',
+                      'Referencia: ${ref.isEmpty ? "—" : ref}\n'
+                      'Pago: ${estadoPago.isEmpty ? "pendiente" : estadoPago}'
+                      '${comprobante.isNotEmpty ? " · Recibo: enviado" : " · Recibo: faltante"}',
                       style: TextStyle(color: AdminUi.secondary(context)),
                     ),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
                       children: [
+                        if (comprobante.isNotEmpty)
+                          OutlinedButton.icon(
+                            onPressed: accionEnCurso
+                                ? null
+                                : () => AdminPoolComprobanteDialog.mostrar(
+                                      context,
+                                      comprobante,
+                                    ),
+                            icon: const Icon(Icons.receipt_long, size: 18),
+                            label: const Text('Ver bauche'),
+                          ),
                         if (ref.isNotEmpty)
                           OutlinedButton.icon(
                             onPressed: accionEnCurso

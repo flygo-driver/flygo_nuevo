@@ -26,6 +26,7 @@ import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
+import 'package:flygo_nuevo/widgets/promo_mxk_cliente_panel.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
@@ -110,6 +111,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   int? _contadorViajesCache;
   DateTime? _contadorTimestamp;
   Map<String, dynamic>? _promoSnapshotCotizacion;
+  bool _promoOmitidaPorLargaDistancia = false;
 
   // Timer para debounce del cálculo automático
   Timer? _calculoDebounce;
@@ -668,6 +670,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _peaje = totalPeaje;
         _segmentos = segmentos;
         _promoSnapshotCotizacion = promoSnapshot;
+        _promoOmitidaPorLargaDistancia =
+            servicio.ultimoDesgloseCotizacion?['promoOmitidaPorLargaDistancia'] ==
+                true;
         _cargando = false;
         _mensajeCarga = '';
         // Igual que [ProgramarViaje]: al terminar la cotización, resumen arriba con precio grande.
@@ -1195,7 +1200,13 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   style: TextStyle(color: textMuted, fontSize: 12),
                 ),
               ],
-              const SizedBox(height: 18),
+              PromoMxKClientePanel(
+                promoSnapshot: _promoSnapshotCotizacion,
+                promoOmitidaPorLargaDistancia: _promoOmitidaPorLargaDistancia,
+                textColor: textPrimary,
+                mutedColor: textMuted,
+              ),
+              const SizedBox(height: 4),
               Text(
                 'TOTAL A PAGAR',
                 textAlign: TextAlign.center,
@@ -1922,6 +1933,13 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                           child: Divider(color: dividerSoft),
                         ),
                         const SizedBox(height: 12),
+                        PromoMxKClientePanel(
+                          promoSnapshot: _promoSnapshotCotizacion,
+                          promoOmitidaPorLargaDistancia:
+                              _promoOmitidaPorLargaDistancia,
+                          textColor: textPrimary,
+                          mutedColor: textMuted,
+                        ),
                         Text(
                           'TOTAL',
                           textAlign: TextAlign.center,

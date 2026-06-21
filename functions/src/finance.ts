@@ -8,6 +8,11 @@ import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
 import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import {
+  aplicarIncentivoComisionEnFinalizar,
+  getComisionIncentivosTaxistaConfigCached,
+  statsDocRef,
+} from "./comision_incentivos_taxista.js";
 import { assertMultiparadaCompletaParaFinalizar } from "./multiparada.js";
 import {
   elegibleLiquidacionSemanalCache,
@@ -804,6 +809,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
   if (idem.done) return idem.result;
 
   const comisionViajePct = await getComisionViajePorcentajeCached();
+  const incentivosCfg = await getComisionIncentivosTaxistaConfigCached();
 
   const viajeRef = db().collection("viajes").doc(viajeId);
   const result = await db().runTransaction(async (tx) => {
@@ -885,28 +891,24 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const comisionCentsDb = typeof d.comision_cents === "number" ? Math.trunc(d.comision_cents) : null;
     const gananciaCentsDb = typeof d.ganancia_cents === "number" ? Math.trunc(d.ganancia_cents) : null;
 
-    const precioCents = (precioCentsDb !== null && precioCentsDb > 0)
-      ? precioCentsDb
-      : toCents(d.precioFinal ?? d.precio ?? d.total ?? 0);
-    const comisionCents = (comisionCentsDb !== null && comisionCentsDb >= 0)
-      ? comisionCentsDb
-      : comisionCentsDesdePrecioCents(precioCents, comisionViajePct);
-    const gananciaCents = (gananciaCentsDb !== null && gananciaCentsDb >= 0)
-      ? gananciaCentsDb
-      : Math.max(0, precioCents - comisionCents);
-
     const metodo = String(d.metodoPago ?? "").toLowerCase().trim();
     const esEfectivo = metodo.includes("efectivo");
     const metodoAsiento = esEfectivo ? "efectivo" : (metodo.includes("transfer") ? "transferencia" : "tarjeta");
     const pagoRegistrado = d.pagoRegistrado === true;
 
+    const precioCents = (precioCentsDb !== null && precioCentsDb > 0)
+      ? precioCentsDb
+      : toCents(d.precioFinal ?? d.precio ?? d.total ?? 0);
+
     const billeRef = db().collection("billeteras_taxista").doc(uidTaxista);
     const asientoRef = db().collection("pagos").doc(`viaje_${viajeId}_asiento`);
     const userTaxRef = db().collection("usuarios").doc(uidTaxista);
+    const statsRef = statsDocRef(uidTaxista);
 
     // Firestore: todas las lecturas de la transacción antes de cualquier escritura.
     const uSnap = await tx.get(userTaxRef);
     const billeSnapPre = await tx.get(billeRef);
+    const statsSnap = await tx.get(statsRef);
     let asientoSnapPre: DocumentSnapshot | null = null;
     let ledgerMovSnapPre: DocumentSnapshot | null = null;
     if (!pagoRegistrado) {
@@ -915,6 +917,30 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         ledgerMovSnapPre = await tx.get(comisionViajeEfectivoLedgerRef(uidTaxista, viajeId));
       }
     }
+
+    let comisionPctAplicada = comisionViajePct;
+    let incentivoViajePatch: AnyMap = {};
+    if (!pagoRegistrado) {
+      const inc = aplicarIncentivoComisionEnFinalizar({
+        cfg: incentivosCfg,
+        globalPct: comisionViajePct,
+        statsData: (statsSnap.data() ?? {}) as AnyMap,
+        now: new Date(),
+      });
+      comisionPctAplicada = inc.pctEfectiva;
+      incentivoViajePatch = inc.viajePatch;
+      tx.set(statsRef, inc.statsPatch, { merge: true });
+    }
+
+    // Tras `pagoRegistrado`, conservar partidas ya cerradas (idempotencia).
+    const comisionCents =
+      pagoRegistrado && comisionCentsDb !== null && comisionCentsDb >= 0
+        ? comisionCentsDb
+        : comisionCentsDesdePrecioCents(precioCents, comisionPctAplicada);
+    const gananciaCents =
+      pagoRegistrado && gananciaCentsDb !== null && gananciaCentsDb >= 0
+        ? gananciaCentsDb
+        : Math.max(0, precioCents - comisionCents);
 
     const uData = (uSnap.data() ?? {}) as AnyMap;
     const perfilFacturaSnap = snapshotPerfilTaxistaParaFactura(uData);
@@ -1026,7 +1052,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
           totalCents: precioCents,
           comisionCents,
           gananciaCents,
-          comisionPlataformaPct: comisionViajePct,
+          comisionPlataformaPct: comisionPctAplicada,
           fuenteAsiento: "finalizar_viaje_seguro_cf",
           metodo: metodoAsiento,
           estado: esEfectivo ? "comision_pendiente" : "por_liquidar",
@@ -1056,6 +1082,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       precio_cents: precioCents,
       comision_cents: comisionCents,
       ganancia_cents: gananciaCents,
+      comisionPorcentaje: comisionPctAplicada,
+      ...incentivoViajePatch,
       precio: fromCents(precioCents),
       comision: fromCents(comisionCents),
       gananciaTaxista: fromCents(gananciaCents),
@@ -1609,6 +1637,8 @@ export const aceptarViajeSeguro = onCall(async (request) => {
       throw new HttpsError("failed-precondition", "tipo-servicio-no-coincide");
     }
 
+    const uidCliente = String(d.uidCliente ?? d.clienteId ?? "").trim();
+
     const tel = telefono || String(uData.telefono ?? "");
     const placaFinal = placa || String(uData.placa ?? "");
     const tipo = tipoVehiculo || String(uData.tipoVehiculo ?? "");
@@ -1655,7 +1685,30 @@ export const aceptarViajeSeguro = onCall(async (request) => {
       actualizadoEn: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    return { ok: true, viajeId, alreadyTaken: false };
+    if (esTurismoPool) {
+      tx.set(
+        db().collection("choferes_turismo").doc(uidActor),
+        {
+          disponible: false,
+          viajeActualId: viajeId,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      if (uidCliente) {
+        tx.set(
+          db().collection("usuarios").doc(uidCliente),
+          {
+            viajeActivoId: viajeId,
+            updatedAt: FieldValue.serverTimestamp(),
+            actualizadoEn: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+      }
+    }
+
+    return { ok: true, viajeId, alreadyTaken: false, esTurismoPool };
   });
 
   await markIdempotencyDone(idem.ref, result as AnyMap);

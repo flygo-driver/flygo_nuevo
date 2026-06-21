@@ -64,7 +64,6 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
   final TextEditingController _searchCtrl = TextEditingController();
   final RaiSpeechBusquedaDireccion _voz = RaiSpeechBusquedaDireccion();
-  bool _vozOk = false;
   bool _escuchando = false;
 
   final Map<String, List<TurismoLugar>> _destinosPorSubtipo = {};
@@ -143,14 +142,6 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     _tipoVehiculoSeleccionado = widget.tipoVehiculoInicial ?? 'carro';
     _organizarCatalogo(_catalogoBase, initTabs: true);
     _cargarDestinosFirestore();
-    unawaited(_initVoz());
-  }
-
-  Future<void> _initVoz() async {
-    try {
-      final ok = await _voz.initialize();
-      if (mounted) setState(() => _vozOk = ok);
-    } catch (_) {}
   }
 
   Future<void> _resolverYAplicarTrasVoz(String texto) async {
@@ -186,13 +177,13 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
   }
 
   Future<void> _toggleVoz() async {
-    if (!_vozOk || _buscandoGoogle) return;
+    if (_buscandoGoogle) return;
     if (_escuchando) {
       await _voz.stop();
       if (mounted) setState(() => _escuchando = false);
       return;
     }
-    await _voz.toggleListen(
+    final ok = await _voz.toggleListen(
       onListeningChanged: (active) {
         if (mounted) setState(() => _escuchando = active);
       },
@@ -208,6 +199,14 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
         }
       },
     );
+    if (!ok && mounted) {
+      final msg = _voz.ultimoFallo?.trim();
+      if (msg != null && msg.isNotEmpty) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    }
   }
 
   Future<void> _abrirBusquedaRai() async {
@@ -720,22 +719,21 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                             : Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  if (_vozOk)
-                                    IconButton(
-                                      tooltip: _escuchando
-                                          ? 'Detener dictado'
-                                          : 'Dictar destino',
-                                      icon: Icon(
-                                        _escuchando
-                                            ? Icons.mic_rounded
-                                            : Icons.mic_none_rounded,
-                                        color: _escuchando
-                                            ? Colors.redAccent
-                                            : accent,
-                                        size: 22,
-                                      ),
-                                      onPressed: _toggleVoz,
+                                  IconButton(
+                                    tooltip: _escuchando
+                                        ? 'Detener dictado'
+                                        : 'Dictar destino',
+                                    icon: Icon(
+                                      _escuchando
+                                          ? Icons.mic_rounded
+                                          : Icons.mic_none_rounded,
+                                      color: _escuchando
+                                          ? Colors.redAccent
+                                          : accent,
+                                      size: 22,
                                     ),
+                                    onPressed: _toggleVoz,
+                                  ),
                                   IconButton(
                                     tooltip: 'Búsqueda inteligente RAI',
                                     icon: const Icon(

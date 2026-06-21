@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import '../../widgets/admin_pool_comprobante_dialog.dart';
 import '../../servicios/pool_repo.dart';
 import '../../utils/pool_recaudo_central.dart';
 import '../../utils/pools_producto_copy.dart';
@@ -444,9 +445,14 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                           final total = ((r['total'] ?? 0) as num).toDouble();
                           final ref = (r['referenciaRecaudo'] ?? '').toString();
                           final estadoPago = (r['estadoPago'] ?? '').toString();
+                          final comprobante =
+                              (r['comprobanteUrl'] ?? '').toString().trim();
+                          final ep = estadoPago.toLowerCase();
                           final pendienteCentral = recaudoCentral &&
                               estL == 'reservado' &&
-                              estadoPago.toLowerCase() == 'pendiente' &&
+                              (ep == 'pendiente' ||
+                                  ep == 'comprobante_enviado' ||
+                                  ep.isEmpty) &&
                               ref.isNotEmpty;
                           final pagadaCentral = recaudoCentral &&
                               estL == 'pagado' &&
@@ -479,11 +485,23 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                     ),
                                   if (ref.isNotEmpty)
                                     Text(
-                                      'Ref: $ref · Pago: ${estadoPago.isEmpty ? "—" : estadoPago}',
+                                      'Ref: $ref · Pago: ${estadoPago.isEmpty ? "—" : estadoPago}'
+                                      '${comprobante.isNotEmpty ? " · Recibo OK" : ""}',
                                       style: TextStyle(
                                           color: AdminUi.secondary(context),
                                           fontSize: 11),
                                     ),
+                                  if (comprobante.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    OutlinedButton.icon(
+                                      onPressed: _accionEnCurso
+                                          ? null
+                                          : () => AdminPoolComprobanteDialog
+                                              .mostrar(context, comprobante),
+                                      icon: const Icon(Icons.receipt_long, size: 16),
+                                      label: const Text('Ver bauche cliente'),
+                                    ),
+                                  ],
                                   if (pendienteCentral || pagadaCentral) ...[
                                     const SizedBox(height: 8),
                                     Wrap(

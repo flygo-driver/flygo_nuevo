@@ -529,6 +529,28 @@ class PoolRepo {
     }
   }
 
+  static Future<void> reportarComprobanteReservaSeguro({
+    required String poolId,
+    required String reservaId,
+    required String comprobanteUrl,
+    String? idempotencyKey,
+  }) async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) throw 'Debes iniciar sesión';
+    final url = comprobanteUrl.trim();
+    if (url.isEmpty) throw 'Falta comprobante';
+    final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+        ? idempotencyKey.trim()
+        : 'bauche_${poolId}_${reservaId}_${DateTime.now().millisecondsSinceEpoch}';
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    await fx.httpsCallable('reportPoolReservaComprobante').call(<String, dynamic>{
+      'poolId': poolId,
+      'reservaId': reservaId,
+      'comprobanteUrl': url,
+      'idempotencyKey': key,
+    });
+  }
+
   static Future<PoolReservaResult> reservarCupos({
     required String poolId,
     required int seats,

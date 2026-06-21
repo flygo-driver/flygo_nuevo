@@ -48,7 +48,6 @@ class _RaiDireccionInteligenteSheetState
   final _voz = RaiSpeechBusquedaDireccion();
   bool _buscando = false;
   bool _escuchando = false;
-  bool _vozOk = false;
   List<DetalleLugar> _resultados = const [];
   String? _error;
 
@@ -57,17 +56,9 @@ class _RaiDireccionInteligenteSheetState
     super.initState();
     final init = (widget.textoInicial ?? '').trim();
     if (init.isNotEmpty) _input.text = init;
-    unawaited(_initVoz());
     if (init.length >= 3) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _buscar());
     }
-  }
-
-  Future<void> _initVoz() async {
-    try {
-      final ok = await _voz.initialize();
-      if (mounted) setState(() => _vozOk = ok);
-    } catch (_) {}
   }
 
   @override
@@ -78,13 +69,13 @@ class _RaiDireccionInteligenteSheetState
   }
 
   Future<void> _toggleVoz() async {
-    if (!_vozOk || _buscando) return;
+    if (_buscando) return;
     if (_escuchando) {
       await _voz.stop();
       if (mounted) setState(() => _escuchando = false);
       return;
     }
-    await _voz.toggleListen(
+    final ok = await _voz.toggleListen(
       onListeningChanged: (active) {
         if (mounted) setState(() => _escuchando = active);
       },
@@ -99,6 +90,14 @@ class _RaiDireccionInteligenteSheetState
         }
       },
     );
+    if (!ok && mounted) {
+      final msg = _voz.ultimoFallo?.trim();
+      if (msg != null && msg.isNotEmpty) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    }
   }
 
   Future<void> _buscar() async {
@@ -215,19 +214,18 @@ class _RaiDireccionInteligenteSheetState
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        if (_vozOk)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4, bottom: 4),
-                            child: IconButton.filledTonal(
-                              onPressed: _buscando ? null : _toggleVoz,
-                              icon: Icon(
-                                _escuchando
-                                    ? Icons.mic_rounded
-                                    : Icons.mic_none_rounded,
-                                color: _escuchando ? cs.error : null,
-                              ),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4, bottom: 4),
+                          child: IconButton.filledTonal(
+                            onPressed: _buscando ? null : _toggleVoz,
+                            icon: Icon(
+                              _escuchando
+                                  ? Icons.mic_rounded
+                                  : Icons.mic_none_rounded,
+                              color: _escuchando ? cs.error : null,
                             ),
                           ),
+                        ),
                         Expanded(
                           child: TextField(
                             controller: _input,

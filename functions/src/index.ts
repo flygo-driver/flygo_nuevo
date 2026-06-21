@@ -37,3 +37,5 @@ export * from "./banco_movimientos.js";
 export * from "./conciliacion.js";
 export * from "./recaudo_qr.js";
 export * from "./azul.js";
+export * from "./turismo_asignacion.js";
+export * from "./turismo_mensajes_adm_notify.js";

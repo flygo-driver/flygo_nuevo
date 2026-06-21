@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
+import 'package:flygo_nuevo/widgets/pool_reserva_bauche_uploader.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -976,7 +977,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                 esCentral
                     ? PoolsProductoCopy.recaudoCentralClientePie
                     : bancoCompleto
-                        ? 'Haz el deposito al chofer/agencia y envia el bauche por WhatsApp para confirmar tu asiento.'
+                        ? 'Transferí a la cuenta indicada, elegí el bauche y tocá «Enviar bauche a RAI».'
                         : 'Este viaje no tiene cuenta bancaria completa. Contacta al dueño del viaje por telefono/WhatsApp.',
                 style: const TextStyle(color: textFaint),
               ),
@@ -1033,6 +1034,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
         }
         _mostrarInstruccionesTransferencia(
           result.recaudoCentral ? result.montoEsperadoRecaudoRd : deposito,
+          reservaId: result.reservaId,
           origen: origen,
           destino: destino,
           choferWhatsApp: choferWhatsApp,
@@ -1099,6 +1101,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 
   void _mostrarInstruccionesTransferencia(
     double deposito, {
+    required String reservaId,
     required String origen,
     required String destino,
     required String choferWhatsApp,
@@ -1111,6 +1114,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
   }) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF111111),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -1121,100 +1125,130 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
         const accent = Color(0xFF4ADE80);
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(recaudoCentral ? 'Transferencia a RAI' : 'Deposito para reservar',
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 18,
+              bottom: 24 + MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    recaudoCentral
+                        ? PoolsProductoCopy.clienteBaucheSheetTitulo
+                        : 'Deposito para reservar',
                     style: const TextStyle(
-                        color: accent,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800)),
-                const SizedBox(height: 10),
-                _bankRow(
-                  sheetContext,
-                  'Banco',
-                  recaudoCentral ? RecargaBancariaConfig.banco : bancoNombre,
-                ),
-                _bankRow(
-                  sheetContext,
-                  'No. de cuenta',
-                  recaudoCentral
-                      ? RecargaBancariaConfig.numeroCuenta
-                      : bancoCuenta,
-                ),
-                _bankRow(
-                  sheetContext,
-                  'Tipo de cuenta',
-                  recaudoCentral
-                      ? RecargaBancariaConfig.tipoCuenta
-                      : bancoTipoCuenta,
-                ),
-                _bankRow(
-                  sheetContext,
-                  'Titular',
-                  recaudoCentral
-                      ? RecargaBancariaConfig.titular
-                      : bancoTitular,
-                ),
-                _bankRow(sheetContext, 'Concepto', _concepto),
-                if (recaudoCentral && referenciaRecaudo.trim().isNotEmpty)
-                  _bankRow(sheetContext, 'Referencia', referenciaRecaudo.trim()),
-                const SizedBox(height: 10),
-                Text(
+                      color: accent,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    recaudoCentral
+                        ? PoolsProductoCopy.clienteBaucheCuentaTitulo
+                        : 'Cuenta donde depositar',
+                    style: const TextStyle(
+                      color: textPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _bankRow(
+                    sheetContext,
+                    'Banco',
+                    recaudoCentral ? RecargaBancariaConfig.banco : bancoNombre,
+                  ),
+                  _bankRow(
+                    sheetContext,
+                    'No. de cuenta',
+                    recaudoCentral
+                        ? RecargaBancariaConfig.numeroCuenta
+                        : bancoCuenta,
+                  ),
+                  _bankRow(
+                    sheetContext,
+                    'Tipo de cuenta',
+                    recaudoCentral
+                        ? RecargaBancariaConfig.tipoCuenta
+                        : bancoTipoCuenta,
+                  ),
+                  _bankRow(
+                    sheetContext,
+                    'Titular',
+                    recaudoCentral
+                        ? RecargaBancariaConfig.titular
+                        : bancoTitular,
+                  ),
+                  _bankRow(sheetContext, 'Concepto', _concepto),
+                  if (recaudoCentral && referenciaRecaudo.trim().isNotEmpty)
+                    _bankRow(sheetContext, 'Referencia', referenciaRecaudo.trim()),
+                  const SizedBox(height: 10),
+                  Text(
                     recaudoCentral
                         ? 'Monto a transferir: RD\$ ${deposito.toStringAsFixed(0)}'
                         : 'Monto del depósito: RD\$ ${deposito.toStringAsFixed(0)}',
                     style: const TextStyle(
-                        color: textPrimary, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 12),
-                Text(
-                  recaudoCentral
-                      ? '${PoolsProductoCopy.recaudoCentralClientePasos}\n\n${PoolsProductoCopy.recaudoCentralClienteSheetCierre}'
-                      : 'Cuando hagas el deposito, envia el bauche por WhatsApp al chofer/agencia para validar tu cupo.',
-                  style: const TextStyle(color: textMuted),
-                ),
-                const SizedBox(height: 16),
-                if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
+                      color: textPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    recaudoCentral
+                        ? PoolsProductoCopy.recaudoCentralClientePasos
+                        : '1. Transferí el monto a la cuenta de arriba.\n'
+                            '2. Elegí la foto del bauche.\n'
+                            '3. Tocá «Enviar bauche a RAI» (o al operador si es legacy).',
+                    style: const TextStyle(color: textMuted, height: 1.4),
+                  ),
+                  const SizedBox(height: 16),
+                  PoolReservaBaucheUploader(
+                    poolId: widget.poolId,
+                    reservaId: reservaId,
+                  ),
+                  const SizedBox(height: 12),
+                  if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _openWhatsApp(
+                          choferWhatsApp,
+                          'Hola, acabo de reservar cupo para $origen -> $destino.\n'
+                          'Asientos: $_seats\n'
+                          'Monto deposito: RD\$ ${deposito.toStringAsFixed(0)}\n'
+                          'Te envio el bauche por WhatsApp si lo necesitas.',
+                        ),
+                        icon: const Icon(Icons.chat),
+                        label: const Text('Coordinar por WhatsApp'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF25D366),
+                          side: const BorderSide(color: Color(0xFF25D366)),
+                        ),
+                      ),
+                    ),
+                  if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
+                    const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () => _openWhatsApp(
-                        choferWhatsApp,
-                        'Hola, acabo de reservar cupo para $origen -> $destino.\n'
-                        'Asientos: $_seats\n'
-                        'Monto deposito: RD\$ ${deposito.toStringAsFixed(0)}\n'
-                        'Te envio el bauche para confirmar mi reserva.',
-                      ),
-                      icon: const Icon(Icons.chat),
-                      label: const Text('Enviar bauche por WhatsApp'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF25D366),
-                        foregroundColor: Colors.white,
-                      ),
+                    child: TextButton.icon(
+                      onPressed: () {
+                        Navigator.pop(sheetContext);
+                        _snack(
+                          'Reserva creada. Cuando deposites, enviá tu bauche desde «Tus reservas».',
+                        );
+                      },
+                      icon: const Icon(Icons.schedule_outlined),
+                      label: const Text('Depositaré después'),
+                      style: TextButton.styleFrom(foregroundColor: textMuted),
                     ),
                   ),
-                if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
-                  const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      Navigator.pop(context, true);
-                      _snack(
-                          'Reserva creada. Revisa tu historial para ver el estado.');
-                    },
-                    icon: const Icon(Icons.check_circle_outline),
-                    label: const Text('Entendido'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: accent,
-                      foregroundColor: Colors.black,
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -1320,29 +1354,60 @@ class _MisReservasGiraPanel extends StatelessWidget {
                     (r['estado'] ?? '').toString().trim().toLowerCase();
                 final seats = ((r['seats'] ?? 1) as num).toInt();
                 final metodo = (r['metodoPago'] ?? '').toString();
+                final comprobante =
+                    (r['comprobanteUrl'] ?? '').toString().trim();
+                final bool esTransferencia =
+                    metodo.toLowerCase().contains('transfer');
+                final bool pendienteComprobante = esTransferencia &&
+                    estado == 'reservado' &&
+                    comprobante.isEmpty;
+                final bool comprobanteEnviado = comprobante.isNotEmpty;
                 final bool puedeCancelar =
                     poolPermiteCancel && estado == 'reservado';
                 final bool cancelando = cancelandoReservaId == doc.id;
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          usaRecaudoCentral
-                              ? PoolsProductoCopy.recaudoCentralEstadoReservaCliente(r)
-                              : '$seats asiento(s) · $metodo · '
-                                  '${estado == 'pagado' ? 'Pago confirmado' : 'Pendiente (depósito o abordaje)'}',
-                          style: const TextStyle(color: textMuted),
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              usaRecaudoCentral
+                                  ? PoolsProductoCopy.recaudoCentralEstadoReservaCliente(r)
+                                  : '$seats asiento(s) · $metodo · '
+                                      '${estado == 'pagado' ? 'Pago confirmado' : comprobanteEnviado ? 'Recibo enviado · pendiente validación' : 'Pendiente depósito y bauche'}',
+                              style: const TextStyle(color: textMuted),
+                            ),
+                          ),
+                          if (puedeCancelar)
+                            TextButton(
+                              onPressed: cancelando ? null : () => onCancelar(doc.id),
+                              child: Text(cancelando ? '…' : 'Cancelar'),
+                            ),
+                        ],
                       ),
-                      if (puedeCancelar)
-                        TextButton(
-                          onPressed: cancelando ? null : () => onCancelar(doc.id),
-                          child: Text(cancelando ? '…' : 'Cancelar'),
+                      if (pendienteComprobante) ...[
+                        const SizedBox(height: 8),
+                        PoolReservaBaucheUploader(
+                          poolId: poolId,
+                          reservaId: doc.id,
+                          compact: true,
                         ),
+                      ] else if (comprobanteEnviado && estado == 'reservado') ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Recibo enviado. RAI validará tu pago pronto.',
+                          style: TextStyle(
+                            color: Colors.green.shade400,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 );
