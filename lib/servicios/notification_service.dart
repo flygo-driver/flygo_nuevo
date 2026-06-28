@@ -29,6 +29,8 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   bool _inited = false;
   AudioPlayer? _timbrePlayer;
+  int _lastPoolOfferSoundMs = 0;
+  static const int _poolOfferSoundDebounceMs = 480;
 
   // 🔔 CANALES ANDROID ACTUALIZADOS (SIN RASTRO DE FLYGO)
   static const String _channelId = 'rai_driver_offers_v1'; // ✅ NUEVO ID
@@ -127,11 +129,11 @@ class NotificationService {
     }
   }
 
-  /// Timbre de ofertas del pool: solo conductor (nunca pasajero).
-  static bool get _timbrePoolPermitido => !isClienteFlavor;
+  /// Timbre de ofertas del pool: conductor o Play unificada (nunca APK solo pasajero).
+  static bool get _timbrePoolPermitido => isTaxistaCapableFlavor;
 
-  /// Timbre / bandeja del catálogo Giras por cupos: solo cliente.
-  static bool get _girasClientePermitido => isClienteFlavor;
+  /// Timbre / bandeja Giras por cupos: pasajero o Play unificada.
+  static bool get _girasClientePermitido => isPasajeroCapableFlavor;
 
   /// Marca un viaje como ya notificado para no reproducir timbre de pool
   /// (p. ej. el pasajero acaba de crear su propio pedido).
@@ -236,6 +238,9 @@ class NotificationService {
   Future<void> playPoolOfferSoundInApp() async {
     if (!_timbrePoolPermitido) return;
     try {
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastPoolOfferSoundMs < _poolOfferSoundDebounceMs) return;
+      _lastPoolOfferSoundMs = now;
       await ensureInited();
       await _playTimbreAsset();
     } catch (e, st) {
@@ -256,12 +261,16 @@ class NotificationService {
     }
   }
 
-  /// Entrada al catálogo: un timbre + mensaje resumen (una vez por visita a la pantalla).
+  /// Entrada al catálogo: timbre + resumen solo si hay salidas nuevas para el cliente.
   Future<void> notifyEntradaCatalogoGirasCliente({
     required int salidasVisibles,
     required int salidasNuevas,
   }) async {
-    if (!_girasClientePermitido || salidasVisibles < 1) return;
+    if (!_girasClientePermitido ||
+        salidasVisibles < 1 ||
+        salidasNuevas < 1) {
+      return;
+    }
     await ensureInited();
     try {
       await HapticFeedback.mediumImpact();
@@ -270,17 +279,11 @@ class NotificationService {
 
     final String titulo;
     final String cuerpo;
-    if (salidasNuevas > 0) {
-      titulo = salidasNuevas == 1
-          ? 'Nueva salida por cupos'
-          : '$salidasNuevas nuevas salidas por cupos';
-      cuerpo =
-          '$salidasVisibles en el catálogo. Tocá para ver giras, tours y excursiones.';
-    } else {
-      titulo = 'Giras por cupos';
-      cuerpo =
-          '$salidasVisibles salida${salidasVisibles == 1 ? '' : 's'} disponible${salidasVisibles == 1 ? '' : 's'} para reservar.';
-    }
+    titulo = salidasNuevas == 1
+        ? 'Nueva salida por cupos'
+        : '$salidasNuevas nuevas salidas por cupos';
+    cuerpo =
+        '$salidasVisibles en el catálogo. Tocá para ver giras, tours y excursiones.';
 
     await _showGiraCuposClienteLocal(
       notifId: 'entrada_giras_${DateTime.now().millisecondsSinceEpoch}'.hashCode &

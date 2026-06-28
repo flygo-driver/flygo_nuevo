@@ -129,6 +129,17 @@ cpR(publicDir, outDir);
 applyRaiWebBranding(outDir);
 patchIndexHtmlFaviconCache(outDir);
 
+/** SPA: Firebase sirve 404.html en rutas sin archivo; copiar index evita página rota. */
+function ensureSpa404Fallback(out) {
+  const indexPath = path.join(out, "index.html");
+  const notFoundPath = path.join(out, "404.html");
+  if (!fs.existsSync(indexPath)) return;
+  fs.copyFileSync(indexPath, notFoundPath);
+  console.log("[prepare-hosting] 404.html ← index.html (SPA admin/web).");
+}
+
+ensureSpa404Fallback(outDir);
+
 if (hadFlutterBuild) {
   console.log("[prepare-hosting] OK: public/ fusionado en build/web (Flutter web existente).");
 } else if (

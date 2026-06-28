@@ -6,6 +6,7 @@ import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
+import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 
 class BolaPuebloCrearPublicacionResult {
@@ -67,6 +68,9 @@ class _BolaPuebloCrearPublicacionFlowState
   void initState() {
     super.initState();
     _syncMontoDesdeKm();
+    TarifaServiceUnificado().recargar().then((_) {
+      if (mounted) _syncMontoDesdeKm();
+    });
   }
 
   @override

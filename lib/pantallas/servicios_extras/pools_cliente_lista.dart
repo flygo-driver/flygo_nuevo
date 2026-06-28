@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'pools_cliente_detalle.dart';
+import 'pools_cliente_mis_giras.dart';
 
 class PoolsClienteLista extends StatefulWidget {
   final String tipo; // "todos" | "consular" | "tour" | "excursion"
@@ -302,6 +303,20 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
           style: TextStyle(color: accent, fontWeight: FontWeight.w800),
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: 'Mis giras',
+            icon: const Icon(Icons.confirmation_number_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const PoolsClienteMisGiras(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -447,14 +462,14 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     final occ = (d['asientosReservados'] ?? 0) as int;
                     final estado = (d['estado'] ?? '').toString();
                     final precio = (d['precioPorAsiento'] as num).toDouble();
-                    final mult = (d['sentido'] == 'ida_y_vuelta') ? 2 : 1;
+                    final precioCliente = precio;
                     final fecha = _fechaSalida(d);
 
                     final left = (cap - occ).clamp(0, cap);
                     final confirmado = estado == 'confirmado';
                     final cuposLlenos =
                         left == 0 || estado.trim().toLowerCase() == 'lleno';
-                    final tipo = (d['tipo'] ?? 'consular').toString();
+                    final tipo = (d['tipo'] ?? '').toString();
                     final badgeLabelRaw =
                         (d['servicioBadge'] ?? d['tipo'] ?? '')
                             .toString()
@@ -465,7 +480,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     final origen = (d['origenTown'] ?? '').toString().trim();
                     final destino = (d['destino'] ?? '').toString().trim();
                     final precioTxt =
-                        'RD\$ ${(precio * mult).toStringAsFixed(0)} / pers';
+                        'RD\$ ${precioCliente.toStringAsFixed(0)} / pers';
                     final agenciaNombre =
                         (d['agenciaNombre'] ?? '').toString().trim();
                     final agenciaLogoUrl =
@@ -790,7 +805,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                       d: d,
                                       fecha: fecha,
                                       left: left,
-                                      precioTotalPorSeat: precio * mult,
+                                      precioTotalPorSeat: precioCliente,
                                       paradas: paradas,
                                       poolId: id,
                                     );
@@ -810,7 +825,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                       d: d,
                                       fecha: fecha,
                                       left: left,
-                                      precioTotalPorSeat: precio * mult,
+                                      precioTotalPorSeat: precioCliente,
                                       paradas: paradas,
                                       poolId: id,
                                     );
@@ -828,7 +843,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                       d: d,
                                       fecha: fecha,
                                       left: left,
-                                      precioTotalPorSeat: precio * mult,
+                                      precioTotalPorSeat: precioCliente,
                                       paradas: paradas,
                                       poolId: id,
                                     );

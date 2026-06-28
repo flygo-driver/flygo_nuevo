@@ -16,7 +16,10 @@ import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
 import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/utils/bancos_rd.dart';
+import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
+import 'package:flygo_nuevo/widgets/pool_gira_contenido_form.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -84,27 +87,17 @@ class PoolsTaxistaCrear extends StatefulWidget {
 class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   final _form = GlobalKey<FormState>();
   static const List<String> _tiposSugeridos = <String>[
-    'consular',
     'tour',
     'excursion',
     'gira',
     'tour cibaeño',
   ];
-  static const List<String> _incluyeSugeridos = <String>[
-    'Buggy',
-    'Motor',
-    'Bote',
-    'Comida',
-    'Guia',
-    'Snorkel',
-    'Fotos',
-  ];
 
-  // Estado del formulario (con defaults sensatos)
-  String _tipo = 'tour';
+  // Estado del formulario (sin valores prellenados de ruta/destino)
+  String _tipo = '';
   String _sentido = 'ida';
-  String _origenTown = 'Higüey';
-  String _destino = 'Consulado SD';
+  String _origenTown = '';
+  String _destino = '';
   String? _destinoPlaceId;
   double? _destinoLat;
   double? _destinoLon;
@@ -128,25 +121,24 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   String _bancoTitular = '';
   String _servicioBadge = '';
   String _descripcionViaje = '';
+  PoolGiraContenidoExtra _contenidoExtra = const PoolGiraContenidoExtra();
 
-  DateTime _fecha = DateTime.now().add(const Duration(days: 1));
+  DateTime? _fecha;
   DateTime? _fechaVuelta;
 
-  int _capacidad = 15;
-  int _minConf = 8;
-  int _cuposComisionRai = 5;
+  int? _capacidad;
+  int? _minConf;
+  int? _cuposComisionRai;
 
-  double _precio = 1000;
+  double? _precio;
   double _deposit = 0.30; // 0..1
   double _fee = 0.10; // 0..1 (giras: comision empresa 10%)
 
   final _agenciaCtrl = TextEditingController();
-  final _tipoCtrl = TextEditingController(text: 'tour');
+  final _tipoCtrl = TextEditingController();
   final _telCtrl = TextEditingController();
   final _waCtrl = TextEditingController();
-  final _bancoNombreCtrl = TextEditingController();
   final _bancoCuentaCtrl = TextEditingController();
-  final _bancoTipoCtrl = TextEditingController();
   final _bancoTitularCtrl = TextEditingController();
   final _servicioBadgeCtrl = TextEditingController();
   final _descripcionCtrl = TextEditingController();
@@ -163,7 +155,6 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   @override
   void initState() {
     super.initState();
-    _ajustarCuposComisionRaiPorDefecto();
     unawaited(ComisionViajePctService.refresh(force: true));
     unawaited(_cargarFlagRecaudoCentral());
   }
@@ -186,9 +177,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     _tipoCtrl.dispose();
     _telCtrl.dispose();
     _waCtrl.dispose();
-    _bancoNombreCtrl.dispose();
     _bancoCuentaCtrl.dispose();
-    _bancoTipoCtrl.dispose();
     _bancoTitularCtrl.dispose();
     _servicioBadgeCtrl.dispose();
     _descripcionCtrl.dispose();
@@ -209,28 +198,26 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
-  void _ajustarCuposComisionRaiPorDefecto() {
-    _cuposComisionRai = PoolRepo.defaultCuposComisionRai(
-      capacidad: _capacidad,
-      minParaConfirmar: _minConf,
-    );
-  }
-
   double _prepagoApartadoEstimadoRd() {
+    final cap = _capacidad;
+    final minC = _minConf;
+    final cuposRai = _cuposComisionRai;
+    final precio = _precio;
+    if (cap == null || minC == null || cuposRai == null || precio == null) {
+      return 0;
+    }
     final cupos = PoolRepo.cuposReservaComision(
-      cuposComisionRai: _cuposComisionRai,
-      minParaConfirmar: _minConf,
-      capacidad: _capacidad,
+      cuposComisionRai: cuposRai,
+      minParaConfirmar: minC,
+      capacidad: cap,
     );
-    final mult = _sentido == 'ida_y_vuelta' ? 2.0 : 1.0;
     final pct = PlataformaEconomia.comisionViajePorcentaje / 100.0;
-    return cupos * _precio * mult * pct;
+    return cupos * precio * pct;
   }
 
   Future<void> _pickFecha({required bool esVuelta}) async {
-    final initial = esVuelta
-        ? (_fechaVuelta ?? _fecha.add(const Duration(days: 1)))
-        : _fecha;
+    final base = _fecha ?? DateTime.now().add(const Duration(days: 1));
+    final initial = esVuelta ? (_fechaVuelta ?? base.add(const Duration(days: 1))) : base;
 
     final DateTime? d = await showDatePicker(
       context: context,
@@ -253,14 +240,30 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       } else {
         _fecha = dt;
         // Si cambia salida y la vuelta quedó antes, limpiar vuelta.
-        if (_fechaVuelta != null && _fechaVuelta!.isBefore(_fecha)) {
+        if (_fechaVuelta != null && _fechaVuelta!.isBefore(_fecha!)) {
           _fechaVuelta = null;
         }
       }
     });
   }
 
+  PoolGiraContenidoExtra _contenidoExtraParaGuardar() {
+    final p = _puntoSalida.trim();
+    if (p.isNotEmpty && _contenidoExtra.direccionExacta.trim().isEmpty) {
+      return _contenidoExtra.copyWith(direccionExacta: p);
+    }
+    return _contenidoExtra;
+  }
+
   Future<void> _crear() async {
+    if (_origenTown.trim().isEmpty) {
+      _snack('Selecciona el pueblo de origen.');
+      return;
+    }
+    if (_tipo.trim().isEmpty) {
+      _snack('Indica el tipo de gira (tour, excursión, consular…).');
+      return;
+    }
     if (_puntoSalida.trim().isEmpty) {
       _snack('Selecciona un punto de salida válido en el buscador.');
       return;
@@ -308,10 +311,31 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     if (!_form.currentState!.validate()) return;
     _form.currentState!.save();
 
+    if (_fecha == null) {
+      _snack('Selecciona fecha y hora de salida.');
+      return;
+    }
+    if (_capacidad == null || _capacidad! < 1) {
+      _snack('Indica la capacidad total de la gira.');
+      return;
+    }
+    if (_minConf == null || _minConf! < 0) {
+      _snack('Indica el mínimo de pasajeros para confirmar.');
+      return;
+    }
+    if (_cuposComisionRai == null || _cuposComisionRai! < 1) {
+      _snack('Indica cuántos cupos venderá RAI.');
+      return;
+    }
+    if (_precio == null || _precio! <= 0) {
+      _snack('Indica el precio por asiento.');
+      return;
+    }
+
     // Reglas de fechas
     final DateTime ahora = DateTime.now();
     final DateTime salidaMin = ahora.add(const Duration(minutes: 5));
-    if (_fecha.isBefore(salidaMin)) {
+    if (_fecha!.isBefore(salidaMin)) {
       _snack('La salida debe ser al menos en 5 minutos.');
       return;
     }
@@ -320,12 +344,12 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         _snack('Selecciona la fecha de vuelta.');
         return;
       }
-      if (_fechaVuelta!.isBefore(_fecha)) {
+      if (_fechaVuelta!.isBefore(_fecha!)) {
         _snack('La vuelta no puede ser antes de la salida.');
         return;
       }
     }
-    if (_cuposComisionRai < 1 || _cuposComisionRai > _capacidad) {
+    if (_cuposComisionRai! < 1 || _cuposComisionRai! > _capacidad!) {
       _snack('Cupos RAI para comisión: entre 1 y $_capacidad.');
       return;
     }
@@ -356,12 +380,12 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         sentido: _sentido,
         origenTown: _origenTown.trim(),
         destino: _destino.trim(),
-        fechaSalida: _fecha,
+        fechaSalida: _fecha!,
         fechaVuelta: _sentido == 'ida_y_vuelta' ? _fechaVuelta : null,
-        capacidad: _capacidad,
-        minParaConfirmar: _minConf,
-        cuposComisionRai: _cuposComisionRai,
-        precioPorAsiento: _precio.toDouble(),
+        capacidad: _capacidad!,
+        minParaConfirmar: _minConf!,
+        cuposComisionRai: _cuposComisionRai!,
+        precioPorAsiento: _precio!,
         pickupPoints: pickups.isEmpty ? null : pickups,
         depositPct: dep,
         feePct: fee,
@@ -395,6 +419,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         incluye: _incluye,
         descripcionViaje:
             _descripcionViaje.trim().isEmpty ? null : _descripcionViaje.trim(),
+        contenidoExtra: _contenidoExtraParaGuardar(),
       );
 
       if (!mounted) return;
@@ -472,7 +497,6 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
   @override
   Widget build(BuildContext context) {
-    final DateFormat f = DateFormat('EEE d MMM - HH:mm', 'es');
     final p = context._poolsCrearPalette;
 
     return Scaffold(
@@ -506,6 +530,19 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
             ),
             const SizedBox(height: 8),
             _infoPanel(
+              icon: Icons.checklist_rtl_outlined,
+              title: 'Campos obligatorios antes de publicar',
+              body:
+                  'Tipo de gira · Pueblo origen · Punto de salida · Destino · '
+                  'Agencia · Banner (foto o video) · Teléfono o WhatsApp del chofer · '
+                  'Capacidad · Mínimo para confirmar · Cupos RAI · Precio por asiento · '
+                  'Fecha/hora de salida'
+                  '${_sentido == 'ida_y_vuelta' ? ' · Fecha/hora de vuelta' : ''} · '
+                  'Datos bancarios del organizador.\n\n'
+                  'El precio que indiques es el monto final por persona (ida y vuelta incluida si aplica).',
+            ),
+            const SizedBox(height: 8),
+            _infoPanel(
               icon: Icons.directions_bus_filled_outlined,
               title: 'Tu rol al publicar',
               body: PoolsProductoCopy.formTuRolOrganizador,
@@ -526,11 +563,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     ),
                   ),
                   _row(
-                    left: _text(
-                      label: 'Pueblo (origen)',
-                      initial: _origenTown,
-                      onSaved: (v) => _origenTown = v,
-                    ),
+                    left: _puebloOrigenDropdown(),
                     right: _textFieldCtrl(
                       controller: _agenciaCtrl,
                       label: 'Agencia (opcional)',
@@ -554,6 +587,18 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     onChanged: (v) => _descripcionViaje = v.trim(),
                   ),
                   _incluyeField(),
+                  const SizedBox(height: 12),
+                  _sectionTitle('Detalle profesional de la gira', Icons.article_outlined),
+                  PoolGiraContenidoFormSection(
+                    initial: _contenidoExtra,
+                    ocultarDireccionExacta: true,
+                    labelColor: context._poolsCrearPalette.labelMuted,
+                    fieldFill: context._poolsCrearPalette.fieldFill,
+                    inputText: context._poolsCrearPalette.inputText,
+                    accent: context._poolsCrearPalette.accent,
+                    onChanged: (v) => _contenidoExtra = v,
+                  ),
+                  const SizedBox(height: 8),
                   CampoLugarAutocomplete(
                     label: 'Punto de salida',
                     hint: 'Busca punto de encuentro/salida',
@@ -572,8 +617,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                   const SizedBox(height: 8),
                   CampoLugarAutocomplete(
                     label: 'Destino',
-                    hint: 'Busca destino',
-                    initialText: _destino,
+                    hint: 'Busca destino de la gira',
+                    initialText: _destino.isEmpty ? null : _destino,
                     country: 'DO',
                     asistenteDireccionHabilitado: true,
                     onTextChanged: (v) => _destino = v.trim(),
@@ -690,20 +735,24 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                   _row(
                     left: _num(
                       label: 'Capacidad',
-                      initial: _capacidad.toString(),
-                      onSaved: (v) {
-                        _capacidad = int.parse(v);
-                        _ajustarCuposComisionRaiPorDefecto();
+                      initial: _capacidad?.toString() ?? '',
+                      hint: 'Ej: 15',
+                      onSaved: (v) => _capacidad = int.parse(v),
+                      onChanged: (v) {
+                        final n = int.tryParse(v.trim());
+                        if (n != null) setState(() => _capacidad = n);
                       },
                       min: 1,
                       max: 60,
                     ),
                     right: _num(
                       label: 'Mín. para confirmar',
-                      initial: _minConf.toString(),
-                      onSaved: (v) {
-                        _minConf = int.parse(v);
-                        _ajustarCuposComisionRaiPorDefecto();
+                      initial: _minConf?.toString() ?? '',
+                      hint: 'Ej: 8',
+                      onSaved: (v) => _minConf = int.parse(v),
+                      onChanged: (v) {
+                        final n = int.tryParse(v.trim());
+                        if (n != null) setState(() => _minConf = n);
                       },
                       min: 0,
                       max: 60,
@@ -711,14 +760,14 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                   ),
                   _num(
                     label: 'Cupos que venderá RAI (tope comisión)',
-                    initial: _cuposComisionRai.toString(),
+                    initial: _cuposComisionRai?.toString() ?? '',
+                    hint: 'Ej: 5',
                     onSaved: (v) => _cuposComisionRai = int.parse(v),
                     onChanged: (v) {
                       final n = int.tryParse(v.trim());
                       if (n == null) return;
-                      setState(
-                        () => _cuposComisionRai = n.clamp(1, _capacidad),
-                      );
+                      final cap = _capacidad ?? 60;
+                      setState(() => _cuposComisionRai = n.clamp(1, cap));
                     },
                     min: 1,
                     max: 60,
@@ -753,12 +802,13 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     Builder(
                       builder: (ctx) {
                         final cupos = PoolRepo.cuposReservaComision(
-                          cuposComisionRai: _cuposComisionRai,
-                          minParaConfirmar: _minConf,
-                          capacidad: _capacidad,
+                          cuposComisionRai: _cuposComisionRai ?? 0,
+                          minParaConfirmar: _minConf ?? 0,
+                          capacidad: _capacidad ?? 0,
                         );
                         final prep = _prepagoApartadoEstimadoRd();
                         final pct = PlataformaEconomia.comisionViajePorcentaje;
+                        final precioTxt = (_precio ?? 0).toStringAsFixed(0);
                         return Container(
                           width: double.infinity,
                           padding: const EdgeInsets.all(12),
@@ -772,7 +822,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                           ),
                           child: Text(
                             'Prepago apartado al publicar (tope, aprox.): RD\$ ${prep.toStringAsFixed(0)} '
-                            '($cupos cupos × RD\$ ${_precio.toStringAsFixed(0)} × $pct% máx. en app). '
+                            '($cupos cupos × RD\$ $precioTxt × $pct% máx. en app). '
                             'Al confirmar comisión se cobra solo lo vendido en RAI.',
                             style: TextStyle(
                               color: context._poolsCrearPalette.inputText,
@@ -807,26 +857,29 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                       ),
                     ),
                   if (_recaudoCentral) ...[
-                    _row(
-                      left: _num(
-                        label: 'Precio por asiento (RD\$)',
-                        initial: _precio.toStringAsFixed(0),
-                        onSaved: (v) => _precio = double.parse(v),
-                        min: 100,
-                      ),
-                      right: _fechaPicker(
-                        label: 'Fecha salida',
-                        text: f.format(_fecha),
-                        onTap: () => _pickFecha(esVuelta: false),
-                      ),
+                    _num(
+                      label: 'Precio por asiento (RD\$)',
+                      initial: _precio?.toStringAsFixed(0) ?? '',
+                      hint: 'Ej: 2000',
+                      onSaved: (v) => _precio = double.parse(v),
+                      onChanged: (v) {
+                        final n = double.tryParse(v.trim());
+                        if (n != null) setState(() => _precio = n);
+                      },
+                      min: 1,
                     ),
                   ] else ...[
                     _row(
                       left: _num(
                         label: 'Precio por asiento (RD\$)',
-                        initial: _precio.toStringAsFixed(0),
+                        initial: _precio?.toStringAsFixed(0) ?? '',
+                        hint: 'Ej: 2000',
                         onSaved: (v) => _precio = double.parse(v),
-                        min: 100,
+                        onChanged: (v) {
+                          final n = double.tryParse(v.trim());
+                          if (n != null) setState(() => _precio = n);
+                        },
+                        min: 1,
                       ),
                       right: _num(
                         label: 'Depósito %',
@@ -849,29 +902,52 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                         ),
                       ),
                     ),
-                    _row(
-                      left: _num(
-                        label: 'Fee plataforma %',
-                        initial: (_fee * 100).toStringAsFixed(0),
-                        onSaved: (v) => _fee = double.parse(v) / 100.0,
-                        min: 0,
-                        max: 100,
-                      ),
-                      right: _fechaPicker(
-                        label: 'Fecha salida',
-                        text: f.format(_fecha),
-                        onTap: () => _pickFecha(esVuelta: false),
-                      ),
+                    _num(
+                      label: 'Fee plataforma %',
+                      initial: (_fee * 100).toStringAsFixed(0),
+                      onSaved: (v) => _fee = double.parse(v) / 100.0,
+                      min: 0,
+                      max: 100,
                     ),
                   ],
-                  if (_sentido == 'ida_y_vuelta')
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Precio final por persona. El cliente verá exactamente este monto'
+                      '${_sentido == 'ida_y_vuelta' ? ' (ida y vuelta incluidas)' : ''}.',
+                      style: TextStyle(
+                        color: context._poolsCrearPalette.subtitleMuted,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Fechas y horarios',
+                    style: TextStyle(
+                      color: context._poolsCrearPalette.inputText,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _fechaPicker(
+                    label: 'Salida',
+                    text: _fecha == null
+                        ? 'Seleccionar fecha y hora'
+                        : _formatFechaHora(_fecha!),
+                    onTap: () => _pickFecha(esVuelta: false),
+                  ),
+                  if (_sentido == 'ida_y_vuelta') ...[
+                    const SizedBox(height: 8),
                     _fechaPicker(
-                      label: 'Fecha vuelta',
+                      label: 'Regreso estimado',
                       text: _fechaVuelta == null
                           ? 'Seleccionar…'
-                          : f.format(_fechaVuelta!),
+                          : _formatFechaHora(_fechaVuelta!),
                       onTap: () => _pickFecha(esVuelta: true),
                     ),
+                  ],
                   const SizedBox(height: 8),
                   Text(
                     _recaudoCentral
@@ -904,26 +980,16 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     ),
                   ],
                   const SizedBox(height: 8),
-                  _textFieldCtrl(
-                    controller: _bancoNombreCtrl,
-                    label: 'Banco',
-                    hint: 'BANRESERVAS',
-                    onChanged: (v) => _bancoNombre = v.trim(),
-                  ),
+                  _bancoNombreDropdown(),
                   const SizedBox(height: 8),
                   _row(
                     left: _textFieldCtrl(
                       controller: _bancoCuentaCtrl,
-                      label: 'Cuenta',
-                      hint: '960-1234567-8',
+                      label: 'Número de cuenta',
+                      hint: 'Ej: 960-1234567-8',
                       onChanged: (v) => _bancoCuenta = v.trim(),
                     ),
-                    right: _textFieldCtrl(
-                      controller: _bancoTipoCtrl,
-                      label: 'Tipo cuenta',
-                      hint: 'Corriente/Ahorros',
-                      onChanged: (v) => _bancoTipoCuenta = v.trim(),
-                    ),
+                    right: _bancoTipoCuentaDropdown(),
                   ),
                   const SizedBox(height: 8),
                   _textFieldCtrl(
@@ -1100,6 +1166,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     required T value,
     required List<T> items,
     required void Function(T?) onChanged,
+    String Function(T)? itemLabel,
   }) {
     final p = context._poolsCrearPalette;
     return InputDecorator(
@@ -1113,18 +1180,53 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<T>(
           value: value,
+          isExpanded: true,
+          hint: Text('Seleccionar…', style: TextStyle(color: p.subtitleMuted)),
           dropdownColor: p.fieldFill,
           style: TextStyle(color: p.inputText),
           items: items
               .map((e) => DropdownMenuItem<T>(
                     value: e,
-                    child: Text(e.toString(),
-                        style: TextStyle(color: p.inputText)),
+                    child: Text(
+                      itemLabel != null ? itemLabel(e) : e.toString(),
+                      style: TextStyle(color: p.inputText),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ))
               .toList(),
           onChanged: onChanged,
         ),
       ),
+    );
+  }
+
+  Widget _puebloOrigenDropdown() {
+    return _dropdown<String?>(
+      label: 'Pueblo (origen)',
+      value: _origenTown.isEmpty ? null : _origenTown,
+      items: const <String?>[null, ...PoolGiraPueblosOrigen.opciones],
+      itemLabel: (v) => v ?? 'Seleccionar pueblo…',
+      onChanged: (v) => setState(() => _origenTown = v ?? ''),
+    );
+  }
+
+  Widget _bancoNombreDropdown() {
+    return _dropdown<String?>(
+      label: 'Banco',
+      value: _bancoNombre.isEmpty ? null : _bancoNombre,
+      items: const <String?>[null, ...BancosRd.nombres],
+      itemLabel: (v) => v ?? 'Seleccionar banco…',
+      onChanged: (v) => setState(() => _bancoNombre = v ?? ''),
+    );
+  }
+
+  Widget _bancoTipoCuentaDropdown() {
+    return _dropdown<String?>(
+      label: 'Tipo de cuenta',
+      value: _bancoTipoCuenta.isEmpty ? null : _bancoTipoCuenta,
+      items: const <String?>[null, ...BancosRd.tiposCuentaGira],
+      itemLabel: (v) => v ?? 'Ahorros o Corriente…',
+      onChanged: (v) => setState(() => _bancoTipoCuenta = v ?? ''),
     );
   }
 
@@ -1212,23 +1314,24 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         Wrap(
           spacing: 6,
           runSpacing: 6,
-          children: _incluyeSugeridos
+          children: PoolGiraContenidoCatalog.incluyeOpciones
               .map((e) => FilterChip(
-                    label: Text(e),
-                    selected: _incluye.contains(e),
+                    avatar: Icon(e.icon, size: 16, color: p.accent),
+                    label: Text(e.label),
+                    selected: _incluye.contains(e.label),
                     selectedColor: p.chipSelectedTint,
                     checkmarkColor: p.isDark ? Colors.white : p.tealBtnFg,
                     labelStyle: TextStyle(
-                      color: _incluye.contains(e) ? p.inputText : p.labelMuted,
+                      color: _incluye.contains(e.label) ? p.inputText : p.labelMuted,
                       fontWeight: FontWeight.w600,
                     ),
                     backgroundColor: p.chipBg,
                     onSelected: (sel) {
                       setState(() {
                         if (sel) {
-                          if (!_incluye.contains(e)) _incluye.add(e);
+                          if (!_incluye.contains(e.label)) _incluye.add(e.label);
                         } else {
-                          _incluye.remove(e);
+                          _incluye.remove(e.label);
                         }
                       });
                     },
@@ -1285,27 +1388,6 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
           ),
         ],
       ],
-    );
-  }
-
-  Widget _text({
-    required String label,
-    required String initial,
-    required void Function(String) onSaved,
-  }) {
-    final p = context._poolsCrearPalette;
-    return TextFormField(
-      initialValue: initial,
-      style: TextStyle(color: p.inputText),
-      decoration: InputDecoration(
-        filled: true,
-        fillColor: p.fieldFill,
-        labelStyle: TextStyle(color: p.labelMuted),
-        border: const OutlineInputBorder(
-            borderRadius: BorderRadius.all(Radius.circular(12))),
-      ).copyWith(labelText: label),
-      validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
-      onSaved: (v) => onSaved(v!.trim()),
     );
   }
 
@@ -1375,6 +1457,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     required String initial,
     required void Function(String) onSaved,
     void Function(String)? onChanged,
+    String? hint,
     double? min,
     double? max,
   }) {
@@ -1386,7 +1469,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       style: TextStyle(color: p.inputText),
       decoration: InputDecoration(
         labelText: label,
+        hintText: hint,
         labelStyle: TextStyle(color: p.labelMuted),
+        hintStyle: TextStyle(color: p.subtitleMuted),
         filled: true,
         fillColor: p.fieldFill,
         border: const OutlineInputBorder(
@@ -1410,18 +1495,57 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     required VoidCallback onTap,
   }) {
     final p = context._poolsCrearPalette;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(color: p.labelMuted)),
-        const SizedBox(height: 6),
-        TextButton.icon(
-          onPressed: onTap,
-          icon: Icon(Icons.calendar_today, color: p.accent),
-          label: Text(text, style: TextStyle(color: p.foreground)),
+    return Material(
+      color: p.fieldFill,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: p.cardBorder),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.calendar_today, color: p.accent, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(color: p.labelMuted, fontSize: 12),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: p.foreground,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: p.faintIcon),
+            ],
+          ),
         ),
-      ],
+      ),
     );
+  }
+
+  String _formatFechaHora(DateTime dt) {
+    final fFecha = DateFormat('EEE d MMM yyyy', 'es');
+    final fHora = DateFormat('HH:mm');
+    return '${fFecha.format(dt)} · ${fHora.format(dt)}';
   }
 
   Widget _agenciaLogoPicker() {

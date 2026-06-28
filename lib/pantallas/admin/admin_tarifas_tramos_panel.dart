@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/modelo/tarifas_tramos_config.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_ui_theme.dart';
+import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 
 /// Formulario completo de `config/tarifas_tramos` (reutilizable en Tarifas y drawer).
@@ -277,9 +278,14 @@ class _AdminTarifasTramosPanelState extends State<AdminTarifasTramosPanel> {
 
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
+    final motivo = await _pedirMotivo();
+    if (motivo == null) return;
     setState(() => _guardando = true);
     try {
-      await _ref.set(_desdeFormulario().toFirestore(), SetOptions(merge: true));
+      await AdminConfigService.updateTarifasTramosConfig(
+        tarifasTramos: _desdeFormulario().toFirestore(),
+        motivo: motivo,
+      );
       await TarifaServiceUnificado().recargar();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -295,6 +301,45 @@ class _AdminTarifasTramosPanelState extends State<AdminTarifasTramosPanel> {
       );
     } finally {
       if (mounted) setState(() => _guardando = false);
+    }
+  }
+
+  Future<String?> _pedirMotivo() async {
+    final ctrl = TextEditingController();
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text(
+            'Motivo del cambio',
+            style: TextStyle(color: AdminUi.onCard(ctx)),
+          ),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: 'Ej: Ajuste tramos interurbanos / corrección mínimo',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return null;
+      final m = ctrl.text.trim();
+      if (m.length < 6) return null;
+      return m;
+    } finally {
+      ctrl.dispose();
     }
   }
 

@@ -3,13 +3,17 @@
 // applicationId del paquete Android/iOS, con fallback al --dart-define.
 //
 // Valores soportados:
-//   - 'cliente'   -> solo pasajero (com.flygo.rd2, --flavor cliente)
+//   - 'cliente'   -> solo pasajero (split / --dart-define APP_FLAVOR=cliente)
 //   - 'conductor' -> solo taxista (com.flygo.rd2.conductor)
-//   - 'all'       -> unificada (solo --dart-define o debug sin package conocido)
+//   - 'all'       -> unificada Play (com.flygo.rd2: cliente + taxista)
 //
-// === Split pruebas / dos APK ===
-// Build pasajero: `--flavor cliente`  → applicationId com.flygo.rd2
-// Build chofer:   `--flavor conductor` → applicationId com.flygo.rd2.conductor
+// === Play Store (unificada) ===
+//   flutter build appbundle --flavor cliente --release -t lib/main.dart
+//   → applicationId com.flygo.rd2, flavor runtime `all`
+//
+// === Split pruebas (dos APK) ===
+//   Pasajero:  --flavor cliente  + --dart-define=APP_FLAVOR=cliente
+//   Chofer:    --flavor conductor → com.flygo.rd2.conductor
 //
 // Autodetectamos desde applicationId (no confiar solo en --dart-define).
 
@@ -56,10 +60,11 @@ class AppFlavor {
   static const String _playStoreConductorPackage = 'com.flygo.rd2.conductor';
 
   /// Mapea el applicationId al nombre de flavor.
-  /// Devuelve null si no es un paquete conocido (emulador / debug sin flavor).
+  /// `com.flygo.rd2` → null → flavor `all` (Play unificado cliente + taxista).
+  /// Solo `com.flygo.rd2.conductor` fuerza modo conductor.
   static String? _flavorFromPackageName(String pkg) {
     if (pkg == _playStoreConductorPackage) return 'conductor';
-    if (pkg == _playStorePasajeroPackage) return 'cliente';
+    if (pkg == _playStorePasajeroPackage) return null;
     return null;
   }
 
@@ -71,6 +76,12 @@ class AppFlavor {
 bool get isClienteFlavor => _resolvedFlavor == 'cliente';
 bool get isConductorFlavor => _resolvedFlavor == 'conductor';
 bool get isAllFlavors => !isClienteFlavor && !isConductorFlavor;
+
+/// APK solo pasajero o Play unificada (`all`): lógica de cliente/Giras/pool pasajero.
+bool get isPasajeroCapableFlavor => !isConductorFlavor;
+
+/// APK solo conductor o Play unificada (`all`): timbre pool y lógica taxista.
+bool get isTaxistaCapableFlavor => !isClienteFlavor;
 
 /// Compatibilidad con código existente que leía la constante.
 String get kAppFlavor => _resolvedFlavor;

@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
+import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 
 class CrearPoolResult {
@@ -74,10 +75,188 @@ class GiraInicioComisionPreview {
   final double comisionEfectivoRd;
 }
 
+/// Fila admin: reserva pool RAI con pago pendiente de verificar.
+class PoolReservaRaiPendienteAdmin {
+  const PoolReservaRaiPendienteAdmin({
+    required this.poolId,
+    required this.reservaId,
+    required this.reserva,
+    required this.pool,
+  });
+
+  final String poolId;
+  final String reservaId;
+  final Map<String, dynamic> reserva;
+  final Map<String, dynamic> pool;
+}
+
+/// Reserva de gira del cliente (historial global Mis giras).
+class PoolReservaClienteGira {
+  const PoolReservaClienteGira({
+    required this.poolId,
+    required this.reservaId,
+    required this.reserva,
+    this.pool = const {},
+  });
+
+  final String poolId;
+  final String reservaId;
+  final Map<String, dynamic> reserva;
+  final Map<String, dynamic> pool;
+}
+
 class PoolRepo {
   static final _db = FirebaseFirestore.instance;
   static CollectionReference<Map<String, dynamic>> get pools =>
       _db.collection('viajes_pool');
+
+  /// Reserva pool central con transferencia aún no verificada por admin.
+  static bool reservaEsPagoPendienteAdmin(Map<String, dynamic> r) {
+    final est = (r['estado'] ?? '').toString().trim().toLowerCase();
+    if (est != 'reservado') return false;
+    final ep = (r['estadoPago'] ?? '').toString().trim().toLowerCase();
+    return ep.isEmpty || ep == 'pendiente' || ep == 'comprobante_enviado';
+  }
+
+  /// Admin · Verificar pagos Giras RAI (sin collectionGroup → sin índice compuesto).
+  static Stream<List<PoolReservaRaiPendienteAdmin>>
+      streamReservasPoolRaiPagoPendienteAdmin({
+    int poolLimit = 80,
+  }) {
+    return Stream<List<PoolReservaRaiPendienteAdmin>>.multi((multi) {
+      final reservaSubs =
+          <String, StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>{};
+      var poolDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+      final reservasByPool =
+          <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+
+      void publish() {
+        final out = <PoolReservaRaiPendienteAdmin>[];
+        for (final poolDoc in poolDocs) {
+          final poolId = poolDoc.id;
+          final pool = poolDoc.data();
+          for (final r in reservasByPool[poolId] ?? const []) {
+            if (!reservaEsPagoPendienteAdmin(r.data())) continue;
+            out.add(PoolReservaRaiPendienteAdmin(
+              poolId: poolId,
+              reservaId: r.id,
+              reserva: r.data(),
+              pool: pool,
+            ));
+          }
+        }
+        out.sort((a, b) {
+          final ta = a.reserva['createdAt'];
+          final tb = b.reserva['createdAt'];
+          final da = ta is Timestamp ? ta.millisecondsSinceEpoch : 0;
+          final db = tb is Timestamp ? tb.millisecondsSinceEpoch : 0;
+          return db.compareTo(da);
+        });
+        multi.add(out);
+      }
+
+      void bindPoolReservas(String poolId) {
+        reservaSubs[poolId] = pools
+            .doc(poolId)
+            .collection('reservas')
+            .where('estado', isEqualTo: 'reservado')
+            .snapshots()
+            .listen(
+          (snap) {
+            reservasByPool[poolId] = snap.docs;
+            publish();
+          },
+          onError: multi.addError,
+        );
+      }
+
+      final poolsSub = pools
+          .where('recaudoModelo', isEqualTo: 'central')
+          .limit(poolLimit)
+          .snapshots()
+          .listen(
+        (snap) {
+          poolDocs = snap.docs;
+          final ids = snap.docs.map((d) => d.id).toSet();
+          for (final id in reservaSubs.keys.toList()) {
+            if (!ids.contains(id)) {
+              reservaSubs.remove(id)?.cancel();
+              reservasByPool.remove(id);
+            }
+          }
+          for (final id in ids) {
+            if (!reservaSubs.containsKey(id)) bindPoolReservas(id);
+          }
+          publish();
+        },
+        onError: multi.addError,
+      );
+
+      multi.onCancel = () async {
+        await poolsSub.cancel();
+        for (final s in reservaSubs.values) {
+          await s.cancel();
+        }
+      };
+    });
+  }
+
+  /// Cliente: todas sus reservas en giras (Mis giras · historial global).
+  static Stream<List<PoolReservaClienteGira>> streamMisReservasGiraCliente(
+    String uid, {
+    int limit = 80,
+  }) {
+    final u = uid.trim();
+    if (u.isEmpty) return Stream.value(const []);
+
+    return _db
+        .collectionGroup('reservas')
+        .where('uidCliente', isEqualTo: u)
+        .limit(limit)
+        .snapshots()
+        .asyncMap((snap) async {
+          final items = snap.docs
+              .map((doc) {
+                final poolId = doc.reference.parent.parent?.id ?? '';
+                if (poolId.isEmpty) return null;
+                return PoolReservaClienteGira(
+                  poolId: poolId,
+                  reservaId: doc.id,
+                  reserva: doc.data(),
+                );
+              })
+              .whereType<PoolReservaClienteGira>()
+              .toList();
+
+          items.sort((a, b) {
+            final ta = a.reserva['createdAt'];
+            final tb = b.reserva['createdAt'];
+            final da = ta is Timestamp ? ta.millisecondsSinceEpoch : 0;
+            final db = tb is Timestamp ? tb.millisecondsSinceEpoch : 0;
+            return db.compareTo(da);
+          });
+
+          final poolIds = items.map((e) => e.poolId).toSet();
+          final poolMap = <String, Map<String, dynamic>>{};
+          await Future.wait(poolIds.map((id) async {
+            try {
+              final p = await pools.doc(id).get();
+              if (p.exists) poolMap[id] = p.data() ?? {};
+            } catch (_) {}
+          }));
+
+          return items
+              .map(
+                (r) => PoolReservaClienteGira(
+                  poolId: r.poolId,
+                  reservaId: r.reservaId,
+                  reserva: r.reserva,
+                  pool: poolMap[r.poolId] ?? const {},
+                ),
+              )
+              .toList();
+        });
+  }
 
   static const String _msgGiraLegacySinComisionEstimada =
       'Esta salida fue creada con una versión anterior del sistema. Por favor, cancélala y crea una nueva.';
@@ -282,6 +461,7 @@ class PoolRepo {
     String? tipoPersonalizado,
     List<String>? incluye,
     String? descripcionViaje,
+    PoolGiraContenidoExtra? contenidoExtra,
   }) async {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) throw 'Debes iniciar sesión como taxista';
@@ -359,6 +539,7 @@ class PoolRepo {
               .toList(),
         if (descripcionViaje != null && descripcionViaje.trim().isNotEmpty)
           'descripcionViaje': descripcionViaje.trim(),
+        ...?contenidoExtra?.toFirestore(),
       });
 
       final raw = res.data;
@@ -412,6 +593,113 @@ class PoolRepo {
       }
       throw 'Error al publicar la salida (${e.code}).';
     }
+  }
+
+  /// Edita contenido de gira publicada (reservas y pagos se conservan).
+  static Future<void> actualizarPoolGiraContenido({
+    required String poolId,
+    PoolGiraContenidoExtra? contenidoExtra,
+    String? agenciaNombre,
+    String? agenciaLogoUrl,
+    String? bannerUrl,
+    String? bannerVideoUrl,
+    String? puntoSalida,
+    String? destino,
+    String? servicioBadge,
+    String? descripcionViaje,
+    List<String>? incluye,
+    List<String>? pickupPoints,
+    String? origenTown,
+    String? bancoNombre,
+    String? bancoCuenta,
+    String? bancoTipoCuenta,
+    String? bancoTitular,
+    double? precioPorAsiento,
+    int? capacidad,
+    DateTime? fechaSalida,
+    DateTime? fechaVuelta,
+    bool clearFechaVuelta = false,
+  }) async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) throw 'Debes iniciar sesión';
+
+    final payload = <String, dynamic>{
+      'poolId': poolId.trim(),
+      ...?contenidoExtra?.toFirestore(),
+      if (agenciaNombre != null && agenciaNombre.trim().isNotEmpty)
+        'agenciaNombre': agenciaNombre.trim(),
+      if (agenciaLogoUrl != null && agenciaLogoUrl.trim().isNotEmpty)
+        'agenciaLogoUrl': agenciaLogoUrl.trim(),
+      if (bannerUrl != null && bannerUrl.trim().isNotEmpty)
+        'bannerUrl': bannerUrl.trim(),
+      if (bannerVideoUrl != null && bannerVideoUrl.trim().isNotEmpty)
+        'bannerVideoUrl': bannerVideoUrl.trim(),
+      if (puntoSalida != null && puntoSalida.trim().isNotEmpty)
+        'puntoSalida': puntoSalida.trim(),
+      if (destino != null && destino.trim().isNotEmpty)
+        'destino': destino.trim(),
+      if (servicioBadge != null && servicioBadge.trim().isNotEmpty)
+        'servicioBadge': servicioBadge.trim(),
+      if (descripcionViaje != null && descripcionViaje.trim().isNotEmpty)
+        'descripcionViaje': descripcionViaje.trim(),
+      if (incluye != null && incluye.isNotEmpty) 'incluye': incluye,
+      if (pickupPoints != null && pickupPoints.isNotEmpty)
+        'pickupPoints': pickupPoints,
+      if (origenTown != null && origenTown.trim().isNotEmpty)
+        'origenTown': origenTown.trim(),
+      if (bancoNombre != null && bancoNombre.trim().isNotEmpty)
+        'bancoNombre': bancoNombre.trim(),
+      if (bancoCuenta != null && bancoCuenta.trim().isNotEmpty)
+        'bancoCuenta': bancoCuenta.trim(),
+      if (bancoTipoCuenta != null && bancoTipoCuenta.trim().isNotEmpty)
+        'bancoTipoCuenta': bancoTipoCuenta.trim(),
+      if (bancoTitular != null && bancoTitular.trim().isNotEmpty)
+        'bancoTitular': bancoTitular.trim(),
+      if (precioPorAsiento != null && precioPorAsiento > 0)
+        'precioPorAsiento': precioPorAsiento,
+      if (capacidad != null && capacidad > 0) 'capacidad': capacidad,
+      if (fechaSalida != null)
+        'fechaSalida': fechaSalida.millisecondsSinceEpoch,
+      if (clearFechaVuelta) 'fechaVuelta': null,
+      if (!clearFechaVuelta && fechaVuelta != null)
+        'fechaVuelta': fechaVuelta.millisecondsSinceEpoch,
+    };
+
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    final callable = fx.httpsCallable('actualizarPoolGiraContenido');
+    await callable.call(payload);
+  }
+
+  /// Ticket digital: genera token si falta (reserva pagada).
+  static Future<String> ensurePoolReservaTicket({
+    required String poolId,
+    required String reservaId,
+  }) async {
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    final res = await fx.httpsCallable('ensurePoolReservaTicket').call(<String, dynamic>{
+      'poolId': poolId.trim(),
+      'reservaId': reservaId.trim(),
+    });
+    final raw = res.data;
+    if (raw is! Map) throw 'Respuesta inválida al obtener ticket';
+    final token = (raw['tokenEntrada'] ?? '').toString().trim();
+    if (token.isEmpty) throw 'No se pudo generar el ticket';
+    return token;
+  }
+
+  /// Valida código QR / token en punto de salida (admin u operador).
+  static Future<Map<String, dynamic>> validarTokenEntradaGira({
+    required String token,
+    String? poolId,
+  }) async {
+    final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
+    final res = await fx.httpsCallable('validarTokenEntradaGira').call(<String, dynamic>{
+      'token': token.trim().toUpperCase(),
+      if (poolId != null && poolId.trim().isNotEmpty) 'poolId': poolId.trim(),
+    });
+    final raw = res.data;
+    if (raw is! Map) throw 'Respuesta inválida al validar ticket';
+    return Map<String, dynamic>.from(raw);
   }
 
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamPoolsCliente({

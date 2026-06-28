@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/bola_nav_coordination_guard.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
@@ -633,8 +634,22 @@ class BolaPuebloDialogs {
     if (nav == null || !nav.mounted) return;
 
     await BolaPuebloRepo.reconciliarSesionBolaAtascada();
-    final String? viajeId =
+    String? viajeId =
         await ViajesRepo.enlazarViajeEspejoBolaOperativo(bolaId: bolaId);
+    if (viajeId == null || viajeId.trim().isEmpty) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> bolaSnap =
+            await FirebaseFirestore.instance
+                .collection('bolas_pueblo')
+                .doc(bolaId)
+                .get();
+        final String espejoEnBola =
+            (bolaSnap.data()?['viajeEspejoId'] ?? '').toString().trim();
+        if (espejoEnBola.isNotEmpty) {
+          viajeId = espejoEnBola;
+        }
+      } catch (_) {}
+    }
     if (viajeId == null || viajeId.trim().isEmpty) {
       if (nav.mounted) {
         try {
@@ -650,6 +665,7 @@ class BolaPuebloDialogs {
               preNav: nav,
               page: BolaPuebloViajeActivoPage(bolaId: bolaId),
             );
+            ActiveTripService.notificarRebuildShell();
           } else {
             await NavigationService.clearAndGoBolaTablero(preNav: nav);
           }
@@ -659,6 +675,8 @@ class BolaPuebloDialogs {
       }
       return;
     }
+
+    if (!BolaNavCoordinationGuard.tryClaimOperativoNav(bolaId)) return;
 
     ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
 
@@ -680,6 +698,7 @@ class BolaPuebloDialogs {
       } else {
         await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: nav);
       }
+      ActiveTripService.notificarRebuildShell();
       return;
     }
 
@@ -692,6 +711,7 @@ class BolaPuebloDialogs {
       );
     }
     await NavigationService.clearAndGoViajeEnCursoCliente(preNav: nav);
+    ActiveTripService.notificarRebuildShell();
   }
 
   /// Abre el flujo correcto según estado (tablero parcial, Mi viaje en curso, etc.).
@@ -796,6 +816,11 @@ class BolaPuebloDialogs {
     const p = 'Exception: ';
     if (s.startsWith(p)) {
       s = s.substring(p.length).trim();
+    }
+    final lower = s.toLowerCase();
+    if (lower.contains('permission-denied') ||
+        lower.contains('insufficient permissions')) {
+      return 'El monto debe estar dentro del promedio establecido.';
     }
     return s.isEmpty ? 'Ocurrió un error.' : s;
   }
@@ -1161,6 +1186,30 @@ class BolaPuebloDialogs {
     if (ok != true) return;
     final monto =
         double.tryParse(montoCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+    if (monto <= 0) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(context, 'Indicá un monto válido.', error: true),
+      );
+      return;
+    }
+    if (ofertaMinRd != null &&
+        ofertaMaxRd != null &&
+        ofertaMinRd > 0 &&
+        ofertaMaxRd >= ofertaMinRd) {
+      final msgRango = BolaPuebloRepo.validarMontoEnRangoBola(
+        monto,
+        minRd: ofertaMinRd,
+        maxRd: ofertaMaxRd,
+      );
+      if (msgRango != null) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(context, msgRango, error: true),
+        );
+        return;
+      }
+    }
     try {
       await BolaPuebloRepo.enviarContraofertaCliente(
         bolaId: bolaId,
@@ -1178,8 +1227,166 @@ class BolaPuebloDialogs {
       );
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(BolaPuebloTheme.snack(context, '$e', error: true));
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          mensajeExcepcionUsuario(e),
+          error: true,
+        ),
+      );
+    }
+  }
+
+  /// «Voy para»: el conductor responde al monto del pasajero con otra cifra.
+  static Future<void> proponerContraofertaConductor({
+    required BuildContext context,
+    required String bolaId,
+    required String uid,
+    required String nombre,
+    required String clienteUid,
+    required String clienteNombre,
+    required double montoCliente,
+    required String ofertaClienteId,
+    double? ofertaMinRd,
+    double? ofertaMaxRd,
+  }) async {
+    final semilla = montoCliente > 0 ? montoCliente : (ofertaMinRd ?? 1500);
+    final montoCtrl = TextEditingController(text: semilla.toStringAsFixed(0));
+    final msgCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final col = BolaPuebloColors.of(context);
+        var cerrando = false;
+        return Theme(
+          data: BolaPuebloTheme.dialogTheme(context),
+          child: StatefulBuilder(
+            builder: (ctxDialog, setDialog) {
+              return AlertDialog(
+                backgroundColor: col.surface,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24)),
+                title: Text('Tu contraoferta',
+                    style: TextStyle(color: col.onSurface)),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '${clienteNombre.trim().isEmpty ? "Pasajero" : clienteNombre.trim()} '
+                      'propuso RD\$${montoCliente.toStringAsFixed(0)}. '
+                      'Indicá el monto con el que te quedarías; el pasajero puede aceptar o rechazar.',
+                      style: TextStyle(
+                          color: col.onMuted, fontSize: 13, height: 1.4),
+                    ),
+                    if (ofertaMinRd != null &&
+                        ofertaMaxRd != null &&
+                        ofertaMaxRd >= ofertaMinRd) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Rango permitido: RD\$${ofertaMinRd.toStringAsFixed(0)} – RD\$${ofertaMaxRd.toStringAsFixed(0)}',
+                        style: TextStyle(color: col.onMuted, fontSize: 12),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: montoCtrl,
+                      style: TextStyle(
+                          color: col.onSurface,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Tu monto (RD\$)',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: msgCtrl,
+                      style: TextStyle(color: col.onSurface),
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Mensaje (opcional)',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed:
+                        cerrando ? null : () => Navigator.pop(ctx, false),
+                    child: const Text('Cancelar'),
+                  ),
+                  FilledButton(
+                    onPressed: cerrando
+                        ? null
+                        : () {
+                            cerrando = true;
+                            setDialog(() {});
+                            Navigator.pop(ctx, true);
+                          },
+                    child: const Text('Enviar contraoferta'),
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+    if (ok != true) return;
+    final monto =
+        double.tryParse(montoCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+    if (monto <= 0) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(context, 'Indicá un monto válido.', error: true),
+      );
+      return;
+    }
+    if (ofertaMinRd != null &&
+        ofertaMaxRd != null &&
+        ofertaMinRd > 0 &&
+        ofertaMaxRd >= ofertaMinRd) {
+      final msgRango = BolaPuebloRepo.validarMontoEnRangoBola(
+        monto,
+        minRd: ofertaMinRd,
+        maxRd: ofertaMaxRd,
+      );
+      if (msgRango != null) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(context, msgRango, error: true),
+        );
+        return;
+      }
+    }
+    try {
+      await BolaPuebloRepo.enviarContraofertaConductor(
+        bolaId: bolaId,
+        conductorUid: uid,
+        conductorNombre: nombre,
+        clienteUid: clienteUid,
+        respondiendoOfertaId: ofertaClienteId,
+        montoRd: monto,
+        mensaje: msgCtrl.text,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(context,
+            'Contraoferta enviada. El pasajero puede aceptarla desde su tarjeta.'),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(
+          context,
+          mensajeExcepcionUsuario(e),
+          error: true,
+        ),
+      );
     }
   }
 
@@ -1254,6 +1461,7 @@ class BolaPuebloDialogs {
     try {
       await BolaPuebloRepo.cancelarAcuerdoAntesDeAbordo(
           bolaId: bolaId, uidActor: uid);
+      BolaNavCoordinationGuard.markCancelHandled(bolaId);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(BolaPuebloTheme.snack(context, 'Acuerdo cancelado'));
@@ -1485,8 +1693,9 @@ class BolaPuebloDialogs {
                         stream: BolaPuebloRepo.streamOfertas(bolaId),
                         builder: (_, snap) {
                           final raw = snap.data?.docs ?? const [];
-                          // Conductores: una pendiente por uid. Contraofertas del pasajero: todas las pendientes.
+                          // Conductores: una pendiente por uid. Contraofertas: la última por destinatario.
                           final seenTaxistaPending = <String>{};
+                          final seenContraDestino = <String>{};
                           final docs =
                               <QueryDocumentSnapshot<Map<String, dynamic>>>[];
                           for (final d in raw) {
@@ -1495,12 +1704,25 @@ class BolaPuebloDialogs {
                             final from = (m['fromUid'] ?? '').toString();
                             final esContraCliente =
                                 m['esContraofertaCliente'] == true;
-                            if (estado == 'pendiente' && !esContraCliente) {
+                            final esContraConductor =
+                                m['esContraofertaConductor'] == true;
+                            if (estado == 'pendiente' && !esContraCliente && !esContraConductor) {
                               if (from.isEmpty ||
                                   seenTaxistaPending.contains(from)) {
                                 continue;
                               }
                               seenTaxistaPending.add(from);
+                            }
+                            if (estado == 'pendiente' &&
+                                (esContraCliente || esContraConductor)) {
+                              final dest = (m['contraOfertaParaUid'] ?? '')
+                                  .toString()
+                                  .trim();
+                              final clave = '${esContraCliente ? 'c' : 't'}:$dest';
+                              if (dest.isEmpty || seenContraDestino.contains(clave)) {
+                                continue;
+                              }
+                              seenContraDestino.add(clave);
                             }
                             docs.add(d);
                           }
@@ -1537,6 +1759,8 @@ class BolaPuebloDialogs {
                                   fromRol == 'taxista' || fromRol == 'driver';
                               final esContraCliente =
                                   m['esContraofertaCliente'] == true;
+                              final esContraConductor =
+                                  m['esContraofertaConductor'] == true;
                               final esMiContraPendientePedido =
                                   estado == 'pendiente' &&
                                       esContraCliente &&
@@ -1544,9 +1768,8 @@ class BolaPuebloDialogs {
                               final esMiContraPendienteOferta =
                                   estado == 'pendiente' &&
                                       tipoPublicacion == 'oferta' &&
-                                      !esContraCliente &&
-                                      fromUid == miUid &&
-                                      esTaxistaOffer;
+                                      esContraConductor &&
+                                      fromUid == miUid;
                               final esMiContraPendiente =
                                   esMiContraPendientePedido ||
                                       esMiContraPendienteOferta;
@@ -1613,7 +1836,11 @@ class BolaPuebloDialogs {
                                                 CrossAxisAlignment.stretch,
                                             children: [
                                               Text(
-                                                'Esperando al conductor. Si cambiás de idea, podés retirar tu contraoferta.',
+                                                esMiContraPendientePedido
+                                                    ? 'Esperando al conductor. Si cambiás de idea, podés retirar tu contraoferta o enviar otra cifra desde «Proponer otro monto».'
+                                                    : esMiContraPendienteOferta
+                                                        ? 'Esperando al pasajero. Si cambiás de idea, podés retirar tu contraoferta.'
+                                                        : 'Esperando al conductor. Si cambiás de idea, podés retirar tu contraoferta.',
                                                 style: TextStyle(
                                                   color: cc.onMuted,
                                                   fontSize: 13,
@@ -2151,15 +2378,23 @@ class BolaPuebloDialogs {
                                                               .currentUser;
                                                           if (u == null) return;
                                                           await BolaPuebloDialogs
-                                                              .enviarOferta(
+                                                              .proponerContraofertaConductor(
                                                             context: sheetCtx,
                                                             bolaId: bolaId,
                                                             uid: u.uid,
                                                             nombre:
                                                                 u.displayName ??
                                                                     'Conductor',
-                                                            rol: 'taxista',
-                                                            montoInicial: monto,
+                                                            clienteUid: fromUid,
+                                                            clienteNombre:
+                                                                fromNombre,
+                                                            montoCliente: monto,
+                                                            ofertaClienteId:
+                                                                d.id,
+                                                            ofertaMinRd:
+                                                                ofertaMinRd,
+                                                            ofertaMaxRd:
+                                                                ofertaMaxRd,
                                                           );
                                                           if (sheetCtx
                                                               .mounted) {
@@ -2323,11 +2558,16 @@ class BolaPuebloDialogs {
         );
       }
 
-      BolaPostFacturaReopenGuard.markOpened(bolaId.trim());
+      BolaPostFacturaReopenGuard.markOpened(bolaId.trim(), role: 'taxista');
       await FacturaBolaPueblo.mostrar(
         context,
         bolaId: bolaId.trim(),
         role: 'taxista',
+      );
+      await BolaPostFacturaReopenGuard.markCompleted(
+        bolaId: bolaId.trim(),
+        role: 'taxista',
+        uid: FirebaseAuth.instance.currentUser?.uid,
       );
       if (context.mounted) {
         await NavigationService.salirModoViajeBola(context);
@@ -2365,11 +2605,16 @@ class BolaPuebloDialogs {
         final uidTx = (d!['uidTaxista'] ?? '').toString().trim();
         final role =
             uidActor.trim() == uidTx ? 'taxista' : 'cliente';
-        BolaPostFacturaReopenGuard.markOpened(bolaId.trim());
+        BolaPostFacturaReopenGuard.markOpened(bolaId.trim(), role: role);
         await FacturaBolaPueblo.mostrar(
           context,
           bolaId: bolaId.trim(),
           role: role,
+        );
+        await BolaPostFacturaReopenGuard.markCompleted(
+          bolaId: bolaId.trim(),
+          role: role,
+          uid: uidActor.trim(),
         );
       }
 
@@ -3565,6 +3810,7 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
     required this.uidConductor,
     required this.codigoBola,
     required this.codigoGeneradoEn,
+    required this.codigoVerificado,
     required this.pickupConfirmadoTaxista,
     required this.user,
     required this.fg,
@@ -3576,6 +3822,7 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
   final String uidConductor;
   final String codigoBola;
   final dynamic codigoGeneradoEn;
+  final bool codigoVerificado;
   final bool pickupConfirmadoTaxista;
   final User user;
   final Color fg;
@@ -3584,9 +3831,15 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
   /// Publicación tipo [oferta]: vos vas al punto donde el conductor dijo que está.
   final bool esClienteVaHaciaConductor;
 
+  static bool _codigoValido(String raw) =>
+      raw.replaceAll(RegExp(r'\D'), '').length == 6;
+
   @override
   Widget build(BuildContext context) {
     final c = BolaPuebloColors.of(context);
+    final String digits = codigoBola.replaceAll(RegExp(r'\D'), '');
+    final bool mostrarCodigo = _codigoValido(codigoBola) && !codigoVerificado;
+
     return Container(
       decoration: BoxDecoration(
         color: c.surfaceRaised.withValues(alpha: 0.35),
@@ -3598,9 +3851,9 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (!pickupConfirmadoTaxista) ...[
+            if (mostrarCodigo) ...[
               Text(
-                'Esperando abordo',
+                'Tu código de verificación',
                 style: TextStyle(
                   color: fg,
                   fontSize: 13,
@@ -3609,22 +3862,9 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                'Cuando subas, el conductor te pedirá el código.',
-                style: TextStyle(color: fgMuted, fontSize: 12.5, height: 1.35),
-              ),
-              const SizedBox(height: 18),
-            ] else ...[
-              Text(
-                'Tu código',
-                style: TextStyle(
-                  color: fg,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Dictalo ahora para iniciar el viaje.',
+                pickupConfirmadoTaxista
+                    ? 'Dictalo ahora para que el conductor inicie el viaje.'
+                    : 'Tenelo listo: al subir, dictalo al conductor para iniciar.',
                 style: TextStyle(color: fgMuted, fontSize: 12.5, height: 1.35),
               ),
               const SizedBox(height: 14),
@@ -3642,7 +3882,7 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     SelectableText(
-                      codigoBola.isEmpty ? '—' : codigoBola,
+                      digits,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
@@ -3653,23 +3893,16 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     TextButton.icon(
-                      onPressed: codigoBola.isEmpty ||
-                              codigoBola.replaceAll(RegExp(r'\D'), '').length !=
-                                  6
-                          ? null
-                          : () async {
-                              final digits =
-                                  codigoBola.replaceAll(RegExp(r'\D'), '');
-                              await Clipboard.setData(
-                                  ClipboardData(text: digits));
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                BolaPuebloTheme.snack(
-                                  context,
-                                  'Código copiado. Pegalo en el chat si querés.',
-                                ),
-                              );
-                            },
+                      onPressed: () async {
+                        await Clipboard.setData(ClipboardData(text: digits));
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          BolaPuebloTheme.snack(
+                            context,
+                            'Código copiado. Pegalo en el chat si querés.',
+                          ),
+                        );
+                      },
                       icon: const Icon(Icons.copy_rounded, size: 18),
                       label: const Text(
                         'Copiar código',
@@ -3694,15 +3927,35 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
+              if (pickupConfirmadoTaxista) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'El conductor marcó que ya estás a bordo.',
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 13,
+                    height: 1.35,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+            ] else if (!pickupConfirmadoTaxista) ...[
               Text(
-                'El conductor marcó que ya estás a bordo.',
+                'Esperando abordo',
                 style: TextStyle(
                   color: fg,
                   fontSize: 13,
-                  height: 1.35,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w800,
                 ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                codigoVerificado
+                    ? 'Código ya verificado. El viaje puede continuar.'
+                    : 'Cuando el conductor llegue, subí al vehículo. '
+                        'Si no ves el código, tocá «Abrir mi viaje en curso» abajo.',
+                style: TextStyle(color: fgMuted, fontSize: 12.5, height: 1.35),
               ),
               const SizedBox(height: 18),
             ],
@@ -3716,14 +3969,20 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Paso actual: esperar recogida y subir.',
+              mostrarCodigo
+                  ? (pickupConfirmadoTaxista
+                      ? 'Paso actual: dictar el código al conductor.'
+                      : 'Paso actual: esperar recogida con el código listo.')
+                  : (pickupConfirmadoTaxista
+                      ? 'Paso actual: continuar el viaje.'
+                      : 'Paso actual: esperar recogida y subir.'),
               style: TextStyle(
                 color: fgMuted,
                 fontSize: 13,
                 height: 1.45,
               ),
             ),
-            if (!pickupConfirmadoTaxista) ...[
+            if (!pickupConfirmadoTaxista && !codigoVerificado) ...[
               const SizedBox(height: 14),
               Center(
                 child: TextButton(
@@ -3938,6 +4197,257 @@ class _BolaPuebloContraofertasInboundState
                                         try {
                                           await BolaPuebloRepo
                                               .aceptarContraofertaClienteBola(
+                                            bolaId: widget.bolaId,
+                                            ofertaId: d.id,
+                                          );
+                                          if (!context.mounted) return;
+                                          await BolaPuebloDialogs
+                                              .mostrarPostAceptarOfertaDialog(
+                                                  context);
+                                          await BolaPuebloDialogs
+                                              ._navegarTrasBolaAcordada(
+                                            preNav: navAntesDeCrear,
+                                            bolaId: widget.bolaId,
+                                          );
+                                        } catch (e) {
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              BolaPuebloTheme.snack(
+                                                  context, '$e',
+                                                  error: true),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _busy = null);
+                                          }
+                                        }
+                                      },
+                                child: accBusy
+                                    ? const SizedBox(
+                                        height: 20,
+                                        width: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Text('Aceptar monto'),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: BolaPuebloTheme.accent,
+                            side: BorderSide(
+                              color: BolaPuebloTheme.accent
+                                  .withValues(alpha: 0.55),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: anyBusy
+                              ? null
+                              : () async {
+                                  final u =
+                                      FirebaseAuth.instance.currentUser;
+                                  if (u == null) return;
+                                  await BolaPuebloDialogs.enviarOferta(
+                                    context: context,
+                                    bolaId: widget.bolaId,
+                                    uid: u.uid,
+                                    nombre: u.displayName ?? 'Conductor',
+                                    rol: 'taxista',
+                                    montoInicial: monto,
+                                  );
+                                },
+                          icon: const Icon(Icons.swap_horiz_rounded, size: 20),
+                          label: const Text('Proponer otro monto'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Contraofertas del conductor dirigidas a este pasajero («Voy para»).
+class BolaPuebloContraofertasInboundCliente extends StatefulWidget {
+  const BolaPuebloContraofertasInboundCliente({
+    super.key,
+    required this.bolaId,
+    required this.uidCliente,
+  });
+
+  final String bolaId;
+  final String uidCliente;
+
+  @override
+  State<BolaPuebloContraofertasInboundCliente> createState() =>
+      _BolaPuebloContraofertasInboundClienteState();
+}
+
+class _BolaPuebloContraofertasInboundClienteState
+    extends State<BolaPuebloContraofertasInboundCliente> {
+  String? _busy;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = BolaPuebloColors.of(context);
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: BolaPuebloRepo.streamOfertas(widget.bolaId),
+      builder: (context, snap) {
+        final raw = snap.data?.docs ??
+            const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+        final items = raw.where((d) {
+          final m = d.data();
+          if (m['esContraofertaConductor'] != true) return false;
+          if ((m['contraOfertaParaUid'] ?? '').toString() !=
+              widget.uidCliente) {
+            return false;
+          }
+          if ((m['estado'] ?? '').toString() != 'pendiente') return false;
+          return true;
+        }).toList();
+        if (items.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            BolaPuebloUi.sectionLabel(context, 'Te propusieron otro monto'),
+            const SizedBox(height: 6),
+            Text(
+              'El conductor envió una contraoferta. Podés aceptarla para cerrar el precio y seguir al viaje, o rechazarla y seguir negociando.',
+              style: TextStyle(color: cs.onMuted, fontSize: 12.5, height: 1.4),
+            ),
+            const SizedBox(height: 10),
+            ...items.map((d) {
+              final m = d.data();
+              final nombre = (m['fromNombre'] ?? 'Conductor').toString();
+              final monto = ((m['montoRd'] ?? 0) as num).toDouble();
+              final msg = (m['mensaje'] ?? '').toString();
+              final rejBusy = _busy == 'rej:${d.id}';
+              final accBusy = _busy == 'acc:${d.id}';
+              final anyBusy = _busy != null;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Material(
+                  color: cs.surfaceRaised,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(
+                        color: cs.outlineSoft.withValues(alpha: 0.35)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          nombre,
+                          style: TextStyle(
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'RD\$${monto.toStringAsFixed(0)}',
+                          style: const TextStyle(
+                            color: BolaPuebloTheme.accent,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 20,
+                          ),
+                        ),
+                        if (msg.trim().isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            msg,
+                            style: TextStyle(
+                                color: cs.onMuted, fontSize: 13, height: 1.3),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: anyBusy && !rejBusy
+                                    ? null
+                                    : () async {
+                                        setState(() => _busy = 'rej:${d.id}');
+                                        try {
+                                          final motivo = await BolaPuebloDialogs
+                                              .pedirMotivoRechazoContraoferta(
+                                                  context);
+                                          if (motivo == null) return;
+                                          await BolaPuebloRepo
+                                              .rechazarContraofertaConductorBola(
+                                            bolaId: widget.bolaId,
+                                            ofertaId: d.id,
+                                            motivo: motivo,
+                                          );
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            BolaPuebloTheme.snack(context,
+                                                'Contraoferta rechazada'),
+                                          );
+                                        } catch (e) {
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              BolaPuebloTheme.snack(
+                                                  context, '$e',
+                                                  error: true),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _busy = null);
+                                          }
+                                        }
+                                      },
+                                child: rejBusy
+                                    ? const SizedBox(
+                                        height: 20,
+                                        width: 20,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2),
+                                      )
+                                    : const Text('Rechazar'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FilledButton(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: BolaPuebloTheme.accent,
+                                  foregroundColor: Colors.white,
+                                ),
+                                onPressed: anyBusy && !accBusy
+                                    ? null
+                                    : () async {
+                                        final NavigatorState? navAntesDeCrear =
+                                            NavigationService
+                                                .navigatorKey.currentState ??
+                                            Navigator.of(context,
+                                                rootNavigator: true);
+                                        setState(() => _busy = 'acc:${d.id}');
+                                        try {
+                                          await BolaPuebloRepo
+                                              .aceptarContraofertaConductorBola(
                                             bolaId: widget.bolaId,
                                             ofertaId: d.id,
                                           );
@@ -4918,6 +5428,13 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                       ),
                     ),
                   if (tipo == 'pedido' && (rol == 'taxista' || rol == 'driver'))
+                    const SizedBox(height: 12),
+                  if (tipo == 'oferta' && rol == 'cliente')
+                    BolaPuebloContraofertasInboundCliente(
+                      bolaId: docId,
+                      uidCliente: user.uid,
+                    ),
+                  if (tipo == 'oferta' && rol == 'cliente')
                     const SizedBox(height: 12),
                   Text(
                     'Referencia RD\$${monto.toStringAsFixed(0)}. Podés enviar esa cifra u otra dentro del rango; '

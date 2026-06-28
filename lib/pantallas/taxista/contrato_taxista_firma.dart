@@ -22,7 +22,7 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el PDF del contrato.')),
+        const SnackBar(content: Text('No se pudo abrir el contrato en la web.')),
       );
     }
   }
@@ -41,7 +41,7 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
             'cliente de correo con destinatario automático.\n\n'
             'Eso no impide operar: la aceptación legal del contrato se registra en la plataforma '
             'cuando marques «He leído y acepto…» y pulses «Firmar y continuar».\n\n'
-            'Podés usar «Ver PDF» para guardar o compartir el documento por tu cuenta.',
+            'Podés usar «Ver contrato» para leer el documento en la web.',
           ),
           actions: [
             TextButton(
@@ -124,84 +124,97 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: const RaiAppBar(title: 'Contrato digital de conductor'),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF151515),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white24),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF151515),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Text(
+                          kTaxistaContractText,
+                          style: TextStyle(
+                            color: Colors.white70,
+                            height: 1.35,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Ver PDF y enviar copia por correo son opcionales.',
+                        style: TextStyle(
+                          color: Colors.greenAccent.shade100
+                              .withValues(alpha: 0.85),
+                          fontSize: 12.5,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _abrirPdfContrato,
+                              icon: const Icon(Icons.picture_as_pdf),
+                              label: const Text('Ver PDF'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _enviarCopiaCorreo,
+                              icon: const Icon(Icons.mail_outline),
+                              label: const Text('Enviar copia'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                child: const SingleChildScrollView(
-                  child: Text(
-                    kTaxistaContractText,
-                    style: TextStyle(
-                      color: Colors.white70,
-                      height: 1.35,
-                      fontSize: 14,
+              ),
+              const SizedBox(height: 10),
+              CheckboxListTile(
+                value: _acepta,
+                onChanged: (v) => setState(() => _acepta = v == true),
+                contentPadding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                title: const Text(
+                  'He leído y acepto este contrato digital',
+                  style: TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: FilledButton.icon(
+                  onPressed: (_acepta && !_guardando) ? _firmar : null,
+                  icon: const Icon(Icons.draw, size: 22),
+                  label: Text(
+                    _guardando ? 'Guardando firma...' : 'Firmar y continuar',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            CheckboxListTile(
-              value: _acepta,
-              onChanged: (v) => setState(() => _acepta = v == true),
-              title: const Text(
-                'He leído y acepto este contrato digital',
-                style: TextStyle(color: Colors.white),
-              ),
-              controlAffinity: ListTileControlAffinity.leading,
-            ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8, left: 4, right: 4),
-              child: Text(
-                'Para salir de esta pantalla y operar: marca la casilla y pulsa «Firmar y continuar». '
-                'Ver PDF y enviar copia por correo son opcionales.',
-                style: TextStyle(
-                  color: Colors.greenAccent.shade100.withValues(alpha: 0.9),
-                  fontSize: 13,
-                  height: 1.35,
-                ),
-              ),
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _abrirPdfContrato,
-                    icon: const Icon(Icons.picture_as_pdf),
-                    label: const Text('Ver PDF'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _enviarCopiaCorreo,
-                    icon: const Icon(Icons.mail_outline),
-                    label: const Text('Enviar copia'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: (_acepta && !_guardando) ? _firmar : null,
-                icon: const Icon(Icons.draw),
-                label: Text(
-                  _guardando ? 'Guardando firma...' : 'Firmar y continuar',
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

@@ -21,6 +21,7 @@ import '../../navegacion/taxista_operacion_nav.dart';
 import '../../utils/viaje_pool_taxista_gate.dart';
 import '../../servicios/navegacion_externa_launcher.dart';
 import '../../servicios/navigation_service.dart';
+import '../../servicios/active_trip_service.dart';
 import 'viaje_en_curso_taxista.dart';
 
 class DetalleViaje extends StatefulWidget {
@@ -128,7 +129,18 @@ class _DetalleViajeState extends State<DetalleViaje> {
     );
   }
 
-  Future<void> _ignorarViaje(String viajeId) async {
+  /// Pool turístico: solo cerrar detalle (el viaje sigue en pool para otros choferes).
+  /// Pool taxi/motor: marcar [ignoradosPor] como antes.
+  Future<void> _ignorarViaje(
+    String viajeId, {
+    required bool turismoPoolSoloCerrar,
+  }) async {
+    if (turismoPoolSoloCerrar) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      return;
+    }
+
     setState(() => _procesando = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -198,11 +210,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
       }
       if (await PagosTaxistaRepo.tieneBloqueoOperativo(user.uid)) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(PagosTaxistaRepo.mensajeRecargaTomarViajes),
-            backgroundColor: Colors.orangeAccent,
-          ),
+        await TaxistaOperacionNav.guiarTrasRecargaPrepagoOperativa(
+          context,
+          mensaje: PagosTaxistaRepo.mensajeRecargaTomarViajes,
         );
         return;
       }
@@ -238,6 +248,29 @@ class _DetalleViajeState extends State<DetalleViaje> {
         return;
       }
       final Map<String, dynamic> d = doc.data()!;
+
+      final billeSnap = await FirebaseFirestore.instance
+          .collection('billeteras_taxista')
+          .doc(user.uid)
+          .get();
+      final String? prepagoRechazo =
+          PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
+        billeData: billeSnap.data(),
+        viajeData: d,
+      );
+      if (prepagoRechazo != null) {
+        if (!mounted) return;
+        await TaxistaOperacionNav.guiarTrasPrepagoInsuficienteComisionViaje(
+          context,
+          viajeId: viajeId,
+          mensaje: PagosTaxistaRepo.mensajePrepagoInsuficienteComisionViaje(
+            viajeData: d,
+            billeData: billeSnap.data(),
+          ),
+        );
+        return;
+      }
+
       final String tipoServicio = (d['tipoServicio'] ?? 'normal').toString();
       final String canalAsignacion =
           (d['canalAsignacion'] ?? 'pool').toString();
@@ -269,16 +302,21 @@ class _DetalleViajeState extends State<DetalleViaje> {
         if (!prep.ok) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                AsignacionTurismoRepo.mensajeNoAutorizadoPoolTurismo,
-              ),
+            SnackBar(
+              content: Text(prep.mensaje),
               backgroundColor: Colors.redAccent,
             ),
           );
           return;
         }
         final DatosClaimPoolTurismo datos = prep.datos!;
+
+        NavigatorState? rootNav;
+        if (mounted) {
+          rootNav = NavigationService.navigatorKey.currentState;
+          rootNav ??= Navigator.of(context, rootNavigator: true);
+        }
+        ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
 
         final String res = await ViajesRepo.claimTripWithReason(
           viajeId: viajeId,
@@ -288,8 +326,6 @@ class _DetalleViajeState extends State<DetalleViaje> {
           placa: datos.placa,
           tipoVehiculo: datos.subtipoTurismo,
         );
-
-        if (!mounted) return;
 
         if (res == 'ok') {
           await ViajesRepo.sincronizarChoferTurismoTrasAceptarDesdePool(
@@ -308,33 +344,37 @@ class _DetalleViajeState extends State<DetalleViaje> {
             SetOptions(merge: true),
           );
           await UbicacionTaxista.marcarNoDisponible();
-          if (!mounted) return;
           await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
             viajeId: viajeId,
             uidTaxista: user.uid,
+            preNav: rootNav,
           );
           return;
         }
 
         if (res == 'taxista-ocupado') {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                taxistaMensajeClaimFallido(
-                  res,
-                  poolModoConductor: poolModo,
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  taxistaMensajeClaimFallido(
+                    res,
+                    poolModoConductor: poolModo,
+                  ),
                 ),
+                backgroundColor: Colors.orangeAccent,
               ),
-              backgroundColor: Colors.orangeAccent,
-            ),
-          );
+            );
+          }
           await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
             viajeId: viajeId,
             uidTaxista: user.uid,
+            preNav: rootNav,
           );
           return;
         }
+
+        if (!mounted) return;
 
         await TaxistaOperacionNav.guiarTrasFalloClaim(
           context,
@@ -888,7 +928,11 @@ class _DetalleViajeState extends State<DetalleViaje> {
                             child: OutlinedButton.icon(
                               onPressed: _procesando
                                   ? null
-                                  : () => _ignorarViaje(widget.viajeId),
+                                  : () => _ignorarViaje(
+                                        widget.viajeId,
+                                        turismoPoolSoloCerrar:
+                                            puedeTomarTurismoPool,
+                                      ),
                               icon: _procesando
                                   ? const SizedBox(
                                       width: 20,

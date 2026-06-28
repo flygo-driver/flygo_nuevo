@@ -20,6 +20,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
 import 'package:flygo_nuevo/widgets/bola_cancelacion_listener.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
+import 'package:flygo_nuevo/widgets/taxista_post_viaje_listener.dart';
 import 'package:flygo_nuevo/widgets/taxista_registro_gate.dart';
 import 'package:flygo_nuevo/widgets/taxista_documentos_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
@@ -39,8 +40,10 @@ class TaxistaShell extends StatelessWidget {
       child: TaxistaDocumentosGate(
         child: BolaCancelacionListener(
           child: BolaPostFacturaListener(
-            child: _TaxistaShellScaffold(
-              openDocumentosOnLaunch: openDocumentosOnLaunch,
+            child: TaxistaPostViajeListener(
+              child: _TaxistaShellScaffold(
+                openDocumentosOnLaunch: openDocumentosOnLaunch,
+              ),
             ),
           ),
         ),
@@ -71,6 +74,7 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
   bool? _viajeActivoShell;
   Timer? _bootstrapViajeTimeout;
   VoidCallback? _offlineListener;
+  VoidCallback? _shellRebuildListener;
 
   static const Duration _kBootstrapViajeMaxWait = Duration(seconds: 3);
 
@@ -116,6 +120,19 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
         if (!mounted || _viajeActivoShell != null) return;
         unawaited(_resolverBootstrapConCache(uid, porTimeout: true));
       });
+
+      _shellRebuildListener = () {
+        if (!mounted) return;
+        if (!ActiveTripService.debeBloquearShellSinViajeTaxista &&
+            !ActiveTripService.debeMantenerOverlayViajeEnShell) {
+          return;
+        }
+        if (_viajeActivoShell != true) {
+          print('[VIAJE_ACTIVO] taxista_shell rebuild tick → overlay viaje');
+          setState(() => _viajeActivoShell = true);
+        }
+      };
+      ActiveTripService.shellRebuildTick.addListener(_shellRebuildListener!);
 
       _viajeActivoSub =
           ActiveTripService.streamTieneViajeActivo(uid).listen((bool ok) {
@@ -176,6 +193,10 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
     _bootstrapViajeTimeout?.cancel();
     if (_offlineListener != null) {
       RaiConnectivityService.instance.offline.removeListener(_offlineListener!);
+    }
+    if (_shellRebuildListener != null) {
+      ActiveTripService.shellRebuildTick
+          .removeListener(_shellRebuildListener!);
     }
     _viajeActivoSub?.cancel();
     RaiUbicacionTaxistaService.instance.disposeService();

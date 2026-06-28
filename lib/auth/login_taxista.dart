@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/servicios/auth_service.dart';
+import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/servicios/google_auth.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
@@ -137,6 +138,7 @@ class _LoginTaxistaState extends State<LoginTaxista> {
     });
     try {
       await AuthService().loginUser(email, pass, rolSiFalta: 'taxista');
+      await FirebaseAuth.instance.currentUser?.reload();
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid != null) {
@@ -240,15 +242,11 @@ class _LoginTaxistaState extends State<LoginTaxista> {
         return;
       }
 
-      final msg = switch (e.code) {
-        'invalid-email' => 'Correo inválido.',
-        'user-disabled' => 'Cuenta deshabilitada.',
-        'user-not-found' => 'No existe una cuenta con ese correo.',
-        'too-many-requests' => 'Demasiados intentos. Intenta más tarde.',
-        'role-mismatch' => e.message ?? 'Rol no coincide.',
-        _ => 'Error al iniciar sesión.',
-      };
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      if (e.code == 'role-mismatch') {
+        _snack(e.message ?? 'Esta cuenta no es de conductor.');
+        return;
+      }
+      _snack(errorAuthEs(e));
     } catch (_) {
       if (mounted) {
         if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {

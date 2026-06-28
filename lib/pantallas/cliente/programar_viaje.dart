@@ -37,6 +37,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_desglose_panel.dart';
 import 'package:flygo_nuevo/widgets/promo_mxk_cliente_panel.dart';
@@ -532,7 +533,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       return false;
     }
     if (_origenBuscarDireccion) {
-      return _origenDetManual != null || origenManual.trim().isNotEmpty;
+      // Con Places: solo cotizar cuando el usuario eligió un lugar (coords fijas).
+      if (kUsePlacesAutocomplete) return _origenDetManual != null;
+      return origenManual.trim().isNotEmpty;
     }
     return _origenMap != null;
   }
@@ -915,7 +918,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       return contador;
     } catch (e) {
       debugPrint('Error obteniendo contador de viajes: $e');
-      return 0;
+      return 1;
     }
   }
 
@@ -923,12 +926,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   Future<double> _calcularPrecioPorTipo(double distancia, bool idaVuelta,
       {double peaje = 0.0}) async {
     final servicio = TarifaServiceUnificado();
+    await servicio.recargar();
     final user = FirebaseAuth.instance.currentUser;
 
     int contadorViajes = 1;
     if (user != null) {
       contadorViajes = await _obtenerContadorViajes(user.uid);
     }
+    if (contadorViajes <= 0) contadorViajes = 1;
     _promoSnapshotCotizacion =
         await servicio.construirPromoSnapshot(contadorViajes);
 
@@ -977,6 +982,65 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (mounted) _snack('Error calculando precio: $e');
       return 0.0;
     }
+  }
+
+  /// Si al confirmar «Ahora» el pickup se movió > [metros], recotiza con el GPS fresco.
+  static const double _kMetrosRecotizarAlConfirmar = 120;
+
+  Future<bool> _alinearPickupConfirmacionAhora({
+    required double origenCotizadoLat,
+    required double origenCotizadoLon,
+    required double nuevoOrigenLat,
+    required double nuevoOrigenLon,
+  }) async {
+    if (latDestino == null || lonDestino == null) return false;
+
+    final double metros = Geolocator.distanceBetween(
+      origenCotizadoLat,
+      origenCotizadoLon,
+      nuevoOrigenLat,
+      nuevoOrigenLon,
+    );
+
+    latCliente = nuevoOrigenLat;
+    lonCliente = nuevoOrigenLon;
+    _origenMap = LatLng(nuevoOrigenLat, nuevoOrigenLon);
+
+    if (metros <= _kMetrosRecotizarAlConfirmar) {
+      return true;
+    }
+
+    final servicio = TarifaServiceUnificado();
+    await servicio.recargar();
+    final RaiDistanciaCotizacion? distRes =
+        await RaiOfflineCotizacionService.resolverDistancia(
+      originLat: nuevoOrigenLat,
+      originLon: nuevoOrigenLon,
+      destLat: latDestino!,
+      destLon: lonDestino!,
+      useDirections: kUseDirectionsForDistance,
+      maxKmCotizable: servicio.distanciaMaximaCotizableKm,
+    );
+    if (distRes == null || distRes.km <= 0) return false;
+
+    final double precioDouble =
+        await _calcularPrecioPorTipo(distRes.km, idaYVuelta, peaje: _peaje);
+    if (precioDouble <= 0) return false;
+
+    final int precioCents = (precioDouble * 100).round();
+    final int comisionCents =
+        PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
+
+    distanciaKm = distRes.km;
+    precioCalculado = precioCents / 100.0;
+    _precioEsEstimadoOffline = distRes.estimadoOffline;
+    _distanciaFuente = distRes.fuente;
+    comisionCalculada = comisionCents / 100.0;
+    gananciaTaxistaCalculada = (precioCents - comisionCents) / 100.0;
+    ubicacionObtenida = true;
+
+    if (mounted) setState(() {});
+    return true;
   }
 
   void _invalidarCotizacion() {
@@ -1068,7 +1132,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           requestIfDenied: false,
         );
         if (!ready.isUsable) {
-          if (!automatico) {
+          if (!automatico &&
+              !RaiUbicacionClienteService.instance.bannerActivo) {
             _snack(LocationReadiness.kMsgEsperandoUbicacion);
           }
           _setCargaFalseSiCorre(runId);
@@ -1096,7 +1161,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       // ORIGEN: búsqueda (solo programar) o mapa / GPS
       if (!widget.modoAhora && _origenBuscarDireccion) {
-        if (kUsePlacesAutocomplete && _origenDetManual != null) {
+        if (kUsePlacesAutocomplete) {
+          if (_origenDetManual == null) {
+            _setCargaFalseSiCorre(runId);
+            return;
+          }
           origenLat = _origenDetManual!.lat;
           origenLon = _origenDetManual!.lon;
           origenLegible = _origenDetManual!.displayLabel;
@@ -1127,7 +1196,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           requestIfDenied: false,
         );
         if (!ready.isUsable) {
-          if (!automatico) {
+          if (!automatico &&
+              !RaiUbicacionClienteService.instance.bannerActivo) {
             _snack(LocationReadiness.kMsgEsperandoUbicacion);
           }
           _setCargaFalseSiCorre(runId);
@@ -1859,12 +1929,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     if (!ubicacionObtenida || latCliente == null || latDestino == null) {
       if (!ubicacionObtenida &&
           RaiUbicacionClienteService.instance.bannerActivo) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text(LocationReadiness.kMsgEsperandoUbicacion)),
-        );
-      } else {
-        messenger.showSnackBar(const SnackBar(content: Text(kMsgCalcFirst)));
+        return;
       }
+      messenger.showSnackBar(const SnackBar(content: Text(kMsgCalcFirst)));
       return;
     }
     if (!widget.modoAhora) {
@@ -1891,11 +1958,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
 
     setState(() => _cargando = true);
-    NavigatorState? navAntesDeCrear =
-        NavigationService.navigatorKey.currentState;
-    if (navAntesDeCrear == null && mounted) {
-      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
-    }
+    final ({NavigatorState? tab, NavigatorState? raiz}) nav =
+        NavigationService.capturarNavigadoresFormulario(context);
     try {
       if (widget.modoAhora) {
         if (!mounted) return;
@@ -1904,15 +1968,53 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           requestIfDenied: false,
         );
         if (!ready.isUsable) {
-          messenger.showSnackBar(
-            SnackBar(content: Text(LocationReadiness.kMsgEsperandoUbicacion)),
-          );
+          if (!RaiUbicacionClienteService.instance.bannerActivo) {
+            messenger.showSnackBar(
+              SnackBar(content: Text(LocationReadiness.kMsgEsperandoUbicacion)),
+            );
+          }
           if (mounted) setState(() => _cargando = false);
           return;
         }
         if (ready.position != null) {
-          latCliente = ready.position!.latitude;
-          lonCliente = ready.position!.longitude;
+          final double cotLat = latCliente!;
+          final double cotLon = lonCliente!;
+          final double freshLat = ready.position!.latitude;
+          final double freshLon = ready.position!.longitude;
+          final double metrosMovidos = Geolocator.distanceBetween(
+            cotLat,
+            cotLon,
+            freshLat,
+            freshLon,
+          );
+          final bool alineado = await _alinearPickupConfirmacionAhora(
+            origenCotizadoLat: cotLat,
+            origenCotizadoLon: cotLon,
+            nuevoOrigenLat: freshLat,
+            nuevoOrigenLon: freshLon,
+          );
+          if (!alineado) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Tu ubicación cambió. Vuelve a calcular el precio antes de confirmar.',
+                ),
+              ),
+            );
+            if (mounted) setState(() => _cargando = false);
+            return;
+          }
+          if (metrosMovidos > _kMetrosRecotizarAlConfirmar && mounted) {
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Precio actualizado según tu ubicación: '
+                  '${FormatosMoneda.rd(precioCalculado)}.',
+                ),
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
         }
       }
       await u.getIdToken(true);
@@ -1986,9 +2088,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         distanciaKm: distanciaKm > 0 ? distanciaKm : null,
         tipoServicio: tipoServicio,
         subtipoTurismo: tipoServicio == 'turismo'
-            ? (_destinoTurismoSeleccionado?.subtipo ??
-                widget.subtipoTurismo ??
-                '')
+            ? (_tipoVehiculoTurismo.isNotEmpty
+                ? _tipoVehiculoTurismo
+                : 'carro')
             : widget.subtipoTurismo,
         forzarEsAhora: viajeInmediato ? true : null,
         catalogoTurismoId: tipoServicio == 'turismo'
@@ -2011,7 +2113,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         viajeId: id,
         fechaHoraPickup: fechaProgramadaUtc,
         tipoServicio: tipoServicio,
-        preNav: navAntesDeCrear,
+        preNav: nav.tab,
+        preNavRaiz: nav.raiz,
       );
     } on fs.FirebaseException catch (e) {
       messenger.showSnackBar(
@@ -3551,6 +3654,20 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                 ),
                               ),
                               const SizedBox(height: 12),
+                              if (!_mostrarResumenCotizacion)
+                                ClienteViajeOrientacionBanner(
+                                  mensaje: ClienteViajeOrientacionCopy.programarViaje(
+                                    modoAhora: widget.modoAhora,
+                                    tipoServicio: tipoServicio,
+                                  ),
+                                  icon: ClienteViajeOrientacionCopy.iconoProgramarViaje(
+                                    tipoServicio,
+                                    modoAhora: widget.modoAhora,
+                                  ),
+                                  accentColor: _colorServicio,
+                                ),
+                              if (!_mostrarResumenCotizacion)
+                                const SizedBox(height: 10),
                               if (_mostrarResumenCotizacion)
                                 _tarjetaResumenCotizacion(),
                               if (!_mostrarResumenCotizacion)

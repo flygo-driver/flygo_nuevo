@@ -129,6 +129,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
   fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreAhora;
   fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreProg;
 
+  Stream<fs.QuerySnapshot<Map<String, dynamic>>>? _streamPoolAhora;
+  Stream<fs.QuerySnapshot<Map<String, dynamic>>>? _streamPoolProg;
+  bool _streamPoolAhoraFallback = false;
+  bool _streamPoolProgFallback = false;
+
   late TabController _tabPool;
   bool _ignorarPrimeraEmisionTimbreAhora = true;
   bool _ignorarPrimeraEmisionTimbreProg = true;
@@ -293,7 +298,85 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
   Future<void> _redirectToActiveTrip({NavigatorState? preNav}) async {
     if (!mounted || _navegandoAViajeActivo) return;
     _navegandoAViajeActivo = true;
-    await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: preNav);
+    NavigatorState? nav = preNav ?? NavigationService.navigatorKey.currentState;
+    if (nav == null) {
+      if (!mounted) return;
+      nav = Navigator.of(context, rootNavigator: true);
+    }
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      try {
+        final uidDoc = await fs.FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(uid)
+            .get();
+        final vid = (uidDoc.data()?['viajeActivoId'] ?? '').toString().trim();
+        if (vid.isNotEmpty) {
+          final vs = await fs.FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(vid)
+              .get();
+          final d = vs.data();
+          if (d != null &&
+              ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
+                  d)) {
+            _navegandoAViajeActivo = false;
+            return;
+          }
+        }
+      } catch (_) {}
+    }
+    await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: nav);
+  }
+
+  /// Si el claim falló por permisos pero el viaje ya quedó asignado en servidor.
+  Future<bool> _confirmarAsignacionYRedirigir({
+    required String viajeId,
+    required String uidTaxista,
+    NavigatorState? preNav,
+  }) async {
+    try {
+      final snap = await fs.FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get(const fs.GetOptions(source: fs.Source.server));
+      if (!snap.exists) return false;
+      final d = snap.data() ?? <String, dynamic>{};
+      final String uidTx = (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
+      final String estado = (d['estado'] ?? '').toString();
+      final bool activo = d['activo'] == true;
+      final bool estadoActivo = estado == 'aceptado' ||
+          estado == 'en_camino_pickup' ||
+          estado == 'enCaminoPickup' ||
+          estado == 'a_bordo' ||
+          estado == 'aBordo' ||
+          estado == 'en_curso' ||
+          estado == 'enCurso';
+      if (uidTx == uidTaxista && (activo || estadoActivo)) {
+        await fs.FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(uidTaxista)
+            .set({
+          'viajeActivoId': viajeId,
+          'updatedAt': fs.FieldValue.serverTimestamp(),
+          'actualizadoEn': fs.FieldValue.serverTimestamp(),
+        }, fs.SetOptions(merge: true));
+        _navegandoAViajeActivo = true;
+        ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
+        final NavigatorState? nav = preNav ??
+            NavigationService.navigatorKey.currentState ??
+            (mounted ? Navigator.of(context, rootNavigator: true) : null);
+        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+          viajeId: viajeId,
+          uidTaxista: uidTaxista,
+          preNav: nav,
+        );
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -456,7 +539,32 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     _arrancarTimbres();
   }
 
+  void _asegurarStreamsPoolUi() {
+    if (_streamPoolAhora == null ||
+        _streamPoolAhoraFallback != _usarFallbackSinIndiceAhora) {
+      _streamPoolAhoraFallback = _usarFallbackSinIndiceAhora;
+      final fs.Query<Map<String, dynamic>> q = _usarFallbackSinIndiceAhora
+          ? _qFallbackBase()
+          : _qTurismoPoolAhora();
+      _streamPoolAhora = q.limit(120).snapshots();
+    }
+    if (_streamPoolProg == null ||
+        _streamPoolProgFallback != _usarFallbackSinIndiceProg) {
+      _streamPoolProgFallback = _usarFallbackSinIndiceProg;
+      final fs.Query<Map<String, dynamic>> q = _usarFallbackSinIndiceProg
+          ? _qFallbackBase()
+          : _qTurismoPoolProgramados();
+      _streamPoolProg = q.limit(200).snapshots();
+    }
+  }
+
+  void _refrescarListaPoolUi() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
   void _arrancarTimbres() {
+    _asegurarStreamsPoolUi();
     _subTimbreAhora?.cancel();
     _subTimbreProg?.cancel();
     _ignorarPrimeraEmisionTimbreAhora = true;
@@ -468,8 +576,9 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         _usarFallbackSinIndiceProg ? _qFallbackBase() : _qTurismoPoolProgramados();
 
     _subTimbreAhora = qA.limit(120).snapshots().listen((snap) async {
-      if (!_appEnForeground) return;
       _snapTimbreAhora = snap;
+      _refrescarListaPoolUi();
+      if (!_appEnForeground) return;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
       if (_ignorarPrimeraEmisionTimbreAhora) {
@@ -487,8 +596,9 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     });
 
     _subTimbreProg = qP.limit(200).snapshots().listen((snap) async {
-      if (!_appEnForeground) return;
       _snapTimbreProg = snap;
+      _refrescarListaPoolUi();
+      if (!_appEnForeground) return;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
       if (_ignorarPrimeraEmisionTimbreProg) {
@@ -558,10 +668,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     if (myUid.isNotEmpty && !await RolesService.getDisponibilidad(myUid)) {
       return;
     }
-    final pendientes = <_OfertaTurismoPendiente>[
-      ..._idsOfertasNoVistasEnTab(0, myUid),
-      ..._idsOfertasNoVistasEnTab(1, myUid),
-    ];
+    final pendientes =
+        _idsOfertasNoVistasEnTab(_tabPool.index, myUid);
     if (pendientes.isEmpty) return;
 
     await NotificationService.I.playPoolOfferSoundInApp();
@@ -600,10 +708,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     _entradaInicialProcesada = true;
 
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    final pendientes = <_OfertaTurismoPendiente>[
-      ..._idsOfertasNoVistasEnTab(0, myUid),
-      ..._idsOfertasNoVistasEnTab(1, myUid),
-    ];
+    final pendientes =
+        _idsOfertasNoVistasEnTab(_tabPool.index, myUid);
 
     final bool disponible = myUid.isEmpty ||
         await RolesService.getDisponibilidad(myUid);
@@ -631,6 +737,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     List<_OfertaTurismoPendiente> nuevas,
   ) async {
     if (!_entradaInicialProcesada || !_appEnForeground) return;
+    if (_tabPool.index != tabIndex) return;
     if (nuevas.isEmpty) return;
     if (myUid.isNotEmpty && !await RolesService.getDisponibilidad(myUid)) {
       return;
@@ -860,6 +967,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     if (_aceptandoIds.contains(v.id)) return;
 
     setState(() => _aceptandoIds.add(v.id));
+    NavigatorState? rootNav;
+    if (mounted) {
+      rootNav = NavigationService.navigatorKey.currentState;
+      rootNav ??= Navigator.of(context, rootNavigator: true);
+    }
     ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
     _navegandoAViajeActivo = true;
     var navegoAViajeEnCurso = false;
@@ -887,7 +999,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         if (!mounted) return;
         messenger.showSnackBar(
           SnackBar(
-            content: Text(AsignacionTurismoRepo.mensajeNoAutorizadoPoolTurismo),
+            content: Text(prep.mensaje),
             backgroundColor: cs.error,
           ),
         );
@@ -906,8 +1018,6 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         placa: datos.placa,
         tipoVehiculo: datos.subtipoTurismo,
       );
-
-      if (!mounted) return;
 
       if (res == 'ok') {
         await NotificationService.I.stopTimbre();
@@ -936,35 +1046,71 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
           fs.SetOptions(merge: true),
         );
 
-        messenger.showSnackBar(
-          SnackBar(
-            content: const Text('✅ Viaje turístico aceptado. Redirigiendo...'),
-            backgroundColor: cs.primary,
-          ),
-        );
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content:
+                  const Text('✅ Viaje turístico aceptado. Redirigiendo...'),
+              backgroundColor: cs.primary,
+            ),
+          );
+        }
         navegoAViajeEnCurso = true;
         await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
           viajeId: v.id,
           uidTaxista: taxista.uid,
+          preNav: rootNav,
         );
         return;
       }
 
       if (res == 'taxista-ocupado') {
         await NotificationService.I.stopTimbre();
-        messenger.showSnackBar(
-          SnackBar(
-            content: const Text('Tienes un viaje activo. Redirigiendo...'),
-            backgroundColor: cs.tertiaryContainer,
-          ),
-        );
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: const Text('Tienes un viaje activo. Redirigiendo...'),
+              backgroundColor: cs.tertiaryContainer,
+            ),
+          );
+        }
         navegoAViajeEnCurso = true;
         await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
           viajeId: v.id,
           uidTaxista: taxista.uid,
+          preNav: rootNav,
         );
         return;
       }
+
+      if (res.startsWith('permiso:')) {
+        final bool yaAsignado = await _confirmarAsignacionYRedirigir(
+          viajeId: v.id,
+          uidTaxista: taxista.uid,
+          preNav: rootNav,
+        );
+        if (yaAsignado) {
+          await NotificationService.I.stopTimbre();
+          await ViajesRepo.sincronizarChoferTurismoTrasAceptarDesdePool(
+            uidChofer: taxista.uid,
+            viajeId: v.id,
+          );
+          if (mounted) {
+            messenger.showSnackBar(
+              SnackBar(
+                content: const Text(
+                  '✅ Viaje turístico tomado. Abriendo viaje en curso...',
+                ),
+                backgroundColor: cs.primary,
+              ),
+            );
+          }
+          navegoAViajeEnCurso = true;
+          return;
+        }
+      }
+
+      if (!mounted) return;
 
       if (res == 'chofer-turismo-no-aprobado') {
         messenger.showSnackBar(
@@ -1094,6 +1240,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
   Widget _buildLista({
     required Stream<fs.QuerySnapshot<Map<String, dynamic>>> stream,
+    fs.QuerySnapshot<Map<String, dynamic>>? preferSnapshot,
     required bool disponible,
     required String myUid,
     required bool Function(Map<String, dynamic>) filtroLocalSiFallback,
@@ -1101,14 +1248,19 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     required bool esTabAhora,
     required double latTaxista,
     required double lonTaxista,
+    Map<String, dynamic>? choferData,
   }) {
     return StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
       stream: stream,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingProfessional();
+        final fs.QuerySnapshot<Map<String, dynamic>>? qs =
+            preferSnapshot ?? snapshot.data;
+        if (qs == null) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingProfessional();
+          }
         }
-        if (snapshot.hasError) {
+        if (snapshot.hasError && qs == null) {
           final errorMsg = snapshot.error.toString().toLowerCase();
           if (errorMsg.contains('index') ||
               errorMsg.contains('failed-precondition')) {
@@ -1121,11 +1273,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
             onRetry: () => setState(() {}),
           );
         }
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+        if (qs == null || qs.docs.isEmpty) {
           return EmptyTripsWidget(esTabAhora: esTabAhora);
         }
 
-        final docs = snapshot.data!.docs.toList();
+        final docs = qs.docs.toList();
         final items = <_ItemPoolTurismo>[];
 
         for (final d in docs) {
@@ -1194,9 +1346,20 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
             final puedeAceptar =
                 esAhora || !DateTime.now().isBefore(acceptAfter);
-            final subtipo =
-                v.subtipoTurismo.isEmpty ? 'carro' : v.subtipoTurismo;
+            final subtipo = AsignacionTurismoRepo.subtipoTurismoRequeridoDesdeViaje(raw);
+            final subtipoLabel =
+                AsignacionTurismoRepo.labelTipoVehiculoTurismo(subtipo);
             final pax = _pasajerosDesde(v);
+            ResultadoEvalVehiculoTurismo? evalVeh;
+            if (choferData != null && choferData.isNotEmpty) {
+              evalVeh = AsignacionTurismoRepo.evaluarVehiculoTurismoParaViaje(
+                choferData: choferData,
+                rawViaje: raw,
+              );
+            }
+            final bool vehiculoCompatible = evalVeh?.ok ?? true;
+            final String? avisoVehiculo =
+                evalVeh != null && !evalVeh.ok ? evalVeh.mensaje : null;
 
             final distanciaKm = DistanciaService.calcularDistancia(
               v.latCliente,
@@ -1255,7 +1418,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                       runSpacing: 8,
                       children: [
                         _chip(context, Icons.directions_car,
-                            'Vehículo: $subtipo'),
+                            'Requiere: $subtipoLabel'),
                         if (pax != null)
                           _chip(context, Icons.people, '$pax pasajeros'),
                         _chip(context, Icons.near_me,
@@ -1274,6 +1437,47 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                           ),
                       ],
                     ),
+                    if (avisoVehiculo != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .errorContainer
+                              .withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .error
+                                .withValues(alpha: 0.45),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.warning_amber_rounded,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                avisoVehiculo,
+                                style: TextStyle(
+                                  color: pal.textSecondary,
+                                  fontSize: 12.5,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     Row(
                       children: [
@@ -1350,6 +1554,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                           child: ElevatedButton.icon(
                             onPressed: (aceptando ||
                                     !disponible ||
+                                    !vehiculoCompatible ||
                                     (!esAhora && !puedeAceptar))
                                 ? null
                                 : () => _aceptarViajeTurismo(
@@ -1371,11 +1576,13 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                             label: Text(
                               aceptando
                                   ? 'Aceptando...'
-                                  : (!disponible
-                                      ? 'No disponible'
-                                      : (!esAhora && !puedeAceptar
-                                          ? 'Espera liberación'
-                                          : 'Aceptar')),
+                                  : (!vehiculoCompatible
+                                      ? 'Vehículo no coincide'
+                                      : (!disponible
+                                          ? 'No disponible'
+                                          : (!esAhora && !puedeAceptar
+                                              ? 'Espera liberación'
+                                              : 'Aceptar'))),
                               textAlign: TextAlign.center,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -1463,9 +1670,9 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           FilledButton.icon(
-            onPressed: () => TaxistaFinanzasNav.abrirMisPagos(
+            onPressed: () => TaxistaOperacionNav.guiarTrasRecargaPrepagoOperativa(
               context,
-              scrollToRecargaSection: true,
+              mensaje: PagosTaxistaRepo.mensajeRecargaBannerLista,
             ),
             icon: const Icon(Icons.payment_rounded),
             label: const Text('Ir a Mis pagos'),
@@ -1504,15 +1711,12 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
   Widget _buildContenidoPrincipal(
     BuildContext context,
     Position pos,
-    User u,
-  ) {
-    final streamAhora = _usarFallbackSinIndiceAhora
-        ? _qFallbackBase().limit(120).snapshots()
-        : _qTurismoPoolAhora().limit(120).snapshots();
-
-    final streamProg = _usarFallbackSinIndiceProg
-        ? _qFallbackBase().limit(200).snapshots()
-        : _qTurismoPoolProgramados().limit(200).snapshots();
+    User u, {
+    Map<String, dynamic>? choferData,
+  }) {
+    _asegurarStreamsPoolUi();
+    final streamAhora = _streamPoolAhora!;
+    final streamProg = _streamPoolProg!;
 
     final p = context._poolTurismoPal;
 
@@ -1587,6 +1791,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                                   children: [
                                     _buildLista(
                                       stream: streamAhora,
+                                      preferSnapshot: _snapTimbreAhora,
                                       disponible: disponible,
                                       myUid: u.uid,
                                       filtroLocalSiFallback:
@@ -1596,9 +1801,11 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                                       esTabAhora: true,
                                       latTaxista: pos.latitude,
                                       lonTaxista: pos.longitude,
+                                      choferData: choferData,
                                     ),
                                     _buildLista(
                                       stream: streamProg,
+                                      preferSnapshot: _snapTimbreProg,
                                       disponible: disponible,
                                       myUid: u.uid,
                                       filtroLocalSiFallback:
@@ -1608,6 +1815,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                                       esTabAhora: false,
                                       latTaxista: pos.latitude,
                                       lonTaxista: pos.longitude,
+                                      choferData: choferData,
                                     ),
                                   ],
                                 ),
@@ -1671,7 +1879,12 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
             if (ubicacionSnapshot.connectionState == ConnectionState.waiting &&
                 _ubicacionCache != null) {
-              return _buildContenidoPrincipal(context, _ubicacionCache!, u);
+              return _buildContenidoPrincipal(
+                context,
+                _ubicacionCache!,
+                u,
+                choferData: d,
+              );
             }
 
             if (ubicacionSnapshot.connectionState == ConnectionState.waiting) {
@@ -1687,7 +1900,12 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
             if (ubicacionSnapshot.hasError) {
               if (_ubicacionCache != null) {
-                return _buildContenidoPrincipal(context, _ubicacionCache!, u);
+                return _buildContenidoPrincipal(
+                  context,
+                  _ubicacionCache!,
+                  u,
+                  choferData: d,
+                );
               }
               return _pantallaUbicacionRequerida();
             }
@@ -1695,7 +1913,12 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
             final pos = ubicacionSnapshot.data;
             if (pos == null) {
               if (_ubicacionCache != null) {
-                return _buildContenidoPrincipal(context, _ubicacionCache!, u);
+                return _buildContenidoPrincipal(
+                  context,
+                  _ubicacionCache!,
+                  u,
+                  choferData: d,
+                );
               }
               return _pantallaUbicacionRequerida();
             }
@@ -1704,7 +1927,12 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
             if (mounted && _gpsServicioActivo != true) {
               _gpsServicioActivo = true;
             }
-            return _buildContenidoPrincipal(context, pos, u);
+            return _buildContenidoPrincipal(
+              context,
+              pos,
+              u,
+              choferData: d,
+            );
           },
         );
       },

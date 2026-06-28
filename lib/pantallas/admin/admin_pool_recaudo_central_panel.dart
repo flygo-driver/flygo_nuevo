@@ -91,24 +91,17 @@ class _PagosPoolPendientesList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stream = FirebaseFirestore.instance
-        .collectionGroup('reservas')
-        .where('recaudoDestino', isEqualTo: 'rai')
-        .where('estado', isEqualTo: 'reservado')
-        .limit(40);
+    final stream = PoolRepo.streamReservasPoolRaiPagoPendienteAdmin(poolLimit: 80);
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: stream.snapshots(),
+    return StreamBuilder<List<PoolReservaRaiPendienteAdmin>>(
+      stream: stream,
       builder: (context, snap) {
         if (snap.hasError) {
           final err = snap.error.toString();
           final hint = err.contains('permission-denied') ||
                   err.contains('PERMISSION_DENIED')
               ? 'Sin permiso Firestore (cuenta admin o reglas desplegadas).'
-              : err.contains('failed-precondition') ||
-                      err.contains('index')
-                  ? 'Falta índice Firestore (desplegar firestore.indexes.json).'
-                  : 'Error de red o Firestore.';
+              : 'Error de red o Firestore.';
           return Text(
             'Error listando reservas: $hint\n$err',
             style: const TextStyle(color: Colors.red),
@@ -117,24 +110,19 @@ class _PagosPoolPendientesList extends StatelessWidget {
         if (!snap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        final docs = snap.data!.docs.where((doc) {
-          final ep =
-              (doc.data()['estadoPago'] ?? '').toString().trim().toLowerCase();
-          return ep == 'pendiente' ||
-              ep == 'comprobante_enviado' ||
-              ep.isEmpty;
-        }).toList();
-        if (docs.isEmpty) {
+        final items = snap.data!;
+        if (items.isEmpty) {
           return Text(
             'No hay transferencias pool pendientes de verificar.',
             style: TextStyle(color: AdminUi.secondary(context)),
           );
         }
         return Column(
-          children: docs.map((doc) {
-            final r = doc.data();
-            final poolId = doc.reference.parent.parent?.id ?? '';
-            final reservaId = doc.id;
+          children: items.map((item) {
+            final r = item.reserva;
+            final poolId = item.poolId;
+            final reservaId = item.reservaId;
+            final pool = item.pool;
             final ref = (r['referenciaRecaudo'] ?? '').toString();
             final comprobante = (r['comprobanteUrl'] ?? '').toString().trim();
             final estadoPago = (r['estadoPago'] ?? '').toString();
@@ -143,19 +131,12 @@ class _PagosPoolPendientesList extends StatelessWidget {
             final cliente = (r['clienteNombre'] ?? 'Cliente').toString();
             final montoEsp =
                 ((r['montoEsperadoRecaudoRd'] ?? total) as num).toDouble();
-            return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              future: FirebaseFirestore.instance
-                  .collection('viajes_pool')
-                  .doc(poolId)
-                  .get(),
-              builder: (context, poolSnap) {
-                final pool = poolSnap.data?.data() ?? const {};
-                final destino = (pool['destino'] ?? '').toString();
-                final origen = (pool['origenTown'] ?? '').toString();
-                final ruta = destino.isNotEmpty
-                    ? (origen.isNotEmpty ? '$origen → $destino' : destino)
-                    : '';
-                return Card(
+            final destino = (pool['destino'] ?? '').toString();
+            final origen = (pool['origenTown'] ?? '').toString();
+            final ruta = destino.isNotEmpty
+                ? (origen.isNotEmpty ? '$origen → $destino' : destino)
+                : '';
+            return Card(
               color: AdminUi.card(context),
               margin: const EdgeInsets.only(bottom: 8),
               child: Padding(
@@ -246,8 +227,6 @@ class _PagosPoolPendientesList extends StatelessWidget {
                   ],
                 ),
               ),
-            );
-              },
             );
           }).toList(),
         );

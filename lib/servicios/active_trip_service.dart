@@ -8,6 +8,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -25,6 +26,13 @@ class ActiveTripService {
   static int _mantenerOverlayViajeHastaMs = 0;
   static int _bloquearShellSinViajeHastaMs = 0;
 
+  /// Fuerza rebuild de [TaxistaShell] / [ClienteShell] tras aceptar viaje u overlay.
+  static final ValueNotifier<int> shellRebuildTick = ValueNotifier<int>(0);
+
+  static void notificarRebuildShell() {
+    shellRebuildTick.value++;
+  }
+
   /// Tras «Aceptar viaje»: evita que [TaxistaShell] vuelva al pool por snapshots
   /// intermedios (viajeActivoId antes que uidTaxista en el doc).
   static void bloquearShellTaxistaTrasAceptar(Duration duracion) {
@@ -35,6 +43,7 @@ class ActiveTripService {
           '[VIAJE_ACTIVO] ActiveTripService.bloquearShellTaxistaTrasAceptar ${duracion.inSeconds}s');
     }
     mantenerOverlayViajeEnShell(duracion);
+    notificarRebuildShell();
   }
 
   static bool get debeBloquearShellSinViajeTaxista =>
@@ -54,6 +63,7 @@ class ActiveTripService {
       print(
           '[VIAJE_ACTIVO] ActiveTripService.mantenerOverlayViajeEnShell ${duracion.inSeconds}s');
     }
+    notificarRebuildShell();
   }
 
   static bool get debeMantenerOverlayViajeEnShell =>
@@ -64,6 +74,7 @@ class ActiveTripService {
   static void cancelarMantenimientoOverlayViaje() {
     _mantenerOverlayViajeHastaMs = 0;
     _bloquearShellSinViajeHastaMs = 0;
+    notificarRebuildShell();
   }
 
   /// Documento del viaje activo, o `null`.
@@ -180,43 +191,66 @@ class ActiveTripService {
     return ok;
   }
 
-  /// Emite `true`/`false` al cambiar `usuarios/{uid}` o el propio viaje enlazado
-  /// (vía nueva lectura con [ViajesRepo.getViajeActivoParaUsuario]).
+  /// Emite al cambiar `usuarios/{uid}`, el viaje enlazado o el bloqueo post-aceptación.
   static Stream<bool> streamTieneViajeActivo(String uid) {
-    final u = uid.trim();
+    final String u = uid.trim();
     if (u.isEmpty) return Stream<bool>.value(false);
-    // Reduce lecturas a [getViajeActivoParaUsuario] cuando solo cambian campos
-    // irrelevantes del perfil (misma huella de viaje activo).
-    return _db
-        .collection('usuarios')
-        .doc(u)
-        .snapshots()
-        .map((DocumentSnapshot<Map<String, dynamic>> s) {
-          final d = s.data();
-          return (d?['viajeActivoId'] ?? '').toString().trim();
-        })
-        .distinct()
-        .asyncMap((_) async {
-          if (debeMantenerOverlayViajeEnShell ||
-              debeBloquearShellSinViajeTaxista) {
-            print(
-                '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → true (overlay/bloqueo taxista)');
-            return true;
-          }
-          final bool ok = await usuarioTieneViajeEnSeguimiento(u);
-          print(
-              '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → $ok');
-          if (ok) {
-            final String vid = (await _db.collection('usuarios').doc(u).get())
-                .data()?['viajeActivoId']
-                ?.toString()
-                .trim() ??
-                '';
-            if (vid.isNotEmpty) {
-              unawaited(RaiLocalReadCache.rememberActiveTripId(u, vid));
+
+    return _db.collection('usuarios').doc(u).snapshots().asyncExpand(
+      (DocumentSnapshot<Map<String, dynamic>> userSnap) {
+        final String vid =
+            (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+
+        return Stream<bool>.multi((MultiStreamController<bool> controller) {
+          Future<void> emit() async {
+            if (controller.isClosed) return;
+            final bool ok = await _evalTieneViajeActivoStream(u);
+            if (!controller.isClosed) {
+              controller.add(ok);
             }
           }
-          return ok;
+
+          void onShellTick() => unawaited(emit());
+
+          shellRebuildTick.addListener(onShellTick);
+          StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? subViaje;
+          if (vid.isNotEmpty) {
+            subViaje = _db
+                .collection('viajes')
+                .doc(vid)
+                .snapshots()
+                .listen((_) => unawaited(emit()));
+          }
+
+          unawaited(emit());
+
+          controller.onCancel = () async {
+            shellRebuildTick.removeListener(onShellTick);
+            await subViaje?.cancel();
+          };
         });
+      },
+    );
+  }
+
+  static Future<bool> _evalTieneViajeActivoStream(String u) async {
+    if (debeMantenerOverlayViajeEnShell || debeBloquearShellSinViajeTaxista) {
+      print(
+          '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → true (overlay/bloqueo)');
+      return true;
+    }
+    final bool ok = await usuarioTieneViajeEnSeguimiento(u);
+    print('[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → $ok');
+    if (ok) {
+      final String vid = (await _db.collection('usuarios').doc(u).get())
+              .data()?['viajeActivoId']
+              ?.toString()
+              .trim() ??
+          '';
+      if (vid.isNotEmpty) {
+        unawaited(RaiLocalReadCache.rememberActiveTripId(u, vid));
+      }
+    }
+    return ok;
   }
 }

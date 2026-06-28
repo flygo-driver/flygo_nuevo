@@ -87,6 +87,11 @@ class _RaiUbicacionMapAlertState extends State<RaiUbicacionMapAlert> {
     final bool esperandoFix = _listo && widget.obteniendoGps;
     final bool necesitaPermiso = !_listo || widget.permisoBloqueadoEnPantalla;
 
+    // El shell ya muestra [RaiUbicacionClienteBanner] / taxista: no duplicar en mapa.
+    if (_svc.bannerActivo && !widget.obteniendoGps) {
+      return const SizedBox.shrink();
+    }
+
     String titulo;
     String mensaje;
     IconData icono;

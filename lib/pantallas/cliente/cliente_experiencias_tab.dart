@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
+import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_mis_giras.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
 import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
@@ -49,6 +50,35 @@ class ClienteExperienciasTab extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                   builder: (_) => const PoolsClienteLista(tipo: 'todos'),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      cards.add(
+        Card(
+          margin: const EdgeInsets.only(bottom: 10),
+          clipBehavior: Clip.antiAlias,
+          child: ListTile(
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            leading: CircleAvatar(
+              backgroundColor: cs.secondaryContainer,
+              foregroundColor: cs.onSecondaryContainer,
+              child: const Icon(Icons.confirmation_number_outlined),
+            ),
+            title: const Text(
+              'Mis giras',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+            ),
+            subtitle: const Text('Reservas pasadas y próximas · ticket QR'),
+            trailing: Icon(Icons.chevron_right, color: cs.outline),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const PoolsClienteMisGiras(),
                 ),
               );
             },
@@ -132,7 +162,8 @@ class ClienteExperienciasTab extends StatelessWidget {
               'Quién está en X y va para Y · negociás y vas a buscarlo',
             ),
             trailing: Icon(Icons.chevron_right, color: cs.outline),
-            onTap: () => NavigationService.push(
+            onTap: () => NavigationService.pushEnTabShell(
+              context,
               const BolaConductoresEnRutaClientePage(),
             ),
           ),

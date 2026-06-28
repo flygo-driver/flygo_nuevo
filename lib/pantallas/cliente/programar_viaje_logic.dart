@@ -60,8 +60,9 @@ class ProgramarViajeLogic {
 
     // Validaciones defensivas
     bool _okLL(dynamic lat, dynamic lon) {
-      if (lat is! num || lon is! num) return false;
-      return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+    if (lat is! num || lon is! num) return false;
+    if (lat == 0 && lon == 0) return false;
+    return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
     }
 
     if (!_okLL(data['latCliente'], data['lonCliente']) ||

@@ -30,7 +30,7 @@ class RaiSpeechBusquedaDireccion {
   Future<bool> initialize() async {
     if (_initialized) return true;
     try {
-      final ok = await _speech.initialize(
+      final bool ok = (await _speech.initialize(
         onStatus: (s) {
           if (s == 'done' || s == 'notListening') {
             _setEscuchando(false);
@@ -39,7 +39,8 @@ class RaiSpeechBusquedaDireccion {
         onError: (_) {
           _setEscuchando(false);
         },
-      );
+      )) ==
+          true;
       _initialized = ok;
       if (!ok) {
         _ultimoFallo =
@@ -93,7 +94,8 @@ class RaiSpeechBusquedaDireccion {
     _setEscuchando(true);
 
     try {
-      final ok = await _speech.listen(
+      // speech_to_text 7.x: listen() es void; antes devolvía bool y en Android daba null.
+      await _speech.listen(
         onResult: (r) {
           final words = r.recognizedWords;
           if (words.isNotEmpty) {
@@ -111,11 +113,23 @@ class RaiSpeechBusquedaDireccion {
           pauseFor: const Duration(seconds: 4),
         ),
       );
-      if (!ok) {
-        _ultimoFallo = 'No se pudo abrir el micrófono. Intenta de nuevo.';
+
+      if (_speech.hasError) {
+        _ultimoFallo = _speech.lastError?.errorMsg ??
+            'No se pudo abrir el micrófono. Intenta de nuevo.';
         _setEscuchando(false);
         return false;
       }
+
+      if (_speech.isNotListening) {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
+      if (_speech.isNotListening) {
+        _ultimoFallo = 'No se pudo abrir el micrófono. Revisa permisos de voz.';
+        _setEscuchando(false);
+        return false;
+      }
+
       return true;
     } catch (e) {
       _ultimoFallo = 'Error al escuchar: $e';

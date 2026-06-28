@@ -6,6 +6,7 @@ import 'package:flygo_nuevo/servicios/auth_service.dart';
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/widgets/rai_bienvenida_registro_dialog.dart';
 
 class RegistroCliente extends StatefulWidget {
   const RegistroCliente({super.key});
@@ -73,7 +74,11 @@ class _RegistroClienteState extends State<RegistroCliente> {
       }
       await LegalAcceptanceService.saveAcceptanceForCurrentUser();
 
-      // 3) Mismo flujo que login: verificación correo + shell cliente
+      if (!mounted) return;
+      await RaiBienvenidaRegistroDialog.mostrar(
+        context,
+        nombre: _nombre.text.trim(),
+      );
       if (!mounted) return;
       nav.pushNamedAndRemoveUntil('/auth_check', (r) => false);
     } on FirebaseAuthException catch (e) {

@@ -49,21 +49,15 @@ abstract final class PoolRecaudoCentral {
         'central';
   }
 
-  /// Multiplicador ida y vuelta (paridad `pool_finance.ts`).
-  static double multSentido(Map<String, dynamic> pool) {
-    return (pool['sentido'] ?? '').toString().trim().toLowerCase() ==
-            'ida_y_vuelta'
-        ? 2.0
-        : 1.0;
-  }
+  /// Siempre 1: [precioPorAsiento] ya es el precio final por persona.
+  static double multSentido(Map<String, dynamic> pool) => 1.0;
 
-  /// Precio por persona mostrado al cliente (precio asiento × sentido).
+  /// Precio por persona mostrado al cliente.
   static double precioPorPersona(Map<String, dynamic> pool) {
-    final precio = ((pool['precioPorAsiento'] ?? 0) as num).toDouble();
-    return precio * multSentido(pool);
+    return ((pool['precioPorAsiento'] ?? 0) as num).toDouble();
   }
 
-  /// Total bruto reserva = asientos × precio asiento × sentido.
+  /// Total bruto reserva = asientos × precio asiento.
   static double totalReservaRd({
     required Map<String, dynamic> pool,
     required int asientos,
@@ -71,7 +65,7 @@ abstract final class PoolRecaudoCentral {
     if (asientos <= 0) return 0;
     final precio = ((pool['precioPorAsiento'] ?? 0) as num).toDouble();
     if (precio <= 0) return 0;
-    return _round2(asientos * precio * multSentido(pool));
+    return _round2(asientos * precio);
   }
 
   /// % comisión guardado en la gira o fallback externo.

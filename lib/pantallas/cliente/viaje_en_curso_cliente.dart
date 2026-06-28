@@ -5099,9 +5099,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   ),
                                   _viajeSheetDivider(),
 
-                                  // Mensaje de viaje programado
+                                  // Mensaje solo para reservas futuras (no motor/taxi «ahora» en pool)
                                   if (estadoBase == EstadosViaje.pendiente &&
-                                      v.uidTaxista.isEmpty)
+                                      v.uidTaxista.isEmpty &&
+                                      v.programado &&
+                                      !v.esAhora)
                                     Container(
                                       padding: const EdgeInsets.all(12),
                                       margin: const EdgeInsets.only(bottom: 16),
@@ -5160,15 +5162,17 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          const Row(
+                                          Row(
                                             children: [
-                                              Icon(Icons.radar,
+                                              const Icon(Icons.radar,
                                                   color: Colors.greenAccent,
                                                   size: 22),
-                                              SizedBox(width: 10),
+                                              const SizedBox(width: 10),
                                               Expanded(
                                                 child: Text(
-                                                  'Buscando conductor cercano',
+                                                  v.esMotor
+                                                      ? 'Buscando motorista cercano'
+                                                      : 'Buscando conductor cercano',
                                                   style: TextStyle(
                                                     color: Colors.white,
                                                     fontWeight: FontWeight.w800,
@@ -5181,8 +5185,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                           const SizedBox(height: 6),
                                           Text(
                                             _driversCount > 0
-                                                ? 'Hay actividad en tu zona en este momento.'
-                                                : 'Notificando a conductores en la zona…',
+                                                ? (v.esMotor
+                                                    ? 'Hay motoristas activos en tu zona.'
+                                                    : 'Hay actividad en tu zona en este momento.')
+                                                : (v.esMotor
+                                                    ? 'Notificando a motoristas en la zona…'
+                                                    : 'Notificando a conductores en la zona…'),
                                             style: const TextStyle(
                                                 color: Colors.white60,
                                                 fontSize: 13),

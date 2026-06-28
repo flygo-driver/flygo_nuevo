@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
+import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/widgets/admin_app_bar.dart';
 import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 
@@ -59,11 +60,11 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
     setState(() => _cargando = true);
 
     try {
-      final snap = await _ref.get();
+      final snap = await _ref.get(const GetOptions(source: Source.server));
       if (snap.exists) {
         final Map<String, dynamic> d = snap.data()!;
 
-        _activa = (d['activa'] == true);
+        _activa = TarifaServiceUnificado.promoActivaDesdeConfig(d);
         _m = _toInt(d['m'], fallback: 3).clamp(1, 999);
         _k = _toInt(d['k'], fallback: 1).clamp(1, 999);
         _porcentaje = _toInt(d['porcentaje'], fallback: 15).clamp(0, 95);
@@ -146,6 +147,8 @@ class _AdminPromosMxKState extends State<AdminPromosMxK> {
         porcentaje: _porcentaje,
         motivo: motivo,
       );
+      await TarifaServiceUnificado().recargar();
+      await _cargar();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

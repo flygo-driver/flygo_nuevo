@@ -100,12 +100,14 @@ class _ToggleDisponibilidadState extends State<ToggleDisponibilidad> {
             if (mounted) {
               await RaiUbicacionTaxistaService.instance
                   .activarUbicacionDesdeApp();
-              messenger.showSnackBar(
-                const SnackBar(
-                  content: Text(LocationReadiness.kMsgEsperandoUbicacion),
-                  duration: Duration(seconds: 6),
-                ),
-              );
+              if (!RaiUbicacionTaxistaService.instance.bannerActivo) {
+                messenger.showSnackBar(
+                  const SnackBar(
+                    content: Text(LocationReadiness.kMsgEsperandoUbicacion),
+                    duration: Duration(seconds: 6),
+                  ),
+                );
+              }
             }
             return;
           }

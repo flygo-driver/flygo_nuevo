@@ -117,6 +117,19 @@ service cloud.firestore {
             resource.data.comisionAplicada != true));
     }
 
+    /// Acuerdo (abierta → acordada + montos/PIN) solo Cloud Functions (Admin SDK).
+    function bolaTransicionAcuerdoSoloServidor() {
+      let pasaAAcordada = request.resource.data.estado == "acordada" &&
+        resource.data.estado == "abierta";
+      let tocaCamposAcuerdo = request.resource.data.diff(resource.data).changedKeys()
+        .hasAny([
+          "ofertaAceptadaId", "montoAcordadoRd", "comisionPct", "comisionRd",
+          "gananciaNetaChoferRd", "acordadaEn", "codigoVerificacionBola",
+          "codigoGeneradoEn"
+        ]);
+      return !(pasaAAcordada || (resource.data.estado == "abierta" && tocaCamposAcuerdo));
+    }
+
     function taxistaSinDeuda(uid) {
       return exists(/databases/$(database)/documents/usuarios/$(uid)) &&
         !(userDoc(uid).data.tienePagoPendiente == true);
@@ -140,6 +153,21 @@ service cloud.firestore {
 
     function changedOnly(allowed) {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly(allowed);
+    }
+
+    /// Auto-registro: rol operativo y sin flags de admin/aprobación en el primer write.
+    function usuarioSelfCreateSeguro() {
+      let d = request.resource.data;
+      let rolOk = !("rol" in d) ||
+        (d.rol is string &&
+          (d.rol == "" || d.rol in ["cliente", "taxista"]));
+      let sinAdmin = !("isAdmin" in d) || d.isAdmin == false;
+      let sinAdminFlag = !("admin" in d) || d.admin == false;
+      let sinAprobacionDocs =
+        (!("docsEstado" in d) || d.docsEstado in ["pendiente", "en_revision", ""]) &&
+        (!("estadoDocumentos" in d) || d.estadoDocumentos in ["pendiente", "en_revision", ""]);
+      let sinRecibirViajes = !("puedeRecibirViajes" in d) || d.puedeRecibirViajes == false;
+      return rolOk && sinAdmin && sinAdminFlag && sinAprobacionDocs && sinRecibirViajes;
     }
 
     // Campos de cierre financiero / pago que no deben ser mutables por cliente-taxista.
@@ -342,7 +370,7 @@ service cloud.firestore {
     match /usuarios/{uid} {
       allow read: if isAuth();
       // Crear en dos líneas: evita OR con isAdmin() + get(usuarios/uid) mientras se crea el mismo uid.
-      allow create: if isOwner(uid);
+      allow create: if isOwner(uid) && usuarioSelfCreateSeguro();
       allow create: if isAdmin();
       // Actualizar perfil / disponibilidad: solo dueño + whitelist (sin isAdmin() en la misma expresión OR,
       // porque isAdmin() hace get(usuarios/auth.uid) y al escribir el propio doc eso es circular → permission-denied).
@@ -356,7 +384,8 @@ service cloud.firestore {
           "updatedAt", "actualizadoEn",
           "pushToken", "notificaciones",
           "aceptacionTerminos",
-          "phoneVerified", "lastPhoneReauthAt"
+          "phoneVerified", "lastPhoneReauthAt",
+          "registroClienteCompleto"
         ]);
       // Disponibilidad operativa (toggle): aislado de campos de aprobación documental.
       allow update: if isOwner(uid) &&
@@ -405,7 +434,7 @@ service cloud.firestore {
           "updatedAt",
           "actualizadoEn"
         ]);
-      // Completar registro conductor (Google / onboarding): datos + vehículo.
+      // Completar registro conductor (Google / onboarding): datos + vehículo + estado docs inicial.
       allow update: if isOwner(uid) &&
         resource.data.rol == "taxista" &&
         changedOnly([
@@ -416,8 +445,22 @@ service cloud.firestore {
           "vehiculoModelo", "vehiculoColor", "vehiculoMarca",
           "fotoVehiculoUrl", "vehiculoPerfilCompleto", "vehiculo",
           "docs",
+          "disponible",
+          "docsEstado", "estadoDocumentos", "documentosCompletos", "puedeRecibirViajes",
+          "docsEnviadosEn",
+          "ratingSuma", "ratingConteo", "fechaRegistro",
           "updatedAt", "actualizadoEn"
-        ]);
+        ]) &&
+        request.resource.data.documentosCompletos != true &&
+        request.resource.data.puedeRecibirViajes != true &&
+        (
+          !("docsEstado" in request.resource.data) ||
+          request.resource.data.docsEstado in ["pendiente", "en_revision"]
+        ) &&
+        (
+          !("estadoDocumentos" in request.resource.data) ||
+          request.resource.data.estadoDocumentos in ["pendiente", "en_revision"]
+        );
       // Firma de contrato conductor (solo aceptación; no revocación desde cliente).
       allow update: if isOwner(uid) &&
         resource.data.rol == "taxista" &&
@@ -812,7 +855,8 @@ service cloud.firestore {
         docId != "comision" &&
         docId != "comision_incentivos_taxista" &&
         docId != "promo_3x1" &&
-        docId != "promociones";
+        docId != "promociones" &&
+        docId != "tarifas_tramos";
     }
 
     // Porcentaje global de comisión viaje efectivo (solo callable admin + Admin SDK).
@@ -927,10 +971,11 @@ service cloud.firestore {
       }
     }
 
-    // Collection group `reservas` (Verificar pagos · Giras RAI).
+    // Collection group `reservas` (Verificar pagos · Giras RAI · Mis giras cliente).
     // Las queries collectionGroup no pueden usar reglas con get(viajes_pool/...).
     match /{path=**}/reservas/{reservaId} {
-      allow read: if isAdmin();
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidCliente == request.auth.uid);
     }
 
     // Ledger comisiones giras: solo Cloud Functions / admin (evita manipulación desde cliente).
@@ -938,6 +983,11 @@ service cloud.firestore {
       allow read: if isAdmin() ||
         (isAuth() && resource.data.uidTaxista == request.auth.uid);
       allow create, update, delete: if false;
+    }
+
+    // Tickets entrada giras: solo Cloud Functions (índice token → reserva).
+    match /gira_tickets/{tokenId} {
+      allow read, write: if false;
     }
 
     match /ledger_pool_reservas/{entryId} {
@@ -1060,6 +1110,7 @@ service cloud.firestore {
       allow update: if isAdmin() || (
         isAuth() &&
         !bolaCierreFinancieroSoloServidor() &&
+        bolaTransicionAcuerdoSoloServidor() &&
         (
           resource.data.createdByUid == request.auth.uid ||
           resource.data.uidTaxista == request.auth.uid ||
@@ -1081,6 +1132,8 @@ service cloud.firestore {
           "canceladaEn",
           "canceladaPor",
           "metodoPago", "metodoPagoUpdatedBy", "metodoPagoUpdatedAt",
+          "taxistaFacturaBolaVistaEn", "taxistaFacturaBolaVistaPorUid",
+          "clienteFacturaBolaVistaEn", "clienteFacturaBolaVistaPorUid",
           // Espejo Bola Ahorro (cliente): ver bola_pueblo_firestore_sync.dart
           "viajeEspejoId", "negociacionCerrada", "errorSync", "errorSyncViajeEspejo"
         ]) &&
@@ -1131,6 +1184,15 @@ service cloud.firestore {
               request.resource.data.contraOfertaParaUid is string &&
               request.resource.data.contraOfertaParaUid.size() > 0 &&
               request.resource.data.contraOfertaParaUid != request.auth.uid
+            ) ||
+            (
+              get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.tipo == "oferta" &&
+              get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.createdByUid == request.auth.uid &&
+              esRolChoferEnSesion() &&
+              request.resource.data.esContraofertaConductor == true &&
+              request.resource.data.contraOfertaParaUid is string &&
+              request.resource.data.contraOfertaParaUid.size() > 0 &&
+              request.resource.data.contraOfertaParaUid != request.auth.uid
             )
           );
 
@@ -1141,6 +1203,7 @@ service cloud.firestore {
             get(/databases/$(database)/documents/bolas_pueblo/$(bolaId)).data.createdByUid == request.auth.uid ||
             resource.data.fromUid == request.auth.uid
           ) &&
+          request.resource.data.estado != "aceptada" &&
           changedOnly(["estado", "updatedAt"])
         );
 

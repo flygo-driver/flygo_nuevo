@@ -23,6 +23,7 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 
@@ -319,16 +320,24 @@ class ViajesRepo {
     /// % comisión RAI (0–100) alineado con [PlataformaEconomia] para espejo Bola / cierre efectivo.
     double? comisionPorcentajeViaje,
   }) async {
-    bool _outOfRange(double lat, double lon) =>
+    double _round6Coord(num v) => double.parse(v.toStringAsFixed(6));
+
+    bool _coordsInvalidas(double lat, double lon) =>
         !(lat.isFinite && lon.isFinite) ||
         lat < -90 ||
         lat > 90 ||
         lon < -180 ||
-        lon > 180;
+        lon > 180 ||
+        (lat.abs() < 1e-6 && lon.abs() < 1e-6);
 
-    if (_outOfRange(latOrigen, lonOrigen) ||
-        _outOfRange(latDestino, lonDestino)) {
-      throw ArgumentError('Coordenadas fuera de rango');
+    latOrigen = _round6Coord(latOrigen);
+    lonOrigen = _round6Coord(lonOrigen);
+    latDestino = _round6Coord(latDestino);
+    lonDestino = _round6Coord(lonDestino);
+
+    if (_coordsInvalidas(latOrigen, lonOrigen) ||
+        _coordsInvalidas(latDestino, lonDestino)) {
+      throw ArgumentError('Coordenadas inválidas');
     }
     if (!precio.isFinite || precio <= 0) {
       throw ArgumentError('Precio inválido');
@@ -361,17 +370,7 @@ class ViajesRepo {
 
     List<Map<String, dynamic>>? _sanitize(List<Map<String, dynamic>>? wps) {
       if (wps == null) return null;
-      final out = <Map<String, dynamic>>[];
-      for (final w in wps) {
-        final double? lat =
-            (w['lat'] is num) ? (w['lat'] as num).toDouble() : null;
-        final double? lon =
-            (w['lon'] is num) ? (w['lon'] as num).toDouble() : null;
-        if (lat == null || lon == null) continue;
-        if (_outOfRange(lat, lon)) continue;
-        out.add(
-            {'lat': lat, 'lon': lon, 'label': (w['label'] ?? '').toString()});
-      }
+      final out = MultiparadaRutaHelper.sanitizarWaypoints(wps);
       return out.isEmpty ? null : out;
     }
 
@@ -478,8 +477,7 @@ class ViajesRepo {
       data['waypoints'] = wps;
       (extras ??= <String, dynamic>{})['paradas_count'] = wps.length;
       // Plan multiparada fijado al crear (navegación lee waypoints + destino).
-      final bool destOk =
-          !_outOfRange(latDestino, lonDestino) && !(latDestino == 0 && lonDestino == 0);
+      final bool destOk = !_coordsInvalidas(latDestino, lonDestino);
       final int legsTotal = wps.length + (destOk ? 1 : 0);
       if (legsTotal > 0) {
         data['multiparadaLegsTotal'] = legsTotal;
@@ -503,7 +501,7 @@ class ViajesRepo {
     final String authUid =
         (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
     final bool usarCallableCliente =
-        isClienteFlavor && authUid == uidCliente.trim();
+        isPasajeroCapableFlavor && authUid == uidCliente.trim();
 
     try {
       if (usarCallableCliente) {
@@ -550,7 +548,7 @@ class ViajesRepo {
       rethrow;
     }
 
-    if (isClienteFlavor) {
+    if (isPasajeroCapableFlavor) {
       unawaited(NotificationService.I.marcarViajePropioSinTimbre(doc.id));
     }
 
@@ -792,6 +790,12 @@ class ViajesRepo {
           uData, bSnap.data())) {
         return false;
       }
+      final prepagoRechazo =
+          PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
+        billeData: bSnap.data(),
+        viajeData: data,
+      );
+      if (prepagoRechazo != null) return false;
       final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
       if (viajeActivoId.isNotEmpty) return false;
 
@@ -1045,6 +1049,16 @@ class ViajesRepo {
           }
           _viajesRepoDebugLog('❌ Taxista bloqueado: prepago / comisión legacy');
           throw 'bloqueado-comision-efectivo';
+        }
+        final prepagoRechazo =
+            PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
+          billeData: bSnap.data(),
+          viajeData: d,
+        );
+        if (prepagoRechazo != null) {
+          _viajesRepoDebugLog(
+              '❌ Prepago insuficiente para comisión del viaje en efectivo');
+          throw prepagoRechazo;
         }
         final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
         if (viajeActivoId.isNotEmpty) {

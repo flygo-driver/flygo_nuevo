@@ -16,6 +16,7 @@ export * from "./pool_finance.js";
 export * from "./admin_release_gira.js";
 export * from "./scheduled_pool_notify.js";
 export * from "./scheduled_pool_departure_owner.js";
+export * from "./scheduled_gira_cupos_client_reminders.js";
 export * from "./scheduled_pool_reservations_cleanup.js";
 export * from "./trip_rating.js";
 export * from "./trip_feedback.js";

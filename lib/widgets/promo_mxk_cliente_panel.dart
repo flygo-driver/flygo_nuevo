@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
+
 /// Banner informativo de promo M×K para el cliente en cotización.
 /// Solo lectura: usa el `promoSnapshot` que ya genera [TarifaServiceUnificado].
 class PromoMxKClientePanel extends StatelessWidget {
@@ -207,7 +209,9 @@ class PromoMxKClienteUi {
   }
 
   static PromoMxKClienteUi? fromSnapshot(Map<String, dynamic>? snap) {
-    if (snap == null || snap['activa'] != true) return null;
+    if (snap == null || !TarifaServiceUnificado.promoActivaDesdeConfig(snap)) {
+      return null;
+    }
 
     int toInt(dynamic v, int fb) {
       if (v is int) return v;

@@ -1114,6 +1114,14 @@ class ViajeData {
           u, billeSnap.data())) {
         throw Exception(PagosTaxistaRepo.mensajeRecargaTomarViajes);
       }
+      final prepagoRechazo =
+          PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
+        billeData: billeSnap.data(),
+        viajeData: d,
+      );
+      if (prepagoRechazo != null) {
+        throw Exception(prepagoRechazo);
+      }
       final bool disponible = (u['disponible'] ?? false) == true;
       if (!disponible) throw Exception('No disponible para aceptar viajes.');
       final rechazo = taxistaRechazoAceptarViajePool(u);

@@ -2,14 +2,34 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/cliente_pagos_sheet.dart';
+import 'package:flygo_nuevo/widgets/cuenta_legal_tiles.dart';
+import 'package:flygo_nuevo/widgets/cuenta_promo_resumen_panel.dart';
 import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
 import 'package:flygo_nuevo/widgets/rai_asistente_launcher.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_config_panel.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
+
+String _textoPerfilCliente(
+  Map<String, dynamic> data, {
+  required String fallbackEmail,
+}) {
+  final List<String> lineas = <String>[];
+  final String nombre = (data['nombre'] ?? '').toString().trim();
+  final String telefono = (data['telefono'] ?? '').toString().trim();
+
+  if (nombre.isNotEmpty) lineas.add('Nombre: $nombre');
+  if (telefono.isNotEmpty) lineas.add('Teléfono: $telefono');
+  if (fallbackEmail.trim().isNotEmpty) lineas.add('Correo: $fallbackEmail');
+
+  return lineas.isEmpty
+      ? 'Aún no has guardado datos de perfil.'
+      : lineas.join('\n');
+}
 
 /// Perfil, pagos, soporte y ajustes (misma lógica que el drawer, sin duplicar rutas).
 class ClienteCuentaTab extends StatelessWidget {
@@ -105,6 +125,45 @@ class ClienteCuentaTab extends StatelessWidget {
               },
             ),
           const Divider(height: 1),
+          if (uid != null)
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(uid)
+                  .snapshots(),
+              builder: (context, snap) {
+                final data = snap.data?.data() ?? const <String, dynamic>{};
+                final texto = _textoPerfilCliente(
+                  data,
+                  fallbackEmail: user?.email ?? '',
+                );
+                return Card(
+                  margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: ListTile(
+                    leading: Icon(Icons.badge_outlined, color: cs.primary),
+                    title: const Text('Datos del perfil'),
+                    subtitle: Text(texto),
+                  ),
+                );
+              },
+            ),
+          if (uid != null) ClienteCuentaPromoPanel(uidCliente: uid),
+          ListTile(
+            leading: Icon(Icons.location_on_outlined, color: cs.primary),
+            title: const Text('Ubicación'),
+            subtitle: const Text('Permisos GPS y ajustes del teléfono'),
+            trailing: Icon(Icons.chevron_right, color: cs.outline),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const RaiUbicacionAjustesPage(
+                    rol: RaiUbicacionRol.cliente,
+                  ),
+                ),
+              );
+            },
+          ),
           ListTile(
             leading: Icon(Icons.person_outline, color: cs.primary),
             title: const Text('Configuración de perfil'),
@@ -146,18 +205,8 @@ class ClienteCuentaTab extends StatelessWidget {
               );
             },
           ),
-          ListTile(
-            leading: Icon(Icons.gavel_outlined, color: cs.primary),
-            title: const Text('Términos y política'),
-            subtitle: const Text('Privacidad y condiciones'),
-            trailing: Icon(Icons.chevron_right, color: cs.outline),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TermsPolicyScreen()),
-              );
-            },
-          ),
+          const CuentaLegalTiles(),
+          const Divider(height: 1),
           ValueListenableBuilder<ThemeMode>(
             valueListenable: ThemeModeService.mode,
             builder: (context, mode, _) {

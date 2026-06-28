@@ -35,12 +35,13 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
   @override
   void initState() {
     super.initState();
-    _arrancar();
+    unawaited(_arrancar());
   }
 
-  void _arrancar() {
+  Future<void> _arrancar() async {
+    await BolaPostFacturaReopenGuard.hydrateFromPrefs();
     final User? u = FirebaseAuth.instance.currentUser;
-    if (u == null) return;
+    if (u == null || !mounted) return;
 
     final Query<Map<String, dynamic>> qCliente = FirebaseFirestore.instance
         .collection('bolas_pueblo')
@@ -58,27 +59,38 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
 
     _subComoCliente = qCliente.snapshots().listen(
       (QuerySnapshot<Map<String, dynamic>> snap) {
-        _onBolasSnap(snap, u.uid, comoCliente: true);
+        unawaited(_onBolasSnap(snap, u.uid, comoCliente: true));
       },
       onError: (_) {},
     );
 
     _subComoTaxista = qTaxista.snapshots().listen(
       (QuerySnapshot<Map<String, dynamic>> snap) {
-        _onBolasSnap(snap, u.uid, comoCliente: false);
+        unawaited(_onBolasSnap(snap, u.uid, comoCliente: false));
       },
       onError: (_) {},
     );
   }
 
   bool _debeOfrecerFacturaBola(Map<String, dynamic> d) {
-    return (d['estado'] ?? '').toString().trim().toLowerCase() == 'finalizada';
+    if ((d['estado'] ?? '').toString().trim().toLowerCase() != 'finalizada') {
+      return false;
+    }
+    // Viaje espejo: la factura la maneja FacturaViaje al finalizar Mi viaje.
+    final String espejo = (d['viajeEspejoId'] ?? '').toString().trim();
+    if (espejo.isNotEmpty) return false;
+    return true;
+  }
+
+  String _roleDesdeBola(Map<String, dynamic> d, String uid) {
+    final String uidTx = (d['uidTaxista'] ?? '').toString().trim();
+    return uid.trim() == uidTx ? 'taxista' : 'cliente';
   }
 
   /// Solo al abrir la app: recupera factura si acaba de cerrarse hace segundos
   /// y el usuario aún no la vio (p. ej. reinició la app al instante).
   bool _finalizacionHaceSegundos(Map<String, dynamic> d, {int segundos = 90}) {
-    final dynamic fin = d['finalizadaEn'] ?? d['updatedAt'];
+    final dynamic fin = d['finalizadaEn'];
     DateTime? dt;
     if (fin is Timestamp) dt = fin.toDate();
     if (fin is DateTime) dt = fin;
@@ -86,11 +98,11 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
     return DateTime.now().difference(dt).inSeconds <= segundos;
   }
 
-  void _onBolasSnap(
+  Future<void> _onBolasSnap(
     QuerySnapshot<Map<String, dynamic>> snap,
     String uid, {
     required bool comoCliente,
-  }) {
+  }) async {
     if (!mounted) return;
 
     final bool primera =
@@ -104,10 +116,8 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
       if (snap.docs.isNotEmpty) {
         final QueryDocumentSnapshot<Map<String, dynamic>> doc = snap.docs.first;
         final Map<String, dynamic> d = doc.data();
-        if (_debeOfrecerFacturaBola(d) &&
-            _finalizacionHaceSegundos(d) &&
-            !BolaPostFacturaReopenGuard.shouldSuppressListenerPush(doc.id)) {
-          _ofrecerFacturaSiCorresponde(doc.id, d, uid);
+        if (_debeOfrecerFacturaBola(d) && _finalizacionHaceSegundos(d)) {
+          await _ofrecerFacturaSiCorresponde(doc.id, d, uid);
         }
       }
       return;
@@ -122,26 +132,29 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
       if (raw == null) continue;
       final Map<String, dynamic> d = raw;
       if (!_debeOfrecerFacturaBola(d)) continue;
-      _ofrecerFacturaSiCorresponde(change.doc.id, d, uid);
+      await _ofrecerFacturaSiCorresponde(change.doc.id, d, uid);
     }
   }
 
-  void _ofrecerFacturaSiCorresponde(
+  Future<void> _ofrecerFacturaSiCorresponde(
     String bolaId,
     Map<String, dynamic> d,
     String uid,
-  ) {
-    if (BolaPostFacturaReopenGuard.shouldSuppressListenerPush(bolaId)) {
+  ) async {
+    final String role = _roleDesdeBola(d, uid);
+    if (await BolaPostFacturaReopenGuard.shouldSuppressAsync(
+      bolaId,
+      role: role,
+      bolaData: d,
+    )) {
       return;
     }
+    if (!mounted) return;
     if (_ultimaBolaOfrecida == bolaId || _facturaEnCurso) return;
 
     _ultimaBolaOfrecida = bolaId;
     _facturaEnCurso = true;
-    BolaPostFacturaReopenGuard.markOpened(bolaId);
-
-    final String uidTx = (d['uidTaxista'] ?? '').toString().trim();
-    final String role = uid.trim() == uidTx ? 'taxista' : 'cliente';
+    BolaPostFacturaReopenGuard.markOpened(bolaId, role: role);
 
     SchedulerBinding.instance.addPostFrameCallback((_) {
       unawaited(_abrirFactura(bolaId, role));
@@ -151,6 +164,12 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
   Future<void> _abrirFactura(String bolaId, String role) async {
     try {
       if (!mounted) return;
+      if (await BolaPostFacturaReopenGuard.shouldSuppressAsync(
+        bolaId,
+        role: role,
+      )) {
+        return;
+      }
       final NavigatorState? nav = NavigationService.navigatorKey.currentState;
       if (nav == null || !nav.mounted) return;
 
@@ -158,6 +177,12 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
         nav.context,
         bolaId: bolaId,
         role: role,
+      );
+      final String? uid = FirebaseAuth.instance.currentUser?.uid;
+      await BolaPostFacturaReopenGuard.markCompleted(
+        bolaId: bolaId,
+        role: role,
+        uid: uid,
       );
     } catch (_) {
     } finally {

@@ -5,6 +5,7 @@ import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/solicitar_motor_rai.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/rai_asistente_destino_pendiente.dart';
 import 'package:flygo_nuevo/servicios/rai_asistente_kb.dart';
@@ -28,29 +29,28 @@ class RaiAsistenteLauncher {
 
     switch (action) {
       case RaiAsistenteAction.openMotor:
-        await Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const SolicitarMotorRai()),
+        await NavigationService.pushEnTabShell(
+          context,
+          const SolicitarMotorRai(),
         );
         break;
       case RaiAsistenteAction.openTaxi:
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ProgramarViaje(
-              modoAhora: true,
-              destinoPrecargado: destino?.displayLabel,
-              latDestinoPrecargado: destino?.lat,
-              lonDestinoPrecargado: destino?.lon,
-            ),
+        await NavigationService.pushEnTabShell(
+          context,
+          ProgramarViaje(
+            modoAhora: true,
+            destinoPrecargado: destino?.displayLabel,
+            latDestinoPrecargado: destino?.lat,
+            lonDestinoPrecargado: destino?.lon,
           ),
         );
         break;
       case RaiAsistenteAction.openTurismo:
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => const ProgramarViaje(
-              modoAhora: true,
-              tipoServicio: 'turismo',
-            ),
+        await NavigationService.pushEnTabShell(
+          context,
+          const ProgramarViaje(
+            modoAhora: true,
+            tipoServicio: 'turismo',
           ),
         );
         break;
@@ -71,14 +71,13 @@ class RaiAsistenteLauncher {
         break;
       case RaiAsistenteAction.none:
         if (destino != null) {
-          await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ProgramarViaje(
-                modoAhora: true,
-                destinoPrecargado: destino.displayLabel,
-                latDestinoPrecargado: destino.lat,
-                lonDestinoPrecargado: destino.lon,
-              ),
+          await NavigationService.pushEnTabShell(
+            context,
+            ProgramarViaje(
+              modoAhora: true,
+              destinoPrecargado: destino.displayLabel,
+              latDestinoPrecargado: destino.lat,
+              lonDestinoPrecargado: destino.lon,
             ),
           );
         }

@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import 'package:flygo_nuevo/servicios/auth_service.dart';
+import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/servicios/google_auth.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
@@ -280,50 +281,55 @@ class _LoginClienteState extends State<LoginCliente> {
         }
       }
 
+      if (e.code == 'role-mismatch') {
+        _snack(e.message ?? 'Esta cuenta no es de pasajero.');
+        return;
+      }
+
       if (!mounted) return;
-      await showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('No se pudo iniciar sesión'),
-          content: Text(
-            'Revisa tus credenciales o elige otra opción para $email:\n\n'
-            '• Restablecer contraseña.\n'
-            '• Continuar con Google.\n'
-            '• Vincular una contraseña (si usas Google).',
+
+      const dialogCodes = <String>{
+        'account-exists-with-different-credential',
+        'use-existing-method',
+      };
+      if (dialogCodes.contains(e.code)) {
+        await showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Cuenta con otro método'),
+            content: Text(
+              e.message ??
+                  'Este correo ya está registrado con Google u otro método. '
+                  'Entra con ese método o restablece tu contraseña.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cerrar'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _sendResetPassword(email);
+                },
+                child: const Text('Restablecer contraseña'),
+              ),
+              ElevatedButton(
+                onPressed: _loadingGoogle
+                    ? null
+                    : () {
+                        Navigator.of(context).pop();
+                        _loginGoogle();
+                      },
+                child: const Text('Continuar con Google'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cerrar'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _sendResetPassword(email);
-              },
-              child: const Text('Restablecer contraseña'),
-            ),
-            TextButton(
-              onPressed: _loadingGoogle
-                  ? null
-                  : () async {
-                      Navigator.of(context).pop();
-                      await _vincularContrasenaConGoogle();
-                    },
-              child: const Text('Vincular contraseña (Google)'),
-            ),
-            ElevatedButton(
-              onPressed: _loadingGoogle
-                  ? null
-                  : () {
-                      Navigator.of(context).pop();
-                      _loginGoogle();
-                    },
-              child: const Text('Continuar con Google'),
-            ),
-          ],
-        ),
-      );
+        );
+        return;
+      }
+
+      _snack(errorAuthEs(e));
     } catch (err) {
       if (kQaFlexibleAccess && kQaAllowAnonOnAuthError) {
         await _loginAnonCliente();

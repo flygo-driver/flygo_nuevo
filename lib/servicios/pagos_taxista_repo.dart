@@ -15,6 +15,7 @@ import 'taxista_billetera_gira_prepago.dart';
 import 'taxista_prepago_ledger.dart';
 import '../utils/liquidacion_semanal_viaje.dart';
 import '../utils/metodo_pago_viaje.dart';
+import '../utils/precio_viaje_doc.dart';
 
 class PagosTaxistaRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -240,6 +241,20 @@ class PagosTaxistaRepo {
     return mensajeRecargaAccesoPantallaCompleta;
   }
 
+  /// Evalúa desbloqueo prepago/comisión desde snapshots (tiempo real tras aprobación ADM).
+  /// No incluye deuda semanal vencida; combinar con [tieneDeudaSemanalVencida].
+  static bool puedeOperarPrepagoDesdeSnapshots({
+    Map<String, dynamic>? usuarioData,
+    Map<String, dynamic>? billeData,
+  }) {
+    if (usuarioData == null) return false;
+    if (usuarioData['bloqueado'] == true) return false;
+    if (usuarioData['tienePagoPendiente'] == true) return false;
+    if (bloqueoOperativoPorComisionEfectivo(billeData)) return false;
+    if (bloqueoPorDeudaPoolAdminDesdeUsuario(usuarioData)) return false;
+    return true;
+  }
+
   /// Misma regla que `bloqueoOperativoPrepago` en Cloud Functions (bloqueo estricto).
   static bool bloqueoOperativoPorComisionEfectivo(
     Map<String, dynamic>? billeData, {
@@ -252,6 +267,78 @@ class PagosTaxistaRepo {
     return saldoDisponiblePrepagoComisionDesdeBilletera(billeData) + 1e-9 <
         minimo;
   }
+
+  static bool viajeEsEfectivoParaComisionPrepago(
+    Map<String, dynamic> viajeData,
+  ) {
+    return MetodoPagoViaje.esEfectivo(viajeData['metodoPago']?.toString());
+  }
+
+  static double pctComisionDesdeViaje(
+    Map<String, dynamic> viajeData,
+    double globalPct,
+  ) {
+    final dynamic raw = viajeData['comisionPorcentaje'];
+    if (raw is num && raw.isFinite && raw > 0) {
+      final double v = raw.toDouble();
+      return v <= 1 ? v * 100 : v;
+    }
+    return globalPct;
+  }
+
+  static double comisionEstimadaRdDesdeViaje(
+    Map<String, dynamic> viajeData, {
+    double? pctComision,
+  }) {
+    final double total = totalRdDesdeDocViaje(viajeData);
+    if (total <= 0) return 0;
+    final double pct = pctComision ??
+        pctComisionDesdeViaje(
+          viajeData,
+          PlataformaEconomia.comisionViajePorcentaje,
+        );
+    return double.parse((total * (pct / 100)).toStringAsFixed(2));
+  }
+
+  /// Código de rechazo al aceptar viaje en efectivo sin prepago para la comisión estimada.
+  static String? codigoRechazoPrepagoInsuficienteComisionViaje({
+    required Map<String, dynamic>? billeData,
+    required Map<String, dynamic> viajeData,
+    double? pctComision,
+  }) {
+    if (!viajeEsEfectivoParaComisionPrepago(viajeData)) return null;
+    final double pend = comisionPendienteDesdeBilletera(billeData);
+    if (!primerViajeComisionGratisConsumido(billeData) && pend <= 1e-6) {
+      return null;
+    }
+    final double comision = comisionEstimadaRdDesdeViaje(
+      viajeData,
+      pctComision: pctComision,
+    );
+    if (comision <= 1e-6) return null;
+    final double disp = saldoDisponiblePrepagoComisionDesdeBilletera(billeData);
+    if (disp + 1e-9 >= comision) return null;
+    return 'prepago-insuficiente-comision-viaje';
+  }
+
+  static String mensajePrepagoInsuficienteComisionViaje({
+    required Map<String, dynamic> viajeData,
+    required Map<String, dynamic>? billeData,
+    double? pctComision,
+  }) {
+    final double comision = comisionEstimadaRdDesdeViaje(
+      viajeData,
+      pctComision: pctComision,
+    );
+    final double disp = saldoDisponiblePrepagoComisionDesdeBilletera(billeData);
+    return 'Este viaje en efectivo requiere RD\$${comision.toStringAsFixed(0)} de prepago '
+        'disponible para la comisión RAI (${PlataformaEconomia.etiquetaPorcentajeComision()}). '
+        'Tenés RD\$${disp.toStringAsFixed(0)} disponible. Recarga en Mis pagos antes de aceptar.';
+  }
+
+  static const String mensajePrepagoInsuficienteComisionViajeGenerico =
+      'Tu prepago disponible no alcanza para la comisión de este viaje en efectivo. '
+      'Recarga en Mis pagos antes de aceptar.';
 
   /// Una sola fuente para pool, reclamar viaje, encadenar siguiente y asignación turismo:
   /// [usuarios.tienePagoPendiente] + prepago mínimo / tope legacy en [billeteras_taxista].
@@ -747,7 +834,12 @@ class PagosTaxistaRepo {
       return true;
     } catch (e) {
       debugPrint('Error verificando si puede trabajar: $e');
-      // Fail-closed: sin lectura fiable de billetera/usuario no se abre el pool.
+      // Onboarding: sin deuda explícita no bloquear por fallo transitorio de lectura.
+      try {
+        final usr =
+            await _db.collection('usuarios').doc(uidTaxista.trim()).get();
+        if (usr.data()?['tienePagoPendiente'] != true) return true;
+      } catch (_) {}
       return false;
     }
   }

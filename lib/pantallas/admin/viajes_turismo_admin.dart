@@ -416,9 +416,11 @@ class _ViajeTurismoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final String etiquetaTipo = subtipoTurismo.trim().isNotEmpty
-        ? subtipoTurismo
-        : (tipoVehiculo.isNotEmpty ? tipoVehiculo : '—');
+    final String etiquetaTipo =
+        AsignacionTurismoRepo.etiquetaVehiculoRequeridoDesdeViaje({
+      'subtipoTurismo': subtipoTurismo,
+      'tipoVehiculo': tipoVehiculo,
+    });
     final green = AdminUi.accentGreen(context);
     final purple = Theme.of(context).brightness == Brightness.light
         ? Colors.deepPurple.shade700
@@ -446,7 +448,7 @@ class _ViajeTurismoTile extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Turismo · $etiquetaTipo',
+            'Turismo · Requiere: $etiquetaTipo',
             style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
           ),
           const SizedBox(height: 4),

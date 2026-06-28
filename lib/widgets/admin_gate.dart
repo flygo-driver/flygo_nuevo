@@ -11,7 +11,10 @@ import '../servicios/launch_config_bootstrap.dart';
 import '../servicios/roles_service.dart';
 
 class AdminGate extends StatelessWidget {
-  const AdminGate({super.key});
+  const AdminGate({super.key, this.child});
+
+  /// Si se indica, los admins ven [child] en lugar del centro de operaciones.
+  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +42,7 @@ class AdminGate extends StatelessWidget {
             .toLowerCase();
 
         if (RolesService.esRolAdmin(rolUsuario)) {
-          return const _AdminCentroConBootstrap();
+          return child ?? const _AdminCentroConBootstrap();
         }
 
         // 2do stream (fallback): roles/{uid}
@@ -58,7 +61,7 @@ class AdminGate extends StatelessWidget {
                 .trim()
                 .toLowerCase();
             if (RolesService.esRolAdmin(rolDoc)) {
-              return const _AdminCentroConBootstrap();
+              return child ?? const _AdminCentroConBootstrap();
             }
 
             // Ninguna fuente dijo admin

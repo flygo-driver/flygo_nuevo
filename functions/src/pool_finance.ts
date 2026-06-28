@@ -6,6 +6,7 @@ import {
   type QueryDocumentSnapshot,
   type Transaction,
 } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 
@@ -194,8 +195,9 @@ export async function getComisionGiraPorcientoFromRemote(): Promise<number> {
   return getComisionViajePorcentajeCached();
 }
 
-function priceMultSentido(sentido: unknown): number {
-  return String(sentido ?? "").trim().toLowerCase() === "ida_y_vuelta" ? 2 : 1;
+/** Precio por asiento = monto final por persona (sin multiplicar por sentido). */
+function priceMultSentido(_sentido: unknown): number {
+  return 1;
 }
 
 function comisionRealRdFromAsientos(
@@ -374,6 +376,162 @@ function stringListOrNull(raw: unknown): string[] | null {
     .map((e) => String(e ?? "").trim())
     .filter((e) => e.length > 0);
   return out.length > 0 ? out : null;
+}
+
+const TOKEN_ENTRADA_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function generarTokenEntradaGira(): string {
+  let code = "";
+  for (let i = 0; i < 8; i++) {
+    code += TOKEN_ENTRADA_CHARS[Math.floor(Math.random() * TOKEN_ENTRADA_CHARS.length)];
+  }
+  return `RAI-${code}`;
+}
+
+function normalizarTokenEntrada(raw: unknown): string | null {
+  const t = String(raw ?? "").trim().toUpperCase();
+  if (!/^RAI-[A-Z0-9]{6,12}$/.test(t)) return null;
+  return t;
+}
+
+/** Índice rápido token → reserva (solo Admin SDK escribe). */
+function asignarTokenEntradaSiFaltaEnTx(
+  tx: Transaction,
+  poolId: string,
+  reservaId: string,
+  res: AnyMap,
+  reservaPatch: AnyMap,
+): void {
+  const existing = trimOrNull(res.tokenEntrada);
+  if (existing) return;
+
+  const seats = Math.max(1, Math.trunc(numOr0(res.seats)));
+  const token = generarTokenEntradaGira();
+  reservaPatch.tokenEntrada = token;
+  reservaPatch.tokenGeneradoAt = FieldValue.serverTimestamp();
+  reservaPatch.tokenEstado = "activo";
+  reservaPatch.tokenAsientosValidados = 0;
+
+  tx.set(db().collection("gira_tickets").doc(token), {
+    poolId,
+    reservaId,
+    uidCliente: String(res.uidCliente ?? ""),
+    seats,
+    tokenEstado: "activo",
+    createdAt: FieldValue.serverTimestamp(),
+  });
+}
+
+function anularTokenEntradaEnTx(
+  tx: Transaction,
+  res: AnyMap,
+  reservaPatch: AnyMap,
+): void {
+  const token = trimOrNull(res.tokenEntrada);
+  if (!token) return;
+  reservaPatch.tokenEstado = "anulado";
+  tx.set(
+    db().collection("gira_tickets").doc(token),
+    {
+      tokenEstado: "anulado",
+      anuladoAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+function ventanaValidacionTokenGira(fechaSalida: Date, now: Date): boolean {
+  const ms = fechaSalida.getTime() - now.getTime();
+  const h24 = 86_400_000;
+  // Desde 24 h antes hasta 6 h después de la salida programada.
+  return ms <= h24 && ms >= -6 * h24;
+}
+
+/** Campos extendidos de contenido para publicación profesional de giras. */
+function mergePoolContenidoExtraFromInput(d: AnyMap): AnyMap {
+  const out: AnyMap = {};
+  const optionalStrings: Array<[string, unknown]> = [
+    ["nombreGira", d.nombreGira],
+    ["eslogan", d.eslogan],
+    ["provincia", d.provincia],
+    ["municipio", d.municipio],
+    ["duracionTexto", d.duracionTexto],
+    ["direccionExacta", d.direccionExacta],
+    ["referenciaLugar", d.referenciaLugar],
+    ["noIncluye", d.noIncluye],
+    ["queDebeLlevar", d.queDebeLlevar],
+    ["reglas", d.reglas],
+    ["observaciones", d.observaciones],
+  ];
+  for (const [key, raw] of optionalStrings) {
+    const v = trimOrNull(raw);
+    if (v) out[key] = v;
+  }
+  if (typeof d.ninosPermitidos === "boolean") out.ninosPermitidos = d.ninosPermitidos;
+  if (typeof d.mascotasPermitidas === "boolean") out.mascotasPermitidas = d.mascotasPermitidas;
+  if (typeof d.edadMinima === "number" && Number.isFinite(d.edadMinima) && d.edadMinima > 0) {
+    out.edadMinima = Math.trunc(d.edadMinima);
+  }
+  if (
+    typeof d.maxAsientosPorCompra === "number" &&
+    Number.isFinite(d.maxAsientosPorCompra) &&
+    d.maxAsientosPorCompra > 0
+  ) {
+    out.maxAsientosPorCompra = Math.min(99, Math.trunc(d.maxAsientosPorCompra));
+  }
+  if (Array.isArray(d.itinerario)) {
+    const it = d.itinerario
+      .map((row) => {
+        if (!row || typeof row !== "object") return null;
+        const m = row as AnyMap;
+        const hora = trimOrNull(m.hora) ?? "";
+        const actividad = trimOrNull(m.actividad) ?? "";
+        if (!hora && !actividad) return null;
+        return { hora, actividad };
+      })
+      .filter((x): x is { hora: string; actividad: string } => x != null);
+    if (it.length > 0) out.itinerario = it;
+  }
+  return out;
+}
+
+async function pushPoolGiraClientes(
+  uids: string[],
+  title: string,
+  body: string,
+  poolId: string,
+): Promise<void> {
+  const unique = [...new Set(uids.filter((u) => u.length > 0))];
+  if (unique.length === 0) return;
+  const messaging = getMessaging();
+  for (const uid of unique) {
+    const tokSnap = await db().collection("push_tokens").doc(uid).get();
+    const raw = tokSnap.data()?.tokens;
+    const tokens = Array.isArray(raw)
+      ? raw.filter((t): t is string => typeof t === "string" && t.length > 10)
+      : [];
+    if (tokens.length === 0) continue;
+    try {
+      await messaging.sendEachForMulticast({
+        tokens,
+        notification: { title, body },
+        data: {
+          type: "gira_cupos_actualizada",
+          poolId,
+          click_action: "FLUTTER_NOTIFICATION_CLICK",
+        },
+        android: {
+          notification: {
+            channelId: "rai_giras_cupos_cliente_v1",
+            sound: "default",
+          },
+        },
+        apns: { payload: { aps: { sound: "default" } } },
+      });
+    } catch (e) {
+      logger.warn("[pushPoolGiraClientes] fallo uid=" + uid, e);
+    }
+  }
 }
 
 /**
@@ -649,6 +807,7 @@ export const crearPoolGira = onCall(async (request) => {
       poolData.destinoLon = d.destinoLon;
     }
     if (incluye) poolData.incluye = incluye;
+    Object.assign(poolData, mergePoolContenidoExtraFromInput(d));
     if (recaudoCentral) {
       poolData.recaudoModelo = "central";
       poolData.montoRecaudoPct = 1;
@@ -691,6 +850,132 @@ export const crearPoolGira = onCall(async (request) => {
 
   logger.info("[crearPoolGira] ok", { uid, poolId: result.poolId, recaudoCentral: result.recaudoCentral });
   return { poolId: result.poolId, aviso };
+});
+
+/**
+ * Actualiza contenido de una gira publicada sin borrar reservas ni pagos aprobados.
+ * Dueño del pool o admin. Notifica pasajeros si cambia fecha, hora o punto de encuentro.
+ */
+export const actualizarPoolGiraContenido = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+  const d = (request.data ?? {}) as AnyMap;
+  const poolId = trimOrNull(d.poolId);
+  if (!poolId) throw new HttpsError("invalid-argument", "Falta poolId");
+
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const poolSnap = await poolRef.get();
+  if (!poolSnap.exists) throw new HttpsError("not-found", "Gira no encontrada");
+  const pool = (poolSnap.data() ?? {}) as AnyMap;
+
+  const role = await getRole(uid);
+  const owner = String(pool.ownerTaxistaId ?? "");
+  if (role !== "admin" && owner !== uid) {
+    throw new HttpsError("permission-denied", "No autorizado para editar esta gira.");
+  }
+
+  const estado = String(pool.estado ?? "").toLowerCase();
+  if (estado === "finalizado" || estado === "cancelado" || estado === "cancelado_por_admin") {
+    throw new HttpsError("failed-precondition", "No se puede editar una gira cerrada o cancelada.");
+  }
+
+  const patch: AnyMap = { ...mergePoolContenidoExtraFromInput(d), updatedAt: FieldValue.serverTimestamp() };
+
+  const marketingKeys: Array<[string, unknown]> = [
+    ["origenTown", d.origenTown],
+    ["agenciaNombre", d.agenciaNombre],
+    ["agenciaLogoUrl", d.agenciaLogoUrl],
+    ["bannerUrl", d.bannerUrl],
+    ["bannerVideoUrl", d.bannerVideoUrl],
+    ["puntoSalida", d.puntoSalida],
+    ["destino", d.destino],
+    ["servicioBadge", d.servicioBadge],
+    ["descripcionViaje", d.descripcionViaje],
+    ["bancoNombre", d.bancoNombre],
+    ["bancoCuenta", d.bancoCuenta],
+    ["bancoTipoCuenta", d.bancoTipoCuenta],
+    ["bancoTitular", d.bancoTitular],
+  ];
+  for (const [key, raw] of marketingKeys) {
+    const v = trimOrNull(raw);
+    if (v) patch[key] = v;
+  }
+
+  const incluye = stringListOrNull(d.incluye);
+  if (incluye) patch.incluye = incluye;
+
+  if (typeof d.precioPorAsiento === "number" && d.precioPorAsiento > 0) {
+    patch.precioPorAsiento = d.precioPorAsiento;
+  }
+  if (typeof d.capacidad === "number" && d.capacidad > 0) {
+    const occ =
+      Math.max(0, Math.trunc(numOr0(pool.asientosReservados))) +
+      Math.max(0, Math.trunc(numOr0(pool.asientosPagados)));
+    if (d.capacidad < occ) {
+      throw new HttpsError(
+        "failed-precondition",
+        `La capacidad no puede ser menor que los asientos ya reservados (${occ}).`,
+      );
+    }
+    patch.capacidad = Math.trunc(d.capacidad);
+  }
+
+  const pickupPoints = stringListOrNull(d.pickupPoints);
+  if (pickupPoints) patch.pickupPoints = pickupPoints;
+
+  const prevSalida = pool.fechaSalida instanceof Timestamp ? pool.fechaSalida.toMillis() : 0;
+  const prevVuelta = pool.fechaVuelta instanceof Timestamp ? pool.fechaVuelta.toMillis() : 0;
+  const prevPunto = String(pool.puntoSalida ?? "");
+  let scheduleChanged = false;
+
+  const fechaSalida = d.fechaSalida != null ? parseDateInput(d.fechaSalida) : null;
+  if (fechaSalida) {
+    patch.fechaSalida = Timestamp.fromDate(fechaSalida);
+    if (fechaSalida.getTime() !== prevSalida) scheduleChanged = true;
+  }
+  const fechaVueltaRaw = d.fechaVuelta;
+  if (fechaVueltaRaw !== undefined) {
+    if (fechaVueltaRaw == null || fechaVueltaRaw === "") {
+      if (prevVuelta !== 0) scheduleChanged = true;
+      patch.fechaVuelta = FieldValue.delete();
+    } else {
+      const fv = parseDateInput(fechaVueltaRaw);
+      if (fv) {
+        patch.fechaVuelta = Timestamp.fromDate(fv);
+        if (fv.getTime() !== prevVuelta) scheduleChanged = true;
+      }
+    }
+  }
+
+  const newPunto = trimOrNull(d.puntoSalida);
+  if (newPunto && newPunto !== prevPunto) scheduleChanged = true;
+  if (pickupPoints) {
+    const prevPick = JSON.stringify(pool.pickupPoints ?? []);
+    if (JSON.stringify(pickupPoints) !== prevPick) scheduleChanged = true;
+  }
+
+  await poolRef.set(patch, { merge: true });
+
+  if (scheduleChanged) {
+    const resSnap = await poolRef.collection("reservas").get();
+    const uids = resSnap.docs
+      .map((doc) => {
+        const r = doc.data() as AnyMap;
+        if (String(r.estado ?? "").toLowerCase() === "cancelado") return "";
+        return String(r.uidCliente ?? "");
+      })
+      .filter((u) => u.length > 0);
+    const nombre = trimOrNull(pool.nombreGira) ?? trimOrNull(pool.servicioBadge) ?? "tu gira";
+    await pushPoolGiraClientes(
+      uids,
+      "Actualización de gira",
+      `Se actualizó la fecha u horario de ${nombre}. Revisa los detalles en la app.`,
+      poolId,
+    );
+  }
+
+  logger.info("[actualizarPoolGiraContenido] ok", { uid, poolId });
+  return { ok: true, poolId };
 });
 
 /** Registro contable `reserva_comision` al crear gira (solo backend; el cliente ya no escribe en `ledger_giras`). */
@@ -942,6 +1227,8 @@ function marcarReservaPagadaEnTx(args: MarcarReservaPagadaTxArgs): { alreadyProc
       { merge: true },
     );
   }
+
+  asignarTokenEntradaSiFaltaEnTx(tx, poolId, reservaId, res, reservaPatch);
 
   tx.update(resRef, reservaPatch);
   tx.update(poolRef, poolPatch);
@@ -2083,12 +2370,11 @@ export const reservePoolSeats = onCall(async (request) => {
     if (occ + seats > cap) throw new HttpsError("failed-precondition", "No hay suficientes cupos");
 
     const precio = Number(pool.precioPorAsiento ?? 0);
-    const mult = String(pool.sentido ?? "") === "ida_y_vuelta" ? 2 : 1;
     const depositPctRaw = Number(pool.depositPct ?? 0);
     const depositPct = Number.isFinite(depositPctRaw)
       ? Math.min(1, Math.max(0, depositPctRaw))
       : 0;
-    const total = Math.max(0, precio * seats * mult);
+    const total = Math.max(0, precio * seats);
     const recaudoCentral = poolUsaRecaudoCentral(pool);
     const deposit = recaudoCentral && metodoPago === "transferencia"
       ? total
@@ -2429,7 +2715,7 @@ export const adminRevertPoolReservaPagada = onCall(async (request) => {
     }
 
     tx.update(poolRef, poolPatch);
-    tx.update(resRef, {
+    const reservaRevertPatch: AnyMap = {
       estado: "cancelado_admin",
       estadoPago: "reembolso_pendiente",
       canceladoPor: uidActor,
@@ -2437,7 +2723,9 @@ export const adminRevertPoolReservaPagada = onCall(async (request) => {
       revertidoAt: FieldValue.serverTimestamp(),
       revertidoMotivo: motivo,
       updatedAt: FieldValue.serverTimestamp(),
-    });
+    };
+    anularTokenEntradaEnTx(tx, r, reservaRevertPatch);
+    tx.update(resRef, reservaRevertPatch);
 
     tx.set(
       db().collection("ledger_pool_reservas").doc(`${reservaId}_recaudo_revertido`),
@@ -2478,3 +2766,174 @@ export const adminRevertPoolReservaPagada = onCall(async (request) => {
   return result;
 });
 
+/** Cliente (o admin): genera ticket si la reserva está pagada y aún no tiene token. */
+export const ensurePoolReservaTicket = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+  const poolId = trimOrNull(request.data?.poolId);
+  const reservaId = trimOrNull(request.data?.reservaId);
+  if (!poolId || !reservaId) {
+    throw new HttpsError("invalid-argument", "Faltan poolId o reservaId");
+  }
+
+  const role = await getRole(uid);
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const resRef = poolRef.collection("reservas").doc(reservaId);
+
+  const result = await db().runTransaction(async (tx) => {
+    const [poolSnap, resSnap] = await Promise.all([tx.get(poolRef), tx.get(resRef)]);
+    if (!poolSnap.exists) throw new HttpsError("not-found", "Gira no encontrada");
+    if (!resSnap.exists) throw new HttpsError("not-found", "Reserva no encontrada");
+    const pool = (poolSnap.data() ?? {}) as AnyMap;
+    const res = (resSnap.data() ?? {}) as AnyMap;
+
+    const uidCliente = String(res.uidCliente ?? "");
+    const owner = String(pool.ownerTaxistaId ?? "");
+    if (role !== "admin" && uid !== uidCliente && uid !== owner) {
+      throw new HttpsError("permission-denied", "No autorizado");
+    }
+
+    if (String(res.estado ?? "").trim().toLowerCase() !== "pagado") {
+      throw new HttpsError(
+        "failed-precondition",
+        "El ticket está disponible cuando el pago está confirmado.",
+      );
+    }
+
+    const reservaPatch: AnyMap = { updatedAt: FieldValue.serverTimestamp() };
+    asignarTokenEntradaSiFaltaEnTx(tx, poolId, reservaId, res, reservaPatch);
+    if (Object.keys(reservaPatch).length > 1) {
+      tx.update(resRef, reservaPatch);
+    }
+
+    const token = trimOrNull(res.tokenEntrada) ?? trimOrNull(reservaPatch.tokenEntrada);
+    return {
+      ok: true,
+      poolId,
+      reservaId,
+      tokenEntrada: token ?? "",
+      tokenEstado: String(res.tokenEstado ?? reservaPatch.tokenEstado ?? "activo"),
+    };
+  });
+
+  return result;
+});
+
+/** Admin u operador de la gira: valida token QR/código en el punto de salida. */
+export const validarTokenEntradaGira = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const token = normalizarTokenEntrada(request.data?.token);
+  if (!token) throw new HttpsError("invalid-argument", "Código de ticket inválido");
+
+  const poolIdHint = trimOrNull(request.data?.poolId);
+  const role = await getRole(uidActor);
+
+  const ticketRef = db().collection("gira_tickets").doc(token);
+  const ticketSnap = await ticketRef.get();
+  if (!ticketSnap.exists) {
+    throw new HttpsError("not-found", "Ticket no encontrado");
+  }
+  const ticket = (ticketSnap.data() ?? {}) as AnyMap;
+  const poolId = String(ticket.poolId ?? "");
+  const reservaId = String(ticket.reservaId ?? "");
+  if (!poolId || !reservaId) {
+    throw new HttpsError("failed-precondition", "Ticket sin datos de reserva");
+  }
+  if (poolIdHint && poolIdHint !== poolId) {
+    throw new HttpsError("failed-precondition", "Este ticket no corresponde a esta gira");
+  }
+
+  const poolRef = db().collection("viajes_pool").doc(poolId);
+  const resRef = poolRef.collection("reservas").doc(reservaId);
+
+  const result = await db().runTransaction(async (tx) => {
+    const [poolSnap, resSnap, ticketSnapTx] = await Promise.all([
+      tx.get(poolRef),
+      tx.get(resRef),
+      tx.get(ticketRef),
+    ]);
+    if (!poolSnap.exists || !resSnap.exists || !ticketSnapTx.exists) {
+      throw new HttpsError("not-found", "Reserva o gira no encontrada");
+    }
+
+    const pool = (poolSnap.data() ?? {}) as AnyMap;
+    const res = (resSnap.data() ?? {}) as AnyMap;
+    const t = (ticketSnapTx.data() ?? {}) as AnyMap;
+
+    const owner = String(pool.ownerTaxistaId ?? "");
+    if (role !== "admin" && uidActor !== owner) {
+      throw new HttpsError("permission-denied", "Solo RAI u operador de esta gira pueden validar");
+    }
+
+    const estadoPool = String(pool.estado ?? "").trim().toLowerCase();
+    if (["cancelado", "cancelado_por_admin", "finalizado"].includes(estadoPool)) {
+      throw new HttpsError("failed-precondition", "La gira no está activa para validar entradas");
+    }
+
+    const estadoRes = String(res.estado ?? "").trim().toLowerCase();
+    if (estadoRes !== "pagado") {
+      throw new HttpsError("failed-precondition", "Reserva sin pago confirmado");
+    }
+
+    const tokenEstado = String(t.tokenEstado ?? res.tokenEstado ?? "").trim().toLowerCase();
+    if (tokenEstado === "anulado") {
+      throw new HttpsError("failed-precondition", "Ticket anulado");
+    }
+    if (tokenEstado === "usado") {
+      throw new HttpsError("failed-precondition", "Ticket ya utilizado");
+    }
+
+    const fechaRaw = pool.fechaSalida;
+    let fechaSalida: Date | null = null;
+    if (fechaRaw instanceof Timestamp) fechaSalida = fechaRaw.toDate();
+    else if (fechaRaw instanceof Date) fechaSalida = fechaRaw;
+    if (!fechaSalida || !ventanaValidacionTokenGira(fechaSalida, new Date())) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Fuera de ventana de validación (24 h antes a 6 h después de la salida)",
+      );
+    }
+
+    const seats = Math.max(1, Math.trunc(numOr0(res.seats)));
+    const nombre = trimOrNull(res.clienteNombre) ?? "Pasajero";
+    const giraNombre =
+      trimOrNull(pool.nombreGira) ??
+      trimOrNull(pool.servicioBadge) ??
+      trimOrNull(pool.destino) ??
+      "Gira RAI";
+
+    const reservaPatch: AnyMap = {
+      tokenEstado: "usado",
+      tokenAsientosValidados: seats,
+      tokenValidadoAt: FieldValue.serverTimestamp(),
+      tokenValidadoPor: uidActor,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    tx.update(resRef, reservaPatch);
+    tx.set(
+      ticketRef,
+      {
+        tokenEstado: "usado",
+        validadoAt: FieldValue.serverTimestamp(),
+        validadoPor: uidActor,
+      },
+      { merge: true },
+    );
+
+    return {
+      ok: true,
+      valido: true,
+      token,
+      poolId,
+      reservaId,
+      pasajero: nombre,
+      gira: giraNombre,
+      asientos: seats,
+      agencia: trimOrNull(pool.agenciaNombre) ?? "",
+    };
+  });
+
+  logger.info("[validarTokenEntradaGira] ok", { uidActor, poolId: result.poolId, reservaId: result.reservaId });
+  return result;
+});

@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../data/viaje_data.dart';
 import '../../servicios/analytics_rai.dart';
 import '../../servicios/distancia_service.dart';
+import '../../servicios/tarifa_service_unificado.dart';
 import '../../utils/formatos_moneda.dart';
 
 Future<void> guardarViajeCliente({
@@ -31,6 +32,22 @@ Future<void> guardarViajeCliente({
     return;
   }
 
+  bool coordsOk(double lat, double lon) =>
+      lat.isFinite &&
+      lon.isFinite &&
+      !(lat.abs() < 1e-6 && lon.abs() < 1e-6) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180;
+
+  if (!coordsOk(latCliente, lonCliente) || !coordsOk(latDestino, lonDestino)) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Ubicación de origen o destino inválida.')),
+    );
+    return;
+  }
+
   // Distancia y precio (SIN ida y vuelta porque no se soporta)
   final km = DistanciaService.calcularDistancia(
     latCliente,
@@ -38,7 +55,8 @@ Future<void> guardarViajeCliente({
     latDestino,
     lonDestino,
   );
-  final precio = DistanciaService.calcularPrecio(km); // ← SIN idaYVuelta
+  final precio =
+      await TarifaServiceUnificado.precioNormalCarroReferencia(km);
 
   try {
     final id = await ViajeData.crearViajeCliente(

@@ -9,7 +9,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:flygo_nuevo/firebase_bootstrap.dart';
-import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 import 'package:flygo_nuevo/servicios/flygo_storage.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
@@ -49,8 +48,11 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
   bool _escuchaAprobacionIniciada = false;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subUsuario;
 
-  /// Último estado de docs conocido (evita saltar al pool si ya estaba aprobado y abrió esta pantalla desde el menú).
-  String? _ultimoEstadoDocs;
+  /// Evita doble navegación; detecta transición a apto para pool (docs + ADM).
+  bool _ultimoPoolOk = false;
+
+  /// Refleja si ADM ya aprobó y puede continuar al pool (onboarding).
+  bool _aptoParaPool = false;
 
   String docsEstado = 'pendiente';
   String? comentarioAdmin;
@@ -109,28 +111,30 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         .listen((DocumentSnapshot<Map<String, dynamic>> snap) {
       final data = snap.data() ?? <String, dynamic>{};
       final e = taxistaDocsEstadoDesdeUsuario(data);
-      if (!taxistaAprobadoParaOperarPool(data)) {
-        _ultimoEstadoDocs = e;
+      final poolOk = taxistaAprobadoParaOperarPool(data);
+      if (!poolOk) {
+        _ultimoPoolOk = false;
         if (mounted) {
           setState(() {
             docsEstado = e;
+            _aptoParaPool = false;
             _renovacionObligatoria = taxistaRequiereRenovacionDocumentos(data);
           });
         }
         return;
       }
-      final prev = (_ultimoEstadoDocs ?? docsEstado).toLowerCase().trim();
-      _ultimoEstadoDocs = e;
+      final pasoAPool = !_ultimoPoolOk;
+      _ultimoPoolOk = true;
       if (mounted) {
         setState(() {
           docsEstado = e;
+          _aptoParaPool = true;
           _renovacionObligatoria = false;
         });
       }
-      final pasoAAprobado = prev != 'aprobado' && e == 'aprobado';
-      if (!pasoAAprobado || !mounted) return;
-      // Una sola decisión: [TaxistaEntry] → contrato (once) o pool. No mezclar aquí con bloqueo RD\$500.
-      _continuarTrasAprobacionAdmin();
+      if (!pasoAPool || !mounted) return;
+      // [TaxistaEntry] → contrato (una vez) o pool en vivo.
+      _maybeContinuarTrasAprobacion(data);
     });
   }
 
@@ -138,6 +142,13 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
     if (!mounted) return;
     Navigator.of(context)
         .pushNamedAndRemoveUntil('/taxista_entry', (route) => false);
+  }
+
+  /// Solo en onboarding obligatorio: ADM aprobó → contrato o pool vía [TaxistaEntry].
+  void _maybeContinuarTrasAprobacion(Map<String, dynamic> data) {
+    if (!widget.onboardingObligatorio) return;
+    if (!taxistaAprobadoParaOperarPool(data)) return;
+    _continuarTrasAprobacionAdmin();
   }
 
   Future<void> _cargar() async {
@@ -186,9 +197,11 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       }
 
       if (!mounted) return;
+      final poolOk = taxistaAprobadoParaOperarPool(data);
       setState(() {
         docsEstado = estado;
-        _ultimoEstadoDocs = estado;
+        _ultimoPoolOk = poolOk;
+        _aptoParaPool = poolOk;
         _renovacionObligatoria = taxistaRequiereRenovacionDocumentos(data);
         comentarioAdmin = (data['docsComentarioAdmin'] as String?);
         licenciaUrl = lic;
@@ -199,6 +212,11 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         _cargando = false;
       });
       _iniciarEscuchaAprobacionAdmin();
+      if (poolOk) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _maybeContinuarTrasAprobacion(data);
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _cargando = false);
@@ -522,16 +540,10 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            '📨 Enviado a revisión. Administración validará tus documentos.',
+            '📨 Enviado a revisión. Cuando administración apruebe, entrarás al pool automáticamente.',
           ),
         ),
       );
-      if (widget.onboardingObligatorio) {
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const TaxistaEntry()),
-          (route) => false,
-        );
-      }
     } on FirebaseException catch (e) {
       if (!mounted) return;
       String msg = '❌ Error al enviar: ${e.message}';
@@ -568,6 +580,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
     final colorEstado = _estadoColor(docsEstado);
     final bool onboardingSalida =
         widget.onboardingObligatorio && !_renovacionObligatoria;
+    final estadoL = docsEstado.toLowerCase();
     const double footerReserva = 118;
 
     final scaffold = Scaffold(
@@ -687,6 +700,44 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                       ),
                     ],
 
+                    if (estadoL == 'en_revision') ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2a2410),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: const Color(0xFFFFD54F).withValues(alpha: 0.6),
+                          ),
+                        ),
+                        child: const Text(
+                          'En revisión por administración. Al aprobar, entrarás al pool en vivo '
+                          '(o al contrato si falta firmarlo).',
+                          style: TextStyle(color: Colors.white70, height: 1.35),
+                        ),
+                      ),
+                    ],
+                    if (_aptoParaPool && widget.onboardingObligatorio) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1a2a1a),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: const Color(0xFF00E676).withValues(alpha: 0.6),
+                          ),
+                        ),
+                        child: const Text(
+                          'Documentos aprobados. Pulsa «Continuar al pool» para operar.',
+                          style: TextStyle(color: Colors.white70, height: 1.35),
+                        ),
+                      ),
+                    ],
+
                     const SizedBox(height: 16),
 
                     _DocItem(
@@ -744,10 +795,16 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       bottomNavigationBar: _cargando
           ? null
           : TaxistaOnboardingAccionesFooter(
-              primaryLabel: 'Enviar a revisión',
-              primaryIcon: Icons.send_rounded,
+              primaryLabel: _aptoParaPool && widget.onboardingObligatorio
+                  ? 'Continuar al pool'
+                  : 'Enviar a revisión',
+              primaryIcon: _aptoParaPool && widget.onboardingObligatorio
+                  ? Icons.check_circle_outline
+                  : Icons.send_rounded,
               busy: _subiendo,
-              onPrimary: _enviarRevision,
+              onPrimary: _aptoParaPool && widget.onboardingObligatorio
+                  ? _continuarTrasAprobacionAdmin
+                  : _enviarRevision,
               mostrarSalirInicio: onboardingSalida,
               fondoOscuro: true,
               primaryClaroSobreOscuro: true,

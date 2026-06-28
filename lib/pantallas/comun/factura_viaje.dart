@@ -1,4 +1,4 @@
-// lib/pantallas/comun/factura_viaje.dart
+import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -74,6 +74,17 @@ class FacturaViaje extends StatelessWidget {
       appBar: AppBar(
         title: const Text('RAI — Comprobante de viaje'),
         centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          tooltip: 'Cerrar',
+          onPressed: () {
+            final NavigatorState rootNav =
+                Navigator.of(context, rootNavigator: true);
+            if (rootNav.canPop()) {
+              rootNav.pop();
+            }
+          },
+        ),
       ),
       body: SafeArea(
         child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -189,15 +200,23 @@ class _FacturaContentState extends State<_FacturaContent> {
 
   void _cerrarFactura({String? snack}) {
     if (_facturaCerrada || !mounted) return;
-    _facturaCerrada = true;
     if (snack != null && snack.isNotEmpty) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(content: Text(snack), duration: const Duration(seconds: 2)),
       );
     }
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
+    _facturaCerrada = true;
+    final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
+    if (rootNav.canPop()) {
+      rootNav.pop();
+      return;
     }
+    final NavigatorState? localNav = Navigator.maybeOf(context);
+    if (localNav != null && localNav.canPop()) {
+      localNav.pop();
+      return;
+    }
+    _facturaCerrada = false;
   }
 
   void _revisarAutoCierre() {
@@ -460,9 +479,16 @@ class _FacturaContentState extends State<_FacturaContent> {
     final double sysBottom = mq.viewPadding.bottom > mq.padding.bottom
         ? mq.viewPadding.bottom
         : mq.padding.bottom;
-    final double bottomScrollPad = sysBottom + 72;
+    final double bottomScrollPad = sysBottom + 16;
+    final String etiquetaBotonCierre = widget.autoCerrarAlContinuar
+        ? 'Continuar'
+        : 'Entendido, cerrar comprobante';
 
-    return ListView(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: ListView(
       padding: EdgeInsets.fromLTRB(20, 12, 20, bottomScrollPad),
       children: [
         _FacturaViajeDocBanner(cs: cs, tt: Theme.of(context).textTheme),
@@ -794,17 +820,23 @@ class _FacturaContentState extends State<_FacturaContent> {
             ),
           ],
         ),
-        const SizedBox(height: 20),
-        FilledButton.icon(
-          onPressed: () => _cerrarFactura(),
-          icon: const Icon(Icons.check_circle_outline_rounded),
-          label: Text(
-            widget.autoCerrarAlContinuar ? 'Continuar' : 'Entendido, cerrar comprobante',
+      ],
           ),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(52),
-            backgroundColor: cs.primary,
-            foregroundColor: cs.onPrimary,
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+            child: FilledButton.icon(
+              onPressed: _facturaCerrada ? null : () => _cerrarFactura(),
+              icon: const Icon(Icons.check_circle_outline_rounded),
+              label: Text(etiquetaBotonCierre),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+                backgroundColor: cs.primary,
+                foregroundColor: cs.onPrimary,
+              ),
+            ),
           ),
         ),
       ],

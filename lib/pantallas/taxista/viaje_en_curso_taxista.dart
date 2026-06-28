@@ -47,6 +47,37 @@ import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
+String _safeFechaViaje(DateTime? dt) {
+  try {
+    return dt == null ? '—' : DateFormat('dd/MM/yyyy - HH:mm').format(dt);
+  } catch (_) {
+    return '—';
+  }
+}
+
+String _safeMoneyViaje(num? n) {
+  try {
+    final double v = (n ?? 0).toDouble();
+    if (!v.isFinite) return FormatosMoneda.rd(0);
+    return FormatosMoneda.rd(v);
+  } catch (_) {
+    return FormatosMoneda.rd(0);
+  }
+}
+
+/// Tras [finalizarViajeSeguro]: no reintentar escrituras legacy en billetera.
+bool _pagoYaAsentadoPorServidor(Map<String, dynamic> data) {
+  if (data['comision_cents'] is num && (data['comision_cents'] as num) > 0) {
+    return true;
+  }
+  if (data['facturaSaldoPrepagoComisionRd'] != null) {
+    return true;
+  }
+  final String st =
+      EstadosViaje.normalizar((data['estado'] ?? '').toString());
+  return data['completado'] == true && st == EstadosViaje.completado;
+}
+
 void logDbg(String msg) {
   if (kDebugMode) debugPrint('[VIAJE_TX] $msg');
 }
@@ -81,6 +112,25 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   /// Pruebas en casa / Bola Ahorro: abrir Maps y finalizar sin recorrer distancia real.
   bool _permitePruebaSinRecorrido(Viaje v) =>
       _flygoSimCasa || v.tipoServicio == 'bola_ahorro';
+
+  /// Copy del sheet: Bola solo en viajes bola; SIM CASA en debug sin mezclar productos.
+  String _hintPruebaSinRecorrido(
+    Viaje v, {
+    required bool trasIniciarRuta,
+  }) {
+    if (v.tipoServicio == 'bola_ahorro') {
+      return trasIniciarRuta
+          ? 'Bola Ahorro: no hace falta recorrer km. '
+              'Tras iniciar ruta podés finalizar directo.'
+          : 'Bola Ahorro: abrí mapa o continuá sin mapa; '
+              'luego aparece «Finalizar viaje».';
+    }
+    return trasIniciarRuta
+        ? 'Modo prueba (SIM CASA): no hace falta recorrer km. '
+            'Tras iniciar ruta podés finalizar directo.'
+        : 'Modo prueba (SIM CASA): abrí mapa o continuá sin mapa; '
+            'luego aparece «Finalizar viaje».';
+  }
 
   /// GPS en vivo para el doc del viaje; abrir Waze/Maps no lo exige en prueba/Bola.
   Future<bool> _gpsListoParaAbrirNavegacionExterna(Viaje v) async {
@@ -134,6 +184,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   final ValueNotifier<bool> _viajesCercanosEscucha = ValueNotifier<bool>(false);
   final ValueNotifier<(double, double)?> _taxistaPosCola =
       ValueNotifier<(double, double)?>(null);
+  final ValueNotifier<ColaCercaniaReferencia?> _colaReferenciaOrden =
+      ValueNotifier<ColaCercaniaReferencia?>(null);
 
   // 🚀 Variables para detección de cercanía del cliente
   bool _clienteCerca = false;
@@ -158,6 +210,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   /// Multiparada: cuántos destinos (paradas + final) ya confirmó el taxista.
   int _multiLegCompletadas = 0;
   String? _multiNavViajeId;
+
+  /// Un solo ticker para "tiempo en ruta" (evita recrear Stream.periodic en cada rebuild).
+  late final Stream<DateTime> _duracionEnRutaTicker =
+      Stream<DateTime>.periodic(
+        const Duration(seconds: 1),
+        (_) => DateTime.now(),
+      ).asBroadcastStream();
 
   // ===== Stream principal (deduplicado: el taxista escribe GPS en el mismo doc → sin esto, cada ping reconstruye toda la pantalla) =====
   Stream<Viaje?> _stream() {
@@ -474,6 +533,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           _aplicarProgresoMultiparadaDesdeViaje(actualizado);
           _cachedViaje = actualizado;
         });
+        _sincronizarReferenciaOrdenCola(actualizado);
         _recalcDistanciaDestino();
         _scheduleDrawRoute();
         final int next = _multiLegCompletadas;
@@ -719,6 +779,61 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
     }
     return null;
+  }
+
+  /// Punto desde el que ordenar candidatos de cola: destino/parada actual si va con cliente; si no, GPS.
+  void _sincronizarReferenciaOrdenCola(Viaje? v) {
+    ColaCercaniaReferencia? next;
+    if (v != null) {
+      final String estadoBase = EstadosViaje.normalizar(
+        v.estado.isNotEmpty
+            ? v.estado
+            : (v.completado
+                ? EstadosViaje.completado
+                : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+      );
+      final bool rutaAlDestino = EstadosViaje.esEnCurso(estadoBase) ||
+          (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
+      if (rutaAlDestino) {
+        final ({double lat, double lon})? dest =
+            _esMultiparada(v) && !_multiparadaRutaCompleta(v)
+                ? _coordsLegMultiActual(v)
+                : _coordsDestinoParaFinalizar(v);
+        if (dest != null) {
+          next = ColaCercaniaReferencia(
+            lat: dest.lat,
+            lon: dest.lon,
+            porDestinoViajeActivo: true,
+          );
+        }
+      }
+    }
+    if (next == null) {
+      final (double, double)? ping = _taxistaPosCola.value;
+      if (ping != null && _coordsValid(ping.$1, ping.$2)) {
+        next = ColaCercaniaReferencia(
+          lat: ping.$1,
+          lon: ping.$2,
+          porDestinoViajeActivo: false,
+        );
+      } else if (v != null && _coordsValid(v.latTaxista, v.lonTaxista)) {
+        next = ColaCercaniaReferencia(
+          lat: v.latTaxista,
+          lon: v.lonTaxista,
+          porDestinoViajeActivo: false,
+        );
+      }
+    }
+    final ColaCercaniaReferencia? prev = _colaReferenciaOrden.value;
+    if (prev != null &&
+        next != null &&
+        prev.lat == next.lat &&
+        prev.lon == next.lon &&
+        prev.porDestinoViajeActivo == next.porDestinoViajeActivo) {
+      return;
+    }
+    if (prev == null && next == null) return;
+    _colaReferenciaOrden.value = next;
   }
 
   ({double lat, double lon})? _origenRutaEnCursoTaxista(Viaje v) {
@@ -1126,6 +1241,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           });
           logDbg('📍 Ubicación enviada: ${p.latitude}, ${p.longitude}');
           _taxistaPosCola.value = (p.latitude, p.longitude);
+          _sincronizarReferenciaOrdenCola(_cachedViaje);
 
           if (mounted && _cachedViaje != null && _cachedViaje!.id == viajeId) {
             _cachedViaje = _cachedViaje!
@@ -1694,6 +1810,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _viajesCercanosEscucha.dispose();
     _viajesCercanosCtl.dispose();
     _taxistaPosCola.dispose();
+    _colaReferenciaOrden.dispose();
     super.dispose();
   }
 
@@ -2368,6 +2485,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
         if (data['pagoRegistrado'] == true) {
           print('[FINALIZAR] pagoRegistrado=true → omitir PagoData legacy');
+        } else if (_pagoYaAsentadoPorServidor(data)) {
+          print('[FINALIZAR] comisión ya en servidor → omitir PagoData legacy');
         } else {
           await retryPago();
         }
@@ -2924,6 +3043,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   String _s(Object? x) => x?.toString() ?? '';
+
+  double? _extraNumero(dynamic raw) {
+    if (raw is num) return raw.toDouble();
+    if (raw == null) return null;
+    return double.tryParse(raw.toString().trim());
+  }
+
   Widget _chip(String text) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         margin: const EdgeInsets.only(right: 8, bottom: 8),
@@ -3007,7 +3133,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           const SizedBox(height: 8),
           ...v.waypoints!.asMap().entries.map((entry) {
             final index = entry.key + 1;
-            final waypoint = entry.value;
+            final dynamic rawWp = entry.value;
+            if (rawWp is! Map) return const SizedBox.shrink();
+            final Map<String, dynamic> waypoint =
+                Map<String, dynamic>.from(rawWp);
             final label = waypoint['label']?.toString() ?? 'Parada $index';
             final lat = _waypointLat(waypoint);
             final lon = _waypointLon(waypoint);
@@ -3056,12 +3185,19 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
 
     final List<Widget> chips = [];
-    if (v.extras!['pasajeros'] != null) {
-      chips.add(_chip(
-          '👥 ${v.extras!['pasajeros']} pasajero${v.extras!['pasajeros'] != 1 ? 's' : ''}'));
+    final dynamic rawPasajeros = v.extras!['pasajeros'];
+    if (rawPasajeros != null) {
+      final int? pasajeros = rawPasajeros is num
+          ? rawPasajeros.round()
+          : int.tryParse(rawPasajeros.toString());
+      if (pasajeros != null && pasajeros > 0) {
+        chips.add(_chip(
+            '👥 $pasajeros pasajero${pasajeros != 1 ? 's' : ''}'));
+      }
     }
-    if (v.extras!['peaje'] != null) {
-      chips.add(_chip('💰 Peaje: ${FormatosMoneda.rd(v.extras!['peaje'])}'));
+    final double? peaje = _extraNumero(v.extras!['peaje']);
+    if (peaje != null && peaje > 0) {
+      chips.add(_chip('💰 Peaje: ${FormatosMoneda.rd(peaje)}'));
     }
 
     if (chips.isEmpty) return const SizedBox.shrink();
@@ -3212,64 +3348,73 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   Widget _progresoOperativoViaje(String estadoBase) {
-    final int etapa = _etapaActualViaje(estadoBase);
-    const labels = <String>[
-      'Aceptado',
-      'Pickup',
-      'A bordo',
-      'En ruta',
-      'Finalizado',
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Progreso del viaje',
-          style: TextStyle(
-              color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: LinearProgressIndicator(
-            minHeight: 7,
-            value: (etapa + 1) / labels.length,
-            backgroundColor: Colors.white12,
-            valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+    try {
+      final int etapa = _etapaActualViaje(estadoBase);
+      const labels = <String>[
+        'Aceptado',
+        'Pickup',
+        'A bordo',
+        'En ruta',
+        'Finalizado',
+      ];
+      final double progress =
+          ((etapa + 1) / labels.length).clamp(0.0, 1.0).toDouble();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Progreso del viaje',
+            style: TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                fontWeight: FontWeight.w600),
           ),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: List<Widget>.generate(labels.length, (i) {
-            final bool done = i <= etapa;
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: done
-                    ? Colors.greenAccent.withValues(alpha: 0.18)
-                    : Colors.white10,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              minHeight: 7,
+              value: progress,
+              backgroundColor: Colors.white12,
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: List<Widget>.generate(labels.length, (i) {
+              final bool done = i <= etapa;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
                   color: done
-                      ? Colors.greenAccent.withValues(alpha: 0.6)
-                      : Colors.white24,
+                      ? Colors.greenAccent.withValues(alpha: 0.18)
+                      : Colors.white10,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: done
+                        ? Colors.greenAccent.withValues(alpha: 0.6)
+                        : Colors.white24,
+                  ),
                 ),
-              ),
-              child: Text(
-                labels[i],
-                style: TextStyle(
-                  color: done ? Colors.greenAccent : Colors.white60,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
+                child: Text(
+                  labels[i],
+                  style: TextStyle(
+                    color: done ? Colors.greenAccent : Colors.white60,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-            );
-          }),
-        ),
-      ],
-    );
+              );
+            }),
+          ),
+        ],
+      );
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
   }
 
   static String _formatDurationHMS(Duration d) {
@@ -3284,31 +3429,131 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   Widget _buildDuracionEnRuta(Viaje v, String estadoBase) {
-    if (!EstadosViaje.esEnCurso(estadoBase)) return const SizedBox.shrink();
-    final DateTime? start = v.inicioRutaDesde;
-    if (start == null) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: StreamBuilder<DateTime>(
-        stream:
-            Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
-        builder: (BuildContext context, _) {
-          final Duration elapsed = DateTime.now().difference(start);
-          return Row(
-            children: [
-              const Icon(Icons.schedule, color: Colors.blueAccent, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Tiempo en ruta: ${_formatDurationHMS(elapsed)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 15),
+    try {
+      if (!EstadosViaje.esEnCurso(estadoBase)) return const SizedBox.shrink();
+      final DateTime? start = v.inicioRutaDesde;
+      if (start == null) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: StreamBuilder<DateTime>(
+          stream: _duracionEnRutaTicker,
+          builder: (BuildContext context, AsyncSnapshot<DateTime> snap) {
+            if (snap.hasError) return const SizedBox.shrink();
+            try {
+              final Duration elapsed = DateTime.now().difference(start);
+              return Row(
+                children: [
+                  const Icon(Icons.schedule, color: Colors.blueAccent, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tiempo en ruta: ${_formatDurationHMS(elapsed)}',
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 15),
+                    ),
+                  ),
+                ],
+              );
+            } catch (_) {
+              return const SizedBox.shrink();
+            }
+          },
+        ),
+      );
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildDetallesViajePanel(Viaje v, String estadoBase) {
+    try {
+      final fecha = _safeFechaViaje(v.fechaHora);
+      final total = _safeMoneyViaje(v.precio);
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.grey[900],
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '🧭 ${v.origen} → ${v.destino}',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
+                _servicioBadge(v),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '🕓 Fecha: $fecha',
+              style: const TextStyle(fontSize: 16, color: Colors.white70),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '💰 Total: $total',
+              style: const TextStyle(fontSize: 18, color: Colors.greenAccent),
+            ),
+            _DesgloseComisionNeto(precio: v.precio),
+            const SizedBox(height: 8),
+            Text(
+              '📍 Estado: ${_labelEstado(estadoBase)}',
+              style: const TextStyle(fontSize: 16, color: Colors.white70),
+            ),
+            const SizedBox(height: 10),
+            _progresoOperativoViaje(estadoBase),
+            _buildDuracionEnRuta(v, estadoBase),
+            _buildWaypoints(
+              v,
+              enRuta: EstadosViaje.esEnCurso(estadoBase),
+            ),
+            _buildExtras(v),
+          ],
+        ),
+      );
+    } catch (e, st) {
+      unawaited(ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'viaje_en_curso_taxista: detalles_panel',
+      ));
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.grey[900],
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '🧭 ${v.origen} → ${v.destino}',
+              style: const TextStyle(
+                fontSize: 16,
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
               ),
-            ],
-          );
-        },
-      ),
-    );
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '📍 Estado: ${_labelEstado(estadoBase)}',
+              style: const TextStyle(fontSize: 15, color: Colors.white70),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   void _disposeBolaCancelWatch() {
@@ -3565,7 +3810,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final formato = DateFormat('dd/MM/yyyy - HH:mm');
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -3622,8 +3866,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 if (snap.hasError) {
                   if (_cachedViaje != null) {
                     final v = _cachedViaje!;
-                    final fecha = formato.format(v.fechaHora);
-                    final total = FormatosMoneda.rd(v.precio);
+                    final fecha = _safeFechaViaje(v.fechaHora);
+                    final total = _safeMoneyViaje(v.precio);
                     final estadoBase = EstadosViaje.normalizar(
                       v.estado.isNotEmpty
                           ? v.estado
@@ -3714,6 +3958,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       _viajesCercanosCtl.resetListeningUi();
                     }
                   }
+                  _sincronizarReferenciaOrdenCola(v);
                 });
 
                 if (v == null) {
@@ -3830,10 +4075,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                     unawaited(_loadNavDestinoPrefs(v));
                   }
                   _recalcDistanciaDestino();
+                  _sincronizarReferenciaOrdenCola(v);
                 });
-
-                final fecha = formato.format(v.fechaHora);
-                final total = FormatosMoneda.rd(v.precio);
 
                 final estadoBase = EstadosViaje.normalizar(
                   v.estado.isNotEmpty
@@ -4022,72 +4265,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                                 ),
                               ],
                               _viajeSheetDivider(),
-                                    if (uid != null)
-                                      ColaSiguienteViajeBannerTaxista(
-                                        uidTaxista: uid,
-                                      ),
-                                    if (uid != null) const SizedBox(height: 12),
-                                    Container(
-                                      padding: const EdgeInsets.all(14),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey[900],
-                                        borderRadius:
-                                            BorderRadius.circular(14),
-                                        border:
-                                            Border.all(color: Colors.white12),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Expanded(
-                                                child: Text(
-                                                  '🧭 ${v.origen} → ${v.destino}',
-                                                  style: const TextStyle(
-                                                    fontSize: 18,
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                ),
-                                              ),
-                                              _servicioBadge(v),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            '🕓 Fecha: $fecha',
-                                            style: const TextStyle(
-                                                fontSize: 16,
-                                                color: Colors.white70),
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            '💰 Total: $total',
-                                            style: const TextStyle(
-                                                fontSize: 18,
-                                                color: Colors.greenAccent),
-                                          ),
-                                          _DesgloseComisionNeto(
-                                              precio: v.precio),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            '📍 Estado: ${_labelEstado(estadoBase)}',
-                                            style: const TextStyle(
-                                                fontSize: 16,
-                                                color: Colors.white70),
-                                          ),
-                                          const SizedBox(height: 10),
-                                          _progresoOperativoViaje(estadoBase),
-                                          _buildDuracionEnRuta(v, estadoBase),
-                                          _buildWaypoints(v,
-                                              enRuta: EstadosViaje.esEnCurso(
-                                                  estadoBase)),
-                                          _buildExtras(v),
-                                        ],
-                                      ),
-                                    ),
+                              if (uid != null)
+                                const _ColaSiguienteViajeBannerSeguro(),
+                              if (uid != null) const SizedBox(height: 12),
+                              _buildDetallesViajePanel(v, estadoBase),
                               const SizedBox(height: 12),
                               _tarjetaVehiculoVisibleAlCliente(v),
                             ],
@@ -4103,7 +4284,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ViajesCercanosTaxistaLayer(
             controller: _viajesCercanosCtl,
             escuchaActiva: _viajesCercanosEscucha,
-            taxistaUbicacion: _taxistaPosCola,
+            referenciaOrdenCola: _colaReferenciaOrden,
           ),
         ],
       ),
@@ -4540,8 +4721,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  'Prueba / Bola Ahorro: no hace falta recorrer km. '
-                  'Tras iniciar ruta podés finalizar directo.',
+                  _hintPruebaSinRecorrido(v, trasIniciarRuta: true),
                   style: TextStyle(
                     color: Colors.deepOrangeAccent.withValues(alpha: 0.95),
                     fontSize: 11.5,
@@ -4806,8 +4986,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              'Prueba / Bola Ahorro: abrí mapa o continuá sin mapa; '
-              'luego aparece «Finalizar viaje».',
+              _hintPruebaSinRecorrido(v, trasIniciarRuta: false),
               style: TextStyle(
                 color: Colors.deepOrangeAccent.withValues(alpha: 0.95),
                 fontSize: 11.5,
@@ -5103,6 +5282,22 @@ class _ConfirmarTransferenciaTaxistaButtonState
   }
 }
 
+/// Evita que un fallo del banner de cola dispare el ErrorWidget global.
+class _ColaSiguienteViajeBannerSeguro extends StatelessWidget {
+  const _ColaSiguienteViajeBannerSeguro();
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      final String? uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null || uid.isEmpty) return const SizedBox.shrink();
+      return ColaSiguienteViajeBannerTaxista(uidTaxista: uid);
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+  }
+}
+
 /// Línea informativa que muestra al taxista la comisión RAI y el neto a
 /// recibir sobre el total del viaje.
 ///
@@ -5118,41 +5313,46 @@ class _DesgloseComisionNeto extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (precio <= 0) return const SizedBox.shrink();
+    if (!precio.isFinite || precio <= 0) return const SizedBox.shrink();
 
-    final double pct = PlataformaEconomia.comisionViajePorcentaje;
-    final String pctLabel =
-        (pct - pct.round()).abs() < 1e-9 ? pct.round().toString() : pct.toStringAsFixed(1);
-    final double comision = PlataformaEconomia.comisionRdDesdeTotal(precio);
-    final double neto = PlataformaEconomia.gananciaTaxistaRdDesdeTotal(precio);
+    try {
+      final double pct = PlataformaEconomia.comisionViajePorcentaje;
+      final String pctLabel = (pct - pct.round()).abs() < 1e-9
+          ? pct.round().toString()
+          : pct.toStringAsFixed(1);
+      final double comision = PlataformaEconomia.comisionRdDesdeTotal(precio);
+      final double neto = PlataformaEconomia.gananciaTaxistaRdDesdeTotal(precio);
 
-    final String comisionTxt = FormatosMoneda.rd(comision);
-    final String netoTxt = FormatosMoneda.rd(neto);
+      final String comisionTxt = FormatosMoneda.rd(comision);
+      final String netoTxt = FormatosMoneda.rd(neto);
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '📊 Comisión RAI ($pctLabel%): $comisionTxt',
-            style: const TextStyle(
-              fontSize: 13.5,
-              color: Colors.white60,
-              fontWeight: FontWeight.w500,
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '📊 Comisión RAI ($pctLabel%): $comisionTxt',
+              style: const TextStyle(
+                fontSize: 13.5,
+                color: Colors.white60,
+                fontWeight: FontWeight.w500,
+              ),
             ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            '💵 Neto a recibir: $netoTxt',
-            style: const TextStyle(
-              fontSize: 14,
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
+            const SizedBox(height: 2),
+            Text(
+              '💵 Neto a recibir: $netoTxt',
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
   }
 }

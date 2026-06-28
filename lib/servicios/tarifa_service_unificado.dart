@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 // ✅ Eliminado import no utilizado de turismo_catalogo_rd.dart
 
@@ -17,13 +19,49 @@ class TarifaServiceUnificado {
   TarifasTramosConfig? _cacheTramos;
   DateTime? _lastFetchGeneral;
   DateTime? _lastFetchTurismo;
-  DateTime? _lastFetchPromo;
   DateTime? _lastFetchTramos;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _promoConfigSub;
 
   /// Último desglose de cotización (solo lectura; se resetea en cada cálculo).
   Map<String, dynamic>? ultimoDesgloseCotizacion;
 
   static const Duration _cacheDuration = Duration(minutes: 5);
+
+  /// Interpreta `activa` del doc `config/promociones` (bool, string o num).
+  static bool promoActivaDesdeConfig(Map<String, dynamic> cfg) {
+    final v = cfg['activa'];
+    if (v is bool) return v;
+    if (v is String) return v.trim().toLowerCase() == 'true';
+    if (v is num) return v != 0;
+    return false;
+  }
+
+  static Map<String, dynamic> _promoInactivaDefault() => <String, dynamic>{
+        'activa': false,
+        'm': 3,
+        'k': 1,
+        'porcentaje': 15,
+        'modo': '3x1',
+        'tipo': 'mxk',
+      };
+
+  void _ensurePromoConfigListener() {
+    if (_promoConfigSub != null) return;
+    _promoConfigSub = FirebaseFirestore.instance
+        .collection('config')
+        .doc('promociones')
+        .snapshots()
+        .listen(
+      (doc) {
+        if (doc.exists && doc.data() != null) {
+          _cachePromo = Map<String, dynamic>.from(doc.data()!);
+        } else {
+          _cachePromo = Map<String, dynamic>.from(_promoInactivaDefault());
+        }
+      },
+      onError: (_) {},
+    );
+  }
 
   // ==============================================================
   // TARIFAS POR TIPO DE VEHÍCULO PARA SERVICIOS NORMALES
@@ -130,11 +168,8 @@ class TarifaServiceUnificado {
   }
 
   Future<Map<String, dynamic>> _getConfigPromo() async {
-    if (_cachePromo != null &&
-        _lastFetchPromo != null &&
-        DateTime.now().difference(_lastFetchPromo!) < _cacheDuration) {
-      return _cachePromo!;
-    }
+    _ensurePromoConfigListener();
+    if (_cachePromo != null) return _cachePromo!;
     return _recargarPromo();
   }
 
@@ -152,7 +187,7 @@ class TarifaServiceUnificado {
       final doc = await FirebaseFirestore.instance
           .collection('tarifas')
           .doc('general')
-          .get();
+          .get(const GetOptions(source: Source.server));
 
       if (doc.exists) {
         _cacheGeneral = Map<String, dynamic>.from(doc.data()!);
@@ -172,8 +207,9 @@ class TarifaServiceUnificado {
 
   Future<Map<String, dynamic>> _recargarTurismo() async {
     try {
-      final snapshot =
-          await FirebaseFirestore.instance.collection('tarifa_turismo').get();
+      final snapshot = await FirebaseFirestore.instance
+          .collection('tarifa_turismo')
+          .get(const GetOptions(source: Source.server));
 
       if (snapshot.docs.isNotEmpty) {
         final Map<String, dynamic> mapa = {};
@@ -200,35 +236,21 @@ class TarifaServiceUnificado {
   }
 
   Future<Map<String, dynamic>> _recargarPromo() async {
+    _ensurePromoConfigListener();
     try {
       final doc = await FirebaseFirestore.instance
           .collection('config')
           .doc('promociones')
-          .get();
+          .get(const GetOptions(source: Source.server));
 
       if (doc.exists) {
         _cachePromo = Map<String, dynamic>.from(doc.data()!);
       } else {
-        _cachePromo = {
-          'activa': false,
-          'm': 3,
-          'k': 1,
-          'porcentaje': 15,
-          'modo': '3x1',
-          'tipo': 'mxk',
-        };
+        _cachePromo = Map<String, dynamic>.from(_promoInactivaDefault());
       }
     } catch (e) {
-      _cachePromo = {
-        'activa': false,
-        'm': 3,
-        'k': 1,
-        'porcentaje': 15,
-        'modo': '3x1',
-        'tipo': 'mxk',
-      };
+      _cachePromo = Map<String, dynamic>.from(_promoInactivaDefault());
     }
-    _lastFetchPromo = DateTime.now();
     return _cachePromo!;
   }
 
@@ -246,7 +268,7 @@ class TarifaServiceUnificado {
       final doc = await FirebaseFirestore.instance
           .collection('config')
           .doc('tarifas_tramos')
-          .get();
+          .get(const GetOptions(source: Source.server));
       final data = doc.data();
       if (!doc.exists || data == null || data.isEmpty) {
         _cacheTramos = TarifasTramosConfig.defaultsPrueba();
@@ -276,10 +298,104 @@ class TarifaServiceUnificado {
       _cacheTramos?.distanciaMaximaCotizableKm ??
       TarifasTramosConfig.distanciaMaximaDefaultKm;
 
+  /// Resuelve base/porKm/mínimo para taxi normal con aliases Firestore + fallback local.
+  static Map<String, double> tarifaNormalVehiculo(
+    String tipoVehiculo,
+    Map<String, dynamic> tarifasFirestore,
+  ) {
+    const Map<String, double> fallbackCarro = <String, double>{
+      'base': 50.0,
+      'porKm': 25.0,
+      'minimo': 150.0,
+    };
+
+    Map<String, double> fromRaw(Map raw) {
+      double rd(String k, double fb) {
+        final v = raw[k];
+        if (v is num && v.isFinite) return v.toDouble();
+        return fb;
+      }
+
+      return <String, double>{
+        'base': rd('base', fallbackCarro['base']!),
+        'porKm': rd('porKm', fallbackCarro['porKm']!),
+        'minimo': rd('minimo', fallbackCarro['minimo']!),
+      };
+    }
+
+    final String clave =
+        TarifasTramosConfig.normalizarClaveVehiculo(tipoVehiculo);
+    final Set<String> candidates = <String>{
+      if (clave.isNotEmpty) clave,
+      tipoVehiculo.trim(),
+      if (clave == 'AutobusGuagua') ...<String>[
+        'AutobusGuagua',
+        'Autobús/Guagua',
+        'Autobús',
+        'Guagua',
+      ],
+    };
+
+    for (final String k in candidates) {
+      if (k.isEmpty) continue;
+      final dynamic raw = tarifasFirestore[k];
+      if (raw is Map) return fromRaw(Map<String, dynamic>.from(raw));
+    }
+
+    for (final MapEntry<String, Map<String, double>> e
+        in _tarifasVehiculos.entries) {
+      if (e.key.toLowerCase() == clave.toLowerCase()) {
+        return Map<String, double>.from(e.value);
+      }
+    }
+
+    return Map<String, double>.from(
+      _tarifasVehiculos[clave] ??
+          _tarifasVehiculos['Carro'] ??
+          fallbackCarro,
+    );
+  }
+
+  /// Taxi normal Carro sin promo (referencia Bola / legacy sync). Usa caché en memoria.
+  static double precioNormalCarroReferenciaSync(double distanciaKm) {
+    final double km =
+        distanciaKm.isFinite && distanciaKm > 0 ? distanciaKm : 0.0;
+    if (km <= 0) return 0.0;
+    final Map<String, dynamic> tarifas =
+        _instance._cacheGeneral ?? Map<String, dynamic>.from(_fallbackGeneral);
+    final TarifasTramosConfig tramos =
+        _instance._cacheTramos ?? TarifasTramosConfig.defaultsPrueba();
+    final Map<String, double> t = tarifaNormalVehiculo('Carro', tarifas);
+    final TarifaNucleoResult r = TarifasTramosCalculo.calcular(
+      distanciaKm: km,
+      baseRd: t['base']!,
+      porKmLocal: t['porKm']!,
+      minimoLocalRd: t['minimo']!,
+      tramos: tramos,
+      claveVehiculo: 'Carro',
+    );
+    return r.nucleoRd;
+  }
+
+  /// Taxi normal Carro sin promo, con tarifas frescas desde Firestore.
+  static Future<double> precioNormalCarroReferencia(double distanciaKm) async {
+    if (distanciaKm <= 0 || !distanciaKm.isFinite) return 0.0;
+    final TarifaServiceUnificado s = TarifaServiceUnificado();
+    await s.recargar();
+    final ({double precio, Map<String, dynamic>? desglose}) r =
+        await s.calcularPrecioConDesglose(
+      tipoServicio: 'normal',
+      tipoVehiculo: 'Carro',
+      distanciaKm: distanciaKm,
+      aplicarPromo: false,
+    );
+    return r.precio;
+  }
+
   double _aplicarDescuento(double precio, int contadorViajes) {
     if (_cachePromo == null) return precio;
 
-    final bool activa = _cachePromo!['activa'] == true;
+    final bool activa = promoActivaDesdeConfig(_cachePromo!);
     if (!activa) return precio;
 
     final int m = _cachePromo!['m'] ?? 3;
@@ -326,6 +442,7 @@ class TarifaServiceUnificado {
     bool idaVuelta = false,
     double peaje = 0.0,
     int contadorViajes = 1,
+    bool aplicarPromo = true,
   }) async {
     ultimoDesgloseCotizacion = null;
     final tramos = await _getTarifasTramos();
@@ -423,25 +540,19 @@ class TarifaServiceUnificado {
 
     // ===== NORMAL =====
     else if (tipoServicio == 'normal') {
-      if (tipoVehiculo == null) {
+      if (tipoVehiculo == null || tipoVehiculo.trim().isEmpty) {
         throw ArgumentError(
             'tipoVehiculo es requerido para servicios normales');
       }
 
       final tarifas = await _getTarifasGenerales();
-
-      double base = 50.0;
-      double porKm = 25.0;
-      double minimo = 150.0;
-
-      if (tarifas.containsKey(tipoVehiculo)) {
-        final rawConfig = tarifas[tipoVehiculo];
-        if (rawConfig is Map) {
-          base = (rawConfig['base'] as num?)?.toDouble() ?? base;
-          porKm = (rawConfig['porKm'] as num?)?.toDouble() ?? porKm;
-          minimo = (rawConfig['minimo'] as num?)?.toDouble() ?? minimo;
-        }
-      }
+      final String claveNorm =
+          TarifasTramosConfig.normalizarClaveVehiculo(tipoVehiculo);
+      final Map<String, double> t =
+          tarifaNormalVehiculo(tipoVehiculo, tarifas);
+      final double base = t['base']!;
+      final double porKm = t['porKm']!;
+      final double minimo = t['minimo']!;
 
       final nucleoRes = TarifasTramosCalculo.calcular(
         distanciaKm: distanciaKm,
@@ -449,7 +560,7 @@ class TarifaServiceUnificado {
         porKmLocal: porKm,
         minimoLocalRd: minimo,
         tramos: tramos,
-        claveVehiculo: tipoVehiculo,
+        claveVehiculo: claveNorm.isNotEmpty ? claveNorm : tipoVehiculo,
       );
       desgloseNucleo = nucleoRes.desglose;
       esLargaDistancia = desgloseNucleo['esLargaDistancia'] == true;
@@ -467,7 +578,8 @@ class TarifaServiceUnificado {
 
     await _getConfigPromo();
     final bool omitirPromo =
-        promoSoloLocal && esLargaDistancia && tramos.activo;
+        !aplicarPromo ||
+        (promoSoloLocal && esLargaDistancia && tramos.activo);
     final precioFinal = omitirPromo
         ? precioBase
         : _aplicarDescuento(precioBase, contadorViajes);
@@ -493,6 +605,7 @@ class TarifaServiceUnificado {
     bool idaVuelta = false,
     double peaje = 0.0,
     int contadorViajes = 1,
+    bool aplicarPromo = true,
   }) async {
     final r = await calcularPrecioConDesglose(
       tipoServicio: tipoServicio,
@@ -502,6 +615,7 @@ class TarifaServiceUnificado {
       idaVuelta: idaVuelta,
       peaje: peaje,
       contadorViajes: contadorViajes,
+      aplicarPromo: aplicarPromo,
     );
     return r.precio;
   }
@@ -645,7 +759,7 @@ class TarifaServiceUnificado {
     await _getConfigPromo();
     if (_cachePromo == null) return 'Sin promoción';
 
-    final bool activa = _cachePromo!['activa'] == true;
+    final bool activa = promoActivaDesdeConfig(_cachePromo!);
     if (!activa) return 'Promoción inactiva';
 
     final int m = _cachePromo!['m'] ?? 3;
@@ -660,7 +774,7 @@ class TarifaServiceUnificado {
     await _getConfigPromo();
     if (_cachePromo == null) return false;
 
-    final bool activa = _cachePromo!['activa'] == true;
+    final bool activa = promoActivaDesdeConfig(_cachePromo!);
     if (!activa) return false;
 
     final int m = _cachePromo!['m'] ?? 3;
@@ -678,7 +792,7 @@ class TarifaServiceUnificado {
     await _getConfigPromo();
     final cfg = _cachePromo ?? <String, dynamic>{};
 
-    final bool activa = cfg['activa'] == true;
+    final bool activa = promoActivaDesdeConfig(cfg);
     final int m = ((cfg['m'] as num?)?.toInt() ?? 3).clamp(1, 999);
     final int k = ((cfg['k'] as num?)?.toInt() ?? 1).clamp(1, 999);
     final int porcentaje =

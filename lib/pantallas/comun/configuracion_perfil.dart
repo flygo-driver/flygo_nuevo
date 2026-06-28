@@ -5,8 +5,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_config_panel.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 
 class ConfiguracionPerfil extends StatefulWidget {
   const ConfiguracionPerfil({super.key});
@@ -131,10 +134,11 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
       }
 
       // Guarda en Firestore
-      await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+      await FirebaseFirestore.instance.collection('usuarios').doc(uid).update({
         'fotoUrl': url,
         'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -159,10 +163,11 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
   Future<void> _eliminarFoto(String uid) async {
     setState(() => _subiendo = true);
     try {
-      await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+      await FirebaseFirestore.instance.collection('usuarios').doc(uid).update({
         'fotoUrl': '',
         'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -202,13 +207,24 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
 
     setState(() => _guardando = true);
     try {
-      await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+      final snap =
+          await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
+      final rol =
+          (snap.data()?['rol'] ?? '').toString().trim().toLowerCase();
+      final patch = <String, dynamic>{
         'nombre': nombre,
         'telefono': telefono,
-        'registroClienteCompleto': true,
         'actualizadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+      // Solo clientes marcan registro completo aquí; taxista usa su flujo de onboarding.
+      if (rol != 'taxista') {
+        patch['registroClienteCompleto'] = true;
+      }
+      await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .update(patch);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -300,8 +316,12 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
 
           final data = snap.data?.data() ?? {};
           final fotoUrl = (data['fotoUrl'] ?? '').toString();
-          final nombre = (data['nombre'] ?? '').toString();
-          final telefono = (data['telefono'] ?? '').toString();
+          final nombreFs = (data['nombre'] ?? '').toString().trim();
+          final telefonoFs = (data['telefono'] ?? '').toString().trim();
+          final nombreAuth = (user.displayName ?? '').toString().trim();
+          final telefonoAuth = (user.phoneNumber ?? '').toString().trim();
+          final nombre = nombreFs.isNotEmpty ? nombreFs : nombreAuth;
+          final telefono = telefonoFs.isNotEmpty ? telefonoFs : telefonoAuth;
 
           if (_nombreCtrl.text.isEmpty && nombre.isNotEmpty) {
             _nombreCtrl.text = nombre;
@@ -363,6 +383,12 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
                   label:
                       Text('Eliminar foto', style: TextStyle(color: cs.error)),
                 ),
+              const SizedBox(height: 24),
+              RaiUbicacionConfigPanel(
+                rol: isConductorFlavor
+                    ? RaiUbicacionRol.taxista
+                    : RaiUbicacionRol.cliente,
+              ),
               const SizedBox(height: 24),
               Text(
                 'Datos de registro',

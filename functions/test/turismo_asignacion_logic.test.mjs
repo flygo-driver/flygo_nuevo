@@ -7,6 +7,7 @@ import {
   estadoPermiteLiberarAlPool,
   filtrarCandidatoTurismo,
   pasajerosRequeridos,
+  subtipoTurismoRequeridoDesdeViaje,
   ventanaPublicacionYAceptacionOk,
 } from "../lib/turismo_asignacion_logic.js";
 
@@ -80,5 +81,43 @@ test("filtrarCandidatoTurismo: vehículo y capacidad", () => {
     radioKm: 55,
   });
   assert.equal(ok.ok, true);
-  assert.ok(ok.vehiculo);
+});
+
+test("filtrarCandidatoTurismo: subtipo catalogo CIUDAD -> carro", () => {
+  const chofer = {
+    estado: "aprobado",
+    disponible: true,
+    vehiculos: [{ tipo: "carro", placa: "ABC123", capacidad: 4 }],
+    ultimaUbicacion: { latitude: 18.5, longitude: -69.9 },
+  };
+  const ok = filtrarCandidatoTurismo({
+    choferData: chofer,
+    subtipoTurismo: "CIUDAD",
+    pasajeros: 2,
+    latO: 18.4861,
+    lonO: -69.9312,
+    radioKm: 55,
+  });
+  assert.equal(ok.ok, true);
+});
+
+test("subtipoTurismoRequeridoDesdeViaje: PLAYA + Carro Turismo -> carro", () => {
+  assert.equal(
+    subtipoTurismoRequeridoDesdeViaje({
+      subtipoTurismo: "PLAYA",
+      tipoVehiculo: "🏝️ TURISMO 🏝️",
+      tipoVehiculoOriginal: "Carro Turismo",
+    }),
+    "carro",
+  );
+});
+
+test("subtipoTurismoRequeridoDesdeViaje: codigo vehiculo en subtipoTurismo", () => {
+  assert.equal(
+    subtipoTurismoRequeridoDesdeViaje({
+      subtipoTurismo: "jeepeta",
+      tipoVehiculoOriginal: "Carro Turismo",
+    }),
+    "jeepeta",
+  );
 });

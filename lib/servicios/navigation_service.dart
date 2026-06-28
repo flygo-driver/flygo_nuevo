@@ -25,6 +25,20 @@ class NavigationService {
     return nav.push(MaterialPageRoute(builder: (_) => page));
   }
 
+  /// Pantallas de flujo dentro del shell (programar, motor, etc.): usa el
+  /// navigator del tab activo para mantener **una** barra inferior.
+  /// [push] en el raíz tapa el shell; apilar otro shell en un tab duplica la barra.
+  static Future<T?> pushEnTabShell<T>(BuildContext context, Widget page) {
+    if (!context.mounted) return Future.value(null);
+    final NavigatorState tabNav = Navigator.of(context);
+    final NavigatorState rootNav =
+        Navigator.of(context, rootNavigator: true);
+    if (!identical(tabNav, rootNav) && tabNav.mounted) {
+      return tabNav.push<T>(MaterialPageRoute<T>(builder: (_) => page));
+    }
+    return push<T>(page);
+  }
+
   static Future<T?> replaceWith<T>(Widget page) {
     final nav = navigatorKey.currentState;
     if (nav == null) return Future.value(null);
@@ -40,6 +54,29 @@ class NavigationService {
   static void pop<T extends Object?>([T? result]) {
     final nav = navigatorKey.currentState;
     if (nav?.canPop() ?? false) nav!.pop(result);
+  }
+
+  /// Navigator del tab del shell (o raíz si no hay anidado).
+  static ({NavigatorState? tab, NavigatorState? raiz})
+      capturarNavigadoresFormulario(BuildContext context) {
+    if (!context.mounted) {
+      final NavigatorState? r = navigatorKey.currentState;
+      return (tab: r, raiz: r);
+    }
+    final NavigatorState tab = Navigator.of(context);
+    final NavigatorState root =
+        Navigator.of(context, rootNavigator: true);
+    if (identical(tab, root)) {
+      return (tab: root, raiz: root);
+    }
+    return (tab: tab, raiz: root);
+  }
+
+  static NavigatorState? navigatorRaiz({BuildContext? context}) {
+    if (context != null && context.mounted) {
+      return Navigator.of(context, rootNavigator: true);
+    }
+    return navigatorKey.currentState;
   }
 
   /// Tablero Bola Ahorro a pantalla completa (stack limpio).
@@ -82,7 +119,7 @@ class NavigationService {
         return;
       }
       await rootNav.pushAndRemoveUntil<void>(
-        MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
+        MaterialPageRoute<void>(builder: (_) => const ClienteShellWithDeepLink()),
         (Route<dynamic> r) => false,
       );
       return;
@@ -157,6 +194,7 @@ class NavigationService {
     required DateTime fechaHoraPickup,
     String tipoServicio = 'normal',
     NavigatorState? preNav,
+    NavigatorState? preNavRaiz,
     bool forzarViajeInmediato = false,
   }) async {
     final DateTime nowUtc = DateTime.now().toUtc();
@@ -169,10 +207,13 @@ class NavigationService {
         );
 
     final String tipo = tipoServicio.trim().toLowerCase();
+    final NavigatorState? raiz =
+        preNavRaiz ?? navigatorKey.currentState ?? preNav;
 
     if (!viajeInmediato) {
+      // Reserva futura (espera publishAt): dentro del tab → una sola barra inferior.
       await clearAndGoPage(
-        preNav: preNav,
+        preNav: preNav ?? raiz,
         page: ViajeProgramadoConfirmacion(
           viajeId: viajeId,
           fechaHoraPickup: fechaHoraPickup,
@@ -188,21 +229,21 @@ class NavigationService {
       final bool choferAsignado =
           (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim().isNotEmpty;
       if (choferAsignado) {
-        await clearAndGoViajeEnCursoCliente(preNav: preNav);
+        await clearAndGoViajeEnCursoCliente(preNav: raiz);
       } else {
         await clearAndGoPage(
-          preNav: preNav,
+          preNav: preNav ?? raiz,
           page: EsperaAsignacionTurismo(viajeId: viajeId),
         );
       }
       return;
     }
 
-    await clearAndGoViajeEnCursoCliente(preNav: preNav);
+    await clearAndGoViajeEnCursoCliente(preNav: raiz);
   }
 
   /// Tras aceptar viaje en pool: pantalla completa [ViajeEnCursoTaxista].
-  static Future<void> clearAndGoViajeEnCursoTaxista({NavigatorState? preNav}) async {
+  static Future<bool> clearAndGoViajeEnCursoTaxista({NavigatorState? preNav}) async {
     // Siempre el navigator raíz del [MaterialApp]: el de la pestaña Recibir es anidado
     // y un pushAndRemoveUntil ahí no abre viaje en curso a pantalla completa.
     for (int intento = 0; intento < 6; intento++) {
@@ -218,11 +259,13 @@ class NavigationService {
         print(
           '[VIAJE_ACTIVO] clearAndGoViajeEnCursoTaxista ok intento=$intento',
         );
-        return;
+        return true;
       }
       await Future<void>.delayed(Duration(milliseconds: 40 * (intento + 1)));
     }
     print('[VIAJE_ACTIVO] clearAndGoViajeEnCursoTaxista sin navigator montado');
+    ActiveTripService.notificarRebuildShell();
+    return false;
   }
 
   /// Espera a que el viaje quede asignado al taxista en servidor (evita flicker del shell).
@@ -308,8 +351,8 @@ class NavigationService {
     return false;
   }
 
-  /// Tras «Aceptar viaje»: abre viaje en curso al instante (navigator raíz); la espera
-  /// de Firestore corre en paralelo para que [ViajeEnCursoTaxista] tenga el doc listo.
+  /// Tras «Aceptar viaje»: overlay del shell al instante + ruta raíz; espera Firestore
+  /// para que [ViajeEnCursoTaxista] tenga el doc listo.
   static Future<void> irAViajeEnCursoTaxistaTrasAceptar({
     required String viajeId,
     required String uidTaxista,
@@ -318,13 +361,29 @@ class NavigationService {
     ActiveTripService.bloquearShellTaxistaTrasAceptar(
       const Duration(minutes: 3),
     );
-    await clearAndGoViajeEnCursoTaxista(preNav: preNav);
-    unawaited(
-      esperarViajeAsignadoAlTaxista(
-        viajeId: viajeId,
-        uidTaxista: uidTaxista,
-      ),
+    final bool navego = await clearAndGoViajeEnCursoTaxista(preNav: preNav);
+    if (!navego) {
+      ActiveTripService.notificarRebuildShell();
+    }
+    await esperarViajeAsignadoAlTaxista(
+      viajeId: viajeId,
+      uidTaxista: uidTaxista,
     );
+    ActiveTripService.notificarRebuildShell();
+  }
+
+  /// Cliente: al asignarse conductor, abre viaje en curso si aún no está ahí.
+  static Future<void> irAViajeEnCursoClienteTrasAsignacionTaxista({
+    NavigatorState? preNav,
+  }) async {
+    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
+    final NavigatorState? nav = preNav ?? navigatorKey.currentState;
+    if (nav == null || !nav.mounted) {
+      ActiveTripService.notificarRebuildShell();
+      return;
+    }
+    await clearAndGoViajeEnCursoCliente(preNav: nav);
+    ActiveTripService.notificarRebuildShell();
   }
 
   /// Home del cliente tras cancelar / sin viaje activo (multiparadas, en curso, etc.).
@@ -340,7 +399,7 @@ class NavigationService {
     }
     if (nav == null || !nav.mounted) return;
     await nav.pushAndRemoveUntil<void>(
-      MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
+      MaterialPageRoute<void>(builder: (_) => const ClienteShellWithDeepLink()),
       (Route<dynamic> r) => false,
     );
   }

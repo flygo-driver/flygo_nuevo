@@ -12,6 +12,7 @@ import '../../utils/pools_producto_copy.dart';
 import '../../widgets/admin_app_bar.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
+import 'package:flygo_nuevo/pantallas/comun/pool_gira_validar_entrada_page.dart';
 import 'verificar_pagos.dart';
 
 /// Listado y control admin de giras / tours por cupos (`viajes_pool`).
@@ -660,8 +661,21 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
-      appBar: const AdminAppBar(
+      appBar: AdminAppBar(
         title: 'Salidas por cupos (admin)',
+        actions: [
+          IconButton(
+            tooltip: 'Validar ticket de entrada',
+            icon: const Icon(Icons.qr_code_scanner_outlined),
+            onPressed: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => const PoolGiraValidarEntradaPage(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

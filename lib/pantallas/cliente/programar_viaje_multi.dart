@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
+import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
@@ -25,11 +26,13 @@ import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/promo_mxk_cliente_panel.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
+import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 
 class _LugarSel {
   final String label;
@@ -88,6 +91,8 @@ class ProgramarViajeMulti extends StatefulWidget {
 }
 
 class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
+  static const int _kMaxParadasIntermedias = 5;
+
   _LugarSel? _origen;
   _LugarSel? _destino;
   final List<_LugarSel?> _paradas = <_LugarSel?>[null];
@@ -260,10 +265,13 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
             Navigator.pop(
                 bc,
-                _LugarSel(
-                  label: seleccion.lugar.nombre,
-                  lat: seleccion.lugar.lat,
-                  lon: seleccion.lugar.lon,
+                _lugarNormalizado(
+                  _LugarSel(
+                    label: seleccion.lugar.nombre,
+                    lat: seleccion.lugar.lat,
+                    lon: seleccion.lugar.lon,
+                  ),
+                  fallbackLabel: 'Destino turístico',
                 ));
             if (mounted) {
               setState(() {
@@ -388,6 +396,109 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     return totalPeaje;
   }
 
+  /// Sin huecos: no puede haber parada vacía entre dos paradas llenas.
+  bool _paradasIntermediasCoherentes() {
+    bool vistoVacio = false;
+    for (final _LugarSel? p in _paradas) {
+      if (p == null) {
+        vistoVacio = true;
+      } else if (vistoVacio) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  _LugarSel _lugarNormalizado(_LugarSel raw, {required String fallbackLabel}) {
+    return _LugarSel(
+      label: MultiparadaRutaHelper.normalizarLabel(raw.label, fallbackLabel),
+      lat: MultiparadaRutaHelper.round6(raw.lat),
+      lon: MultiparadaRutaHelper.round6(raw.lon),
+    );
+  }
+
+  List<_LugarSel> _paradasIntermediasOrdenadas() =>
+      _paradas.whereType<_LugarSel>().toList();
+
+  void _compactarParadasVaciasAlFinal() {
+    while (_paradas.length > 1 && _paradas.last == null) {
+      _paradas.removeLast();
+    }
+    if (_paradas.isEmpty) {
+      _paradas.add(null);
+    }
+  }
+
+  String? _validarRutaMultiParaGuardar() {
+    if (_origen == null || _destino == null) {
+      return 'Completá origen y destino.';
+    }
+    if (!_paradasIntermediasCoherentes()) {
+      return 'Completa las paradas en orden o quita las filas vacías.';
+    }
+    final List<({double lat, double lon, String label})> paradas =
+        _paradasIntermediasOrdenadas()
+            .map(
+              (_LugarSel p) => (
+                lat: p.lat,
+                lon: p.lon,
+                label: p.label,
+              ),
+            )
+            .toList();
+    return MultiparadaRutaHelper.validarSecuenciaRuta(
+      latOrigen: _origen!.lat,
+      lonOrigen: _origen!.lon,
+      labelOrigen: _origen!.label,
+      latDestino: _destino!.lat,
+      lonDestino: _destino!.lon,
+      labelDestino: _destino!.label,
+      paradas: paradas,
+    );
+  }
+
+  double _distanciaKmDesdeSegmentos(List<Map<String, dynamic>> segmentos) {
+    if (segmentos.isEmpty) return _distKm;
+    double sum = 0;
+    for (final Map<String, dynamic> s in segmentos) {
+      final dynamic km = s['km'];
+      if (km is num && km > 0) sum += km.toDouble();
+    }
+    if (sum <= 0) return _distKm;
+    return double.parse(sum.toStringAsFixed(2));
+  }
+
+  double _peajeDesdeSegmentos(List<Map<String, dynamic>> segmentos) {
+    if (segmentos.isEmpty) return _peaje;
+    double sum = 0;
+    for (final Map<String, dynamic> s in segmentos) {
+      final dynamic p = s['peaje'];
+      if (p is num && p > 0) sum += p.toDouble();
+    }
+    return sum > 0 ? sum : _peaje;
+  }
+
+  /// Peaje RD una sola vez por ruta (misma regla que viaje simple; evita duplicar por tramo).
+  void _normalizarPeajeMultiparada(
+    List<Map<String, dynamic>> segmentos,
+    double totalKm,
+  ) {
+    if (segmentos.isEmpty || _origen == null || _destino == null) return;
+    final double peajeUnico = _estimarPeaje(
+      totalKm,
+      _origen!.lat,
+      _origen!.lon,
+      _destino!.lat,
+      _destino!.lon,
+    );
+    for (int i = 0; i < segmentos.length; i++) {
+      segmentos[i] = <String, dynamic>{
+        ...segmentos[i],
+        'peaje': i == 0 ? peajeUnico : 0.0,
+      };
+    }
+  }
+
   // ✅ CÁLCULO AUTOMÁTICO - SE EJECUTA CUANDO HAY ORIGEN Y DESTINO
   void _programarCalculoAutomatico() {
     // Solo calcular si tenemos origen Y destino
@@ -411,6 +522,136 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       _cargando = false;
       _mensajeCarga = '';
     });
+  }
+
+  static const double _kMetrosRecotizarAlConfirmar = 120;
+
+  bool get _origenEsGpsActual =>
+      _origen?.label.trim() == 'Mi ubicación actual';
+
+  int _tramosEsperadosMulti() {
+    if (_origen == null || _destino == null) return 0;
+    return _paradas.whereType<_LugarSel>().length + 1;
+  }
+
+  /// Cotización desfasada respecto a origen / paradas / destino actuales.
+  bool _cotizacionDesfasadaDePuntos() {
+    if (_origen == null || _destino == null) return true;
+    final int tramos = _tramosEsperadosMulti();
+    if (_segmentos.length != tramos) return true;
+
+    bool coordsCerca(double a, double b) => (a - b).abs() < 0.00005;
+
+    final Map<String, dynamic> s0 = _segmentos.first;
+    final double? lat0 = (s0['latOrigen'] as num?)?.toDouble();
+    final double? lon0 = (s0['lonOrigen'] as num?)?.toDouble();
+    if (lat0 == null ||
+        lon0 == null ||
+        !coordsCerca(lat0, _origen!.lat) ||
+        !coordsCerca(lon0, _origen!.lon)) {
+      return true;
+    }
+
+    final List<_LugarSel> paradas = _paradas.whereType<_LugarSel>().toList();
+    for (int i = 0; i < paradas.length; i++) {
+      final Map<String, dynamic> seg = _segmentos[i];
+      final double? latD = (seg['latDestino'] as num?)?.toDouble();
+      final double? lonD = (seg['lonDestino'] as num?)?.toDouble();
+      if (latD == null ||
+          lonD == null ||
+          !coordsCerca(latD, paradas[i].lat) ||
+          !coordsCerca(lonD, paradas[i].lon)) {
+        return true;
+      }
+    }
+
+    final Map<String, dynamic> sLast = _segmentos.last;
+    final double? latF = (sLast['latDestino'] as num?)?.toDouble();
+    final double? lonF = (sLast['lonDestino'] as num?)?.toDouble();
+    if (latF == null ||
+        lonF == null ||
+        !coordsCerca(latF, _destino!.lat) ||
+        !coordsCerca(lonF, _destino!.lon)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Antes de guardar: precio/distancia/segmentos alineados con la ruta visible.
+  Future<bool> _asegurarCotizacionCoherenteAntesDeGuardar({
+    bool duranteConfirmacion = false,
+  }) async {
+    final int tramos = _tramosEsperadosMulti();
+    if (tramos <= 0) return false;
+
+    final bool cotizacionPendiente = _calculoDebounce?.isActive == true ||
+        (_cargando && !duranteConfirmacion);
+    if (!cotizacionPendiente &&
+        _segmentos.length == tramos &&
+        !_cotizacionDesfasadaDePuntos() &&
+        _precio > 0 &&
+        _distKm > 0) {
+      return true;
+    }
+
+    _calculoDebounce?.cancel();
+    _calculoSeq++;
+    final int runId = _calculoSeq;
+    await _calcularConRutasReales(automatico: false, runId: runId);
+    if (!mounted || runId != _calculoSeq) return false;
+    return _segmentos.length == tramos &&
+        !_cotizacionDesfasadaDePuntos() &&
+        _precio > 0 &&
+        _distKm > 0;
+  }
+
+  /// Uber-like: solo confirmar con cotización cerrada y ruta alineada.
+  bool get _puedeConfirmarViajeMulti {
+    if (_cargando || (_calculoDebounce?.isActive ?? false)) return false;
+    if (_origen == null || _destino == null) return false;
+    if (!_paradasIntermediasCoherentes()) return false;
+    if (_validarRutaMultiParaGuardar() != null) return false;
+    if (_precio <= 0 || _distKm <= 0 || _segmentos.isEmpty) return false;
+    final int tramos = _tramosEsperadosMulti();
+    if (tramos <= 0 || _segmentos.length != tramos) return false;
+    if (_cotizacionDesfasadaDePuntos()) return false;
+    return true;
+  }
+
+  VoidCallback? get _onConfirmarViajeMulti =>
+      _puedeConfirmarViajeMulti ? _confirmar : null;
+
+  /// Alinea pickup GPS al confirmar «Ahora»; recotiza ruta multiparada si se movió mucho.
+  Future<bool> _alinearPickupConfirmacionAhoraMulti({
+    required double origenCotizadoLat,
+    required double origenCotizadoLon,
+    required double nuevoOrigenLat,
+    required double nuevoOrigenLon,
+  }) async {
+    if (_origen == null || _destino == null) return false;
+
+    final double metros = Geolocator.distanceBetween(
+      origenCotizadoLat,
+      origenCotizadoLon,
+      nuevoOrigenLat,
+      nuevoOrigenLon,
+    );
+
+    _origen = _LugarSel(
+      label: _origen!.label,
+      lat: nuevoOrigenLat,
+      lon: nuevoOrigenLon,
+    );
+
+    if (metros <= _kMetrosRecotizarAlConfirmar) {
+      return _precio > 0 && _distKm > 0;
+    }
+
+    _calculoSeq++;
+    final int runId = _calculoSeq;
+    await _calcularConRutasReales(automatico: true, runId: runId);
+    if (!mounted || runId != _calculoSeq) return false;
+    return _precio > 0 && _distKm > 0;
   }
 
   Future<void> _calcularConRutasReales({
@@ -613,13 +854,25 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         totalPeaje += resultadoFinal['peaje']!;
       }
 
+      if (segmentos.isNotEmpty) {
+        totalKm = segmentos.fold<double>(
+          0,
+          (double acc, Map<String, dynamic> s) =>
+              acc + ((s['km'] as num?)?.toDouble() ?? 0),
+        );
+        _normalizarPeajeMultiparada(segmentos, totalKm);
+        totalPeaje = _peajeDesdeSegmentos(segmentos);
+      }
+
       final TarifaServiceUnificado servicio = TarifaServiceUnificado();
+      await servicio.recargar();
 
       final user = FirebaseAuth.instance.currentUser;
       int contadorViajes = 1;
       if (user != null) {
         contadorViajes = await _obtenerContadorViajes(user.uid);
       }
+      if (contadorViajes <= 0) contadorViajes = 1;
       if (!mounted || runId != _calculoSeq) return;
 
       final promoSnapshot =
@@ -690,8 +943,21 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }
 
   Future<void> _confirmar() async {
-    if (_precio <= 0 || _distKm <= 0) {
-      _snack('Primero calcula el precio.');
+    if (!_puedeConfirmarViajeMulti) {
+      if (_calculoDebounce?.isActive == true || _cargando) {
+        _snack('Espera a que termine el cálculo del precio.');
+      } else if (_precio <= 0 || _distKm <= 0) {
+        _snack('Primero calcula el precio.');
+      } else if (!_paradasIntermediasCoherentes()) {
+        _snack('Completa las paradas en orden o quita las filas vacías.');
+      } else {
+        _snack('Actualiza la ruta: revisa origen, paradas y destino.');
+      }
+      return;
+    }
+
+    if (_segmentos.isEmpty) {
+      _snack('Espera a que termine el cálculo de la ruta.');
       return;
     }
 
@@ -704,10 +970,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     if (_origen == null || _destino == null) {
       if (_origen == null &&
           RaiUbicacionClienteService.instance.bannerActivo) {
-        _snack(LocationReadiness.kMsgEsperandoUbicacion);
-      } else {
-        _snack('Selecciona origen y destino.');
+        return;
       }
+      _snack('Selecciona origen y destino.');
       return;
     }
 
@@ -727,48 +992,154 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     setState(() => _cargando = true);
 
     bool navegoFuera = false;
-    NavigatorState? navAntesDeCrear =
-        NavigationService.navigatorKey.currentState;
-    if (navAntesDeCrear == null && context.mounted) {
-      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
-    }
+    final ({NavigatorState? tab, NavigatorState? raiz}) nav =
+        NavigationService.capturarNavigadoresFormulario(context);
 
     try {
-      final List<Map<String, dynamic>> waypoints = <Map<String, dynamic>>[];
-      final List<Map<String, dynamic>> rutaPuntos = <Map<String, dynamic>>[
-        <String, dynamic>{
-          'lat': _origen!.lat,
-          'lon': _origen!.lon,
-          'label': _origen!.label,
-          'rol': 'origen',
-        },
-      ];
+      if (_esAhora && _origenEsGpsActual) {
+        final LocationReadiness ready =
+            await LocationPermissionService.ensureLocationReady(
+          context: context,
+          requestIfDenied: false,
+        );
+        if (!ready.isUsable || ready.position == null) {
+          if (!RaiUbicacionClienteService.instance.bannerActivo) {
+            _snack(LocationReadiness.kMsgEsperandoUbicacion);
+          }
+          if (mounted) setState(() => _cargando = false);
+          return;
+        }
+        final double cotLat = _origen!.lat;
+        final double cotLon = _origen!.lon;
+        final double freshLat = ready.position!.latitude;
+        final double freshLon = ready.position!.longitude;
+        final double metrosMovidos = Geolocator.distanceBetween(
+          cotLat,
+          cotLon,
+          freshLat,
+          freshLon,
+        );
+        final bool alineado = await _alinearPickupConfirmacionAhoraMulti(
+          origenCotizadoLat: cotLat,
+          origenCotizadoLon: cotLon,
+          nuevoOrigenLat: freshLat,
+          nuevoOrigenLon: freshLon,
+        );
+        if (!alineado) {
+          _snack(
+            'Tu ubicación cambió. Vuelve a calcular el precio antes de confirmar.',
+          );
+          if (mounted) setState(() => _cargando = false);
+          return;
+        }
+        if (metrosMovidos > _kMetrosRecotizarAlConfirmar && mounted) {
+          _snack(
+            'Precio actualizado según tu ubicación: '
+            '${FormatosMoneda.rd(_precio)}.',
+          );
+        }
+        if (mounted) setState(() => _cargando = true);
+      }
 
-      for (final _LugarSel? p in _paradas) {
-        if (p == null) continue;
-        waypoints.add({
+      final bool cotizacionOk =
+          await _asegurarCotizacionCoherenteAntesDeGuardar(
+        duranteConfirmacion: true,
+      );
+      if (!cotizacionOk) {
+        _snack(
+          'No se pudo alinear precio y ruta. Revisa origen, paradas y destino.',
+        );
+        if (mounted) setState(() => _cargando = false);
+        return;
+      }
+
+      final String? errorRuta = _validarRutaMultiParaGuardar();
+      if (errorRuta != null) {
+        _snack(errorRuta);
+        if (mounted) setState(() => _cargando = false);
+        return;
+      }
+
+      _compactarParadasVaciasAlFinal();
+      final _LugarSel origenGuardar = _lugarNormalizado(
+        _origen!,
+        fallbackLabel: 'Origen',
+      );
+      final _LugarSel destinoGuardar = _lugarNormalizado(
+        _destino!,
+        fallbackLabel: 'Destino final',
+      );
+      final List<_LugarSel> paradasOrdenadas = _paradasIntermediasOrdenadas();
+      final List<_LugarSel> paradasGuardar = <_LugarSel>[];
+      for (int i = 0; i < paradasOrdenadas.length; i++) {
+        paradasGuardar.add(
+          _lugarNormalizado(
+            paradasOrdenadas[i],
+            fallbackLabel: 'Parada ${i + 1}',
+          ),
+        );
+      }
+
+      final List<Map<String, dynamic>> waypointsRaw = <Map<String, dynamic>>[];
+      for (int i = 0; i < paradasGuardar.length; i++) {
+        final _LugarSel p = paradasGuardar[i];
+        waypointsRaw.add(<String, dynamic>{
           'lat': p.lat,
           'lon': p.lon,
           'label': p.label,
-        });
-        rutaPuntos.add({
-          'lat': p.lat,
-          'lon': p.lon,
-          'label': p.label,
-          'rol': 'parada',
+          'orden': i + 1,
         });
       }
-      rutaPuntos.add(<String, dynamic>{
-        'lat': _destino!.lat,
-        'lon': _destino!.lon,
-        'label': _destino!.label,
-        'rol': 'destino',
-      });
+      final List<Map<String, dynamic>> waypoints =
+          MultiparadaRutaHelper.sanitizarWaypoints(waypointsRaw);
+
+      final List<({String label, double lat, double lon})> puntosOrdenados =
+          <({String label, double lat, double lon})>[
+        (label: origenGuardar.label, lat: origenGuardar.lat, lon: origenGuardar.lon),
+        ...paradasGuardar.map(
+          (_LugarSel p) => (label: p.label, lat: p.lat, lon: p.lon),
+        ),
+        (
+          label: destinoGuardar.label,
+          lat: destinoGuardar.lat,
+          lon: destinoGuardar.lon,
+        ),
+      ];
+
+      final List<Map<String, dynamic>> rutaPuntos =
+          MultiparadaRutaHelper.construirRutaPuntos(
+        latOrigen: origenGuardar.lat,
+        lonOrigen: origenGuardar.lon,
+        labelOrigen: origenGuardar.label,
+        latDestino: destinoGuardar.lat,
+        lonDestino: destinoGuardar.lon,
+        labelDestino: destinoGuardar.label,
+        waypoints: waypoints,
+      );
 
       final String tipoSrv =
           ProgramarViajeMulti.normalizarTipoServicioMulti(_tipoServicio);
       final String canal =
           ProgramarViajeMulti.canalAsignacionParaMulti(tipoSrv);
+
+      final List<Map<String, dynamic>> segmentosGuardar =
+          MultiparadaRutaHelper.alinearSegmentosConPuntos(
+        segmentos: _segmentos,
+        puntosOrdenados: puntosOrdenados,
+      );
+      final int tramosEsperados = _tramosEsperadosMulti();
+      if (segmentosGuardar.length != tramosEsperados) {
+        _snack('La ruta cambió. Vuelve a cotizar antes de confirmar.');
+        if (mounted) setState(() => _cargando = false);
+        return;
+      }
+      final double distKmGuardar = _distanciaKmDesdeSegmentos(segmentosGuardar);
+      final double peajeGuardar = _peajeDesdeSegmentos(segmentosGuardar);
+      if (distKmGuardar <= 0 || _precio <= 0) {
+        _snack('No se pudo validar precio y distancia de la ruta.');
+        if (mounted) setState(() => _cargando = false);
+        return;
+      }
 
       final DateTime nowUtc = DateTime.now().toUtc();
       // Misma política que [ProgramarViaje] modoAhora: recogida = ahora (UTC), no +10 min.
@@ -793,12 +1164,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
       final String id = await ViajesRepo.crearViajePendiente(
         uidCliente: u.uid,
-        origen: _origen!.label,
-        destino: _destino!.label,
-        latOrigen: _origen!.lat,
-        lonOrigen: _origen!.lon,
-        latDestino: _destino!.lat,
-        lonDestino: _destino!.lon,
+        origen: origenGuardar.label,
+        destino: destinoGuardar.label,
+        latOrigen: origenGuardar.lat,
+        lonOrigen: origenGuardar.lon,
+        latDestino: destinoGuardar.lat,
+        lonDestino: destinoGuardar.lon,
         fechaHora: fechaHoraViaje,
         precio: _precio,
         metodoPago: _metodoPago,
@@ -814,14 +1185,16 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         waypoints: waypoints,
         extras: {
           'paradas_count': waypoints.length,
-          'segmentos': _segmentos,
+          'tramos_total': segmentosGuardar.length,
+          'segmentos': segmentosGuardar,
           'rutaPuntos': rutaPuntos,
-          'peaje_total': _peaje,
+          'peaje_total': peajeGuardar,
+          'distancia_km': distKmGuardar,
           'esAhora': viajeInmediato,
           if (_promoSnapshotCotizacion != null)
             'promoSnapshot': _promoSnapshotCotizacion,
         },
-        distanciaKm: _distKm,
+        distanciaKm: distKmGuardar,
         canalAsignacion: canal,
         publishAt: publishAtArg,
         acceptAfter: acceptAfterArg,
@@ -837,7 +1210,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         viajeId: id,
         fechaHoraPickup: fechaHoraViaje,
         tipoServicio: tipoSrv,
-        preNav: navAntesDeCrear,
+        preNav: nav.tab,
+        preNavRaiz: nav.raiz,
         forzarViajeInmediato: _esAhora,
       );
     } on fs.FirebaseException catch (e) {
@@ -1021,7 +1395,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             onTap: () async {
               final _LugarSel? sel = await _buscarLugar('Destino Turístico');
               if (!mounted || sel == null) return;
-              setState(() => _destino = sel);
+              setState(() => _destino = _lugarNormalizado(sel, fallbackLabel: 'Destino final'));
               _programarCalculoAutomatico();
             },
           ),
@@ -1055,7 +1429,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       onTap: () async {
         final _LugarSel? sel = await _buscarLugar('Elige el destino');
         if (!mounted || sel == null) return;
-        setState(() => _destino = sel);
+        setState(() => _destino = _lugarNormalizado(sel, fallbackLabel: 'Destino final'));
         _programarCalculoAutomatico();
       },
     );
@@ -1268,7 +1642,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _confirmar,
+                  onPressed: _onConfirmarViajeMulti,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: c,
                     foregroundColor: Colors.black,
@@ -1416,7 +1790,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             onTap: () async {
               final _LugarSel? sel = await _buscarLugar('Elige el origen');
               if (!mounted || sel == null) return;
-              setState(() => _origen = sel);
+              setState(() => _origen = _lugarNormalizado(sel, fallbackLabel: 'Origen'));
               _programarCalculoAutomatico();
             },
           ),
@@ -1428,7 +1802,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _tituloSeccionRuta(
           estilo: estiloParada,
           titulo: 'PARADAS INTERMEDIAS',
-          ayuda: 'Paradas en el camino (hasta 3). Puedes dejar vacías.',
+          ayuda: 'Paradas en el camino (hasta $_kMaxParadasIntermedias). Puedes dejar vacías.',
           textoAyuda: textMuted,
         ),
         ..._paradas.asMap().entries.map((MapEntry<int, _LugarSel?> e) {
@@ -1450,8 +1824,13 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     onTap: () async {
                       final _LugarSel? sel =
                           await _buscarLugar('Elige la parada ${i + 1}');
-                      if (!mounted) return;
-                      setState(() => _paradas[i] = sel);
+                      if (!mounted || sel == null) return;
+                      setState(
+                        () => _paradas[i] = _lugarNormalizado(
+                          sel,
+                          fallbackLabel: 'Parada ${i + 1}',
+                        ),
+                      );
                       _programarCalculoAutomatico();
                     },
                   ),
@@ -1516,7 +1895,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
-            onPressed: _paradas.length < 3
+            onPressed: _paradas.length < _kMaxParadasIntermedias
                 ? () {
                     setState(() => _paradas.add(null));
                     _programarCalculoAutomatico();
@@ -1611,6 +1990,19 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   metodoPagoChipBorder: metodoPagoChipBorder,
                 ),
               if (!_mostrarResumenMulti) ...<Widget>[
+                ClienteViajeOrientacionBanner(
+                  mensaje: ClienteViajeOrientacionCopy.multiParadas(
+                    tipoServicio: _tipoServicio,
+                    esAhora: _esAhora,
+                  ),
+                  icon: _tipoServicio == 'turismo'
+                      ? Icons.flight_takeoff_rounded
+                      : _tipoServicio == 'motor'
+                          ? Icons.two_wheeler_rounded
+                          : Icons.alt_route_rounded,
+                  accentColor: _colorServicio,
+                ),
+                const SizedBox(height: 12),
                 _card(
                   mockupSurface: rutaMockup,
                   child: Column(
@@ -1977,7 +2369,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton(
-                            onPressed: _confirmar,
+                            onPressed: _onConfirmarViajeMulti,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: _colorServicio,
                               foregroundColor: Colors.black,
@@ -2420,9 +2812,12 @@ class _BuscarLugarSheet extends StatelessWidget {
                       Navigator.pop(
                         context,
                         _LugarSel(
-                          label: det.displayLabel,
-                          lat: det.lat,
-                          lon: det.lon,
+                          label: MultiparadaRutaHelper.normalizarLabel(
+                            det.displayLabel,
+                            isDestino ? 'Destino' : 'Ubicación',
+                          ),
+                          lat: MultiparadaRutaHelper.round6(det.lat),
+                          lon: MultiparadaRutaHelper.round6(det.lon),
                         ),
                       );
                     },

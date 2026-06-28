@@ -31,8 +31,8 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
   final ValueNotifier<String?> feedbackSinUbicacion = ValueNotifier(null);
 
   static const String kMsgAunSinUbicacion =
-      'No activaste la ubicación en el teléfono. Toca «Activar ubicación» otra vez '
-      'y elige «Al usar la app» en el mensaje del sistema.';
+      'No activaste la ubicación. Toca «Abrir ajustes» o ve a Cuenta → Ubicación '
+      'y elige «Al usar la app».';
 
   static const String kMsgAunSinGps =
       'Aún no tienes el GPS activo. Toca «Activar ubicación» para abrir los '
@@ -196,8 +196,7 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
     RaiUbicacionClienteModo modoActual,
   ) async {
     if (modoActual == RaiUbicacionClienteModo.permisoBloqueado) {
-      feedbackSinUbicacion.value =
-          'Ubicación bloqueada. Toca «Activar ubicación» para abrir Ajustes de RAI.';
+      feedbackSinUbicacion.value = RaiUbicacionUiConstants.msgIrAjustesManual;
       return;
     }
     if (modoActual == RaiUbicacionClienteModo.gpsApagado &&
@@ -229,28 +228,13 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
     await LocationPermissionService.marcarActivacionDesdeAppRai();
     solicitudEnCurso.value = true;
     try {
-      final bool gpsOn = await Geolocator.isLocationServiceEnabled();
-      if (!gpsOn) {
-        await LocationPermissionService.openSystemLocationSettings();
-        return;
-      }
+      final r = await LocationPermissionService.activarUbicacionRai(
+        bannerEnAlertaRoja: bannerEnAlertaRoja,
+        modoPermisoBloqueado:
+            modo.value == RaiUbicacionClienteModo.permisoBloqueado,
+      );
 
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.deniedForever) {
-        await _registrarIntentoFallido(
-          'Ubicación bloqueada. Toca «Activar ubicación» para abrir Ajustes de RAI.',
-        );
-        modo.value = RaiUbicacionClienteModo.permisoBloqueado;
-        await LocationPermissionService.openAppSettingsPage();
-        return;
-      }
-
-      if (!GpsService.permissionUsable(perm)) {
-        await GpsService.requestPermissionExplicitUser();
-        perm = await GpsService.waitUntilPermissionUsable();
-      }
-
-      if (GpsService.permissionUsable(perm)) {
+      if (r.concedido) {
         feedbackSinUbicacion.value = null;
         modo.value = RaiUbicacionClienteModo.listo;
         await _marcarListoEnPrefs();
@@ -258,11 +242,23 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
         return;
       }
 
-      if (perm == LocationPermission.deniedForever) {
+      if (r.gpsApagado) {
+        await _registrarIntentoFallido(kMsgAunSinGps);
+        modo.value = RaiUbicacionClienteModo.gpsApagado;
+        return;
+      }
+
+      if (r.permission == LocationPermission.deniedForever) {
         await _registrarIntentoFallido(
-          'Ubicación bloqueada. Toca «Activar ubicación» para abrir Ajustes de RAI.',
+          RaiUbicacionUiConstants.msgIrAjustesManual,
         );
         modo.value = RaiUbicacionClienteModo.permisoBloqueado;
+        return;
+      }
+
+      if (r.abrioAjustesApp) {
+        await _registrarIntentoFallido(RaiUbicacionUiConstants.msgIrAjustesManual);
+        modo.value = RaiUbicacionClienteModo.permisoPendiente;
       } else {
         await _registrarIntentoFallido(kMsgAunSinUbicacion);
         modo.value = RaiUbicacionClienteModo.permisoPendiente;
@@ -310,7 +306,7 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
         return 'Para cotizar tu viaje, toca «Activar ubicación». '
             'Se abrirá el cuadro del teléfono: elige «Al usar la app».';
       case RaiUbicacionClienteModo.permisoBloqueado:
-        return 'Toca «Activar ubicación» para abrir Ajustes de RAI y permitir ubicación.';
+        return 'Toca «Abrir ajustes» o ve a Cuenta → Ubicación para permitir ubicación.';
       case RaiUbicacionClienteModo.listo:
         return '';
     }
@@ -318,6 +314,17 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
 
   /// Misma etiqueta en banner, mapa y botón GPS.
   String get accionActivarUbicacion => kAccionActivarUbicacion;
+
+  String get etiquetaAccionBanner {
+    if (modo.value == RaiUbicacionClienteModo.listo) {
+      return kAccionActivarUbicacion;
+    }
+    if (bannerEnAlertaRoja ||
+        modo.value == RaiUbicacionClienteModo.permisoBloqueado) {
+      return RaiUbicacionUiConstants.accionAbrirAjustesUbicacion;
+    }
+    return kAccionActivarUbicacion;
+  }
 
   @Deprecated('Usar accionActivarUbicacion')
   String get accionPrincipal => accionActivarUbicacion;

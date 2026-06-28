@@ -18,23 +18,6 @@ class AdminConfigService {
     });
   }
 
-  static Future<void> updatePromo3x1Config({
-    required bool activa,
-    required int porcentaje,
-    required int m,
-    required int k,
-    required String motivo,
-  }) async {
-    final c = _fx.httpsCallable('updatePromo3x1Config');
-    await c.call(<String, dynamic>{
-      'activa': activa,
-      'porcentaje': porcentaje,
-      'm': m,
-      'k': k,
-      'motivo': motivo,
-    });
-  }
-
   static Future<void> updatePromocionesMxKConfig({
     required bool activa,
     required int m,
@@ -48,6 +31,17 @@ class AdminConfigService {
       'm': m,
       'k': k,
       'porcentaje': porcentaje,
+      'motivo': motivo,
+    });
+  }
+
+  static Future<void> updateTarifasTramosConfig({
+    required Map<String, dynamic> tarifasTramos,
+    required String motivo,
+  }) async {
+    final c = _fx.httpsCallable('updateTarifasTramosConfig');
+    await c.call(<String, dynamic>{
+      'tarifasTramos': tarifasTramos,
       'motivo': motivo,
     });
   }
@@ -91,4 +85,3 @@ class AdminConfigService {
     });
   }
 }
-

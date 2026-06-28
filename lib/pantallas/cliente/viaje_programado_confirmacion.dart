@@ -5,7 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -168,10 +167,7 @@ class _ViajeProgramadoConfirmacionState
           backgroundColor: Color(0xFF2E7D32),
         ),
       );
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
-        (r) => false,
-      );
+      unawaited(NavigationService.irAlInicioCliente(context: context));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -401,10 +397,8 @@ class _ViajeProgramadoConfirmacionState
                 color: RaiBackButton.resolveColor(context),
               ),
               onPressed: () {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
-                  (r) => false,
-                );
+                unawaited(
+                    NavigationService.irAlInicioCliente(context: context));
               },
             ),
           ),
@@ -619,11 +613,8 @@ class _ViajeProgramadoConfirmacionState
                   onPressed: _cancelando
                       ? null
                       : () {
-                          Navigator.of(context).pushAndRemoveUntil(
-                            MaterialPageRoute<void>(
-                                builder: (_) => const ClienteShell()),
-                            (r) => false,
-                          );
+                          unawaited(NavigationService.irAlInicioCliente(
+                              context: context));
                         },
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1031,13 +1022,10 @@ class _OtrasReservasSection extends StatelessWidget {
                   child: InkWell(
                     borderRadius: BorderRadius.circular(12),
                     onTap: () {
-                      Navigator.push<void>(
+                      unawaited(NavigationService.pushEnTabShell(
                         context,
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              ViajeProgramadoConfirmacion(viajeId: doc.id),
-                        ),
-                      );
+                        ViajeProgramadoConfirmacion(viajeId: doc.id),
+                      ));
                     },
                     child: Padding(
                       padding: const EdgeInsets.symmetric(

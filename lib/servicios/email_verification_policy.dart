@@ -5,12 +5,7 @@ abstract final class EmailVerificationPolicy {
   static bool isGoogleAccount(User user) =>
       user.providerData.any((p) => p.providerId == 'google.com');
 
-  /// Google y anónimos no pasan por pantalla de verificación.
-  static bool needsVerification(User? user) {
-    if (user == null) return false;
-    if (user.isAnonymous) return false;
-    if (isGoogleAccount(user)) return false;
-    if ((user.email ?? '').trim().isEmpty) return false;
-    return !user.emailVerified;
-  }
+  /// Tras login/registro con contraseña válida, mismo acceso que Google (sin pantalla bloqueante).
+  /// El enlace de verificación se envía al registrarse; no impide entrar a la app.
+  static bool needsVerification(User? user) => false;
 }

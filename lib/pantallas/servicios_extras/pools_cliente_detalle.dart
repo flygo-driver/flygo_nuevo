@@ -6,10 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
+import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
+import 'package:flygo_nuevo/widgets/pool_gira_contenido_panel.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
 import 'package:flygo_nuevo/widgets/pool_reserva_bauche_uploader.dart';
+import 'package:flygo_nuevo/pantallas/servicios_extras/pool_gira_ticket_page.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -265,7 +268,6 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 
   @override
   Widget build(BuildContext context) {
-    final f = DateFormat('EEE d MMM • HH:mm', 'es');
     final poolRef = PoolRepo.pools.doc(widget.poolId);
     const Color textPrimary = Colors.white;
     const Color textSecondary = Color(0xFFE5E7EB);
@@ -352,7 +354,6 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
               d['fechaVuelta'] != null ? _dateFromAny(d['fechaVuelta']) : null;
           final sentido =
               (d['sentido'] ?? 'ida').toString(); // ida | vuelta | ida_y_vuelta
-          final mult = (sentido == 'ida_y_vuelta') ? 2 : 1;
 
           final cap = (d['capacidad'] ?? 0) as int;
           final occ = (d['asientosReservados'] ?? 0) as int;
@@ -373,7 +374,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                   estadoL == 'buscando');
 
           final precioSeat = ((d['precioPorAsiento'] ?? 0.0) as num).toDouble();
-          final precioTotalPorSeat = precioSeat * mult;
+          final precioTotalPorSeat = precioSeat;
           final depositPct =
               ((d['depositPct'] ?? 0.3) as num).toDouble().clamp(0, 1);
           // feePct eliminado porque no se usa aquí para evitar warning
@@ -384,7 +385,6 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
           final pickup =
               pickupPoints.isNotEmpty ? pickupPoints.first : 'Parque Central';
 
-          final titulo = '$origen → $destino';
           final confirmado = estado == 'confirmado';
           final agenciaNombre = (d['agenciaNombre'] ?? '').toString().trim();
           final taxistaNombre = (d['taxistaNombre'] ?? '').toString().trim();
@@ -410,14 +410,23 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
               : <String>[];
           final descripcionViaje =
               (d['descripcionViaje'] ?? '').toString().trim();
-          final fechaAnuncio =
-              DateFormat('d MMM yyyy, h:mm a', 'es').format(fecha);
-          final publicadoPor =
-              agenciaNombre.isNotEmpty ? agenciaNombre : ownerLabel;
-          final anuncioTexto =
-              'Salida programada para $fechaAnuncio. Reserva tu cupo. Publicado por: $publicadoPor';
-
-          // Totales con asientos seleccionados
+          final contenidoExtra = PoolGiraContenidoExtra.fromMap(d);
+          final nombreGira = contenidoExtra.nombreGira.trim();
+          final maxAsientosCompra = contenidoExtra.maxAsientosPorCompra.clamp(1, cap);
+          final estadoCliente = PoolGiraContenidoCatalog.estadoGiraCliente(
+            estado: estadoL,
+            cuposDisponibles: left,
+            capacidad: cap,
+          );
+          final ultimosCupos =
+              PoolGiraContenidoCatalog.esUltimosCupos(left, cap);
+          final fechaLineas = PoolGiraContenidoCatalog.lineasFechaSalidaRegreso(
+            salida: fecha,
+            regreso: fechaVuelta,
+          );
+          final titulo = nombreGira.isNotEmpty
+              ? nombreGira
+              : '$origen → $destino';
           final total = (_seats * precioTotalPorSeat).toDouble();
           final deposito = (total * depositPct);
           final restante = (total - deposito);
@@ -435,6 +444,12 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
             pool: d,
             totalReserva: total,
           );
+          final fechaAnuncio =
+              DateFormat('d MMM yyyy, h:mm a', 'es').format(fecha);
+          final publicadoPor =
+              agenciaNombre.isNotEmpty ? agenciaNombre : ownerLabel;
+          final anuncioTexto =
+              'Salida programada para $fechaAnuncio. Reserva tu cupo. Publicado por: $publicadoPor';
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -480,15 +495,34 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                       ),
                       const SizedBox(height: 12),
                     ],
+                    if (ultimosCupos && reservable) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDC2626).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFDC2626)),
+                        ),
+                        child: const Text(
+                          '¡Últimos cupos disponibles!',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Color(0xFFFCA5A5),
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
                     PoolRutaRecorridoCard(
                       origen: origen,
                       destino: destino,
                       paradas: pickupPoints,
-                      fechaLabel: fechaVuelta == null
-                          ? f.format(fecha)
-                          : '${f.format(fecha)} · Vuelta: ${f.format(fechaVuelta)}',
+                      fechaLabels: fechaLineas,
                       sentidoLabel: _sentidoLegible(sentido),
-                      cuposLabel: '$left cupos disponibles',
+                      cuposLabel: '$left cupos · $estadoCliente',
                       estiloOscuroRojo: true,
                     ),
                     if (incluye.isNotEmpty) ...[
@@ -505,6 +539,11 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         estiloOscuroRojo: true,
                       ),
                     ],
+                    const SizedBox(height: 12),
+                    PoolGiraContenidoPanel(
+                      extra: contenidoExtra,
+                      estiloOscuroRojo: true,
+                    ),
                     const SizedBox(height: 10),
                     _anuncioLineal(context, anuncioTexto),
                     const SizedBox(height: 10),
@@ -642,11 +681,14 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      fechaVuelta == null
-                          ? f.format(fecha)
-                          : '${f.format(fecha)}  •  Vuelta: ${f.format(fechaVuelta)}',
-                      style: const TextStyle(color: textSecondary),
+                    ...fechaLineas.map(
+                      (linea) => Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          linea,
+                          style: const TextStyle(color: textSecondary),
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 6),
                     Row(
@@ -720,7 +762,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         style: const TextStyle(
                             color: textPrimary, fontWeight: FontWeight.w800)),
                     IconButton(
-                      onPressed: (_seats < left)
+                      onPressed: (_seats < left && _seats < maxAsientosCompra)
                           ? () => setState(() => _seats++)
                           : null,
                       icon:
@@ -1405,6 +1447,27 @@ class _MisReservasGiraPanel extends StatelessWidget {
                             color: Colors.green.shade400,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      if (estado == 'pagado') ...[
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => PoolGiraTicketPage(
+                                  poolId: poolId,
+                                  reservaId: doc.id,
+                                ),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.qr_code_2, size: 18),
+                          label: const Text('Ver ticket / QR'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: accent,
+                            side: const BorderSide(color: accent),
                           ),
                         ),
                       ],

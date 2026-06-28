@@ -1205,6 +1205,7 @@ class PoolRutaRecorridoCard extends StatelessWidget {
     required this.destino,
     required this.paradas,
     this.fechaLabel,
+    this.fechaLabels,
     this.sentidoLabel,
     this.cuposLabel,
     this.estiloOscuroRojo = false,
@@ -1214,6 +1215,7 @@ class PoolRutaRecorridoCard extends StatelessWidget {
   final String destino;
   final List<String> paradas;
   final String? fechaLabel;
+  final List<String>? fechaLabels;
   final String? sentidoLabel;
   final String? cuposLabel;
   final bool estiloOscuroRojo;
@@ -1239,6 +1241,12 @@ class PoolRutaRecorridoCard extends StatelessWidget {
     final o = origen.trim().isEmpty ? '—' : origen.trim();
     final d = destino.trim().isEmpty ? '—' : destino.trim();
     final stops = paradas.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final List<String> fechasPill = <String>[
+      ...?fechaLabels?.where((e) => e.trim().isNotEmpty),
+      if ((fechaLabels == null || fechaLabels!.isEmpty) &&
+          (fechaLabel ?? '').trim().isNotEmpty)
+        fechaLabel!.trim(),
+    ];
 
     return Container(
       width: double.infinity,
@@ -1286,7 +1294,7 @@ class PoolRutaRecorridoCard extends StatelessWidget {
               ),
             ],
           ),
-          if ((fechaLabel ?? '').trim().isNotEmpty ||
+          if (fechasPill.isNotEmpty ||
               (sentidoLabel ?? '').trim().isNotEmpty ||
               (cuposLabel ?? '').trim().isNotEmpty) ...[
             const SizedBox(height: 10),
@@ -1294,10 +1302,10 @@ class PoolRutaRecorridoCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 6,
               children: [
-                if ((fechaLabel ?? '').trim().isNotEmpty)
+                for (final linea in fechasPill)
                   _InfoPill(
                     icon: Icons.schedule,
-                    label: fechaLabel!.trim(),
+                    label: linea,
                     color: accent2,
                   ),
                 if ((sentidoLabel ?? '').trim().isNotEmpty)
@@ -1837,6 +1845,7 @@ class _InfoPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      constraints: const BoxConstraints(maxWidth: 340),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.14),
@@ -1848,12 +1857,16 @@ class _InfoPill extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w800,
-              fontSize: 12,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
             ),
           ),
         ],

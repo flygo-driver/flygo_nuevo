@@ -20,6 +20,7 @@ import {
   filtrarCandidatoTurismo,
   ordenarCandidatosPorDistancia,
   pasajerosRequeridos,
+  subtipoTurismoRequeridoDesdeViaje,
   toDateFromUnknown,
   vehiculoQueCoincide,
   ventanaPublicacionYAceptacionOk,
@@ -278,7 +279,7 @@ export async function intentarAsignacionTurismoInterno(args: {
     return { uidChofer: null, liberadoPool, canalAsignacion: canalAfter };
   }
 
-  const subtipo = String(v0.subtipoTurismo ?? "carro").trim() || "carro";
+  const subtipo = subtipoTurismoRequeridoDesdeViaje(v0);
   const pax = pasajerosRequeridos(v0);
   const prepagoCfg = await getComisionPrepagoConfig();
 

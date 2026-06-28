@@ -9,6 +9,8 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 import { logAdminAudit } from "./audit.js";
 import { getComisionPrepagoConfig } from "./finance.js";
+import { getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import { prepagoInsuficienteParaViajeEfectivo } from "./prepago_comision_viaje.js";
 import {
   mensajeBloqueoOperativo,
   sortColaCandidates,
@@ -212,6 +214,7 @@ async function tryPromoteOne(
   viajeId: string,
   slot: number,
   minimoOperativoRd: number,
+  globalComisionPct: number,
 ): Promise<string | null | typeof TX_BLOCKED> {
   const uRef = usuarios().doc(uidTaxista);
   const vRef = viajes().doc(viajeId);
@@ -235,6 +238,14 @@ async function tryPromoteOne(
       return null;
     }
     const v = vSnap.data() as AnyMap;
+
+    if (prepagoInsuficienteParaViajeEfectivo({
+      billeData: bSnap.data() as AnyMap | undefined,
+      viajeData: v,
+      globalComisionPct,
+    })) {
+      return TX_BLOCKED;
+    }
 
     const elig =
       slot === 0 ? tripEligibleReserva(v, uidTaxista) : tripEligibleEncolado(v, uidTaxista);
@@ -304,6 +315,7 @@ export type PromoverSiguienteViajeResult = {
 export async function ejecutarPromoverSiguienteViaje(uidTaxista: string): Promise<PromoverSiguienteViajeResult> {
   const prepagoCfg = await getComisionPrepagoConfig();
   const minimoOperativoRd = prepagoCfg.minimoOperativoRd;
+  const globalComisionPct = await getComisionViajePorcentajeCached();
 
   const uRef = usuarios().doc(uidTaxista);
   const uSnap = await uRef.get();
@@ -337,7 +349,7 @@ export async function ejecutarPromoverSiguienteViaje(uidTaxista: string): Promis
   keys.sort(sortColaCandidates);
 
   for (const k of keys) {
-    const promoted = await tryPromoteOne(uidTaxista, k.id, k.slot, minimoOperativoRd);
+    const promoted = await tryPromoteOne(uidTaxista, k.id, k.slot, minimoOperativoRd, globalComisionPct);
     if (promoted === TX_BLOCKED) {
       return {
         ok: false,

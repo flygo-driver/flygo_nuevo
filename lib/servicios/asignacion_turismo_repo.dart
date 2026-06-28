@@ -3,7 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
@@ -23,20 +22,48 @@ class DatosClaimPoolTurismo {
   });
 }
 
+enum MotivoRechazoPrepPoolTurismo { noAprobado, vehiculoNoCompatible }
+
+class ResultadoEvalVehiculoTurismo {
+  final Map<String, dynamic>? vehiculo;
+  final String? mensaje;
+
+  const ResultadoEvalVehiculoTurismo({this.vehiculo, this.mensaje});
+
+  bool get ok => vehiculo != null;
+}
+
 class ResultadoPrepClaimPoolTurismo {
   final DatosClaimPoolTurismo? datos;
+  final MotivoRechazoPrepPoolTurismo? motivo;
+  final String? mensajeDetalle;
 
-  const ResultadoPrepClaimPoolTurismo._({this.datos});
+  const ResultadoPrepClaimPoolTurismo._({
+    this.datos,
+    this.motivo,
+    this.mensajeDetalle,
+  });
 
   factory ResultadoPrepClaimPoolTurismo.ok(DatosClaimPoolTurismo d) {
     return ResultadoPrepClaimPoolTurismo._(datos: d);
   }
 
-  factory ResultadoPrepClaimPoolTurismo.error() {
-    return const ResultadoPrepClaimPoolTurismo._(datos: null);
+  factory ResultadoPrepClaimPoolTurismo.error(
+    MotivoRechazoPrepPoolTurismo motivo, {
+    String? mensajeDetalle,
+  }) {
+    return ResultadoPrepClaimPoolTurismo._(
+      datos: null,
+      motivo: motivo,
+      mensajeDetalle: mensajeDetalle,
+    );
   }
 
   bool get ok => datos != null;
+
+  String get mensaje =>
+      mensajeDetalle ??
+      AsignacionTurismoRepo.mensajePrepClaimPoolTurismo(motivo);
 }
 
 class AsignacionTurismoRepo {
@@ -46,6 +73,49 @@ class AsignacionTurismoRepo {
   static bool choferEstadoOperativo(Object? estadoRaw) {
     final String e = estadoRaw?.toString().trim().toLowerCase() ?? '';
     return e == 'aprobado' || e == 'activo';
+  }
+
+  /// Categorías de destino turístico (catálogo RD). No son tipos de vehículo.
+  static const Set<String> _categoriasDestinoTurismo = {
+    'AEROPUERTO',
+    'MUELLE',
+    'ZONA_COLONIAL',
+    'CIUDAD',
+    'PLAYA',
+    'RESORT',
+    'HOTEL',
+    'TOUR',
+    'PARQUE',
+    'MONTANA',
+    'CASCADA',
+    'LAGO',
+    'MUSEO',
+    'ATRACCION',
+  };
+
+  static bool esCategoriaDestinoTurismo(String raw) {
+    if (raw.trim().isEmpty) return false;
+    return _categoriasDestinoTurismo.contains(raw.trim().toUpperCase());
+  }
+
+  static String? _codigoVehiculoDesdeCampoDoc(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    final t = raw.trim();
+    if (t.contains('🏝️')) return null;
+    final c = normalizarCodigoTipoTurismo(t, t);
+    return c.isEmpty ? null : c;
+  }
+
+  static String? _codigoVehiculoDesdeCotizacionDesglose(
+    Map<String, dynamic> rawViaje,
+  ) {
+    final dynamic ex = rawViaje['extras'];
+    if (ex is! Map) return null;
+    final dynamic desg = ex['cotizacionDesglose'];
+    if (desg is! Map) return null;
+    final String? clave = desg['claveVehiculo']?.toString();
+    if (clave == null || clave.trim().isEmpty) return null;
+    return normalizarCodigoTipoTurismo(clave, clave);
   }
 
   /// Alinea `subtipoTurismo` / `tipoVehiculo` del documento con `vehiculos[].tipo` en `choferes_turismo`.
@@ -385,18 +455,161 @@ class AsignacionTurismoRepo {
     required Map<String, dynamic> choferData,
     required String subtipoTurismo,
     required int pasajerosRequeridos,
+    String? tipoVehiculoViaje,
   }) {
-    final String st = subtipoTurismo.trim().isEmpty ? 'carro' : subtipoTurismo;
-    final Map<String, dynamic>? v =
-        _vehiculoQueCoincide(choferData['vehiculos'] as List<dynamic>?, st);
-    if (v == null) return null;
-    if (_capacidadDesdeVehiculoMap(v, st) < pasajerosRequeridos) return null;
-    return v;
+    return evaluarVehiculoTurismoEnChofer(
+      choferData: choferData,
+      subtipoRequerido: subtipoTurismo,
+      pasajerosRequeridos: pasajerosRequeridos,
+      tipoVehiculoViaje: tipoVehiculoViaje,
+    ).vehiculo;
+  }
+
+  static String labelTipoVehiculoTurismo(String codigo) {
+    switch (normalizarCodigoTipoTurismo(codigo, codigo)) {
+      case 'jeepeta':
+        return 'Jeepeta Turismo';
+      case 'minivan':
+        return 'Minivan Turismo';
+      case 'bus':
+        return 'Bus Turismo';
+      case 'carro':
+      default:
+        return 'Carro Turismo';
+    }
+  }
+
+  static List<String> labelsVehiculosAprobadosEnChofer(
+    Map<String, dynamic> choferData,
+  ) {
+    final List<dynamic>? vehiculos = choferData['vehiculos'] as List<dynamic>?;
+    if (vehiculos == null || vehiculos.isEmpty) return const <String>[];
+    final List<String> labels = <String>[];
+    for (final dynamic v in vehiculos) {
+      if (v is! Map) continue;
+      final String codigo = normalizarCodigoTipoTurismo(
+        v['tipo']?.toString(),
+        v['tipoLabel']?.toString(),
+      );
+      final String label = (v['tipoLabel'] ?? labelTipoVehiculoTurismo(codigo))
+          .toString()
+          .trim();
+      if (label.isNotEmpty && !labels.contains(label)) labels.add(label);
+    }
+    return labels;
+  }
+
+  static ResultadoEvalVehiculoTurismo evaluarVehiculoTurismoParaViaje({
+    required Map<String, dynamic> choferData,
+    required Map<String, dynamic> rawViaje,
+  }) {
+    final String subtipo = subtipoTurismoRequeridoDesdeViaje(rawViaje);
+    final int pax = pasajerosRequeridosDesdeViaje(rawViaje);
+    final String tipoVehDoc = (rawViaje['tipoVehiculo'] ??
+            rawViaje['tipoVehiculoOriginal'] ??
+            '')
+        .toString();
+    return evaluarVehiculoTurismoEnChofer(
+      choferData: choferData,
+      subtipoRequerido: subtipo,
+      pasajerosRequeridos: pax,
+      tipoVehiculoViaje: tipoVehDoc,
+    );
+  }
+
+  static ResultadoEvalVehiculoTurismo evaluarVehiculoTurismoEnChofer({
+    required Map<String, dynamic> choferData,
+    required String subtipoRequerido,
+    required int pasajerosRequeridos,
+    String? tipoVehiculoViaje,
+  }) {
+    final String st = normalizarCodigoTipoTurismo(
+      subtipoRequerido,
+      tipoVehiculoViaje ?? subtipoRequerido,
+    );
+    final String reqLabel = labelTipoVehiculoTurismo(st);
+    final List<String> suyos = labelsVehiculosAprobadosEnChofer(choferData);
+
+    final Map<String, dynamic>? v = _vehiculoQueCoincide(
+      choferData['vehiculos'] as List<dynamic>?,
+      st,
+    );
+    if (v == null) {
+      final String suyosTxt = suyos.isEmpty
+          ? 'ninguno registrado en tu perfil de turismo'
+          : suyos.join(', ');
+      return ResultadoEvalVehiculoTurismo(
+        mensaje: 'Este viaje pidió $reqLabel. '
+            'Tus vehículos aprobados: $suyosTxt. '
+            'Si tienes el vehículo correcto, actualiza tu solicitud de chofer turismo.',
+      );
+    }
+
+    final int cap = _capacidadDesdeVehiculoMap(v, st);
+    if (cap < pasajerosRequeridos) {
+      final String tipoLabel = labelTipoVehiculoTurismo(
+        v['tipo']?.toString() ?? st,
+      );
+      return ResultadoEvalVehiculoTurismo(
+        mensaje: 'Este viaje requiere $pasajerosRequeridos pasajero(s). '
+            'Tu $tipoLabel aprobado(a) admite hasta $cap. '
+            'Revisa los datos de tu vehículo en tu perfil de turismo.',
+      );
+    }
+
+    return ResultadoEvalVehiculoTurismo(vehiculo: v);
   }
 
   /// Si el chofer no cumple aprobación o vehículo/capacidad para un viaje del pool turístico.
   static const String mensajeNoAutorizadoPoolTurismo =
       'No está autorizado como chofer de turismo. Solo los choferes aprobados para este servicio pueden aceptar este viaje.';
+
+  static const String mensajeVehiculoNoCompatiblePoolTurismo =
+      'Tu vehículo aprobado no coincide con lo que pidió este viaje. Revisa tu perfil de chofer turismo.';
+
+  static String mensajePrepClaimPoolTurismo(
+    MotivoRechazoPrepPoolTurismo? motivo,
+  ) {
+    switch (motivo) {
+      case MotivoRechazoPrepPoolTurismo.vehiculoNoCompatible:
+        return mensajeVehiculoNoCompatiblePoolTurismo;
+      case MotivoRechazoPrepPoolTurismo.noAprobado:
+      case null:
+        return mensajeNoAutorizadoPoolTurismo;
+    }
+  }
+
+  /// Código de vehículo (`carro`, `jeepeta`, …) alineado con `vehiculos[].tipo`.
+  static String subtipoTurismoRequeridoDesdeViaje(Map<String, dynamic> rawViaje) {
+    final String subtipo = (rawViaje['subtipoTurismo'] ?? '').toString().trim();
+    final String tipoOrig =
+        (rawViaje['tipoVehiculoOriginal'] ?? '').toString().trim();
+    final String tipoVeh = (rawViaje['tipoVehiculo'] ?? '').toString().trim();
+
+    if (subtipo.isNotEmpty && !esCategoriaDestinoTurismo(subtipo)) {
+      final String? desdeSubtipo = _codigoVehiculoDesdeCampoDoc(subtipo);
+      if (desdeSubtipo != null) return desdeSubtipo;
+    }
+
+    final String? desdeOriginal = _codigoVehiculoDesdeCampoDoc(tipoOrig);
+    if (desdeOriginal != null) return desdeOriginal;
+
+    final String? desdeDesglose =
+        _codigoVehiculoDesdeCotizacionDesglose(rawViaje);
+    if (desdeDesglose != null) return desdeDesglose;
+
+    final String? desdeTipoDoc = _codigoVehiculoDesdeCampoDoc(tipoVeh);
+    if (desdeTipoDoc != null) return desdeTipoDoc;
+
+    return 'carro';
+  }
+
+  /// Etiqueta legible alineada con pool chofer y aprobación ADM (ej. Carro Turismo).
+  static String etiquetaVehiculoRequeridoDesdeViaje(
+    Map<String, dynamic> rawViaje,
+  ) {
+    return labelTipoVehiculoTurismo(subtipoTurismoRequeridoDesdeViaje(rawViaje));
+  }
 
   static Future<ResultadoPrepClaimPoolTurismo> prepararClaimPoolTurismo({
     required String uidChofer,
@@ -409,21 +622,29 @@ class AsignacionTurismoRepo {
     if (!choferSnap.exists ||
         choferData == null ||
         !choferEstadoOperativo(choferData['estado'])) {
-      return ResultadoPrepClaimPoolTurismo.error();
+      return ResultadoPrepClaimPoolTurismo.error(
+        MotivoRechazoPrepPoolTurismo.noAprobado,
+      );
     }
 
-    final v = Viaje.fromMap(viajeId, Map<String, dynamic>.from(rawViaje));
-    final String subtipo =
-        v.subtipoTurismo.trim().isEmpty ? 'carro' : v.subtipoTurismo.trim();
+    final String subtipo = subtipoTurismoRequeridoDesdeViaje(rawViaje);
     final int pax = pasajerosRequeridosDesdeViaje(rawViaje);
-    final Map<String, dynamic>? veh = vehiculoTurismoCompatibleEnChofer(
+    final ResultadoEvalVehiculoTurismo eval = evaluarVehiculoTurismoEnChofer(
       choferData: choferData,
-      subtipoTurismo: subtipo,
+      subtipoRequerido: subtipo,
       pasajerosRequeridos: pax,
+      tipoVehiculoViaje: (rawViaje['tipoVehiculo'] ??
+              rawViaje['tipoVehiculoOriginal'] ??
+              '')
+          .toString(),
     );
-    if (veh == null) {
-      return ResultadoPrepClaimPoolTurismo.error();
+    if (!eval.ok) {
+      return ResultadoPrepClaimPoolTurismo.error(
+        MotivoRechazoPrepPoolTurismo.vehiculoNoCompatible,
+        mensajeDetalle: eval.mensaje,
+      );
     }
+    final Map<String, dynamic> veh = eval.vehiculo!;
 
     final uSnap = await _db.collection('usuarios').doc(uidChofer).get();
     final Map<String, dynamic> uData = uSnap.data() ?? <String, dynamic>{};
@@ -487,11 +708,14 @@ class AsignacionTurismoRepo {
 
   static Map<String, dynamic>? _vehiculoQueCoincide(
       List<dynamic>? vehiculos, String tipoReq) {
-    final String t = tipoReq.toLowerCase();
+    final String t = normalizarCodigoTipoTurismo(tipoReq, tipoReq);
     if (vehiculos == null) return null;
     for (final dynamic v in vehiculos) {
       if (v is Map) {
-        final String vt = v['tipo']?.toString().toLowerCase() ?? '';
+        final String vt = normalizarCodigoTipoTurismo(
+          v['tipo']?.toString(),
+          v['tipoLabel']?.toString(),
+        );
         if (vt == t) return Map<String, dynamic>.from(v);
       }
     }
@@ -614,7 +838,7 @@ class AsignacionTurismoRepo {
     if (rawLon is num) lonO = rawLon.toDouble();
     if (!latO.isFinite || !lonO.isFinite) return null;
 
-    final String subtipo = (v0['subtipoTurismo'] ?? 'carro').toString();
+    final String subtipo = subtipoTurismoRequeridoDesdeViaje(v0);
     final int pax = _pasajerosRequeridos(v0);
 
     final QuerySnapshot<Map<String, dynamic>> q = await _db

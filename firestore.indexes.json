@@ -628,6 +628,38 @@
       ]
     },
     {
+      "collectionGroup": "viajes_pool",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "comisionPendientePagoAdmin", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes_pool",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerTaxistaId", "order": "ASCENDING" },
+        { "fieldPath": "comisionPendientePagoAdmin", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes_pool",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "comisionEstado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservas",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "liquidaciones_pool",
       "queryScope": "COLLECTION",
       "fields": [

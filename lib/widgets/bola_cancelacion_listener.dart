@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/servicios/bola_nav_coordination_guard.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
@@ -86,6 +87,29 @@ class _BolaCancelacionListenerState extends State<BolaCancelacionListener> {
       } else {
         _primeraEmisionCliente = false;
       }
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> doc
+          in snap.docs) {
+        final Map<String, dynamic> d = doc.data();
+        if ((d['estado'] ?? '').toString().trim() != 'cancelada') continue;
+        final String canceladaPor =
+            (d['canceladaPor'] ?? '').toString().trim();
+        if (canceladaPor.isNotEmpty && canceladaPor == uid) continue;
+        if (!_canceladaReciente(d)) continue;
+        if (_ultimaBolaNotificada == doc.id || _navegacionEnCurso) continue;
+        if (!BolaNavCoordinationGuard.tryClaimCancelListenerNotif(doc.id)) {
+          continue;
+        }
+        _ultimaBolaNotificada = doc.id;
+        final String msg = canceladaPor.isEmpty
+            ? 'El acuerdo Bola Ahorro fue cancelado.'
+            : (comoTaxista
+                ? 'El pasajero canceló el acuerdo Bola Ahorro.'
+                : 'El conductor canceló el acuerdo Bola Ahorro.');
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          unawaited(_notificarYSalir(msg, comoTaxista: comoTaxista));
+        });
+        return;
+      }
       return;
     }
 
@@ -106,6 +130,9 @@ class _BolaCancelacionListenerState extends State<BolaCancelacionListener> {
       if (_ultimaBolaNotificada == change.doc.id || _navegacionEnCurso) {
         continue;
       }
+      if (!BolaNavCoordinationGuard.tryClaimCancelListenerNotif(change.doc.id)) {
+        continue;
+      }
 
       _ultimaBolaNotificada = change.doc.id;
       final String msg = canceladaPor.isEmpty
@@ -115,13 +142,16 @@ class _BolaCancelacionListenerState extends State<BolaCancelacionListener> {
               : 'El conductor canceló el acuerdo Bola Ahorro.');
 
       SchedulerBinding.instance.addPostFrameCallback((_) {
-        unawaited(_notificarYSalir(msg));
+        unawaited(_notificarYSalir(msg, comoTaxista: comoTaxista));
       });
       break;
     }
   }
 
-  Future<void> _notificarYSalir(String mensaje) async {
+  Future<void> _notificarYSalir(
+    String mensaje, {
+    required bool comoTaxista,
+  }) async {
     if (!mounted || _navegacionEnCurso) return;
     _navegacionEnCurso = true;
     try {
@@ -135,9 +165,9 @@ class _BolaCancelacionListenerState extends State<BolaCancelacionListener> {
           ),
         );
       }
-      if (isConductorFlavor) {
+      if (comoTaxista && !isClienteFlavor) {
         await NavigationService.irAlInicioTaxista(context: context);
-      } else if (isClienteFlavor) {
+      } else if (!comoTaxista && !isConductorFlavor) {
         await NavigationService.irAlInicioCliente(context: context);
       } else if (nav != null && nav.mounted) {
         await NavigationService.salirModoViajeBola(nav.context);

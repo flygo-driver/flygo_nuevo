@@ -83,6 +83,38 @@
         "destination": "/pool/index.html"
       },
       {
+        "source": "/legal/privacidad",
+        "destination": "/legal/privacidad/index.html"
+      },
+      {
+        "source": "/legal/terminos",
+        "destination": "/legal/terminos/index.html"
+      },
+      {
+        "source": "/legal/eliminar-cuenta",
+        "destination": "/legal/eliminar-cuenta/index.html"
+      },
+      {
+        "source": "/legal/contrato-taxista",
+        "destination": "/legal/contrato-taxista/index.html"
+      },
+      {
+        "source": "/login_admin",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/admin",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/admin/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/auth_check",
+        "destination": "/index.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

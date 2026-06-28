@@ -4,6 +4,7 @@
 // `finalizarBolaPueblo`. Solo lectura; alinea tono y estructura a operadora formal.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -15,6 +16,7 @@ import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
+import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 
 double _pctComisionDesdeDoc(Map<String, dynamic> data) {
   final raw = data['comisionPct'];
@@ -368,7 +370,17 @@ class _FacturaBolaContent extends StatelessWidget {
         ),
         const SizedBox(height: 20),
         FilledButton.icon(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () async {
+            final String? uid = FirebaseAuth.instance.currentUser?.uid;
+            await BolaPostFacturaReopenGuard.markCompleted(
+              bolaId: bolaId,
+              role: role,
+              uid: uid,
+            );
+            if (context.mounted) {
+              Navigator.of(context).pop();
+            }
+          },
           icon: const Icon(Icons.check_circle_outline_rounded),
           label: const Text('Entendido, cerrar comprobante'),
           style: FilledButton.styleFrom(

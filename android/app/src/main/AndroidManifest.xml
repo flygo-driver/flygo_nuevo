@@ -63,6 +63,9 @@
     <!-- Asistente RAI: dictar dirección por voz (opcional) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Firebase Analytics (sin AdMob). Play Console → ID de publicidad → Sí → Análisis. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+
     <!-- Galería: Photo Picker (image_picker + main.dart). Estas líneas solo evitan que
          dependencias fusionen permisos de medios amplios; no se añaden al APK final. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />

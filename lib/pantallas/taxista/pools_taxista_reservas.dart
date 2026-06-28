@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
+import 'package:flygo_nuevo/pantallas/comun/pool_gira_validar_entrada_page.dart';
 import 'package:flygo_nuevo/utils/pool_gira_cancelar_ui.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
@@ -353,6 +354,19 @@ class _PoolsTaxistaReservasState extends State<PoolsTaxistaReservas> {
         ),
         centerTitle: true,
         actions: [
+          IconButton(
+            tooltip: 'Validar entrada (QR/código)',
+            onPressed: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => PoolGiraValidarEntradaPage(
+                    poolId: widget.poolId,
+                  ),
+                ),
+              );
+            },
+            icon: Icon(Icons.qr_code_scanner_outlined, color: accent),
+          ),
           StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
             stream: poolRef.snapshots(),
             builder: (context, snap) {

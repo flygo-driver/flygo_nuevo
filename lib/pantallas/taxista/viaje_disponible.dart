@@ -24,6 +24,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_reentrada_guard.dart';
 import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/bola_pueblo_disponible_tab.dart';
@@ -167,6 +168,12 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreAhora;
   fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreProg;
   fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreBola;
+
+  /// Streams estables (no recrearlos en cada tick de GPS).
+  Stream<fs.QuerySnapshot<Map<String, dynamic>>>? _streamPoolAhora;
+  Stream<fs.QuerySnapshot<Map<String, dynamic>>>? _streamPoolProg;
+  bool _streamPoolAhoraFallback = false;
+  bool _streamPoolProgFallback = false;
 
   // Listener estable para viaje activo (evita parpadeos por queries amplias).
   StreamSubscription<fs.DocumentSnapshot<Map<String, dynamic>>>?
@@ -443,6 +450,17 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     unawaited(_flushTimbreOfertasParaTab(_tabPool.index));
   }
 
+  /// Tras finalizar viaje: marcar ofertas ya visibles como vistas sin timbre.
+  bool _silenciarTimbreReentradaTrasFinalizar(
+    List<_OfertaPoolPendiente> pendientes,
+  ) {
+    if (!PoolTimbreReentradaGuard.activo) return false;
+    for (final _OfertaPoolPendiente item in pendientes) {
+      _vistosParaTimbre.add(item.id);
+    }
+    return true;
+  }
+
   /// Al entrar a una pestaña: un timbre si hay ofertas no vistas acumuladas.
   Future<void> _flushTimbreOfertasParaTab(int tabIndex) async {
     if (!_appEnForeground) return;
@@ -451,6 +469,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     final pendientes = _idsOfertasNoVistasEnTab(tabIndex, myUid);
     if (pendientes.isEmpty) return;
+    if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
 
     await NotificationService.I.playPoolOfferSoundInApp();
     for (final item in pendientes) {
@@ -469,12 +488,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     if (!_appEnForeground) return;
     if (!await _taxistaDisponibleParaTimbre(myUid)) return;
 
-    final pendientes = <_OfertaPoolPendiente>[
-      ..._idsOfertasNoVistasEnTab(0, myUid),
-      ..._idsOfertasNoVistasEnTab(1, myUid),
-      ..._idsOfertasNoVistasEnTab(2, myUid),
-    ];
+    final pendientes =
+        _idsOfertasNoVistasEnTab(_tabPool.index, myUid);
     if (pendientes.isEmpty) return;
+    if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
 
     await NotificationService.I.playPoolOfferSoundInApp();
     for (final item in pendientes) {
@@ -512,11 +529,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     _entradaInicialProcesada = true;
 
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    final pendientes = <_OfertaPoolPendiente>[
-      ..._idsOfertasNoVistasEnTab(0, myUid),
-      ..._idsOfertasNoVistasEnTab(1, myUid),
-      ..._idsOfertasNoVistasEnTab(2, myUid),
-    ];
+    final pendientes =
+        _idsOfertasNoVistasEnTab(_tabPool.index, myUid);
+
+    if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
 
     if (pendientes.isNotEmpty &&
         await _taxistaDisponibleParaTimbre(myUid)) {
@@ -542,6 +558,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     List<_OfertaPoolPendiente> nuevas,
   ) async {
     if (!_entradaInicialProcesada || !_appEnForeground) return;
+    if (_tabPool.index != tabIndex) return;
     if (nuevas.isEmpty) return;
     if (!await _taxistaDisponibleParaTimbre(myUid)) return;
 
@@ -611,6 +628,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     for (final d in snap.docs) {
       final data = d.data();
       if (!_pasaFiltroAhoraLocal(data)) continue;
+      if (_esViajeEspejoBolaEnVentana(data, myUid)) continue;
       if (!_timbreMeInteresaViaje(data, myUid)) continue;
       if (!_esAhoraDesdeData(data)) continue;
       final id = _timbreClaveViaje(d.id, data, myUid);
@@ -635,6 +653,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     for (final d in snap.docs) {
       final data = d.data();
       if (!_pasaFiltroProgLocal(data)) continue;
+      if (_esViajeEspejoBolaEnVentana(data, myUid)) continue;
       if (!_timbreMeInteresaViaje(data, myUid)) continue;
       if (_esAhoraDesdeData(data)) continue;
       final id = _timbreClaveViaje(d.id, data, myUid);
@@ -819,7 +838,32 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     setState(() {});
   }
 
+  void _asegurarStreamsPoolUi() {
+    if (_streamPoolAhora == null ||
+        _streamPoolAhoraFallback != _usarFallbackSinIndiceAhora) {
+      _streamPoolAhoraFallback = _usarFallbackSinIndiceAhora;
+      final fs.Query<Map<String, dynamic>> q = _usarFallbackSinIndiceAhora
+          ? _qFallbackBase()
+          : _qPoolAhora();
+      _streamPoolAhora = q.limit(120).snapshots();
+    }
+    if (_streamPoolProg == null ||
+        _streamPoolProgFallback != _usarFallbackSinIndiceProg) {
+      _streamPoolProgFallback = _usarFallbackSinIndiceProg;
+      final fs.Query<Map<String, dynamic>> q = _usarFallbackSinIndiceProg
+          ? _qFallbackBase()
+          : _qPoolProgramados();
+      _streamPoolProg = q.limit(200).snapshots();
+    }
+  }
+
+  void _refrescarListaPoolUi() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
   void _arrancarTimbres() {
+    _asegurarStreamsPoolUi();
     _subTimbreAhora?.cancel();
     _subTimbreProg?.cancel();
     _subTimbreBola?.cancel();
@@ -837,8 +881,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     // Mismos límites que los streams de la lista (AHORA 120, PROGRAMADOS 200).
     // Con 60/80 el timbre no veía viajes que sí aparecían en pantalla.
     _subTimbreAhora = qA.limit(120).snapshots().listen((snap) async {
-      if (!_appEnForeground) return;
       _snapTimbreAhora = snap;
+      _refrescarListaPoolUi();
+      if (!_appEnForeground) return;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
       if (_ignorarPrimeraEmisionTimbreAhora) {
@@ -856,8 +901,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     });
 
     _subTimbreProg = qP.limit(200).snapshots().listen((snap) async {
-      if (!_appEnForeground) return;
       _snapTimbreProg = snap;
+      _refrescarListaPoolUi();
+      if (!_appEnForeground) return;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
       if (_ignorarPrimeraEmisionTimbreProg) {
@@ -875,8 +921,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     });
 
     _subTimbreBola = BolaPuebloRepo.streamTablero().listen((snap) async {
-      if (!_appEnForeground) return;
       _snapTimbreBola = snap;
+      _refrescarListaPoolUi();
+      if (!_appEnForeground) return;
       final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
       if (myUid.isEmpty) return;
 
@@ -1722,9 +1769,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           FilledButton.icon(
-            onPressed: () => TaxistaFinanzasNav.abrirMisPagos(
+            onPressed: () => TaxistaOperacionNav.guiarTrasRecargaPrepagoOperativa(
               context,
-              scrollToRecargaSection: true,
+              mensaje: PagosTaxistaRepo.mensajeRecargaBannerLista,
             ),
             icon: const Icon(Icons.payment_rounded),
             label: const Text('Ir a Mis pagos'),
@@ -1984,6 +2031,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
   Widget _buildLista({
     required Stream<fs.QuerySnapshot<Map<String, dynamic>>> stream,
+    fs.QuerySnapshot<Map<String, dynamic>>? preferSnapshot,
     required bool disponible,
 
     /// Evita mostrar «No disponible» mientras aún no llega el primer snapshot de `usuarios`.
@@ -2008,10 +2056,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     return StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
       stream: stream,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return poolTabFill(const _PoolEntradaLoading());
+        final fs.QuerySnapshot<Map<String, dynamic>>? qs =
+            preferSnapshot ?? snapshot.data;
+        if (qs == null) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return poolTabFill(const _PoolEntradaLoading());
+          }
         }
-        if (snapshot.hasError) {
+        if (snapshot.hasError && qs == null) {
           final errorMsg = snapshot.error.toString().toLowerCase();
           _diag(
               'stream error tab=${esTabAhora ? "ahora" : "prog"} fallback=${esTabAhora ? _usarFallbackSinIndiceAhora : _usarFallbackSinIndiceProg} msg=$errorMsg');
@@ -2057,7 +2109,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             ),
           );
         }
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+        if (qs == null || qs.docs.isEmpty) {
           return poolTabFill(
             EmptyTripsWidget(
               esTabAhora: esTabAhora,
@@ -2066,7 +2118,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           );
         }
 
-        final docs = snapshot.data!.docs.toList();
+        final docs = qs.docs.toList();
         final items = <_Item>[];
 
         if (!esTabAhora) {
@@ -2686,13 +2738,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       maxScaleFactor: 1.18,
     );
 
-    final streamAhora = _usarFallbackSinIndiceAhora
-        ? _qFallbackBase().snapshots()
-        : _qPoolAhora().limit(120).snapshots();
-
-    final streamProg = _usarFallbackSinIndiceProg
-        ? _qFallbackBase().snapshots()
-        : _qPoolProgramados().limit(200).snapshots();
+    _asegurarStreamsPoolUi();
+    final streamAhora = _streamPoolAhora!;
+    final streamProg = _streamPoolProg!;
 
     return MediaQuery(
       data: media.copyWith(textScaler: accesibilidad),
@@ -2822,6 +2870,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                 ),
                                 _buildLista(
                                   stream: streamAhora,
+                                  preferSnapshot: _snapTimbreAhora,
                                   disponible: disponible,
                                   disponibilidadCargando:
                                       disponibilidadCargando,
@@ -2838,6 +2887,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                 ),
                                 _buildLista(
                                   stream: streamProg,
+                                  preferSnapshot: _snapTimbreProg,
                                   disponible: disponible,
                                   disponibilidadCargando:
                                       disponibilidadCargando,

@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../servicios/pagos_taxista_repo.dart';
+import '../../servicios/pool_repo.dart';
 import '../../servicios/turismo_control_adm_repo.dart';
 import '../../widgets/admin_drawer.dart';
 import '../../widgets/admin_app_bar.dart';
@@ -373,26 +374,21 @@ class _ColaGirasRaiCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pagosStream = FirebaseFirestore.instance
-        .collectionGroup('reservas')
-        .where('recaudoDestino', isEqualTo: 'rai')
-        .where('estado', isEqualTo: 'reservado')
-        .where('estadoPago', isEqualTo: 'pendiente')
-        .limit(200)
-        .snapshots();
+    final pagosStream =
+        PoolRepo.streamReservasPoolRaiPagoPendienteAdmin(poolLimit: 80);
     final liqStream = FirebaseFirestore.instance
         .collection('liquidaciones_pool')
         .where('estado', isEqualTo: 'pendiente_pago')
         .limit(200)
         .snapshots();
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<List<PoolReservaRaiPendienteAdmin>>(
       stream: pagosStream,
       builder: (context, snapPagos) {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: liqStream,
           builder: (context, snapLiq) {
-            final nPagos = snapPagos.data?.docs.length ?? 0;
+            final nPagos = snapPagos.data?.length ?? 0;
             final nLiq = snapLiq.data?.docs.length ?? 0;
             final total = nPagos + nLiq;
             return _ColaCard(

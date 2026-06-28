@@ -13,6 +13,23 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 
+/// Punto desde el que se mide distancia al pickup del candidato (GPS taxista o destino del viaje activo).
+class ColaCercaniaReferencia {
+  const ColaCercaniaReferencia({
+    required this.lat,
+    required this.lon,
+    required this.porDestinoViajeActivo,
+  });
+
+  final double lat;
+  final double lon;
+
+  /// Si true, [lat]/[lon] es el destino (o parada actual) del viaje en curso, no el GPS.
+  final bool porDestinoViajeActivo;
+
+  (double, double) get coords => (lat, lon);
+}
+
 /// Estado compartido entre el botón del AppBar y el overlay (solo este árbol escucha [notifyListeners]).
 class ViajesCercanosTaxistaController extends ChangeNotifier {
   int _pendingCount = 0;
@@ -61,14 +78,14 @@ class ViajesCercanosTaxistaLayer extends StatefulWidget {
     super.key,
     required this.controller,
     required this.escuchaActiva,
-    this.taxistaUbicacion,
+    this.referenciaOrdenCola,
   });
 
   final ViajesCercanosTaxistaController controller;
   final ValueNotifier<bool> escuchaActiva;
 
-  /// Posición actual del taxista; si viene informada, la lista se ordena por distancia al punto de recogida.
-  final ValueNotifier<(double, double)?>? taxistaUbicacion;
+  /// Punto de referencia para ordenar candidatos (taxista o destino del viaje activo).
+  final ValueNotifier<ColaCercaniaReferencia?>? referenciaOrdenCola;
 
   @override
   State<ViajesCercanosTaxistaLayer> createState() =>
@@ -105,7 +122,7 @@ class _ViajesCercanosTaxistaLayerState
   void initState() {
     super.initState();
     widget.escuchaActiva.addListener(_onEscuchaChanged);
-    widget.taxistaUbicacion?.addListener(_onTaxistaPosChanged);
+    widget.referenciaOrdenCola?.addListener(_onReferenciaOrdenChanged);
     _syncSubscription(widget.escuchaActiva.value);
   }
 
@@ -117,14 +134,14 @@ class _ViajesCercanosTaxistaLayerState
       widget.escuchaActiva.addListener(_onEscuchaChanged);
       _syncSubscription(widget.escuchaActiva.value);
     }
-    if (!identical(oldWidget.taxistaUbicacion, widget.taxistaUbicacion)) {
-      oldWidget.taxistaUbicacion?.removeListener(_onTaxistaPosChanged);
-      widget.taxistaUbicacion?.addListener(_onTaxistaPosChanged);
+    if (!identical(oldWidget.referenciaOrdenCola, widget.referenciaOrdenCola)) {
+      oldWidget.referenciaOrdenCola?.removeListener(_onReferenciaOrdenChanged);
+      widget.referenciaOrdenCola?.addListener(_onReferenciaOrdenChanged);
       _applySortAndSetState();
     }
   }
 
-  void _onTaxistaPosChanged() {
+  void _onReferenciaOrdenChanged() {
     _applySortAndSetState();
   }
 
@@ -150,7 +167,7 @@ class _ViajesCercanosTaxistaLayerState
 
   double _distanciaMetrosPickup(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
-    (double, double) taxista,
+    (double, double) referencia,
   ) {
     final Map<String, dynamic> m = doc.data();
     final double? la =
@@ -159,31 +176,33 @@ class _ViajesCercanosTaxistaLayerState
         (m['lonCliente'] is num) ? (m['lonCliente'] as num).toDouble() : null;
     if (la == null || lo == null) return double.infinity;
     if (!la.isFinite || !lo.isFinite) return double.infinity;
-    return Geolocator.distanceBetween(taxista.$1, taxista.$2, la, lo);
+    return Geolocator.distanceBetween(
+        referencia.$1, referencia.$2, la, lo);
   }
 
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _ordenarPorCercania(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
-    (double, double)? taxista,
+    ColaCercaniaReferencia? referencia,
   ) {
-    if (taxista == null) {
+    if (referencia == null) {
       return List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(docs);
     }
+    final (double, double) coords = referencia.coords;
     final List<QueryDocumentSnapshot<Map<String, dynamic>>> copy =
         List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(docs);
     copy.sort((QueryDocumentSnapshot<Map<String, dynamic>> a,
         QueryDocumentSnapshot<Map<String, dynamic>> b) {
-      return _distanciaMetrosPickup(a, taxista)
-          .compareTo(_distanciaMetrosPickup(b, taxista));
+      return _distanciaMetrosPickup(a, coords)
+          .compareTo(_distanciaMetrosPickup(b, coords));
     });
     return copy;
   }
 
   void _applySortAndSetState() {
     if (!mounted) return;
-    final (double, double)? t = widget.taxistaUbicacion?.value;
+    final ColaCercaniaReferencia? ref = widget.referenciaOrdenCola?.value;
     final List<QueryDocumentSnapshot<Map<String, dynamic>>> sorted =
-        _ordenarPorCercania(_rawDocs, t);
+        _ordenarPorCercania(_rawDocs, ref);
     final List<QueryDocumentSnapshot<Map<String, dynamic>>> top =
         sorted.take(_kMostrarMax).toList(growable: false);
     setState(() {
@@ -201,6 +220,7 @@ class _ViajesCercanosTaxistaLayerState
     _sub = FirebaseFirestore.instance
         .collection('viajes')
         .where('estado', whereIn: _kEstadosReservablesSiguiente)
+        .where('uidTaxista', isEqualTo: '')
         .where('completado', isEqualTo: false)
         .limit(_kQueryLimit)
         .snapshots()
@@ -273,7 +293,7 @@ class _ViajesCercanosTaxistaLayerState
   @override
   void dispose() {
     widget.escuchaActiva.removeListener(_onEscuchaChanged);
-    widget.taxistaUbicacion?.removeListener(_onTaxistaPosChanged);
+    widget.referenciaOrdenCola?.removeListener(_onReferenciaOrdenChanged);
     _stopSub();
     super.dispose();
   }
@@ -365,9 +385,17 @@ class _ViajesCercanosTaxistaLayerState
                                 fontWeight: FontWeight.bold),
                           ),
                           Text(
-                            widget.taxistaUbicacion?.value != null
-                                ? 'Ordenados por cercanía al pickup · se activan al terminar el actual'
-                                : 'Activa GPS para ordenar por distancia',
+                            () {
+                              final ColaCercaniaReferencia? ref =
+                                  widget.referenciaOrdenCola?.value;
+                              if (ref == null) {
+                                return 'Activa GPS para ordenar por distancia';
+                              }
+                              if (ref.porDestinoViajeActivo) {
+                                return 'Cerca de tu destino · pickup más próximo al dejar al cliente';
+                              }
+                              return 'Ordenados por cercanía al pickup · se activan al terminar el actual';
+                            }(),
                             style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.55),
                                 fontSize: 11),
@@ -418,10 +446,11 @@ class _ViajesCercanosTaxistaLayerState
                         ? precioRaw.toDouble()
                         : (double.tryParse('${precioRaw ?? 0}') ?? 0.0);
                     final String precio = FormatosMoneda.rd(precioNum);
-                    final (double, double)? t = widget.taxistaUbicacion?.value;
+                    final ColaCercaniaReferencia? ref =
+                        widget.referenciaOrdenCola?.value;
                     String? distTxt;
-                    if (t != null) {
-                      final double m = _distanciaMetrosPickup(doc, t);
+                    if (ref != null) {
+                      final double m = _distanciaMetrosPickup(doc, ref.coords);
                       if (m.isFinite) {
                         distTxt = m < 1000
                             ? '${m.round()} m'
@@ -468,7 +497,9 @@ class _ViajesCercanosTaxistaLayerState
                                 ),
                                 if (distTxt != null)
                                   Text(
-                                    'A recogida: $distTxt',
+                                    ref!.porDestinoViajeActivo
+                                        ? 'Desde tu destino: $distTxt'
+                                        : 'A recogida: $distTxt',
                                     style: TextStyle(
                                       color:
                                           Colors.white.withValues(alpha: 0.45),

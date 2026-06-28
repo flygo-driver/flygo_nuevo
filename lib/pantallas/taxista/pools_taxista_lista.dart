@@ -16,6 +16,7 @@ import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_recaudo_central_taxista_panel.dart';
 
+import 'pools_gira_editar_contenido.dart';
 import 'pools_taxista_reservas.dart';
 import 'pools_taxista_crear.dart';
 
@@ -234,6 +235,13 @@ Contactanos por esta via para mas informacion y confirmacion.
 
   bool _puedeCancelar(Map<String, dynamic> d) {
     return PoolRepo.giraPuedeCancelarseAntesDeIniciar(d);
+  }
+
+  bool _puedeEditarContenido(Map<String, dynamic> d) {
+    final e = (d['estado'] ?? '').toString().trim().toLowerCase();
+    return e != 'finalizado' &&
+        e != 'cancelado' &&
+        e != 'cancelado_por_admin';
   }
 
   Future<bool> _confirmarCancelarGira(
@@ -502,16 +510,15 @@ Contactanos por esta via para mas informacion y confirmacion.
               final pag = ((d['asientosPagados'] ?? 0) as num).toInt();
               final fee = ((d['feePct'] ?? 0.0) as num).toDouble();
               final precio = (d['precioPorAsiento'] as num).toDouble();
-              final mult = (d['sentido'] == 'ida_y_vuelta') ? 2 : 1;
               final ingresoAseg = ((d['montoPagado'] ?? 0.0) as num).toDouble();
-              final ingresoProj = occ * precio * mult;
+              final ingresoProj = occ * precio;
               final neto = ingresoAseg * (1 - fee);
               final estado = (d['estado'] ?? '').toString();
-              final tipo = (d['tipo'] ?? 'consular').toString();
+              final tipo = (d['tipo'] ?? '').toString();
               final badgeLabelRaw =
-                  (d['servicioBadge'] ?? d['tipo'] ?? 'consular').toString();
+                  (d['servicioBadge'] ?? d['tipo'] ?? '').toString();
               final badgeLabel = badgeLabelRaw.trim().isEmpty
-                  ? 'CONSULAR'
+                  ? 'GIRA'
                   : badgeLabelRaw.trim().toUpperCase();
               final confirmado = estado == 'confirmado';
               final fechaSalida = (d['fechaSalida'] as Timestamp).toDate();
@@ -519,6 +526,7 @@ Contactanos por esta via para mas informacion y confirmacion.
               final puedeIniciar = _puedeIniciar(d);
               final puedeFinalizar = _puedeFinalizar(d);
               final puedeCancelar = _puedeCancelar(d);
+              final puedeEditar = _puedeEditarContenido(d);
               final tieneAccionesPool =
                   puedeIniciar || puedeFinalizar || puedeCancelar;
 
@@ -686,6 +694,22 @@ Contactanos por esta via para mas informacion y confirmacion.
                       spacing: 8,
                       runSpacing: 4,
                       children: [
+                        if (puedeEditar)
+                          TextButton.icon(
+                            onPressed: _accionEnCurso
+                                ? null
+                                : () async {
+                                    await Navigator.of(ctx).push<bool>(
+                                      MaterialPageRoute<bool>(
+                                        builder: (_) => PoolsGiraEditarContenido(
+                                          poolId: id,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                            icon: const Icon(Icons.edit_outlined, size: 18),
+                            label: const Text('Editar y republicar'),
+                          ),
                         if (tieneAccionesPool)
                           PopupMenuButton<String>(
                             tooltip: 'Comisión / cerrar salida / cancelar',

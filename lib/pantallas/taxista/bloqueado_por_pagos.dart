@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -26,11 +28,75 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
   bool _deudaSemanalVencida = false;
   bool _cargando = true;
   String? _errorCarga;
+  bool _navegandoAlPool = false;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subUsuario;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subBilletera;
 
   @override
   void initState() {
     super.initState();
     _cargarPagosPendientes();
+    _iniciarEscuchaDesbloqueoEnVivo();
+  }
+
+  @override
+  void dispose() {
+    _subUsuario?.cancel();
+    _subBilletera?.cancel();
+    super.dispose();
+  }
+
+  void _iniciarEscuchaDesbloqueoEnVivo() {
+    final uid = user?.uid;
+    if (uid == null) return;
+
+    void onSnapshot() {
+      unawaited(_evaluarDesbloqueoTrasAprobacionAdmin(uid));
+    }
+
+    _subUsuario = FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(uid)
+        .snapshots()
+        .listen((snap) {
+      _usuarioData = snap.data();
+      if (mounted) setState(() {});
+      onSnapshot();
+    });
+
+    _subBilletera = FirebaseFirestore.instance
+        .collection('billeteras_taxista')
+        .doc(uid)
+        .snapshots()
+        .listen((snap) {
+      _billeData = snap.data();
+      if (mounted) setState(() {});
+      onSnapshot();
+    });
+  }
+
+  Future<void> _evaluarDesbloqueoTrasAprobacionAdmin(String uid) async {
+    if (_navegandoAlPool || !mounted) return;
+    if (!PagosTaxistaRepo.puedeOperarPrepagoDesdeSnapshots(
+      usuarioData: _usuarioData,
+      billeData: _billeData,
+    )) {
+      return;
+    }
+    final deudaSemanal = await PagosTaxistaRepo.tieneDeudaSemanalVencida(uid);
+    if (!mounted || _navegandoAlPool) return;
+    if (deudaSemanal) return;
+
+    _navegandoAlPool = true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Recarga verificada. Entrando al pool en vivo…',
+        ),
+        backgroundColor: Colors.green,
+      ),
+    );
+    Navigator.of(context).pushNamedAndRemoveUntil('/taxista_entry', (_) => false);
   }
 
   Future<void> _cargarPagosPendientes() async {
@@ -318,9 +384,10 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
                             ],
                             const SizedBox(height: 8),
                             Text(
-                              'Recarga desde Mis pagos: al aprobar el admin, el monto verificado paga primero '
-                              'la comisión legacy pendiente (si hay) y el resto suma a tu prepago; el $pctComStr% '
-                              'de cada viaje en efectivo se descuenta del prepago disponible.',
+                              'Recarga desde Mis pagos: al aprobar el admin, entrarás al pool en vivo '
+                              'y el monto verificado paga primero la comisión legacy pendiente (si hay); '
+                              'el resto suma a tu prepago. El $pctComStr% de cada viaje en efectivo '
+                              'se descuenta del prepago disponible.',
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.85),
                                   fontSize: 13,
@@ -458,7 +525,8 @@ class _BloqueadoPorPagosState extends State<BloqueadoPorPagos> {
                           _buildPaso(
                             numero: '3',
                             titulo: 'Espera verificación',
-                            descripcion: 'El admin revisará y aprobará tu pago',
+                            descripcion:
+                                'Cuando el admin apruebe, entrarás al pool en vivo automáticamente.',
                           ),
                         ],
                       ),

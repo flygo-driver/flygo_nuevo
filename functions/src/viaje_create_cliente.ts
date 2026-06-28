@@ -135,6 +135,83 @@ function parseTimestamp(v: unknown, label: string): Timestamp {
   throw new HttpsError("invalid-argument", `Timestamp inválido: ${label}`);
 }
 
+function numCoord(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function round6(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
+}
+
+function sanitizeWaypointsServer(raw: unknown[]): AnyMap[] {
+  const parsed: AnyMap[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const w = item as AnyMap;
+    const lat = numCoord(w.lat);
+    const lon = numCoord(w.lon);
+    if (!coordsValidas(lat, lon)) continue;
+    const orden = typeof w.orden === "number" ? w.orden : 0;
+    parsed.push({
+      lat: round6(lat!),
+      lon: round6(lon!),
+      label: trimOrEmpty(w.label) || `Parada ${parsed.length + 1}`,
+      orden,
+    });
+  }
+  parsed.sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
+  for (let i = 0; i < parsed.length; i++) {
+    parsed[i].orden = i + 1;
+  }
+  return parsed;
+}
+
+function coordsValidas(lat: number | null, lon: number | null): boolean {
+  if (lat == null || lon == null) return false;
+  if (Math.abs(lat) < 1e-6 && Math.abs(lon) < 1e-6) return false;
+  return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+}
+
+function assertTripCoordsAndPrecio(trip: AnyMap): void {
+  const latO = numCoord(trip.latCliente) ?? numCoord(trip.latOrigen);
+  const lonO = numCoord(trip.lonCliente) ?? numCoord(trip.lonOrigen);
+  const latD = numCoord(trip.latDestino);
+  const lonD = numCoord(trip.lonDestino);
+
+  if (!coordsValidas(latO, lonO) || !coordsValidas(latD, lonD)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Coordenadas de origen o destino inválidas.",
+    );
+  }
+
+  const precio = numCoord(trip.precio);
+  if (precio == null || precio <= 0) {
+    throw new HttpsError("invalid-argument", "Precio inválido.");
+  }
+
+  const dist = numCoord(trip.distanciaKm);
+  if (dist != null && dist <= 0) {
+    throw new HttpsError("invalid-argument", "Distancia inválida.");
+  }
+
+  if (latO != null && lonO != null) {
+    trip.latCliente = round6(latO);
+    trip.lonCliente = round6(lonO);
+    trip.latOrigen = round6(latO);
+    trip.lonOrigen = round6(lonO);
+  }
+  if (latD != null && lonD != null) {
+    trip.latDestino = round6(latD);
+    trip.lonDestino = round6(lonD);
+  }
+}
+
 function sanitizeTrip(raw: AnyMap, viajeId: string, uid: string): AnyMap {
   const uidCliente = trimOrEmpty(raw.uidCliente) || trimOrEmpty(raw.clienteId);
   if (uidCliente !== uid) {
@@ -183,6 +260,30 @@ function sanitizeTrip(raw: AnyMap, viajeId: string, uid: string): AnyMap {
   ];
   for (const k of forbidden) {
     delete out[k];
+  }
+
+  assertTripCoordsAndPrecio(out);
+
+  const wpsRaw = out.waypoints;
+  if (wpsRaw != null && Array.isArray(wpsRaw)) {
+    const sanitized = sanitizeWaypointsServer(wpsRaw as unknown[]);
+    if (sanitized.length > 0) {
+      out.waypoints = sanitized;
+      const extras = (out.extras ?? {}) as AnyMap;
+      extras.paradas_count = sanitized.length;
+      out.extras = extras;
+      const destOk = coordsValidas(
+        numCoord(out.latDestino),
+        numCoord(out.lonDestino),
+      );
+      const legsTotal = sanitized.length + (destOk ? 1 : 0);
+      if (legsTotal > 0) {
+        out.multiparadaLegsTotal = legsTotal;
+        out.multiparadaLegCompletadas = 0;
+        out.multiparadaParadasVisitadas = [];
+        out.multiparadaCompleta = false;
+      }
+    }
   }
 
   out.creadoEn = FieldValue.serverTimestamp();

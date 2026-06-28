@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flygo_nuevo/legal/terms_data.dart' show kTermsContactEmail;
+import 'package:flygo_nuevo/legal/terms_data.dart';
+import 'package:flygo_nuevo/legal/legal_urls.dart';
 
 class PoliticaPrivacidadPage extends StatelessWidget {
   const PoliticaPrivacidadPage({super.key});
@@ -19,8 +20,14 @@ class PoliticaPrivacidadPage extends StatelessWidget {
               style: text.headlineSmall
                   ?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
           const SizedBox(height: 6),
-          Text('Última actualización: 05/11/2025',
+          Text('Última actualización: $kTermsLastUpdate',
               style: text.bodySmall?.copyWith(color: Colors.white54)),
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: () => abrirPoliticaPrivacidadWeb(context),
+            icon: const Icon(Icons.open_in_new, size: 18),
+            label: const Text('Ver versión web (Google Play)'),
+          ),
           const SizedBox(height: 18),
           _h('1. Responsable del tratamiento'),
           _p('Open ASK Service SRL, RNC 1320-11767 (“RAI DRIVER”, “nosotros”). Contacto: $kTermsContactEmail'),

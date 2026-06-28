@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
-import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
@@ -101,7 +100,7 @@ class _ViajeProgramadoPendienteState extends State<ViajeProgramadoPendiente> {
 
   Future<void> _volverInicio() async {
     if (!mounted) return;
-    await NavigationService.clearAndGo(const ClienteShell());
+    await NavigationService.irAlInicioCliente(context: context);
   }
 
   /// Misma condición que [ViajesRepo.cancelarPorCliente] (evita botón activo si Firestore rechazaría).

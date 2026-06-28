@@ -466,11 +466,11 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       final NavigatorState? nav =
           NavigationService.navigatorKey.currentState;
       if (nav != null) {
-        await NavigationService.clearAndGo(const ClienteShell());
+        await NavigationService.clearAndGo(const ClienteShellWithDeepLink());
         return;
       }
       await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil<void>(
-        MaterialPageRoute<void>(builder: (_) => const ClienteShell()),
+        MaterialPageRoute<void>(builder: (_) => const ClienteShellWithDeepLink()),
         (Route<dynamic> r) => false,
       );
     });

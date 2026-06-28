@@ -343,6 +343,111 @@ class LocationPermissionService {
     await ph.openAppSettings();
   }
 
+  /// Desde Cuenta / banner rojo: GPS del sistema o permisos de RAI en ajustes.
+  static Future<void> abrirAjustesUbicacionManualmente() async {
+    await marcarActivacionDesdeAppRai();
+    final bool gpsOn = await Geolocator.isLocationServiceEnabled();
+    if (!gpsOn) {
+      await openSystemLocationSettings();
+      return;
+    }
+    await openAppSettingsPage();
+  }
+
+  /// Resultado del botón «Activar ubicación» / «Abrir ajustes».
+  static Future<
+      ({
+        bool concedido,
+        bool gpsApagado,
+        bool abrioAjustesApp,
+        bool abrioAjustesGps,
+        LocationPermission permission,
+      })> activarUbicacionRai({
+    required bool bannerEnAlertaRoja,
+    required bool modoPermisoBloqueado,
+  }) async {
+    bool abrioAjustesApp = false;
+    bool abrioAjustesGps = false;
+
+    final bool gpsOn = await Geolocator.isLocationServiceEnabled();
+    if (!gpsOn) {
+      await openSystemLocationSettings();
+      abrioAjustesGps = true;
+      return (
+        concedido: false,
+        gpsApagado: true,
+        abrioAjustesApp: false,
+        abrioAjustesGps: true,
+        permission: await Geolocator.checkPermission(),
+      );
+    }
+
+    var perm = await Geolocator.checkPermission();
+    final bool reintentoTrasDenegacion = bannerEnAlertaRoja ||
+        await ubicacionDenegadaTrasBannerEnPrefs();
+
+    if (modoPermisoBloqueado || perm == LocationPermission.deniedForever) {
+      await openAppSettingsPage();
+      abrioAjustesApp = true;
+      perm = await Geolocator.checkPermission();
+      return (
+        concedido: GpsService.permissionUsable(perm),
+        gpsApagado: false,
+        abrioAjustesApp: true,
+        abrioAjustesGps: false,
+        permission: perm,
+      );
+    }
+
+    // Banner rojo: ir directo a ajustes del teléfono (sin repetir cuadro «Permitir»).
+    if (bannerEnAlertaRoja && !GpsService.permissionUsable(perm)) {
+      await openAppSettingsPage();
+      abrioAjustesApp = true;
+      perm = await Geolocator.checkPermission();
+      return (
+        concedido: GpsService.permissionUsable(perm),
+        gpsApagado: false,
+        abrioAjustesApp: true,
+        abrioAjustesGps: false,
+        permission: perm,
+      );
+    }
+
+    if (!GpsService.permissionUsable(perm)) {
+      await GpsService.requestPermissionExplicitUser();
+      perm = await GpsService.waitUntilPermissionUsable(
+        timeout: const Duration(seconds: 3),
+      );
+    }
+
+    if (GpsService.permissionUsable(perm)) {
+      return (
+        concedido: true,
+        gpsApagado: false,
+        abrioAjustesApp: false,
+        abrioAjustesGps: false,
+        permission: perm,
+      );
+    }
+
+    // Android a veces no vuelve a mostrar el cuadro tras un «Denegar».
+    if (reintentoTrasDenegacion || perm == LocationPermission.denied) {
+      await openAppSettingsPage();
+      abrioAjustesApp = true;
+      perm = await GpsService.waitUntilPermissionUsable(
+        timeout: const Duration(seconds: 2),
+      );
+    }
+
+    return (
+      concedido: GpsService.permissionUsable(perm),
+      gpsApagado: false,
+      abrioAjustesApp: abrioAjustesApp,
+      abrioAjustesGps: false,
+      permission: perm,
+    );
+  }
+
   /// Reintento suave cada 30 s (p. ej. pantalla de mapa esperando GPS/permiso).
   static void startGentleRetry(VoidCallback onTick) {
     stopGentleRetry();
@@ -493,14 +598,9 @@ class LocationPermissionService {
       print('[LOCATION] ensureLocationReady: sin permiso usable');
       final bool yaListo = await ubicacionConcedidaAntesEnPrefs();
       if (context?.mounted == true) {
-        if (yaListo || clienteBannerManejaUi || taxistaBannerManejaUi) {
-          ScaffoldMessenger.maybeOf(context!)?.showSnackBar(
-            const SnackBar(
-              content: Text(LocationReadiness.kMsgEsperandoUbicacion),
-              duration: Duration(seconds: 6),
-            ),
-          );
-        } else {
+        final bool bannerShell =
+            clienteBannerManejaUi || taxistaBannerManejaUi;
+        if (!yaListo && !bannerShell) {
           _snackOpenAppSettings(
             context!,
             'RAI necesita permiso de ubicación. Toca «Permitir» en el banner superior.',
@@ -568,7 +668,7 @@ class LocationPermissionService {
 
   static void _snackOpenLocationSettings(
       BuildContext context, String message) {
-    if (clienteBannerManejaUi) return;
+    if (clienteBannerManejaUi || taxistaBannerManejaUi) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(
         content: Text(message),
@@ -585,7 +685,7 @@ class LocationPermissionService {
   }
 
   static void _snackOpenAppSettings(BuildContext context, String message) {
-    if (clienteBannerManejaUi) return;
+    if (clienteBannerManejaUi || taxistaBannerManejaUi) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(
         content: Text(message),

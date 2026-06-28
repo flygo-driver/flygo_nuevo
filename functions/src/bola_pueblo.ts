@@ -94,6 +94,21 @@ export const aceptarOfertaBola = onCall(async (request) => {
     throw new HttpsError("not-found", "Oferta no encontrada.");
   }
   const ofData = ofSnap.data()!;
+  if (String(ofData.estado ?? "") !== "pendiente") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Esta oferta ya no está pendiente.",
+    );
+  }
+  if (
+    ofData.esContraofertaCliente === true ||
+    ofData.esContraofertaConductor === true
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Usá el flujo de contraoferta para aceptar este monto.",
+    );
+  }
   const montoAcordado = Number(ofData.montoRd ?? 0);
   if (!(montoAcordado > 0)) {
     throw new HttpsError("invalid-argument", "Monto acordado inválido.");
@@ -462,6 +477,248 @@ export const aceptarContraofertaClienteBola = onCall(async (request) => {
 });
 
 /**
+ * Pasajero acepta la contraoferta del conductor («Voy para»): el conductor publicó otro monto.
+ */
+export const aceptarContraofertaConductorBola = onCall(async (request) => {
+  const uidCliente = request.auth?.uid;
+  if (!uidCliente) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+
+  const bolaId = String(request.data?.bolaId ?? "").trim();
+  const ofertaId = String(request.data?.ofertaId ?? "").trim();
+  if (!bolaId || !ofertaId) {
+    throw new HttpsError("invalid-argument", "Faltan bolaId u ofertaId.");
+  }
+
+  const db = getFirestore();
+  const callerRol = await rolUsuario(db, uidCliente);
+  if (callerRol !== "cliente") {
+    throw new HttpsError("permission-denied", "Solo pasajeros pueden aceptar esta contraoferta.");
+  }
+
+  const pubRef = db.collection("bolas_pueblo").doc(bolaId);
+  const pubSnap = await pubRef.get();
+  if (!pubSnap.exists) {
+    throw new HttpsError("not-found", "Publicación no encontrada.");
+  }
+
+  const pub = pubSnap.data()!;
+  if (String(pub.tipo ?? "") !== "oferta") {
+    throw new HttpsError("failed-precondition", "Solo aplica a publicaciones tipo oferta.");
+  }
+  if (!esRolTaxista(String(pub.createdByRol ?? "").toLowerCase())) {
+    throw new HttpsError("failed-precondition", "La publicación debe ser del conductor.");
+  }
+  if (pub.estado !== "abierta") {
+    throw new HttpsError("failed-precondition", "Esta publicación ya no está abierta.");
+  }
+
+  const ofRef = pubRef.collection("ofertas").doc(ofertaId);
+  const ofSnap = await ofRef.get();
+  if (!ofSnap.exists) {
+    throw new HttpsError("not-found", "Contraoferta no encontrada.");
+  }
+  const ofData = ofSnap.data()!;
+  if (ofData.esContraofertaConductor !== true) {
+    throw new HttpsError("invalid-argument", "Esta fila no es una contraoferta del conductor.");
+  }
+  if (String(ofData.contraOfertaParaUid ?? "") !== uidCliente) {
+    throw new HttpsError("permission-denied", "Solo el pasajero indicado puede aceptar esta contraoferta.");
+  }
+  const uidTaxista = String(pub.createdByUid ?? "");
+  const fromUid = String(ofData.fromUid ?? "");
+  if (!uidTaxista || fromUid !== uidTaxista) {
+    throw new HttpsError("failed-precondition", "La contraoferta no coincide con el conductor publicador.");
+  }
+  if (String(ofData.estado ?? "") !== "pendiente") {
+    throw new HttpsError("failed-precondition", "Esta contraoferta ya fue respondida.");
+  }
+
+  const montoAcordado = Number(ofData.montoRd ?? 0);
+  if (!(montoAcordado > 0)) {
+    throw new HttpsError("invalid-argument", "Monto inválido.");
+  }
+
+  const comisionCalc = await comisionDesdeMontoAcordado(montoAcordado);
+  const { comisionPct, comision, gananciaNeta, precioCents, comisionCents, gananciaCents } =
+    comisionCalc;
+  const codigo = generarCodigoVerificacion();
+
+  const ofertasSnap = await pubRef.collection("ofertas").get();
+  const batch = db.batch();
+
+  batch.set(
+    pubRef,
+    {
+      estado: "acordada",
+      ofertaAceptadaId: ofertaId,
+      montoAcordadoRd: Number.parseFloat(montoAcordado.toFixed(2)),
+      comisionPct,
+      comisionRd: comision,
+      gananciaNetaChoferRd: gananciaNeta,
+      uidTaxista,
+      uidCliente,
+      estadoViajeBola: "acordada",
+      codigoVerificacionBola: codigo,
+      codigoGeneradoEn: FieldValue.serverTimestamp(),
+      codigoVerificado: false,
+      codigoVerificadoEn: FieldValue.delete(),
+      metodoPago: "efectivo",
+      metodoPagoUpdatedAt: FieldValue.serverTimestamp(),
+      pickupConfirmadoTaxista: false,
+      pickupConfirmadoTaxistaEn: FieldValue.delete(),
+      acordadaEn: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  batch.set(
+    ofRef,
+    { estado: "aceptada", updatedAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+
+  for (const d of ofertasSnap.docs) {
+    if (d.id === ofertaId) continue;
+    batch.set(
+      d.ref,
+      { estado: "rechazada", updatedAt: FieldValue.serverTimestamp() },
+      { merge: true },
+    );
+  }
+
+  await batch.commit();
+
+  const viajesSnap = await db
+    .collection("viajes")
+    .where("bolaPuebloId", "==", bolaId)
+    .limit(8)
+    .get();
+
+  if (!viajesSnap.empty) {
+    const uSnap = await db.collection("usuarios").doc(uidTaxista).get();
+    const ud = uSnap.data() ?? {};
+    const nombreTaxista = String(ud.nombre ?? "").trim() || "Conductor";
+    const telefonoTx = String(ud.telefono ?? "").trim();
+    const placaTx = String(ud.placa ?? "").trim();
+
+    const viajePatch: Record<string, unknown> = {
+      bolaNegociacionAbierta: false,
+      uidTaxista,
+      taxistaId: uidTaxista,
+      uidCliente,
+      clienteId: uidCliente,
+      nombreTaxista,
+      telefono: telefonoTx,
+      telefonoTaxista: telefonoTx,
+      placa: placaTx,
+      precio: Number.parseFloat(montoAcordado.toFixed(2)),
+      comision: Number.parseFloat(comision.toFixed(2)),
+      gananciaTaxista: Number.parseFloat(gananciaNeta.toFixed(2)),
+      precio_cents: precioCents,
+      comision_cents: comisionCents,
+      ganancia_cents: gananciaCents,
+      estado: "aceptado",
+      aceptado: true,
+      activo: true,
+      codigoVerificacion: codigo,
+      codigoVerificado: false,
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    };
+
+    const primaryViajeId = viajesSnap.docs[0].id;
+    for (const v of viajesSnap.docs) {
+      await v.ref.set(viajePatch, { merge: true });
+    }
+
+    await db.collection("usuarios").doc(uidTaxista).set(
+      {
+        viajeActivoId: primaryViajeId,
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    await db.collection("usuarios").doc(uidCliente).set(
+      {
+        viajeActivoId: primaryViajeId,
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    if (!String(pub.viajeEspejoId ?? "").trim()) {
+      await pubRef.set(
+        {
+          viajeEspejoId: primaryViajeId,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+  }
+
+  return { ok: true };
+});
+
+/**
+ * Pasajero rechaza la contraoferta del conductor; la publicación sigue abierta.
+ */
+export const rechazarContraofertaConductorBola = onCall(async (request) => {
+  const uidCliente = request.auth?.uid;
+  if (!uidCliente) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+
+  const bolaId = String(request.data?.bolaId ?? "").trim();
+  const ofertaId = String(request.data?.ofertaId ?? "").trim();
+  const motivo = String(request.data?.motivo ?? "").trim();
+  if (!bolaId || !ofertaId) {
+    throw new HttpsError("invalid-argument", "Faltan bolaId u ofertaId.");
+  }
+
+  const db = getFirestore();
+  const pubRef = db.collection("bolas_pueblo").doc(bolaId);
+  const pubSnap = await pubRef.get();
+  if (!pubSnap.exists) {
+    throw new HttpsError("not-found", "Publicación no encontrada.");
+  }
+  const pub = pubSnap.data()!;
+  if (pub.estado !== "abierta") {
+    throw new HttpsError("failed-precondition", "Esta publicación ya no está abierta.");
+  }
+
+  const ofRef = pubRef.collection("ofertas").doc(ofertaId);
+  const ofSnap = await ofRef.get();
+  if (!ofSnap.exists) {
+    throw new HttpsError("not-found", "Oferta no encontrada.");
+  }
+  const ofData = ofSnap.data()!;
+  if (ofData.esContraofertaConductor !== true) {
+    throw new HttpsError("invalid-argument", "No es una contraoferta del conductor.");
+  }
+  if (String(ofData.contraOfertaParaUid ?? "") !== uidCliente) {
+    throw new HttpsError("permission-denied", "No podés rechazar esta contraoferta.");
+  }
+  if (String(ofData.estado ?? "") !== "pendiente") {
+    throw new HttpsError("failed-precondition", "Esta contraoferta ya fue respondida.");
+  }
+
+  await ofRef.set(
+    {
+      estado: "rechazada",
+      ...(motivo ? { motivoRechazo: motivo } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+  return { ok: true };
+});
+
+/**
  * Conductor rechaza la contraoferta del pasajero; la bola sigue abierta.
  */
 export const rechazarContraofertaClienteBola = onCall(async (request) => {
@@ -566,6 +823,21 @@ export const actualizarMetodoPagoBola = onCall(async (request) => {
     },
     { merge: true },
   );
+
+  const viajeEspejoId = String(d.viajeEspejoId ?? "").trim();
+  if (viajeEspejoId) {
+    await db.collection("viajes").doc(viajeEspejoId).set(
+      {
+        metodoPago: metodoRaw === "efectivo" ? "Efectivo" : "Transferencia",
+        metodoPagoUpdatedBy: uid,
+        metodoPagoUpdatedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+
   return { ok: true };
 });
 

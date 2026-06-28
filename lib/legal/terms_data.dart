@@ -1,14 +1,31 @@
-const String kTermsVersion = '1.0';
+const String kTermsVersion = '1.1';
 const String kTaxistaContractVersion = '1.0';
+
+/// Base pública en Firebase Hosting (Play Console y enlaces in-app).
+const String kLegalPublicBaseUrl = 'https://flygo-rd.web.app';
+
+/// URL para Google Play Console → Política de privacidad.
+const String kPrivacyPolicyPublicUrl = '$kLegalPublicBaseUrl/legal/privacidad';
+
+/// Términos y condiciones (web).
+const String kTermsPublicUrl = '$kLegalPublicBaseUrl/legal/terminos';
+
+/// Eliminación de cuenta (requisito Google Play).
+const String kAccountDeletionPublicUrl =
+    '$kLegalPublicBaseUrl/legal/eliminar-cuenta';
+
+/// Contrato digital conductor (web).
 const String kTaxistaContractPdfUrl =
-    'https://rai-driver.app/legal/contrato-taxista-v1.pdf';
-const String kTermsLastUpdate = '31/03/2026';
+    '$kLegalPublicBaseUrl/legal/contrato-taxista';
+
+const String kTermsLastUpdate = '24/06/2026';
 const String kTermsContactEmail = 'ventasopenask@gmail.com';
 const String kTermsContactPhone = '18094201481';
 
 const String kTermsFullText = '''
 POLITICA DE PRIVACIDAD Y TERMINOS DE USO - RAI DRIVER
-Ultima actualizacion: 31/03/2026
+Ultima actualizacion: 24/06/2026
+Version: 1.1
 
 Empresa: Open ASK Service SRL
 RNC: 1320-11767

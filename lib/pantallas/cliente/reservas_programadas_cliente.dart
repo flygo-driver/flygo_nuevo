@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_confirmacion.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 
@@ -203,13 +206,10 @@ class ReservasProgramadasCliente extends StatelessWidget {
                             const SizedBox(height: 12),
                             FilledButton(
                               onPressed: () {
-                                Navigator.push(
+                                unawaited(NavigationService.pushEnTabShell(
                                   context,
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => ViajeProgramadoConfirmacion(
-                                        viajeId: d.id),
-                                  ),
-                                );
+                                  ViajeProgramadoConfirmacion(viajeId: d.id),
+                                ));
                               },
                               style: FilledButton.styleFrom(
                                 backgroundColor:

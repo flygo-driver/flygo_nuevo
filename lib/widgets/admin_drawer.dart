@@ -34,7 +34,6 @@ import 'package:flygo_nuevo/pantallas/admin/revision_documentos_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/gestionar_usuarios_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/reportes_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_tarifas.dart';
-import 'package:flygo_nuevo/pantallas/admin/admin_tarifas_tramos.dart';
 import 'package:flygo_nuevo/pantallas/admin/configuracion_viaje_comision_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_comision_incentivos_taxista.dart';
 import 'package:flygo_nuevo/pantallas/admin/incidencias_admin.dart';
@@ -222,21 +221,10 @@ class AdminDrawer extends StatelessWidget {
               title: Text('Tarifas',
                   style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
               subtitle: Text(
-                'Pestaña Tramos distancia + tarifas locales',
+                'Locales, turismo y tramos larga distancia',
                 style: subtleStyle,
               ),
               onTap: () => _push(context, const AdminTarifas()),
-            ),
-            ListTile(
-              leading: Icon(Icons.alt_route,
-                  color: isLight ? Colors.green.shade700 : Colors.greenAccent),
-              title: Text('Tramos larga distancia',
-                  style: titleStyle.copyWith(fontWeight: FontWeight.w700)),
-              subtitle: Text(
-                'Mismo panel Tarifas — tramos arriba en verde',
-                style: subtleStyle,
-              ),
-              onTap: () => _push(context, const AdminTarifasTramos()),
             ),
             ListTile(
               leading: Icon(Icons.local_offer, color: iconNeutral),

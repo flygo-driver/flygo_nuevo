@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/servicios/fcm_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/shell/cliente_pool_deep_link_bridge.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
 
 class PushService {
@@ -51,6 +52,16 @@ class PushService {
     if (type == 'trip_chat_message' || type == 'trip_call_attempt') {
       debugPrint('[FCM] opened app: trip comms type=$type');
       await FcmService.handleRemoteOpen(message);
+      return;
+    }
+    if (type.startsWith('gira_cupos_recordatorio_') ||
+        type == 'gira_cupos_actualizada') {
+      final poolId = (data['poolId'] ?? '').toString().trim();
+      if (poolId.isEmpty) return;
+      if (isPasajeroCapableFlavor) {
+        ClientePoolDeepLinkBridge.enqueuePoolId(poolId);
+        ClientePoolDeepLinkBridge.tryOpenPool(poolId);
+      }
       return;
     }
     if (type != 'scheduled_trip_pool_open') return;
@@ -99,7 +110,7 @@ class PushService {
       await _fm.setForegroundNotificationPresentationOptions(
         alert: true,
         badge: true,
-        sound: !isClienteFlavor,
+        sound: isTaxistaCapableFlavor,
       );
     }
 

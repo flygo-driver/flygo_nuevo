@@ -11,13 +11,11 @@ import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
-import 'package:flygo_nuevo/servicios/active_trip_service.dart';
-import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/bola_nav_coordination_guard.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
-import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
-import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
@@ -987,6 +985,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                       uidConductor: uidTaxista,
                                       codigoBola: codigoBola,
                                       codigoGeneradoEn: codigoGeneradoEn,
+                                      codigoVerificado: codigoVerificado,
                                       pickupConfirmadoTaxista:
                                           pickupConfirmadoTaxista,
                                       user: user,
@@ -1206,42 +1205,11 @@ class _BolaEspejoPoolAutoNavListenerState
       }
       unawaited(() async {
         try {
-          final String? viajeId =
-              await ViajesRepo.enlazarViajeEspejoBolaOperativo(
+          await BolaPuebloDialogs.abrirViajeEnCursoOperativoBola(
             bolaId: widget.bolaId,
+            esTaxista: widget.esTaxistaAsignado,
+            preNav: preNav,
           );
-          if (viajeId == null || viajeId.trim().isEmpty) return;
-          ActiveTripService.mantenerOverlayViajeEnShell(
-            const Duration(seconds: 90),
-          );
-          if (widget.esTaxistaAsignado) {
-            ActiveTripService.bloquearShellTaxistaTrasAceptar(
-              const Duration(seconds: 90),
-            );
-            final String uid =
-                (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
-            if (uid.isNotEmpty) {
-              await NavigationService.esperarViajeAsignadoAlTaxista(
-                viajeId: viajeId,
-                uidTaxista: uid,
-              );
-            }
-            await NavigationService.clearAndGoViajeEnCursoTaxista(
-              preNav: preNav,
-            );
-          } else {
-            final String uid =
-                (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
-            if (uid.isNotEmpty) {
-              await NavigationService.esperarViajeEspejoBolaCliente(
-                viajeId: viajeId,
-                uidCliente: uid,
-              );
-            }
-            await NavigationService.clearAndGoViajeEnCursoCliente(
-              preNav: preNav,
-            );
-          }
         } finally {
           if (mounted) _navegacionMapaPoolEnCurso = false;
         }
@@ -1288,6 +1256,9 @@ class _BolaViajeTerminalPageState extends State<BolaViajeTerminalPage> {
   @override
   void initState() {
     super.initState();
+    if (widget.terminal == BolaViajeTerminal.cancelada) {
+      BolaNavCoordinationGuard.markCancelHandled(widget.bolaId);
+    }
     if (widget.terminal == BolaViajeTerminal.finalizada) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_abrirComprobante(automatico: true));
@@ -1305,11 +1276,14 @@ class _BolaViajeTerminalPageState extends State<BolaViajeTerminalPage> {
 
     if (automatico) {
       if (_autoComprobanteOfrecido) return;
-      if (BolaPostFacturaReopenGuard.shouldSuppressListenerPush(widget.bolaId)) {
+      if (BolaPostFacturaReopenGuard.shouldSuppressListenerPush(
+        widget.bolaId,
+        role: _role,
+      )) {
         return;
       }
       _autoComprobanteOfrecido = true;
-      BolaPostFacturaReopenGuard.markOpened(widget.bolaId);
+      BolaPostFacturaReopenGuard.markOpened(widget.bolaId, role: _role);
     }
 
     try {
@@ -1318,9 +1292,11 @@ class _BolaViajeTerminalPageState extends State<BolaViajeTerminalPage> {
         bolaId: widget.bolaId,
         role: _role,
       );
-      if (!automatico) {
-        BolaPostFacturaReopenGuard.markOpened(widget.bolaId);
-      }
+      await BolaPostFacturaReopenGuard.markCompleted(
+        bolaId: widget.bolaId,
+        role: _role,
+        uid: widget.uid,
+      );
     } catch (_) {
       if (automatico && mounted) {
         _autoComprobanteOfrecido = false;

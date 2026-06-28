@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
-import 'package:flygo_nuevo/servicios/rai_ubicacion_ui_constants.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 
 /// Botón único RAI (cliente o taxista): GPS, permiso o ajustes del teléfono.
@@ -62,6 +61,9 @@ class _RaiUbicacionActivarButtonState extends State<RaiUbicacionActivarButton> {
     final cs = Theme.of(context).colorScheme;
     final cargando = _solicitudEnCurso.value;
     const accent = Color(0xFF49F18B);
+    final String etiqueta = widget.rol == RaiUbicacionRol.cliente
+        ? RaiUbicacionClienteService.instance.etiquetaAccionBanner
+        : RaiUbicacionTaxistaService.instance.etiquetaAccionBanner;
 
     return FilledButton(
       onPressed: cargando ? null : () => unawaited(_activar()),
@@ -88,7 +90,7 @@ class _RaiUbicacionActivarButtonState extends State<RaiUbicacionActivarButton> {
               ),
             )
           : Text(
-              RaiUbicacionUiConstants.accionActivarUbicacion,
+              etiqueta,
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
     );

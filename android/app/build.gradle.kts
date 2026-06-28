@@ -50,7 +50,7 @@ android {
         create("cliente") {
             dimension = "tipo"
             applicationId = "com.flygo.rd2"
-            resValue("string", "app_name", "RAI Pasajero")
+            resValue("string", "app_name", "RAI Driver")
         }
         create("conductor") {
             dimension = "tipo"
@@ -167,16 +167,53 @@ afterEvaluate {
                     }
                     apksToCopy.forEach { apk ->
                         apk.copyTo(File(destDir, apk.name), overwrite = true)
-                        // Nombre que busca `flutter run` sin --flavor (variante cliente).
+                    }
+
+                    // Flutter CLI busca `app-<flavor>-release.apk` (universal) o
+                    // `app-<abi>-<flavor>-release.apk` (split). AGP emite
+                    // `app-<flavor>-<abi>-release.apk` → alias compatibles.
+                    val releaseApks = apksToCopy.filter { it.name.endsWith("-release.apk") }
+                    val preferredArm64 = releaseApks.firstOrNull {
+                        it.name.contains("arm64-v8a", ignoreCase = true)
+                    }
+                    val primaryRelease = preferredArm64
+                        ?: releaseApks.maxByOrNull { it.length() }
+                        ?: releaseApks.firstOrNull()
+
+                    if (primaryRelease != null && lowerBuild == "release") {
+                        val flavorRelease = File(destDir, "app-$flavor-release.apk")
+                        primaryRelease.copyTo(flavorRelease, overwrite = true)
                         if (flavor == "cliente") {
-                            val flutterAlias = when (lowerBuild) {
-                                "debug" -> "app-debug.apk"
-                                "release" -> "app-release.apk"
-                                else -> null
-                            }
-                            if (flutterAlias != null) {
-                                apk.copyTo(File(destDir, flutterAlias), overwrite = true)
-                            }
+                            primaryRelease.copyTo(
+                                File(destDir, "app-release.apk"),
+                                overwrite = true,
+                            )
+                        }
+                    }
+
+                    if (lowerBuild == "release") {
+                        val abiFlavorRegex =
+                            Regex("""app-$flavor-(.+)-release\.apk""")
+                        releaseApks.forEach { apk ->
+                            val abi = abiFlavorRegex.matchEntire(apk.name)
+                                ?.groupValues?.getOrNull(1)
+                                ?: return@forEach
+                            apk.copyTo(
+                                File(destDir, "app-$abi-$flavor-release.apk"),
+                                overwrite = true,
+                            )
+                        }
+                    }
+
+                    if (flavor == "cliente" && lowerBuild == "debug") {
+                        val debugApk = apksToCopy.firstOrNull {
+                            it.name.endsWith("-debug.apk")
+                        }
+                        if (debugApk != null) {
+                            debugApk.copyTo(
+                                File(destDir, "app-debug.apk"),
+                                overwrite = true,
+                            )
                         }
                     }
                 }

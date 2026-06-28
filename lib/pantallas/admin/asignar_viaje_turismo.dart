@@ -49,10 +49,9 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
       widget.subtipoTurismo,
       widget.tipoVehiculoDoc,
     );
-    final String raw = (widget.subtipoTurismo ?? '').trim().isNotEmpty
-        ? widget.subtipoTurismo!.trim()
-        : (widget.tipoVehiculoDoc ?? '').trim();
-    _etiquetaTipo = raw.isNotEmpty ? raw : _tipoVehiculoRequerido;
+    _etiquetaTipo = AsignacionTurismoRepo.labelTipoVehiculoTurismo(
+      _tipoVehiculoRequerido,
+    );
   }
 
   @override
@@ -138,7 +137,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
-              'Vehículo requerido: $_tipoVehiculoRequerido ($_etiquetaTipo)',
+              'Vehículo requerido: $_etiquetaTipo',
               style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
             ),
           ),
@@ -247,7 +246,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
                             style: TextStyle(color: AdminUi.secondary(context)),
                           ),
                           Text(
-                            _tipoVehiculoRequerido.toUpperCase(),
+                            _etiquetaTipo,
                             style: TextStyle(
                               color: warn,
                               fontSize: 20,

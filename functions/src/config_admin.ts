@@ -9,6 +9,7 @@ import {
   type EscalonIncentivo,
   type VentanaIncentivo,
 } from "./comision_incentivos_taxista.js";
+import { invalidateComisionPrepagoConfigCache } from "./finance.js";
 
 type AnyMap = Record<string, unknown>;
 
@@ -172,6 +173,8 @@ export const updateComisionPrepagoConfig = onCall(async (request) => {
     resourceId: "config/comision_prepago",
     metadata: { minimoOperativoRd, umbralPreventivoRd },
   });
+
+  invalidateComisionPrepagoConfigCache();
 
   return { ok: true };
 });
@@ -473,5 +476,55 @@ export const updateComisionIncentivosTaxistaConfig = onCall(async (request) => {
   });
 
   return { ok: true, activo: parsed.activo, ventana: parsed.ventana, escalones: parsed.escalones };
+});
+
+/**
+ * Tramos larga distancia (`config/tarifas_tramos`).
+ */
+export const updateTarifasTramosConfig = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+  await assertAdmin(uid);
+
+  const motivo = String(request.data?.motivo ?? "").trim();
+  if (motivo.length < 6) throw new HttpsError("invalid-argument", "Motivo requerido (min 6 caracteres)");
+
+  const tarifasTramos = request.data?.tarifasTramos as AnyMap | undefined;
+  if (!tarifasTramos || typeof tarifasTramos !== "object") {
+    throw new HttpsError("invalid-argument", "Falta tarifasTramos");
+  }
+
+  const ref = db().collection("config").doc("tarifas_tramos");
+  const beforeSnap = await ref.get();
+  const before = safeJson(beforeSnap.data() ?? {});
+
+  await ref.set(
+    {
+      ...tarifasTramos,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  const afterSnap = await ref.get();
+  const after = safeJson(afterSnap.data() ?? {});
+
+  await writeHistory({
+    configKey: "config/tarifas_tramos",
+    changedBy: uid,
+    motivo,
+    before,
+    after,
+  });
+
+  logAdminAudit({
+    action: "update_tarifas_tramos_config",
+    actorUid: uid,
+    resourceType: "config",
+    resourceId: "config/tarifas_tramos",
+    metadata: { activo: after.activo === true },
+  });
+
+  return { ok: true };
 });
 

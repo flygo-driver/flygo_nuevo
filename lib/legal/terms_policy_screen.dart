@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
+import 'package:flygo_nuevo/legal/legal_urls.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart';
 import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
@@ -78,9 +79,31 @@ class _TermsPolicyScreenState extends State<TermsPolicyScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(16),
               color: cs.surfaceContainerHighest,
-              child: Text(
-                'Version $kTermsVersion  ·  Ultima actualizacion: $kTermsLastUpdate',
-                style: TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Version $kTermsVersion  ·  Ultima actualizacion: $kTermsLastUpdate',
+                    style: TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => abrirPoliticaPrivacidadWeb(context),
+                        icon: const Icon(Icons.open_in_new, size: 16),
+                        label: const Text('Privacidad (web)'),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => abrirTerminosWeb(context),
+                        icon: const Icon(Icons.open_in_new, size: 16),
+                        label: const Text('Términos (web)'),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
             Expanded(

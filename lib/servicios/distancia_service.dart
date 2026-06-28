@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 
+import 'tarifa_service_unificado.dart';
+
 class DistanciaService {
-  static const double _tarifaBase = 120.0; // RD$
-  static const double _tarifaPorKm = 45.0; // RD$ por km
+  static const double _tarifaBase = 120.0; // RD$ (legacy, ver calcularPrecio)
+  static const double _tarifaPorKm = 45.0; // RD$ por km (legacy)
   static const double _minimo = 150.0;
 
   /// Tope técnico RD (interurbano largo, ej. 200–400 km por carretera).
@@ -27,9 +29,11 @@ class DistanciaService {
   }
 
   static double calcularPrecio(double distanciaKm, {bool idaVuelta = false}) {
-    final double kms = idaVuelta ? (distanciaKm * 2.0) : distanciaKm;
-    double precio = _tarifaBase + (kms * _tarifaPorKm);
-    if (precio < _minimo) precio = _minimo;
+    double precio =
+        TarifaServiceUnificado.precioNormalCarroReferenciaSync(distanciaKm);
+    if (idaVuelta) {
+      precio *= 1.8;
+    }
     return double.parse(precio.toStringAsFixed(2));
   }
 

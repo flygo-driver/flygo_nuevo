@@ -95,7 +95,12 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
   }
 
   Future<void> _finalizarFlujo() async {
-    if (!mounted) return;
+    if (!mounted) {
+      await TaxistaColaPostCompletar.navegarTrasCompletar(
+        uidTaxista: widget.uidTaxista,
+      );
+      return;
+    }
     await TaxistaColaPostCompletar.navegarTrasCompletar(
       context: context,
       uidTaxista: widget.uidTaxista,
@@ -466,6 +471,20 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
           ),
           const SizedBox(height: 28),
           const CircularProgressIndicator(color: Colors.greenAccent),
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: () => unawaited(_finalizarFlujo()),
+            icon: const Icon(Icons.local_taxi_rounded),
+            label: const Text(
+              'Volver a recibir viajes',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.greenAccent,
+              foregroundColor: Colors.black87,
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+            ),
+          ),
         ],
       ),
     );

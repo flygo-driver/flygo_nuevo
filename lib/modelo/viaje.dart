@@ -368,9 +368,17 @@ class Viaje {
     final bool codigoVerifOk = _asBool(data['codigoVerificado']);
 
     // ✅ NUEVO: waypoints
-    final List<Map<String, dynamic>>? waypoints = data['waypoints'] is List
+    List<Map<String, dynamic>>? waypoints = data['waypoints'] is List
         ? List<Map<String, dynamic>>.from(data['waypoints'])
         : null;
+    if (waypoints != null && waypoints.length > 1) {
+      waypoints.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
+        final int oa = (a['orden'] is num) ? (a['orden'] as num).toInt() : 0;
+        final int ob = (b['orden'] is num) ? (b['orden'] as num).toInt() : 0;
+        if (oa != ob) return oa.compareTo(ob);
+        return 0;
+      });
+    }
 
     final int multiLegsTotal = data['multiparadaLegsTotal'] is num
         ? (data['multiparadaLegsTotal'] as num).toInt()

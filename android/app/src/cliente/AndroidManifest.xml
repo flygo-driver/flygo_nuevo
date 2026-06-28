@@ -1,20 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pasajero: sin ubicación en segundo plano ni FGS de ubicación (solo conductor). -->
+<!-- Play unificada (com.flygo.rd2): cliente + taxista. Permisos de ubicación en
+     segundo plano vienen del manifest principal (taxista en viaje). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <uses-permission
-        android:name="android.permission.ACCESS_BACKGROUND_LOCATION"
-        tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_LOCATION"
-        tools:node="remove" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
 
     <application>
         <activity
             android:name=".MainActivity"
             tools:node="merge">
-            <!-- Giras/pool: solo RAI Pasajero (com.flygo.rd2) -->
+            <!-- Giras/pool: RAI Driver unificado (com.flygo.rd2) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

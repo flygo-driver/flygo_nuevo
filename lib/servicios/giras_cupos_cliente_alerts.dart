@@ -21,7 +21,7 @@ class GirasCuposClienteAlerts {
     required bool welcomeYaEnEstaVisita,
     required void Function() onWelcomePlayed,
   }) async {
-    if (!isClienteFlavor) return;
+    if (!isPasajeroCapableFlavor) return;
 
     if (esPrimeraEmisionSuscripcion) {
       if (!welcomeYaEnEstaVisita) {
@@ -59,6 +59,9 @@ class GirasCuposClienteAlerts {
     final persisted = (prefs.getStringList(_kSeenIds) ?? <String>[]).toSet();
     final nuevas =
         docs.where((d) => !persisted.contains(d.id)).length;
+
+    // Sin novedad: no timbre al reabrir el catálogo (evita molestia rutinaria).
+    if (nuevas < 1) return;
 
     await NotificationService.I.notifyEntradaCatalogoGirasCliente(
       salidasVisibles: docs.length,
@@ -133,9 +136,8 @@ class GirasCuposClienteAlerts {
     final occ = (d['asientosReservados'] as num?)?.toInt() ?? 0;
     final left = (cap - occ).clamp(0, cap);
     final precio = (d['precioPorAsiento'] as num?)?.toDouble() ?? 0;
-    final mult = (d['sentido'] == 'ida_y_vuelta') ? 2 : 1;
     final precioTxt = precio > 0
-        ? 'Desde RD\$ ${(precio * mult).toStringAsFixed(0)}'
+        ? 'Desde RD\$ ${precio.toStringAsFixed(0)}'
         : 'Consultá precio en la app';
     return left > 0
         ? '$left cupo${left == 1 ? '' : 's'} · $precioTxt'

@@ -41,7 +41,10 @@ bool taxistaRequiereRenovacionDocumentos(Map<String, dynamic> data) {
 /// El bloqueo operativo por comisión efectivo (tope) sigue en [tienePagoPendiente] + repos / UI.
 bool taxistaAprobadoParaOperarPool(Map<String, dynamic> data) {
   if (taxistaDocsEstadoDesdeUsuario(data) != 'aprobado') return false;
-  if (data['documentosCompletos'] != true) return false;
+  // ADM moderno usa documentosCompletos; legacy / desbloqueo usa puedeRecibirViajes.
+  final docsOk = data['documentosCompletos'] == true ||
+      data['puedeRecibirViajes'] == true;
+  if (!docsOk) return false;
   if (taxistaRequiereRenovacionDocumentos(data)) return false;
   return true;
 }
@@ -182,6 +185,8 @@ String taxistaMensajeClaimFallido(
     case 'bloqueado-pago-semanal':
     case 'bloqueado-comision-efectivo':
       return PagosTaxistaRepo.mensajeRecargaTomarViajes;
+    case 'prepago-insuficiente-comision-viaje':
+      return PagosTaxistaRepo.mensajePrepagoInsuficienteComisionViajeGenerico;
     case 'bloqueado-admin':
       return 'Tu cuenta está bloqueada por administración. Contacta soporte.';
     case 'registro-incompleto':

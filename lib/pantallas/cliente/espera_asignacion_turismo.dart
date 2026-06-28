@@ -218,10 +218,12 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     _navegarViajeActivoTimer?.cancel();
     final NavigatorState? navRoot =
         Navigator.of(context, rootNavigator: true);
-    _navegarViajeActivoTimer = Timer(const Duration(milliseconds: 2600), () {
+    _navegarViajeActivoTimer = Timer(const Duration(milliseconds: 400), () {
       if (!mounted) return;
       unawaited(
-        NavigationService.clearAndGoViajeEnCursoCliente(preNav: navRoot),
+        NavigationService.irAViajeEnCursoClienteTrasAsignacionTaxista(
+          preNav: navRoot,
+        ),
       );
     });
   }
@@ -1879,7 +1881,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
         motivo: 'Cancelado desde espera turismo',
       );
       if (!mounted) return;
-      await NavigationService.clearAndGo(const ClienteShell());
+      await NavigationService.clearAndGo(const ClienteShellWithDeepLink());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

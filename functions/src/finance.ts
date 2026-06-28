@@ -21,6 +21,10 @@ import {
   metodoPagoNormalizadoDesde,
 } from "./liquidacion_semanal_viaje.js";
 import { assertTaxistaAptoParaClaimPool } from "./taxista_operacion_gate.js";
+import {
+  PREPAGO_INSUFICIENTE_COMISION_VIAJE,
+  prepagoInsuficienteParaViajeEfectivo,
+} from "./prepago_comision_viaje.js";
 
 const db = () => getFirestore();
 const messaging = () => getMessaging();
@@ -43,6 +47,11 @@ let _cfgCache: {
   minimoOperativoRd: number;
   umbralPreventivoRd: number;
 } | null = null;
+
+/** Tras cambio admin en config/comision_prepago (config_admin.ts). */
+export function invalidateComisionPrepagoConfigCache(): void {
+  _cfgCache = null;
+}
 
 let _financeCfgCache: {
   loadedAt: number;
@@ -1573,6 +1582,7 @@ export const aceptarViajeSeguro = onCall(async (request) => {
   if (idem.done) return idem.result;
 
   const prepagoCfg = await getComisionPrepagoConfig();
+  const comisionPctGlobal = await getComisionViajePorcentajeCached();
 
   const viajeRef = db().collection("viajes").doc(viajeId);
   const userRef = db().collection("usuarios").doc(uidActor);
@@ -1621,6 +1631,13 @@ export const aceptarViajeSeguro = onCall(async (request) => {
     const billeSnap = await tx.get(db().collection("billeteras_taxista").doc(uidActor));
     if (bloqueoOperativoPrepago(billeSnap.data() as AnyMap | undefined, prepagoCfg.minimoOperativoRd)) {
       throw new HttpsError("failed-precondition", "bloqueado-comision-efectivo");
+    }
+    if (prepagoInsuficienteParaViajeEfectivo({
+      billeData: billeSnap.data() as AnyMap | undefined,
+      viajeData: d,
+      globalComisionPct: comisionPctGlobal,
+    })) {
+      throw new HttpsError("failed-precondition", PREPAGO_INSUFICIENTE_COMISION_VIAJE);
     }
     const viajeActivoId = String(uData.viajeActivoId ?? "");
     if (viajeActivoId) throw new HttpsError("failed-precondition", "taxista-ocupado");
@@ -1834,6 +1851,23 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
     }, { merge: true });
+
+    if (esTurismo && uidTx) {
+      const choferRef = db().collection("choferes_turismo").doc(uidTx);
+      const choferSnap = await tx.get(choferRef);
+      if (choferSnap.exists) {
+        const choferData = (choferSnap.data() ?? {}) as AnyMap;
+        const viajeActual = String(choferData.viajeActualId ?? "").trim();
+        if (viajeActual === viajeId || viajeActual === "") {
+          tx.update(choferRef, {
+            disponible: true,
+            viajeActualId: "",
+            updatedAt: FieldValue.serverTimestamp(),
+            actualizadoEn: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+    }
 
     return { ok: true, viajeId };
   });

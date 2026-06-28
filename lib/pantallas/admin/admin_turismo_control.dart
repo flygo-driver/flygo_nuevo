@@ -32,6 +32,7 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   _FiltroPedidoTurismo _filtro = _FiltroPedidoTurismo.todos;
+  final Set<String> _liberandoViajeIds = <String>{};
 
   @override
   void initState() {
@@ -114,6 +115,87 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
     }
   }
 
+  static bool _puedeLiberarAlPool(Map<String, dynamic> d) {
+    final canal = (d['canalAsignacion'] ?? 'admin').toString().trim();
+    if (canal != 'admin') return false;
+    final uid =
+        (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+    if (uid.isNotEmpty) return false;
+    final estadoRaw = (d['estado'] ?? '').toString();
+    final estadoNorm = EstadosViaje.normalizar(estadoRaw);
+    return estadoRaw == 'pendiente_admin' ||
+        estadoNorm == EstadosViaje.pendiente ||
+        estadoNorm == EstadosViaje.pendientePago;
+  }
+
+  Future<void> _liberarAlPoolTuristico(
+    BuildContext context,
+    String id,
+  ) async {
+    if (_liberandoViajeIds.contains(id)) return;
+
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) {
+        return AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text(
+            'Liberar al pool turístico',
+            style: TextStyle(color: AdminUi.onCard(ctx)),
+          ),
+          content: Text(
+            'El viaje saldrá de cola ADM y lo verán choferes de turismo aprobados en «Pool turístico».',
+            style: TextStyle(color: AdminUi.secondary(ctx)),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Cancelar',
+                  style: TextStyle(color: AdminUi.onCard(ctx))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Liberar',
+                  style: TextStyle(color: Theme.of(ctx).colorScheme.primary)),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true || !context.mounted) return;
+
+    setState(() => _liberandoViajeIds.add(id));
+    try {
+      final bool okLiberar =
+          await AsignacionTurismoRepo.liberarViajeAlPoolTurismoSiAplica(
+        viajeId: id,
+        omitirVentanaPublicacion: true,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            okLiberar
+                ? 'Viaje liberado al pool turístico'
+                : 'No se pudo liberar (estado o chofer ya asignado).',
+          ),
+          backgroundColor: okLiberar ? Colors.green : Colors.orange,
+        ),
+      );
+      if (okLiberar) Navigator.of(context).maybePop();
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo liberar: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _liberandoViajeIds.remove(id));
+    }
+  }
+
   String _etiquetaCanal(Map<String, dynamic> d) {
     final canal = (d['canalAsignacion'] ?? 'admin').toString().trim();
     if (canal == AsignacionTurismoRepo.canalTurismoPool) return 'Pool turístico';
@@ -152,6 +234,8 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
         (d['canalAsignacion'] ?? 'admin').toString().trim() == 'admin' &&
             uidTx.isEmpty &&
             _sinChofer(d);
+    final bool puedeLiberar = _puedeLiberarAlPool(d);
+    final bool liberando = _liberandoViajeIds.contains(id);
 
     await showModalBottomSheet<void>(
       context: context,
@@ -211,9 +295,8 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
                     _detalleFila(ctx, 'Publicación pool', fmt.format(publishAt)),
                   _detalleFila(
                     ctx,
-                    'Tipo',
-                    (d['subtipoTurismo'] ?? d['tipoVehiculo'] ?? '—')
-                        .toString(),
+                    'Vehículo requerido',
+                    AsignacionTurismoRepo.etiquetaVehiculoRequeridoDesdeViaje(d),
                   ),
                   _detalleFila(
                     ctx,
@@ -328,6 +411,27 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
                       icon: const Icon(Icons.person_add_alt_1),
                       label: const Text('Asignar chofer'),
                     ),
+                  if (puedeLiberar) ...[
+                    const SizedBox(height: 8),
+                    FilledButton.tonalIcon(
+                      onPressed: liberando
+                          ? null
+                          : () => _liberarAlPoolTuristico(ctx, id),
+                      icon: liberando
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AdminUi.progressAccent(ctx),
+                              ),
+                            )
+                          : const Icon(Icons.pool),
+                      label: Text(
+                        liberando ? 'Liberando…' : 'Liberar al pool turístico',
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     onPressed: () {
@@ -522,6 +626,7 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
                             const SizedBox(height: 4),
                             Text(
                               '#${_ref(doc.id)} · ${_etiquetaEstado(d)} · '
+                              '${AsignacionTurismoRepo.etiquetaVehiculoRequeridoDesdeViaje(d)} · '
                               '${uidTx.isEmpty ? 'Sin chofer' : 'Con chofer'}',
                               style: TextStyle(
                                 color: AdminUi.muted(context),
@@ -725,8 +830,9 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
                 border: Border.all(color: AdminUi.infoBorder(context)),
               ),
               child: Text(
-                'Vista en tiempo real de todos los pedidos turismo del cliente. '
-                'Solo lectura aquí; usa «Cola de asignación» para liberar o asignar chofer.',
+                'Pedidos y mensajes se actualizan solos en tiempo real. '
+                'Desde el detalle puedes asignar chofer o liberar al pool; '
+                'la cola de asignación sigue disponible para operación completa.',
                 style: TextStyle(
                   color: AdminUi.secondary(context),
                   fontSize: 12,

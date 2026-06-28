@@ -133,8 +133,14 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
 
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
-    final u = FirebaseAuth.instance.currentUser;
-    if (u == null) return;
+
+    User? u = FirebaseAuth.instance.currentUser;
+    u ??= await resolveFirebaseUser(timeout: const Duration(seconds: 12));
+    if (u == null) {
+      _snack('Sesión expirada. Vuelve a iniciar sesión.');
+      return;
+    }
+
     final anio = int.tryParse(_anio.text.trim());
     if (anio == null) {
       _snack('Año inválido.');
@@ -168,6 +174,14 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
         ),
         (route) => false,
       );
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        _snack(
+          'No se pudo guardar el registro (permisos). Actualiza la app o contacta soporte.',
+        );
+      } else {
+        _snack('Error al guardar: ${e.message ?? e.code}');
+      }
     } catch (e) {
       _snack('Error al guardar: $e');
     } finally {
@@ -229,7 +243,8 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
                 Text(
                   'RAI necesita tus datos y tu vehículo. Al guardar, '
                   'continuás con licencia, matrícula, seguro, foto del vehículo '
-                  'y demás documentos.',
+                  'y demás documentos. Después de subirlos, pulsa «Enviar a revisión» '
+                  'para que administración los valide.',
                   style: TextStyle(
                     color: cs.onSurface.withValues(alpha: 0.75),
                     height: 1.35,

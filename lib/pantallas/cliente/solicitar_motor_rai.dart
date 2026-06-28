@@ -31,6 +31,7 @@ import 'package:flygo_nuevo/servicios/pay_config.dart';
 
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/rai_cotizacion_offline_hint.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart'; // DetalleLugar
@@ -699,7 +700,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         requestIfDenied: false,
       );
       if (!ready.isUsable) {
-        _snack(LocationReadiness.kMsgEsperandoUbicacion);
+        if (!RaiUbicacionClienteService.instance.bannerActivo) {
+          _snack(LocationReadiness.kMsgEsperandoUbicacion);
+        }
         setState(() => _cargando = false);
         return;
       }
@@ -766,15 +769,29 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
       final DirectionsResult? dir = distRes.directions;
       final bool estimadoOffline = distRes.estimadoOffline;
 
-      // ✅ 1. Calcular distancia FINAL (si es ida y vuelta)
-      final double distanciaFinal = idaYVuelta ? dist * 2 : dist;
+      int contadorViajes = 1;
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        try {
+          final snapshot = await fs.FirebaseFirestore.instance
+              .collection('viajes')
+              .where('uidCliente', isEqualTo: user.uid)
+              .where('completado', isEqualTo: true)
+              .count()
+              .get();
+          contadorViajes = (snapshot.count ?? 0) + 1;
+        } catch (_) {
+          contadorViajes = 1;
+        }
+      }
+      if (contadorViajes <= 0) contadorViajes = 1;
 
-      // Precio motor con el mismo motor unificado (tramos larga distancia).
+      // Mismo motor que programar viaje motor: distancia ida + factor 1.8 si ida/vuelta.
       final cot = await servicio.calcularPrecioConDesglose(
         tipoServicio: 'motor',
-        distanciaKm: distanciaFinal,
-        idaVuelta: false,
-        contadorViajes: 1,
+        distanciaKm: dist,
+        idaVuelta: idaYVuelta,
+        contadorViajes: contadorViajes,
       );
       final precioDouble = cot.precio;
 
@@ -898,7 +915,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         precioCalculado <= 0) {
       if (!ubicacionObtenida &&
           RaiUbicacionClienteService.instance.bannerActivo) {
-        _snack(LocationReadiness.kMsgEsperandoUbicacion);
+        return;
       } else {
         _snack(kMsgCalcFirst);
       }
@@ -911,11 +928,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     }
 
     setState(() => _cargando = true);
-    NavigatorState? navAntesDeCrear =
-        NavigationService.navigatorKey.currentState;
-    if (navAntesDeCrear == null && mounted) {
-      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
-    }
+    final ({NavigatorState? tab, NavigatorState? raiz}) nav =
+        NavigationService.capturarNavigadoresFormulario(context);
     try {
       await u.getIdToken(true);
 
@@ -954,7 +968,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         viajeId: id,
         fechaHoraPickup: nowUtc,
         tipoServicio: 'motor',
-        preNav: navAntesDeCrear,
+        preNav: nav.tab,
+        preNavRaiz: nav.raiz,
         forzarViajeInmediato: true,
       );
     } on fs.FirebaseException catch (e) {
@@ -1531,6 +1546,14 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                 ),
                               ),
                               const SizedBox(height: 10),
+                              if (!_mostrarResumenMotor)
+                                const ClienteViajeOrientacionBanner(
+                                  mensaje: ClienteViajeOrientacionCopy.motorRai,
+                                  icon: Icons.two_wheeler_rounded,
+                                  accentColor: Color(0xFFFF5A00),
+                                ),
+                              if (!_mostrarResumenMotor)
+                                const SizedBox(height: 10),
                               if (_mostrarResumenMotor) _tarjetaResumenMotor(),
                               if (!_mostrarResumenMotor)
                                 Column(

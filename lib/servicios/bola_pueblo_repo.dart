@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
-import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 class BolaPuebloRepo {
@@ -17,6 +17,31 @@ class BolaPuebloRepo {
   static const double ofertaMinFactorSobreBase = 0.80; // 80% de la base bola.
   static const double ofertaMaxFactorSobreNormal =
       1.10; // hasta 110% de tarifa normal.
+
+  /// null = válido. Mensaje corto para UI cuando el monto sale del rango bola.
+  static String? validarMontoEnRangoBola(
+    double montoRd, {
+    required double minRd,
+    required double maxRd,
+  }) {
+    if (minRd <= 0 || maxRd <= 0 || !montoRd.isFinite) return null;
+    if (montoRd < minRd) return 'Está por debajo del promedio establecido.';
+    if (montoRd > maxRd) return 'Está por encima del promedio establecido.';
+    return null;
+  }
+
+  static void _exigirMontoEnRangoBola({
+    required double montoRd,
+    required double minRd,
+    required double maxRd,
+  }) {
+    final msg = validarMontoEnRangoBola(
+      montoRd,
+      minRd: minRd,
+      maxRd: maxRd,
+    );
+    if (msg != null) throw Exception(msg);
+  }
 
   static const List<String> tipos = <String>['pedido', 'oferta'];
   static const List<String> estadosPublicacion = <String>[
@@ -312,7 +337,8 @@ class BolaPuebloRepo {
         ofertaMaxRd: 0.0,
       );
     }
-    final double tarifaNormalRd = DistanciaService.calcularPrecio(distanciaKm);
+    final double tarifaNormalRd =
+        TarifaServiceUnificado.precioNormalCarroReferenciaSync(distanciaKm);
     final double tarifaBaseBolaRd =
         double.parse((tarifaNormalRd * baseBolaFactor).toStringAsFixed(2));
     final double ofertaMinRd = double.parse(
@@ -357,7 +383,8 @@ class BolaPuebloRepo {
     }
     if (distanciaKm <= 0) throw Exception('Distancia inválida');
     final int pax = pasajeros.clamp(1, 8);
-    final double tarifaNormalRd = DistanciaService.calcularPrecio(distanciaKm);
+    final double tarifaNormalRd =
+        await TarifaServiceUnificado.precioNormalCarroReferencia(distanciaKm);
     final double tarifaBaseBolaRd =
         double.parse((tarifaNormalRd * baseBolaFactor).toStringAsFixed(2));
     final double ofertaMinRd = double.parse(
@@ -479,6 +506,36 @@ class BolaPuebloRepo {
         .snapshots();
   }
 
+  static Future<void> _marcarOfertasRetiradas(
+    Iterable<DocumentReference<Map<String, dynamic>>> refs,
+  ) async {
+    final List<DocumentReference<Map<String, dynamic>>> list =
+        refs.toList(growable: false);
+    if (list.isEmpty) return;
+    final WriteBatch batch = FirebaseFirestore.instance.batch();
+    for (final DocumentReference<Map<String, dynamic>> ref in list) {
+      batch.update(ref, <String, dynamic>{
+        'estado': 'retirada',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
+
+  static Future<void> _retirarOfertasPendientes({
+    required String bolaId,
+    required bool Function(Map<String, dynamic> m) match,
+  }) async {
+    final QuerySnapshot<Map<String, dynamic>> qs =
+        await _ofertasCol(bolaId).where('estado', isEqualTo: 'pendiente').get();
+    final List<DocumentReference<Map<String, dynamic>>> refs =
+        <DocumentReference<Map<String, dynamic>>>[];
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> d in qs.docs) {
+      if (match(d.data())) refs.add(d.reference);
+    }
+    await _marcarOfertasRetiradas(refs);
+  }
+
   static Future<void> enviarOferta({
     required String bolaId,
     required String fromUid,
@@ -495,9 +552,24 @@ class BolaPuebloRepo {
     final pub = pubSnap.data() ?? <String, dynamic>{};
     final double minRd = ((pub['ofertaMinRd'] ?? 0) as num).toDouble();
     final double maxRd = ((pub['ofertaMaxRd'] ?? 0) as num).toDouble();
-    if (minRd > 0 && maxRd > 0 && (montoRd < minRd || montoRd > maxRd)) {
-      throw Exception(
-        'Oferta fuera de rango. Debe estar entre RD\$${minRd.toStringAsFixed(0)} y RD\$${maxRd.toStringAsFixed(0)}.',
+    _exigirMontoEnRangoBola(montoRd: montoRd, minRd: minRd, maxRd: maxRd);
+
+    final String uid = fromUid.trim();
+    final String rol = fromRol.trim().toLowerCase();
+    final String tipoPub = (pub['tipo'] ?? '').toString().trim().toLowerCase();
+    await _retirarOfertasPendientes(
+      bolaId: bolaId,
+      match: (Map<String, dynamic> m) =>
+          (m['fromUid'] ?? '').toString() == uid &&
+          m['esContraofertaCliente'] != true &&
+          m['esContraofertaConductor'] != true,
+    );
+    if ((rol == 'taxista' || rol == 'driver') && tipoPub == 'pedido') {
+      await _retirarOfertasPendientes(
+        bolaId: bolaId,
+        match: (Map<String, dynamic> m) =>
+            m['esContraofertaCliente'] == true &&
+            (m['contraOfertaParaUid'] ?? '').toString() == uid,
       );
     }
 
@@ -543,14 +615,20 @@ class BolaPuebloRepo {
     }
     final double minRd = ((pub['ofertaMinRd'] ?? 0) as num).toDouble();
     final double maxRd = ((pub['ofertaMaxRd'] ?? 0) as num).toDouble();
-    if (minRd > 0 && maxRd > 0 && (montoRd < minRd || montoRd > maxRd)) {
-      throw Exception(
-        'Monto fuera de rango. Entre RD\$${minRd.toStringAsFixed(0)} y RD\$${maxRd.toStringAsFixed(0)}.',
-      );
-    }
+    _exigirMontoEnRangoBola(montoRd: montoRd, minRd: minRd, maxRd: maxRd);
+
+    final String uidCli = clienteUid.trim();
+    final String uidTx = taxistaUid.trim();
+    await _retirarOfertasPendientes(
+      bolaId: bolaId,
+      match: (Map<String, dynamic> m) =>
+          (m['fromUid'] ?? '').toString() == uidCli &&
+          m['esContraofertaCliente'] == true &&
+          (m['contraOfertaParaUid'] ?? '').toString() == uidTx,
+    );
 
     await _ofertasCol(bolaId).add(<String, dynamic>{
-      'fromUid': clienteUid.trim(),
+      'fromUid': uidCli,
       'fromNombre':
           clienteNombre.trim().isEmpty ? 'Pasajero' : clienteNombre.trim(),
       'fromRol': 'cliente',
@@ -558,7 +636,66 @@ class BolaPuebloRepo {
       'mensaje': mensaje.trim(),
       'estado': 'pendiente',
       'esContraofertaCliente': true,
-      'contraOfertaParaUid': taxistaUid.trim(),
+      'contraOfertaParaUid': uidTx,
+      if (respondiendoOfertaId != null &&
+          respondiendoOfertaId.trim().isNotEmpty)
+        'respondiendoOfertaId': respondiendoOfertaId.trim(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// «Voy para» (oferta del conductor): propone otro monto al pasajero.
+  static Future<void> enviarContraofertaConductor({
+    required String bolaId,
+    required String conductorUid,
+    required String conductorNombre,
+    required String clienteUid,
+    String? respondiendoOfertaId,
+    required double montoRd,
+    String mensaje = '',
+  }) async {
+    if (bolaId.trim().isEmpty) throw Exception('Publicación inválida');
+    if (conductorUid.trim().isEmpty) throw Exception('Sesión inválida');
+    if (clienteUid.trim().isEmpty) throw Exception('Pasajero inválido');
+    if (montoRd <= 0) throw Exception('Monto inválido');
+    if (conductorUid.trim() == clienteUid.trim()) {
+      throw Exception('Contraoferta inválida.');
+    }
+    final pubSnap = await _col.doc(bolaId).get();
+    if (!pubSnap.exists) throw Exception('Publicación no encontrada');
+    final pub = pubSnap.data() ?? <String, dynamic>{};
+    if ((pub['tipo'] ?? '').toString().trim().toLowerCase() != 'oferta') {
+      throw Exception('Solo en publicaciones «Voy para» del conductor.');
+    }
+    if ((pub['createdByUid'] ?? '').toString() != conductorUid.trim()) {
+      throw Exception('Solo quien publicó la ruta puede contraofertar.');
+    }
+    final double minRd = ((pub['ofertaMinRd'] ?? 0) as num).toDouble();
+    final double maxRd = ((pub['ofertaMaxRd'] ?? 0) as num).toDouble();
+    _exigirMontoEnRangoBola(montoRd: montoRd, minRd: minRd, maxRd: maxRd);
+
+    final String uidTx = conductorUid.trim();
+    final String uidCli = clienteUid.trim();
+    await _retirarOfertasPendientes(
+      bolaId: bolaId,
+      match: (Map<String, dynamic> m) =>
+          (m['fromUid'] ?? '').toString() == uidTx &&
+          m['esContraofertaConductor'] == true &&
+          (m['contraOfertaParaUid'] ?? '').toString() == uidCli,
+    );
+
+    await _ofertasCol(bolaId).add(<String, dynamic>{
+      'fromUid': uidTx,
+      'fromNombre': conductorNombre.trim().isEmpty
+          ? 'Conductor'
+          : conductorNombre.trim(),
+      'fromRol': 'taxista',
+      'montoRd': double.parse(montoRd.toStringAsFixed(2)),
+      'mensaje': mensaje.trim(),
+      'estado': 'pendiente',
+      'esContraofertaConductor': true,
+      'contraOfertaParaUid': uidCli,
       if (respondiendoOfertaId != null &&
           respondiendoOfertaId.trim().isNotEmpty)
         'respondiendoOfertaId': respondiendoOfertaId.trim(),
@@ -583,6 +720,57 @@ class BolaPuebloRepo {
         'ofertaId': ofertaId.trim(),
       });
       await ViajesRepo.enlazarViajeEspejoBolaOperativo(bolaId: bolaId);
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) {
+        throw Exception(msg);
+      }
+      throw Exception(e.code);
+    }
+  }
+
+  /// Pasajero acepta el monto que propuso el conductor (contraoferta en «Voy para»).
+  static Future<void> aceptarContraofertaConductorBola({
+    required String bolaId,
+    required String ofertaId,
+  }) async {
+    if (bolaId.trim().isEmpty || ofertaId.trim().isEmpty) {
+      throw Exception('Datos inválidos');
+    }
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('aceptarContraofertaConductorBola');
+      await callable.call(<String, dynamic>{
+        'bolaId': bolaId.trim(),
+        'ofertaId': ofertaId.trim(),
+      });
+      await ViajesRepo.enlazarViajeEspejoBolaOperativo(bolaId: bolaId);
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) {
+        throw Exception(msg);
+      }
+      throw Exception(e.code);
+    }
+  }
+
+  /// Pasajero no acepta la contraoferta del conductor; la publicación sigue abierta.
+  static Future<void> rechazarContraofertaConductorBola({
+    required String bolaId,
+    required String ofertaId,
+    String? motivo,
+  }) async {
+    if (bolaId.trim().isEmpty || ofertaId.trim().isEmpty) {
+      throw Exception('Datos inválidos');
+    }
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('rechazarContraofertaConductorBola');
+      await callable.call(<String, dynamic>{
+        'bolaId': bolaId.trim(),
+        'ofertaId': ofertaId.trim(),
+        if (motivo != null && motivo.trim().isNotEmpty) 'motivo': motivo.trim(),
+      });
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
       if (msg.isNotEmpty) {

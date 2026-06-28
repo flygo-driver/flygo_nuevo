@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
     show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/services.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart' as intl;
@@ -43,6 +44,8 @@ import 'package:flygo_nuevo/auth/login_admin.dart';
 import 'package:flygo_nuevo/auth/rai_identity_router.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
+import 'package:flygo_nuevo/pantallas/legal/eliminar_cuenta_page.dart';
+import 'package:flygo_nuevo/pantallas/legal/politica_privacidad_page.dart';
 
 // 🧭 Cliente
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
@@ -335,6 +338,9 @@ void main() {
   runZonedGuarded(
     () {
       WidgetsFlutterBinding.ensureInitialized();
+      if (kIsWeb) {
+        usePathUrlStrategy();
+      }
       _configureGlobalSystemUi();
       _configureAndroidPhotoPicker();
       runApp(const RaiBootstrap());
@@ -524,7 +530,7 @@ class _RaiAppState extends State<RaiApp> {
           '/registro_taxista': (_) => const RegistroTaxista(),
 
           // Cliente
-          '/cliente_home': (_) => const ClienteShell(),
+          '/cliente_home': (_) => const ClienteShellWithDeepLink(),
           '/solicitar_viaje_ahora': (_) =>
               const ProgramarViaje(modoAhora: true),
           '/programar_viaje': (_) => const ProgramarViaje(modoAhora: false),
@@ -568,8 +574,10 @@ class _RaiAppState extends State<RaiApp> {
           // 🔴 NUEVAS RUTAS DE PAGOS
           '/mis_pagos': (_) => const MisPagos(),
           '/bloqueado_por_pagos': (_) => const BloqueadoPorPagos(),
-          '/verificar_pagos': (_) => const VerificarPagos(),
+          '/verificar_pagos': (_) => const AdminGate(child: VerificarPagos()),
           '/terminos_politica': (_) => const TermsPolicyScreen(),
+          '/privacidad': (_) => const PoliticaPrivacidadPage(),
+          '/eliminar_cuenta': (_) => const EliminarCuentaPage(),
           '/login_admin': (_) => const LoginAdmin(),
           '/admin': (_) => const AdminGate(),
         },

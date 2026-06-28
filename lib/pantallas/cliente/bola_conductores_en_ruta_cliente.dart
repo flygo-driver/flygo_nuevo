@@ -7,6 +7,7 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 
 /// Pantalla cliente: conductores que publicaron «Voy para» (tipo [oferta]).
 class BolaConductoresEnRutaClientePage extends StatelessWidget {
@@ -78,6 +79,12 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                     return ListView(
                       padding: BolaPuebloUi.listScrollPadding(context, top: 8),
                       children: [
+                        const ClienteViajeOrientacionBanner(
+                          mensaje: ClienteViajeOrientacionCopy.bolaAhora,
+                          icon: Icons.groups_rounded,
+                          accentColor: BolaPuebloTheme.accent,
+                        ),
+                        const SizedBox(height: 12),
                         BolaPuebloUi.actionPanel(
                           context,
                           child: Column(

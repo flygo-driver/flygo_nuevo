@@ -3,9 +3,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
+import 'package:flygo_nuevo/widgets/cuenta_promo_resumen_panel.dart';
 import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
+import 'package:flygo_nuevo/widgets/cuenta_legal_tiles.dart';
 import 'package:flygo_nuevo/widgets/cuenta_open_ask_deposito_panel.dart';
-import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
 import 'package:flygo_nuevo/pantallas/taxista/billetera_taxista.dart';
@@ -21,6 +22,8 @@ import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/configuracion_bancaria.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_config_panel.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 
 String _pctLabel(double p) =>
     p == p.roundToDouble() ? p.round().toString() : p.toStringAsFixed(1);
@@ -33,6 +36,79 @@ String _subtituloRepartoComision(double c) {
 String _subtituloGananciasComision(double c) {
   final t = 100.0 - c;
   return 'Totales y reparto ${_pctLabel(t)}/${_pctLabel(c)}';
+}
+
+String _textoPerfilTaxista(
+  Map<String, dynamic> data, {
+  required String fallbackEmail,
+}) {
+  final List<String> lineas = <String>[];
+  final String nombre = (data['nombre'] ?? '').toString().trim();
+  final String telefono = (data['telefono'] ?? '').toString().trim();
+  final String tipoServicio =
+      (data['tipoServicio'] ?? '').toString().trim().toLowerCase();
+  final String placa = (data['placa'] ?? '').toString().trim();
+  final String marca =
+      (data['vehiculoMarca'] ?? data['marca'] ?? '').toString().trim();
+  final String modelo =
+      (data['vehiculoModelo'] ?? data['modelo'] ?? '').toString().trim();
+  final String color =
+      (data['vehiculoColor'] ?? data['color'] ?? '').toString().trim();
+  final String anio = (data['anio'] ?? data['vehiculoAnio'] ?? '')
+      .toString()
+      .trim();
+
+  String tipoVehiculo = (data['tipoVehiculo'] ?? data['vehiculoTipo'] ?? '')
+      .toString()
+      .trim();
+  if (tipoServicio == 'turismo') {
+    switch (tipoVehiculo.toLowerCase()) {
+      case 'jeepeta':
+        tipoVehiculo = 'Jeepeta Turismo';
+        break;
+      case 'minivan':
+        tipoVehiculo = 'Minivan Turismo';
+        break;
+      case 'bus':
+        tipoVehiculo = 'Bus Turismo';
+        break;
+      case 'carro':
+      default:
+        tipoVehiculo = tipoVehiculo.isEmpty ? '' : 'Carro Turismo';
+        break;
+    }
+  }
+
+  if (nombre.isNotEmpty) lineas.add('Nombre: $nombre');
+  if (telefono.isNotEmpty) lineas.add('Teléfono: $telefono');
+  if (fallbackEmail.trim().isNotEmpty) lineas.add('Correo: $fallbackEmail');
+  if (tipoServicio.isNotEmpty) lineas.add('Servicio: ${_labelServicio(tipoServicio)}');
+  if (tipoVehiculo.isNotEmpty) lineas.add('Vehículo: $tipoVehiculo');
+  if (placa.isNotEmpty) lineas.add('Placa: $placa');
+
+  final String marcaModelo = [marca, modelo].where((v) => v.isNotEmpty).join(' ');
+  if (marcaModelo.isNotEmpty) lineas.add('Marca / modelo: $marcaModelo');
+  if (color.isNotEmpty) lineas.add('Color: $color');
+  if (anio.isNotEmpty) lineas.add('Año: $anio');
+
+  return lineas.isEmpty
+      ? 'Aún no hay datos de perfil guardados.'
+      : lineas.join('\n');
+}
+
+String _labelServicio(String raw) {
+  switch (raw) {
+    case 'normal':
+      return 'Normal';
+    case 'motor':
+      return 'Motor';
+    case 'turismo':
+      return 'Turismo';
+    case 'bola_ahorro':
+      return 'Bola Ahorro';
+    default:
+      return raw.isEmpty ? '—' : raw;
+  }
 }
 
 /// Finanzas, documentos y ajustes de cuenta.
@@ -118,6 +194,28 @@ class TaxistaCuentaTab extends StatelessWidget {
               },
             ),
           const Divider(height: 1),
+          if (uid != null)
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(uid)
+                  .snapshots(),
+              builder: (context, snap) {
+                final data = snap.data?.data() ?? const <String, dynamic>{};
+                final texto = _textoPerfilTaxista(
+                  data,
+                  fallbackEmail: user?.email ?? '',
+                );
+                return Card(
+                  margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: ListTile(
+                    leading: Icon(Icons.badge_outlined, color: cs.primary),
+                    title: const Text('Datos del perfil'),
+                    subtitle: Text(texto),
+                  ),
+                );
+              },
+            ),
           if (uid != null)
             StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
@@ -290,6 +388,7 @@ class TaxistaCuentaTab extends StatelessWidget {
             padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: CuentaOpenAskDepositoPanel(mostrarNota: true),
           ),
+          if (uid != null) TaxistaCuentaIncentivoPanel(uidTaxista: uid),
           _tile(
             context,
             icon: Icons.local_offer_outlined,
@@ -361,18 +460,19 @@ class TaxistaCuentaTab extends StatelessWidget {
           const Divider(height: 24),
           _tile(
             context,
+            icon: Icons.location_on_outlined,
+            title: 'Ubicación',
+            subtitle: 'Permisos GPS y ajustes del teléfono',
+            page: const RaiUbicacionAjustesPage(rol: RaiUbicacionRol.taxista),
+          ),
+          _tile(
+            context,
             icon: Icons.person_outline,
             title: 'Configuración de perfil',
             subtitle: 'Foto y nombre',
             page: const ConfiguracionPerfil(),
           ),
-          _tile(
-            context,
-            icon: Icons.gavel_outlined,
-            title: 'Términos y política',
-            subtitle: 'Privacidad y condiciones',
-            page: const TermsPolicyScreen(),
-          ),
+          const CuentaLegalTiles(),
           ValueListenableBuilder<ThemeMode>(
             valueListenable: ThemeModeService.mode,
             builder: (context, mode, _) {

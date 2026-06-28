@@ -1,8 +1,8 @@
 # Copia a android/key.properties (NO subir al repo).
 # Usa tu keystore EXISTENTE de Play — no generes uno nuevo.
 #
-# Play unificado (com.flygo.rd2):
-#   flutter build appbundle --flavor cliente --release
+# Play unificado (com.flygo.rd2 — cliente + taxista en una app):
+#   flutter build appbundle --flavor cliente --release -t lib/main.dart
 #
 # Split futuro conductor (com.flygo.rd2.conductor):
 #   flutter build appbundle --flavor conductor --release

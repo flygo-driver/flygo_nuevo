@@ -171,12 +171,14 @@ class SeleccionServicio extends StatelessWidget {
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
                       child: _HomePrimaryTripBlock(
                         onPedirAhora: () {
-                          unawaited(NavigationService.push(
+                          unawaited(NavigationService.pushEnTabShell(
+                            context,
                             const ProgramarViaje(modoAhora: true),
                           ));
                         },
                         onProgramar: () {
-                          unawaited(NavigationService.push(
+                          unawaited(NavigationService.pushEnTabShell(
+                            context,
                             const ProgramarViaje(modoAhora: false),
                           ));
                         },
@@ -224,7 +226,8 @@ class SeleccionServicio extends StatelessWidget {
                             ],
                             if (ProductosConfigService.muestraConductoresEnRuta)
                               _HomeConductoresTile(
-                                onTap: () => NavigationService.push(
+                                onTap: () => NavigationService.pushEnTabShell(
+                                  context,
                                   const BolaConductoresEnRutaClientePage(),
                                 ),
                                 accentColor: verConductoresColor,
@@ -290,16 +293,17 @@ class SeleccionServicio extends StatelessWidget {
                                 iconSize: 30,
                                 title: 'MÚLTIPLES\nPARADAS',
                                 titleSize: 15,
-                                subtitle: 'Hasta 3 paradas',
+                                subtitle: 'Hasta 5 paradas',
                                 price: 'FLEXIBLE',
                                 features: const [
-                                  '📍 3 paradas',
+                                  '📍 5 paradas',
                                   '🔄 Cambia ruta',
                                 ],
                                 badge: const Icon(Icons.alt_route,
                                     color: Colors.white, size: 16),
                                 onTap: () {
-                                  unawaited(NavigationService.push(
+                                  unawaited(NavigationService.pushEnTabShell(
+                                    context,
                                     const ProgramarViajeMulti(),
                                   ));
                                 },
@@ -335,7 +339,8 @@ class SeleccionServicio extends StatelessWidget {
                                 badge: const Icon(Icons.speed,
                                     color: Colors.white, size: 16),
                                 onTap: () {
-                                  unawaited(NavigationService.push(
+                                  unawaited(NavigationService.pushEnTabShell(
+                                    context,
                                     const ProgramarViaje(
                                       modoAhora: true,
                                       tipoServicio: 'motor',
@@ -564,7 +569,8 @@ class SeleccionServicio extends StatelessWidget {
     required bool modoAhora,
   }) {
     if (!context.mounted) return;
-    unawaited(NavigationService.push(
+    unawaited(NavigationService.pushEnTabShell(
+      context,
       ProgramarViaje(
         modoAhora: modoAhora,
         tipoServicio: 'turismo',
@@ -602,7 +608,8 @@ class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
     final det = await RaiDireccionInteligenteSheet.mostrar(context);
     if (det == null || !mounted) return;
     if (!context.mounted) return;
-    unawaited(NavigationService.push(
+    unawaited(NavigationService.pushEnTabShell(
+      context,
       ProgramarViaje(
         modoAhora: !_programar,
         destinoPrecargado: det.displayLabel,

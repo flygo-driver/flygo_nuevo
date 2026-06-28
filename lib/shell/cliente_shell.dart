@@ -31,6 +31,7 @@ import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 
 /// Shell del cliente: barra inferior fija; cada pestaña usa un [Navigator] anidado
 /// (pantallas con [Navigator.push] no tapan Inicio / Mis viajes / etc.).
+/// No apilar otro [ClienteShell] en un tab — usar [NavigationService.irAlInicioCliente].
 /// [ClienteShell] + reintento de deep link gira tras montar (login lento).
 class ClienteShellWithDeepLink extends StatefulWidget {
   const ClienteShellWithDeepLink({super.key});
@@ -92,6 +93,7 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
   bool? _viajeActivoShell;
   Timer? _bootstrapViajeTimeout;
   VoidCallback? _offlineListener;
+  VoidCallback? _shellRebuildListener;
 
   static const Duration _kBootstrapViajeMaxWait = Duration(seconds: 3);
   static const int _kTabExperiencias = 2;
@@ -210,10 +212,25 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
         unawaited(_resolverBootstrapConCache(uid, porTimeout: true));
       });
 
+      _shellRebuildListener = () {
+        if (!mounted) return;
+        if (!ActiveTripService.debeMantenerOverlayViajeEnShell) return;
+        if (_viajeActivoShell != true) {
+          print('[VIAJE_ACTIVO] cliente_shell rebuild tick → overlay viaje');
+          setState(() => _viajeActivoShell = true);
+        }
+      };
+      ActiveTripService.shellRebuildTick.addListener(_shellRebuildListener!);
+
       _viajeActivoSub =
           ActiveTripService.streamTieneViajeActivo(uid).listen((bool ok) {
         if (!mounted) return;
         _bootstrapViajeTimeout?.cancel();
+        if (_viajeActivoShell == true &&
+            !ok &&
+            ActiveTripService.debeMantenerOverlayViajeEnShell) {
+          return;
+        }
         if (_viajeActivoShell != ok) {
           print('[VIAJE_ACTIVO] cliente_shell stream tieneActivo=$ok');
           setState(() {
@@ -288,6 +305,10 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     _bootstrapViajeTimeout?.cancel();
     if (_offlineListener != null) {
       RaiConnectivityService.instance.offline.removeListener(_offlineListener!);
+    }
+    if (_shellRebuildListener != null) {
+      ActiveTripService.shellRebuildTick
+          .removeListener(_shellRebuildListener!);
     }
     _viajeActivoSub?.cancel();
     RaiUbicacionClienteService.instance.disposeService();

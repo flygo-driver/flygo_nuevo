@@ -140,11 +140,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
     }
 
     setState(() => _cargando = true);
-    NavigatorState? navAntesDeCrear =
-        NavigationService.navigatorKey.currentState;
-    if (navAntesDeCrear == null && mounted) {
-      navAntesDeCrear = Navigator.of(context, rootNavigator: true);
-    }
+    final ({NavigatorState? tab, NavigatorState? raiz}) nav =
+        NavigationService.capturarNavigadoresFormulario(context);
     try {
       // 1) Asegura doc de usuario con rol por defecto cliente (si no existe)
       await RolesService.ensureUserDoc(u.uid, defaultRol: Roles.cliente);
@@ -189,7 +186,8 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
       await NavigationService.navegarTrasCrearViajeCliente(
         viajeId: id,
         fechaHoraPickup: fechaUtc,
-        preNav: navAntesDeCrear,
+        preNav: nav.tab,
+        preNavRaiz: nav.raiz,
       );
     } on FirebaseException catch (e) {
       if (!mounted) return;

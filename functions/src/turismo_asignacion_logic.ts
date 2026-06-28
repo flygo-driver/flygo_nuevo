@@ -84,6 +84,92 @@ export function pasajerosRequeridos(vData: AnyMap): number {
   return 1;
 }
 
+const CATEGORIAS_DESTINO_TURISMO = new Set([
+  "AEROPUERTO",
+  "MUELLE",
+  "ZONA_COLONIAL",
+  "CIUDAD",
+  "PLAYA",
+  "RESORT",
+  "HOTEL",
+  "TOUR",
+  "PARQUE",
+  "MONTANA",
+  "CASCADA",
+  "LAGO",
+  "MUSEO",
+  "ATRACCION",
+]);
+
+export function esCategoriaDestinoTurismo(raw: unknown): boolean {
+  const u = String(raw ?? "").trim().toUpperCase();
+  return u.length > 0 && CATEGORIAS_DESTINO_TURISMO.has(u);
+}
+
+function codigoVehiculoDesdeCampoDoc(raw: unknown): string | null {
+  const t = String(raw ?? "").trim();
+  if (!t || t.includes("🏝️")) return null;
+  const c = normalizarCodigoTipoTurismo(t, t);
+  return c || null;
+}
+
+function codigoVehiculoDesdeCotizacionDesglose(vData: AnyMap): string | null {
+  const ex = vData.extras;
+  if (!ex || typeof ex !== "object") return null;
+  const desg = (ex as AnyMap).cotizacionDesglose;
+  if (!desg || typeof desg !== "object") return null;
+  const clave = String((desg as AnyMap).claveVehiculo ?? "").trim();
+  if (!clave) return null;
+  return normalizarCodigoTipoTurismo(clave, clave);
+}
+
+export function normalizarCodigoTipoTurismo(
+  subtipo: unknown,
+  tipoVehiculoDoc?: unknown,
+): string {
+  const from = (raw: unknown): string => {
+    const t = String(raw ?? "").trim().toLowerCase();
+    if (!t) return "";
+    if (t.includes("jeepeta")) return "jeepeta";
+    if (t.includes("minivan") || t.includes("minib")) return "minivan";
+    if (t.includes("bus") || t.includes("guagua") || t.includes("autobús") || t.includes("autobus")) {
+      return "bus";
+    }
+    if (t.includes("carro")) return "carro";
+    if (t === "carro" || t === "jeepeta" || t === "minivan" || t === "bus") return t;
+    if (t === "viaje_multi" || t === "ciudad" || t === "interior") return "carro";
+    return "";
+  };
+
+  const a = from(subtipo);
+  if (a) return a;
+  const b = from(tipoVehiculoDoc);
+  if (b) return b;
+  return "carro";
+}
+
+export function subtipoTurismoRequeridoDesdeViaje(vData: AnyMap): string {
+  const subtipo = String(vData.subtipoTurismo ?? "").trim();
+  const tipoOrig = String(vData.tipoVehiculoOriginal ?? "").trim();
+  const tipoVeh = String(vData.tipoVehiculo ?? "").trim();
+
+  if (subtipo && !esCategoriaDestinoTurismo(subtipo)) {
+    const desdeSubtipo = codigoVehiculoDesdeCampoDoc(subtipo);
+    if (desdeSubtipo) return desdeSubtipo;
+  }
+
+  const desdeOriginal = codigoVehiculoDesdeCampoDoc(tipoOrig);
+  if (desdeOriginal) return desdeOriginal;
+
+  const desdeDesglose = codigoVehiculoDesdeCotizacionDesglose(vData);
+  if (desdeDesglose) return desdeDesglose;
+
+  const desdeTipoDoc = codigoVehiculoDesdeCampoDoc(tipoVeh);
+  if (desdeTipoDoc) return desdeTipoDoc;
+
+  return "carro";
+}
+
 export function capacidadPorTipoVehiculo(tipo: string): number {
   switch (tipo.toLowerCase()) {
     case "jeepeta":
@@ -115,12 +201,12 @@ export function vehiculoQueCoincide(
   vehiculos: unknown,
   tipoReq: string,
 ): AnyMap | null {
-  const t = tipoReq.toLowerCase();
+  const t = normalizarCodigoTipoTurismo(tipoReq, tipoReq);
   if (!Array.isArray(vehiculos)) return null;
   for (const v of vehiculos) {
     if (!v || typeof v !== "object") continue;
     const map = v as AnyMap;
-    const vt = String(map.tipo ?? "").toLowerCase();
+    const vt = normalizarCodigoTipoTurismo(map.tipo, map.tipoLabel);
     if (vt === t) return map;
   }
   return null;
@@ -200,7 +286,11 @@ export function filtrarCandidatoTurismo(args: {
   }
   const veh = vehiculoQueCoincide(args.choferData.vehiculos, args.subtipoTurismo);
   if (!veh) return { ok: false, vehiculo: null, distanciaKm: null };
-  if (capacidadDesdeVehiculoMap(veh, args.subtipoTurismo) < args.pasajeros) {
+  const subtipoNorm = normalizarCodigoTipoTurismo(
+    args.subtipoTurismo,
+    args.subtipoTurismo,
+  );
+  if (capacidadDesdeVehiculoMap(veh, subtipoNorm) < args.pasajeros) {
     return { ok: false, vehiculo: null, distanciaKm: null };
   }
   const dk = distanciaKmHastaOrigen(args.choferData, args.latO, args.lonO);

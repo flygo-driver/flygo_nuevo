@@ -44,6 +44,14 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
   Widget build(BuildContext context) {
     if (uidTaxista.isEmpty) return const SizedBox.shrink();
 
+    try {
+      return _buildStreams(context);
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildStreams(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('usuarios')
@@ -53,12 +61,15 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
           .limit(24)
           .snapshots(),
       builder: (context, colaSnap) {
+        if (colaSnap.hasError) return const SizedBox.shrink();
+
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
               .collection('usuarios')
               .doc(uidTaxista)
               .snapshots(),
           builder: (context, uSnap) {
+            if (uSnap.hasError) return const SizedBox.shrink();
             if (!uSnap.hasData || !uSnap.data!.exists) {
               return const SizedBox.shrink();
             }
@@ -88,6 +99,7 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
                   .doc(nextId)
                   .snapshots(),
               builder: (context, vSnap) {
+                if (vSnap.hasError) return const SizedBox.shrink();
                 if (!vSnap.hasData || !vSnap.data!.exists) {
                   return _shell(
                     reservaFormal,
@@ -99,41 +111,45 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
                   );
                 }
                 final m = vSnap.data!.data() ?? {};
-                final origen = (m['origen'] ?? 'Origen').toString();
-                final destino = (m['destino'] ?? 'Destino').toString();
-                final g = m['gananciaTaxista'];
-                final p = m['precio'];
-                double ganancia = g is num ? g.toDouble() : 0.0;
-                final precio = p is num ? p.toDouble() : 0.0;
-                if (ganancia <= 0 && precio > 0) {
-                  ganancia =
-                      precio * (1.0 - PlataformaEconomia.factorComision);
+                try {
+                  final origen = (m['origen'] ?? 'Origen').toString();
+                  final destino = (m['destino'] ?? 'Destino').toString();
+                  final g = m['gananciaTaxista'];
+                  final p = m['precio'];
+                  double ganancia = g is num ? g.toDouble() : 0.0;
+                  final precio = p is num ? p.toDouble() : 0.0;
+                  if (ganancia <= 0 && precio > 0) {
+                    ganancia =
+                        precio * (1.0 - PlataformaEconomia.factorComision);
+                  }
+                  final ganTxt =
+                      FormatosMoneda.rd(ganancia > 0 ? ganancia : precio);
+
+                  DateTime? fh;
+                  final ts = m['fechaHora'];
+                  if (ts is Timestamp) fh = ts.toDate();
+                  final sw = m['startWindowAt'];
+                  if (fh == null && sw is Timestamp) fh = sw.toDate();
+                  String ventana = '';
+                  if (fh != null) {
+                    ventana = DateFormat('dd/MM/yyyy · HH:mm').format(fh);
+                  }
+
+                  final titulo = reservaFormal
+                      ? 'Al terminar este viaje, tu siguiente recogida es:'
+                      : 'Próximo en cola (se activa al finalizar el actual):';
+
+                  return _shell(
+                    reservaFormal,
+                    titulo,
+                    origen,
+                    destino,
+                    ventana.isEmpty ? '' : 'Ventana: $ventana',
+                    'Ganancia estimada: $ganTxt',
+                  );
+                } catch (_) {
+                  return const SizedBox.shrink();
                 }
-                final ganTxt =
-                    FormatosMoneda.rd(ganancia > 0 ? ganancia : precio);
-
-                DateTime? fh;
-                final ts = m['fechaHora'];
-                if (ts is Timestamp) fh = ts.toDate();
-                final sw = m['startWindowAt'];
-                if (fh == null && sw is Timestamp) fh = sw.toDate();
-                String ventana = '';
-                if (fh != null) {
-                  ventana = DateFormat('dd/MM/yyyy · HH:mm').format(fh);
-                }
-
-                final titulo = reservaFormal
-                    ? 'Al terminar este viaje, tu siguiente recogida es:'
-                    : 'Próximo en cola (se activa al finalizar el actual):';
-
-                return _shell(
-                  reservaFormal,
-                  titulo,
-                  origen,
-                  destino,
-                  ventana.isEmpty ? '' : 'Ventana: $ventana',
-                  'Ganancia estimada: $ganTxt',
-                );
               },
             );
           },

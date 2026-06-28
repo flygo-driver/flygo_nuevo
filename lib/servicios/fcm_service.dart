@@ -8,12 +8,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/firebase_bootstrap.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -79,7 +76,7 @@ class FcmService {
         return;
       }
       // Pasajero: avisos de pool / conductor sin timbre (solo bandeja si aplica).
-      if (isClienteFlavor && type == 'scheduled_trip_pool_open') {
+      if (isPasajeroCapableFlavor && type == 'scheduled_trip_pool_open') {
         final title = m.notification?.title ?? 'Tu viaje ya está en búsqueda';
         final body = m.notification?.body ??
             'Los conductores cercanos pueden aceptarlo ahora.';
@@ -89,6 +86,18 @@ class FcmService {
           body: body,
           payload: payload,
           playSound: false,
+        );
+        return;
+      }
+      if (isPasajeroCapableFlavor &&
+          (type.startsWith('gira_cupos_recordatorio_') ||
+              type == 'gira_cupos_actualizada')) {
+        final title = m.notification?.title ?? 'Recordatorio de gira';
+        final body = m.notification?.body ?? 'Toca para ver tu reserva.';
+        await NotificationService.I.notifyGiraCuposCliente(
+          poolId: (m.data['poolId'] ?? '').toString(),
+          titulo: title,
+          cuerpo: body,
         );
       }
     });
@@ -139,17 +148,9 @@ class FcmService {
     if (nav == null || !nav.mounted) return;
 
     if (isCliente) {
-      await nav.push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => const ViajeEnCursoCliente(),
-        ),
-      );
+      await NavigationService.clearAndGoViajeEnCursoCliente(preNav: nav);
     } else {
-      await nav.push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => const ViajeEnCursoTaxista(),
-        ),
-      );
+      await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: nav);
     }
   }
 
