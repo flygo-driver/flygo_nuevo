@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_ui_constants.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_activar_button.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_banner_scope.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 
 /// Aviso en el shell del cliente cuando falta GPS o permiso de ubicación.
@@ -42,6 +43,9 @@ class _RaiUbicacionClienteBannerState extends State<RaiUbicacionClienteBanner> {
 
   @override
   Widget build(BuildContext context) {
+    if (RaiUbicacionBannerScope.isDescendant(context)) {
+      return const SizedBox.shrink();
+    }
     return ValueListenableBuilder<RaiUbicacionClienteModo>(
       valueListenable: _svc.modo,
       builder: (context, modo, _) {

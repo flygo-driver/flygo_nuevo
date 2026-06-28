@@ -20,6 +20,7 @@ import 'package:flygo_nuevo/widgets/cliente_post_viaje_listener.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_asistente_fab.dart';
 import 'package:flygo_nuevo/widgets/cliente_registro_gate.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_banner_scope.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_detalle.dart';
@@ -342,7 +343,9 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
             RaiOfflineBanner(uid: uidOffline),
             const RaiUbicacionClienteBanner(),
             const Expanded(
-              child: Center(child: CircularProgressIndicator()),
+              child: RaiUbicacionBannerScope(
+                child: Center(child: CircularProgressIndicator()),
+              ),
             ),
           ],
         ),
@@ -360,8 +363,10 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
             RaiOfflineBanner(uid: uidOffline),
             const RaiUbicacionClienteBanner(),
             Expanded(
-              child: ClientePantallaViajeActivo(
-                viajeEnCursoKey: _viajeEnCursoShellKey,
+              child: RaiUbicacionBannerScope(
+                child: ClientePantallaViajeActivo(
+                  viajeEnCursoKey: _viajeEnCursoShellKey,
+                ),
               ),
             ),
           ],
@@ -377,17 +382,19 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
           RaiOfflineBanner(uid: uidOffline),
           const RaiUbicacionClienteBanner(),
           Expanded(
-            child: IndexedStack(
-              index: _index,
-              children: [
-                _tabNavigator(
-                  0,
-                  const ViajeSolicitadoActivoBootstrap(child: ClienteHome()),
-                ),
-                _tabNavigator(1, const ClienteMisViajesHub()),
-                _tabNavigator(2, const ClienteExperienciasTab()),
-                _tabNavigator(3, const ClienteCuentaTab()),
-              ],
+            child: RaiUbicacionBannerScope(
+              child: IndexedStack(
+                index: _index,
+                children: [
+                  _tabNavigator(
+                    0,
+                    const ViajeSolicitadoActivoBootstrap(child: ClienteHome()),
+                  ),
+                  _tabNavigator(1, const ClienteMisViajesHub()),
+                  _tabNavigator(2, const ClienteExperienciasTab()),
+                  _tabNavigator(3, const ClienteCuentaTab()),
+                ],
+              ),
             ),
           ),
         ],
