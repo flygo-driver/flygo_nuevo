@@ -1,4 +1,4 @@
-// ✅ Pantalla Motor estilo Uber/RAI: mapa + bottom sheet + destino + calcular + confirmar
+// ✅ Pantalla Motor RAI: mapa + bottom sheet + destino + calcular + confirmar
 // ✅ NO rompe Firestore: usa ViajesRepo.crearViajePendiente igual que tu flujo
 // ✅ tipoVehiculo fijo = "Motor" (normal)
 // ignore_for_file: prefer_const_constructors, prefer_const_literals_to_create_immutables
@@ -896,6 +896,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   Future<void> _confirmarMotor() async {
     if (_cargando) return;
     if (!_formKey.currentState!.validate()) return;
+    if (!mounted) return;
+    final ({NavigatorState? tab, NavigatorState? raiz}) navCapturado =
+        NavigationService.capturarNavigadoresFormulario(context);
 
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) {
@@ -928,8 +931,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     }
 
     setState(() => _cargando = true);
-    final ({NavigatorState? tab, NavigatorState? raiz}) nav =
-        NavigationService.capturarNavigadoresFormulario(context);
+    final ({NavigatorState? tab, NavigatorState? raiz}) nav = navCapturado;
     try {
       await u.getIdToken(true);
 
@@ -1561,7 +1563,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                       CrossAxisAlignment.stretch,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    _MotoUberHeader(isDark: isDark),
+                                    _MotoRaiHeader(isDark: isDark),
                                     const SizedBox(height: 12),
                                     _MotoSearchShell(
                                       isDark: isDark,
@@ -1804,10 +1806,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 // Auxiliares UI
 // ==========================
 /// Cabecera compacta alineada al tema (menos contraste duro que bloque negro).
-class _MotoUberHeader extends StatelessWidget {
+class _MotoRaiHeader extends StatelessWidget {
   final bool isDark;
 
-  const _MotoUberHeader({required this.isDark});
+  const _MotoRaiHeader({required this.isDark});
 
   static const _accent = Color(0xFFFF5A00);
 
@@ -1966,7 +1968,7 @@ class _MotoOptionsCard extends StatelessWidget {
             ),
             value: idaYVuelta,
             onChanged: onIdaYVuelta,
-            activeColor: const Color(0xFFFF5A00),
+            activeThumbColor: const Color(0xFFFF5A00),
             activeTrackColor: const Color(0xFFFF5A00).withValues(alpha: 0.35),
           ),
           Divider(height: 1, thickness: 1, color: border),

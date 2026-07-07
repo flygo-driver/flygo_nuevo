@@ -58,13 +58,21 @@ class AppFlavorRolGuard {
     return rol == esperado;
   }
 
+  static String _sufijoContacto({String? email, String? telefono}) {
+    final mail = (email ?? '').trim();
+    if (mail.isNotEmpty) return '\n\nCorreo: $mail';
+    final tel = (telefono ?? '').trim();
+    if (tel.isNotEmpty) return '\n\nTeléfono: $tel';
+    return '';
+  }
+
   static String mensajeMismatch({
     required String rolFirestore,
     String? email,
+    String? telefono,
   }) {
     final rol = _canon(rolFirestore);
-    final mail = (email ?? '').trim();
-    final sufijo = mail.isNotEmpty ? '\n\nCorreo: $mail' : '';
+    final sufijo = _sufijoContacto(email: email, telefono: telefono);
 
     if (isConductorFlavor && rol == 'cliente') {
       return 'Esta cuenta es de pasajero. Abrí RAI Pasajero (Google Play) '
@@ -75,6 +83,33 @@ class AppFlavorRolGuard {
           'otro correo de pasajero.$sufijo';
     }
     return 'Esta cuenta no corresponde a esta aplicación.$sufijo';
+  }
+
+  /// Play unificada (`all`): mensaje según pantalla de entrada (pasajero vs conductor).
+  static String mensajeMismatchEntrada({
+    required String rolFirestore,
+    required String entradaRol,
+    String? email,
+    String? telefono,
+  }) {
+    final actual = _canon(rolFirestore);
+    final entrada = _canon(entradaRol);
+    final sufijo = _sufijoContacto(email: email, telefono: telefono);
+
+    if (entrada == 'cliente' && actual == 'taxista') {
+      return 'Esta cuenta es de conductor. En la pantalla de inicio elegí '
+          'la pestaña «Conductor» y entrá con el mismo correo, teléfono o Google.$sufijo';
+    }
+    if (entrada == 'taxista' && actual == 'cliente') {
+      return 'Esta cuenta es de pasajero. En la pantalla de inicio elegí '
+          'la pestaña «Pasajero» y entrá con el mismo correo, teléfono o Google.$sufijo';
+    }
+
+    return mensajeMismatch(
+      rolFirestore: rolFirestore,
+      email: email,
+      telefono: telefono,
+    );
   }
 
   static String tituloMismatch(String rolFirestore) {
@@ -93,6 +128,7 @@ class AppFlavorRolGuard {
     required String rolFirestore,
     required String entradaRol,
     String? email,
+    String? telefono,
   }) {
     final actual = _canon(rolFirestore);
     final entrada = _canon(entradaRol);
@@ -101,9 +137,22 @@ class AppFlavorRolGuard {
     if (entrada.isEmpty) return;
     if (actual == entrada) return;
 
+    final mensaje = isAllFlavors
+        ? mensajeMismatchEntrada(
+            rolFirestore: actual,
+            entradaRol: entrada,
+            email: email,
+            telefono: telefono,
+          )
+        : mensajeMismatch(
+            rolFirestore: actual,
+            email: email,
+            telefono: telefono,
+          );
+
     throw FirebaseAuthException(
       code: 'role-mismatch',
-      message: mensajeMismatch(rolFirestore: actual, email: email),
+      message: mensaje,
     );
   }
 

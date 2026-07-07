@@ -193,6 +193,7 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
+                // ignore: deprecated_member_use
                 value: _tipoCuenta,
                 style: textStyle,
                 decoration: _fieldDecoration(

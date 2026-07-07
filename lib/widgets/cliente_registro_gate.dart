@@ -1,11 +1,13 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
+import 'package:flygo_nuevo/pantallas/cliente/completar_perfil_cliente.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_perfil_onboarding.dart';
 
-/// Perfil cliente incompleto: sugiere completar sin bloquear viajes activos.
+/// Tras teléfono/Google: obliga perfil mínimo (nombre + teléfono) antes del shell.
 class ClienteRegistroGate extends StatelessWidget {
   const ClienteRegistroGate({super.key, required this.child});
 
@@ -28,82 +30,65 @@ class ClienteRegistroGate extends StatelessWidget {
         }
 
         final data = userSnap.data?.data() ?? <String, dynamic>{};
-        final incompleto = data['registroClienteCompleto'] != true;
+        final incompleto = ClientePerfilOnboarding.debeCompletarPerfil(data);
         final vid = (data['viajeActivoId'] ?? '').toString().trim();
         final tieneViaje = vid.isNotEmpty ||
             ActiveTripService.debeMantenerOverlayViajeEnShell;
 
-        if (!incompleto || tieneViaje) return child;
+        // Viaje activo: no bloquear (perfil después).
+        if (!incompleto || tieneViaje) {
+          return child;
+        }
 
-        return _ClienteCompletarPerfilPrompt(child: child);
+        // QA debug: permitir shell sin perfil si hace falta probar.
+        if (kDebugMode && !kReleaseMode) {
+          return _ClientePerfilOpcionalOverlay(child: child);
+        }
+
+        return const CompletarPerfilCliente();
       },
     );
   }
 }
 
-class _ClienteCompletarPerfilPrompt extends StatelessWidget {
-  const _ClienteCompletarPerfilPrompt({required this.child});
+/// Solo debug: aviso suave sin bloquear.
+class _ClientePerfilOpcionalOverlay extends StatelessWidget {
+  const _ClientePerfilOpcionalOverlay({required this.child});
 
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 24),
-              Image.asset(
-                'assets/icon/logo_rai_vertical.png',
-                width: 120,
-                height: 120,
+    return Stack(
+      children: [
+        child,
+        Positioned(
+          left: 12,
+          right: 12,
+          bottom: 12,
+          child: Material(
+            color: Colors.orange.shade900.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(12),
+            child: ListTile(
+              dense: true,
+              title: const Text(
+                'Perfil incompleto (debug)',
+                style: TextStyle(color: Colors.white, fontSize: 13),
               ),
-              const SizedBox(height: 24),
-              const Text(
-                'Completa tu perfil',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Nombre y teléfono ayudan al conductor a contactarte. '
-                'Puedes pedir viajes después; no hay bloqueo por deuda.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, height: 1.4),
-              ),
-              const Spacer(),
-              FilledButton.icon(
+              trailing: TextButton(
                 onPressed: () {
-                  Navigator.of(context).push(
+                  Navigator.of(context).push<void>(
                     MaterialPageRoute<void>(
-                      builder: (_) => const ConfiguracionPerfil(),
+                      builder: (_) => const CompletarPerfilCliente(),
                     ),
                   );
                 },
-                icon: const Icon(Icons.edit),
-                label: const Text('Completar ahora'),
+                child: const Text('Completar'),
               ),
-              const SizedBox(height: 10),
-              OutlinedButton(
-                onPressed: () {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute<void>(builder: (_) => child),
-                  );
-                },
-                child: const Text('Continuar sin completar'),
-              ),
-            ],
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

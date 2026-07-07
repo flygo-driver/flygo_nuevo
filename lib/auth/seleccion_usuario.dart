@@ -1,171 +1,177 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/auth/login_cliente.dart';
-import 'package:flygo_nuevo/auth/login_taxista.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/widgets/rai_entrada_hero.dart';
+import 'package:flygo_nuevo/widgets/rai_entrada_social_panel.dart';
 
-class SeleccionUsuario extends StatelessWidget {
-  const SeleccionUsuario({super.key});
+/// Bienvenida unificada Play: paracaídas + pasajero/conductor, mismo diseño.
+class SeleccionUsuario extends StatefulWidget {
+  const SeleccionUsuario({
+    super.key,
+    this.initialRol = 'cliente',
+    this.showBackButton = false,
+  });
 
-  void _goAuthCheck(BuildContext context) {
-    Navigator.of(context).pushNamedAndRemoveUntil('/auth_check', (r) => false);
+  final String initialRol;
+  final bool showBackButton;
+
+  @override
+  State<SeleccionUsuario> createState() => _SeleccionUsuarioState();
+}
+
+class _SeleccionUsuarioState extends State<SeleccionUsuario> {
+  static const Color _raiVerde = Color(0xFF00C853);
+
+  late String _rolEntrada;
+
+  @override
+  void initState() {
+    super.initState();
+    _rolEntrada = _rolInicial();
+  }
+
+  String _rolInicial() {
+    if (isConductorFlavor) return 'taxista';
+    if (isClienteFlavor) return 'cliente';
+    final r = widget.initialRol.trim().toLowerCase();
+    return r == 'taxista' ? 'taxista' : 'cliente';
+  }
+
+  bool get _mostrarSelectorRol => isAllFlavors;
+  bool get _esConductor => _rolEntrada == 'taxista';
+
+  void _snackError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Widget _selectorPasajeroConductor() {
+    final c = RaiEntradaColores.de(context);
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: c.chipFondo,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: c.campoBorde, width: 1),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _chipRol(
+              label: 'Pasajero',
+              icon: Icons.person_outline,
+              seleccionado: !_esConductor,
+              onTap: () => setState(() => _rolEntrada = 'cliente'),
+            ),
+          ),
+          Expanded(
+            child: _chipRol(
+              label: 'Conductor',
+              icon: Icons.local_taxi_outlined,
+              seleccionado: _esConductor,
+              onTap: () => setState(() => _rolEntrada = 'taxista'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _chipRol({
+    required String label,
+    required IconData icon,
+    required bool seleccionado,
+    required VoidCallback onTap,
+  }) {
+    final c = RaiEntradaColores.de(context);
+    return Material(
+      color: seleccionado ? _raiVerde : Colors.transparent,
+      borderRadius: BorderRadius.circular(9),
+      elevation: seleccionado ? 2 : 0,
+      shadowColor: _raiVerde.withValues(alpha: 0.4),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(9),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: seleccionado ? Colors.white : c.chipInactivo,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: seleccionado ? FontWeight.w800 : FontWeight.w500,
+                color: seleccionado ? Colors.white : c.chipInactivo,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _subtituloRol(bool esConductor) {
+    if (esConductor) {
+      return 'Teléfono o Google. Verificás el código y listo — nuevo o existente.';
+    }
+    return 'Celular, Google o correo. Mismo paso para entrar o crear cuenta.';
   }
 
   @override
   Widget build(BuildContext context) {
-    final Color accent = Theme.of(context).colorScheme.primary;
-    const Color bg = Colors.black;
-    const Color btnBg = Colors.white;
+    final rol = isConductorFlavor
+        ? 'taxista'
+        : (isClienteFlavor ? 'cliente' : _rolEntrada);
+    final esConductorUi = _esConductor || isConductorFlavor;
 
-    return Scaffold(
-      backgroundColor: bg,
-      body: SafeArea(
-        bottom: true,
-        child: LayoutBuilder(
-          builder: (context, c) {
-            final double h = c.maxHeight;
-
-            // Logos GRANDES por ALTURA
-            final double paraH = (h * 0.25).clamp(180.0, 360.0); // Paracaídas
-            final double logoRaiH =
-                (h * 0.15).clamp(100.0, 240.0); // Logo RAI vertical
-
-            return SingleChildScrollView(
-              physics: const ClampingScrollPhysics(),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: h),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // ---------- Arriba: paracaídas + LOGO RAI VERTICAL + textos ----------
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 22, 24, 0),
-                      child: Column(
-                        children: [
-                          // PARACAÍDAS
-                          Center(
-                            child: GestureDetector(
-                              onLongPress: () => _goAuthCheck(context),
-                              child: Image.asset(
-                                'assets/icon/paracaida_color.png',
-                                height: paraH,
-                                fit: BoxFit.contain,
-                                filterQuality: FilterQuality.high,
-                              ),
-                            ),
-                          ),
-
-                          // LOGO RAI VERTICAL (R arriba + RAI abajo)
-                          SizedBox(height: h * 0.016),
-                          Center(
-                            child: GestureDetector(
-                              onLongPress: () => _goAuthCheck(context),
-                              child: Image.asset(
-                                'assets/icon/logo_rai_vertical.png',
-                                height: logoRaiH,
-                                fit: BoxFit.contain,
-                                filterQuality: FilterQuality.high,
-                              ),
-                            ),
-                          ),
-
-                          SizedBox(height: h * 0.022),
-
-                          // TEXTO PRINCIPAL
-                          const Text(
-                            'Largos viajes,\nfáciles y seguros',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 36,
-                              fontWeight: FontWeight.w900,
-                              height: 1.05,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-
-                          // SUBTEXTO
-                          const Text(
-                            'Comparte ruta, ahorra y viaja mejor.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Color.fromARGB(191, 255, 255, 255),
-                              fontSize: 15,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // ---------- Abajo: botones + pie legal discreto ----------
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-                      child: Column(
-                        children: [
-                          // App unificada Play (all) o split: cliente / conductor
-                          Visibility(
-                            visible: !isConductorFlavor,
-                            child: _BigButton(
-                              background: btnBg,
-                              foreground: accent,
-                              icon: Icons.person,
-                              label: 'SOY CLIENTE',
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) => const LoginCliente()),
-                                );
-                              },
-                            ),
-                          ),
-                          Visibility(
-                            visible: isAllFlavors,
-                            child: const SizedBox(height: 10),
-                          ),
-                          Visibility(
-                            visible: !isClienteFlavor,
-                            child: _BigButton(
-                              background: btnBg,
-                              foreground: accent,
-                              icon: Icons.local_taxi,
-                              label: 'SOY TAXISTA',
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) => const LoginTaxista()),
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          const _UberStyleLegalFooter(),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
+    return RaiEntradaScaffold(
+      mostrarAtras: widget.showBackButton,
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const RaiEntradaHero(),
+            const SizedBox(height: 22),
+            if (_mostrarSelectorRol) ...[
+              _selectorPasajeroConductor(),
+              const SizedBox(height: 16),
+            ],
+            RaiEntradaRegistroBanner(esConductor: esConductorUi),
+            const SizedBox(height: 18),
+            RaiEntradaSocialPanel(
+              key: ValueKey<String>('entrada-$rol'),
+              entradaRol: rol,
+              ocultarTitulo: true,
+              subtitulo: _subtituloRol(esConductorUi),
+              mostrarCorreo: rol == 'cliente',
+              onError: _snackError,
+            ),
+            const SizedBox(height: 28),
+            const _RaiLegalFooter(),
+          ],
         ),
       ),
     );
   }
 }
 
-/// Pie legal discreto (estilo apps tipo Uber); enlaces con gestos bien dispuestos.
-class _UberStyleLegalFooter extends StatefulWidget {
-  const _UberStyleLegalFooter();
+class _RaiLegalFooter extends StatefulWidget {
+  const _RaiLegalFooter();
 
   @override
-  State<_UberStyleLegalFooter> createState() => _UberStyleLegalFooterState();
+  State<_RaiLegalFooter> createState() => _RaiLegalFooterState();
 }
 
-class _UberStyleLegalFooterState extends State<_UberStyleLegalFooter> {
+class _RaiLegalFooterState extends State<_RaiLegalFooter> {
   late final TapGestureRecognizer _tapCondiciones;
   late final TapGestureRecognizer _tapPrivacidad;
 
@@ -198,23 +204,21 @@ class _UberStyleLegalFooterState extends State<_UberStyleLegalFooter> {
 
   @override
   Widget build(BuildContext context) {
+    final c = RaiEntradaColores.de(context);
     return Text.rich(
       TextSpan(
         style: TextStyle(
-          color: Colors.white.withValues(alpha: 0.52),
+          color: c.textoSecundario,
           fontSize: 12,
-          height: 1.45,
-          fontWeight: FontWeight.w400,
+          height: 1.5,
         ),
         children: [
-          const TextSpan(text: 'Al continuar, aceptas nuestras '),
+          const TextSpan(text: 'Al continuar, aceptás los '),
           TextSpan(
-            text: 'Condiciones',
+            text: 'Términos del servicio',
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.92),
+              color: c.link,
               fontWeight: FontWeight.w600,
-              decoration: TextDecoration.underline,
-              decorationColor: Colors.white.withValues(alpha: 0.35),
             ),
             recognizer: _tapCondiciones,
           ),
@@ -222,78 +226,15 @@ class _UberStyleLegalFooterState extends State<_UberStyleLegalFooter> {
           TextSpan(
             text: 'Política de privacidad',
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.92),
+              color: c.link,
               fontWeight: FontWeight.w600,
-              decoration: TextDecoration.underline,
-              decorationColor: Colors.white.withValues(alpha: 0.35),
             ),
             recognizer: _tapPrivacidad,
           ),
-          const TextSpan(text: '.'),
+          const TextSpan(text: ' de RAI.'),
         ],
       ),
       textAlign: TextAlign.center,
-    );
-  }
-}
-
-/// Botón grande
-class _BigButton extends StatelessWidget {
-  final Color background;
-  final Color foreground;
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _BigButton({
-    required this.background,
-    required this.foreground,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(22),
-        onTap: onTap,
-        child: Ink(
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(22),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x22000000),
-                blurRadius: 18,
-                offset: Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 22),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, color: foreground),
-                const SizedBox(width: 12),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

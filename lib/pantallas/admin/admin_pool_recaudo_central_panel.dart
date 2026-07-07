@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../servicios/pool_repo.dart';
+import '../../utils/pool_recaudo_central.dart';
+import '../../widgets/admin_pool_cierre_recaudo_panel.dart';
 import '../../widgets/admin_pool_comprobante_dialog.dart';
 import 'admin_ui_theme.dart';
 
@@ -276,10 +278,16 @@ class _LiquidacionesPoolPendientesList extends StatelessWidget {
             final liqId = doc.id;
             final neto = ((d['netoTotalRd'] ?? 0) as num).toDouble();
             final poolId = (d['poolId'] ?? '').toString();
+            final cierre = PoolRecaudoCentral.cierreDesdePool(
+              Map<String, dynamic>.from(d),
+            );
             final titular = (d['bancoTitular'] ?? '').toString();
             final cuenta = (d['bancoCuenta'] ?? '').toString();
             final banco = (d['bancoNombre'] ?? '').toString();
             final destino = (d['destino'] ?? '').toString();
+            final asientosVendidos = ((d['asientosVendidos'] ?? 0) as num).toInt();
+            final precioAsiento =
+                ((d['precioPorAsiento'] ?? 0) as num).toDouble();
             return Card(
               color: AdminUi.card(context),
               margin: const EdgeInsets.only(bottom: 8),
@@ -302,6 +310,23 @@ class _LiquidacionesPoolPendientesList extends StatelessWidget {
                         child: Text('Destino: $destino',
                             style: TextStyle(color: AdminUi.secondary(context))),
                       ),
+                    if (asientosVendidos > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          precioAsiento > 0
+                              ? '$asientosVendidos asiento(s) vendido(s) × ${formatter.format(precioAsiento)}'
+                              : '$asientosVendidos asiento(s) vendido(s)',
+                          style: TextStyle(
+                            color: AdminUi.onCard(context),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    AdminPoolCierreRecaudoPanel(
+                      cierre: cierre,
+                      compact: true,
+                    ),
                     const SizedBox(height: 6),
                     Text(
                       'Transferir a:\n'

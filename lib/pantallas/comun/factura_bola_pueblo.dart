@@ -52,10 +52,14 @@ class FacturaBolaPueblo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final c = BolaPuebloColors.of(context);
     return Scaffold(
+      backgroundColor: c.bgDeep,
       appBar: AppBar(
-        title: const Text('RAI — Comprobante Bola Ahorro'),
+        backgroundColor: c.appBarScrim,
+        foregroundColor: c.onSurface,
+        elevation: 0,
+        title: const Text('Comprobante Bola'),
         centerTitle: true,
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -74,7 +78,7 @@ class FacturaBolaPueblo extends StatelessWidget {
                 child: Text(
                   'No encontramos el registro de esta operación Bola Ahorro.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: cs.onSurfaceVariant),
+                  style: TextStyle(color: c.onMuted),
                 ),
               ),
             );
@@ -270,7 +274,8 @@ class _FacturaBolaContent extends StatelessWidget {
                   value: FormatosMoneda.rd(gananciaNeta),
                   boldValue: true,
                 ),
-                if (esEfectivo && saldoPrepagoFactura != null) ...[
+                if ((esEfectivo || esTransferencia) &&
+                    saldoPrepagoFactura != null) ...[
                   const SizedBox(height: 8),
                   _Row(
                     label: 'Saldo prepago comisión (tras este viaje)',
@@ -286,8 +291,8 @@ class _FacturaBolaContent extends StatelessWidget {
                           'políticas vigentes. Regularizá en Mis pagos para mantener tu cuenta '
                           'operativa sin restricciones.'
                       : 'Pago por transferencia: el importe neto acordado lo recibís del '
-                          'pasajero. La comisión RAI se liquida según el modelo de viajes '
-                          'estándar (sin descuento automático del prepago en efectivo).',
+                          'pasajero. La comisión RAI se descontó de tu prepago (recarga); si no '
+                          'alcanzó, quedó como comisión pendiente. Regularizá en Mis pagos.',
                   style: tt.bodySmall?.copyWith(
                     color: cs.onSurfaceVariant,
                     height: 1.35,

@@ -27,6 +27,19 @@ function trimOrEmpty(v: unknown): string {
   return (v ?? "").toString().trim();
 }
 
+function assertClienteCuentaReal(
+  request: { auth?: { token?: Record<string, unknown> } },
+): void {
+  const firebase = request.auth?.token?.firebase as Record<string, string> | undefined;
+  const provider = trimOrEmpty(firebase?.sign_in_provider).toLowerCase();
+  if (provider === "anonymous") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Regístrate con teléfono, Google o correo para pedir viaje.",
+    );
+  }
+}
+
 function esTerminal(estado: string): boolean {
   return TERMINAL.has(estado.trim().toLowerCase());
 }
@@ -298,6 +311,7 @@ export const crearViajePendienteCliente = onCall(async (request) => {
   if (!request.auth?.uid) {
     throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
   }
+  assertClienteCuentaReal(request);
   const uid = request.auth.uid;
   const payload = (request.data ?? {}) as AnyMap;
   const viajeId = trimOrEmpty(payload.viajeId);

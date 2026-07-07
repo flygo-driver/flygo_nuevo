@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 
 /// Alertas in-app (timbre + bandeja) para el catálogo **Giras por cupos** del cliente.
 /// No afecta el timbre del conductor ni otros productos.
@@ -135,7 +136,7 @@ class GirasCuposClienteAlerts {
     final cap = (d['capacidad'] as num?)?.toInt() ?? 0;
     final occ = (d['asientosReservados'] as num?)?.toInt() ?? 0;
     final left = (cap - occ).clamp(0, cap);
-    final precio = (d['precioPorAsiento'] as num?)?.toDouble() ?? 0;
+    final precio = PoolRecaudoCentral.precioPorPersona(d);
     final precioTxt = precio > 0
         ? 'Desde RD\$ ${precio.toStringAsFixed(0)}'
         : 'Consultá precio en la app';

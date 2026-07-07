@@ -385,7 +385,8 @@ service cloud.firestore {
           "pushToken", "notificaciones",
           "aceptacionTerminos",
           "phoneVerified", "lastPhoneReauthAt",
-          "registroClienteCompleto"
+          "registroClienteCompleto",
+          "verificacionIdentidadEn", "verificacionIdentidadUrl"
         ]);
       // Disponibilidad operativa (toggle): aislado de campos de aprobación documental.
       allow update: if isOwner(uid) &&

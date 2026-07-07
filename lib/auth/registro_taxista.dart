@@ -334,25 +334,44 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
                 ),
                 child: Column(
                   children: [
-                    _buildTipoServicioOption(
-                      value: 'bola_ahorro',
-                      icon: Icons.savings_outlined,
-                      label: '💚 Bola Ahorro (viajes compartidos)',
-                    ),
-                    _buildTipoServicioOption(
-                      value: 'normal',
-                      icon: Icons.directions_car,
-                      label: '🚗 Servicio Normal',
-                    ),
-                    _buildTipoServicioOption(
-                      value: 'motor',
-                      icon: Icons.two_wheeler,
-                      label: '🛵 Servicio Motor',
-                    ),
-                    _buildTipoServicioOption(
-                      value: 'turismo',
-                      icon: Icons.beach_access,
-                      label: '🏝️ Servicio Turismo',
+                    RadioGroup<String>(
+                      groupValue: _tipoServicio,
+                      onChanged: (val) {
+                        if (val == null) return;
+                        setState(() {
+                          _tipoServicio = val;
+                          if (_tipoServicio == 'normal' ||
+                              _tipoServicio == 'bola_ahorro') {
+                            _tipoVehiculo = 'Carro';
+                          } else if (_tipoServicio == 'turismo') {
+                            _subtipoTurismo = 'carro';
+                          }
+                        });
+                      },
+                      child: Column(
+                        children: [
+                          _buildTipoServicioOption(
+                            value: 'bola_ahorro',
+                            icon: Icons.savings_outlined,
+                            label: '💚 Bola Ahorro (viajes compartidos)',
+                          ),
+                          _buildTipoServicioOption(
+                            value: 'normal',
+                            icon: Icons.directions_car,
+                            label: '🚗 Servicio Normal',
+                          ),
+                          _buildTipoServicioOption(
+                            value: 'motor',
+                            icon: Icons.two_wheeler,
+                            label: '🛵 Servicio Motor',
+                          ),
+                          _buildTipoServicioOption(
+                            value: 'turismo',
+                            icon: Icons.beach_access,
+                            label: '🏝️ Servicio Turismo',
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -376,6 +395,7 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
               if (_tipoServicio == 'normal' ||
                   _tipoServicio == 'bola_ahorro') ...[
                 DropdownButtonFormField<String>(
+                  // ignore: deprecated_member_use
                   value: _tipoVehiculo,
                   isExpanded: true,
                   items: _tiposVehiculoNormal.map((tipo) {
@@ -400,6 +420,7 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
 
               if (_tipoServicio == 'turismo') ...[
                 DropdownButtonFormField<String>(
+                  // ignore: deprecated_member_use
                   value: _subtipoTurismo ?? 'carro',
                   isExpanded: true,
                   items: _subtiposTurismo.map((tipo) {
@@ -647,18 +668,6 @@ class _RegistroTaxistaState extends State<RegistroTaxista> {
         ],
       ),
       value: value,
-      groupValue: _tipoServicio,
-      onChanged: (val) {
-        setState(() {
-          _tipoServicio = val!;
-          // Resetear valores según tipo
-          if (_tipoServicio == 'normal' || _tipoServicio == 'bola_ahorro') {
-            _tipoVehiculo = 'Carro';
-          } else if (_tipoServicio == 'turismo') {
-            _subtipoTurismo = 'carro';
-          }
-        });
-      },
       activeColor: Colors.greenAccent,
     );
   }

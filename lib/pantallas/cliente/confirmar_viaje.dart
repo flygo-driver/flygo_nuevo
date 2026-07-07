@@ -7,7 +7,6 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
 class ConfirmarViajePage extends StatefulWidget {
@@ -351,6 +350,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                       Expanded(
                         child: DropdownButtonFormField<String>(
                           dropdownColor: const Color(0xFF1E1E1E),
+                          // ignore: deprecated_member_use
                           value: _metodoPago,
                           items: const [
                             DropdownMenuItem(
@@ -380,6 +380,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                       Expanded(
                         child: DropdownButtonFormField<String>(
                           dropdownColor: const Color(0xFF1E1E1E),
+                          // ignore: deprecated_member_use
                           value: _tipoVehiculo,
                           items: const [
                             DropdownMenuItem(
@@ -412,7 +413,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: Colors.white),
                     ),
-                    activeColor: Colors.greenAccent,
+                    activeThumbColor: Colors.greenAccent,
                   ),
                 ],
               ),

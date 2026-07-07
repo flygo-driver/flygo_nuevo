@@ -83,63 +83,62 @@ class _PagoMetodoState extends State<PagoMetodo> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            RadioListTile<String>(
-              value: 'Efectivo',
+            RadioGroup<String>(
               groupValue: _metodo,
-              onChanged: _procesando
-                  ? null
-                  : (String? v) => setState(() => _metodo = v!),
-              activeColor: Colors.greenAccent,
-              tileColor: Colors.grey[900],
-              title: const Text(
-                'Efectivo',
-                style: TextStyle(color: Colors.white),
-              ),
-              subtitle: const Text(
-                'Pagas al finalizar el viaje. RAI registra la comisión al taxista.',
-                style: TextStyle(color: Colors.white70),
+              onChanged: (String? v) {
+                if (_procesando || v == null) return;
+                setState(() => _metodo = v);
+              },
+              child: Column(
+                children: [
+                  RadioListTile<String>(
+                    value: 'Efectivo',
+                    activeColor: Colors.greenAccent,
+                    tileColor: Colors.grey[900],
+                    title: const Text(
+                      'Efectivo',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    subtitle: const Text(
+                      'Pagas al finalizar el viaje. RAI registra la comisión al taxista.',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  RadioListTile<String>(
+                    value: 'Transferencia',
+                    activeColor: Colors.greenAccent,
+                    tileColor: Colors.grey[900],
+                    title: const Text(
+                      'Transferencia',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    subtitle: const Text(
+                      'Subes el comprobante según las instrucciones del viaje.',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                  if (PayConfig.tarjetaHabilitada) ...[
+                    const SizedBox(height: 8),
+                    RadioListTile<String>(
+                      value: 'Tarjeta',
+                      activeColor: Colors.greenAccent,
+                      tileColor: Colors.grey[900],
+                      title: const Text(
+                        'Tarjeta',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        _esFlujoConViaje
+                            ? 'Se autoriza ahora y se captura al completar.'
+                            : 'Se autorizará al confirmar tu viaje.',
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            RadioListTile<String>(
-              value: 'Transferencia',
-              groupValue: _metodo,
-              onChanged: _procesando
-                  ? null
-                  : (String? v) => setState(() => _metodo = v!),
-              activeColor: Colors.greenAccent,
-              tileColor: Colors.grey[900],
-              title: const Text(
-                'Transferencia',
-                style: TextStyle(color: Colors.white),
-              ),
-              subtitle: const Text(
-                'Subes el comprobante según las instrucciones del viaje.',
-                style: TextStyle(color: Colors.white70),
-              ),
-            ),
-            if (PayConfig.tarjetaHabilitada) ...[
-              const SizedBox(height: 8),
-              RadioListTile<String>(
-                value: 'Tarjeta',
-                groupValue: _metodo,
-                onChanged: _procesando
-                    ? null
-                    : (String? v) => setState(() => _metodo = v!),
-                activeColor: Colors.greenAccent,
-                tileColor: Colors.grey[900],
-                title: const Text(
-                  'Tarjeta',
-                  style: TextStyle(color: Colors.white),
-                ),
-                subtitle: Text(
-                  _esFlujoConViaje
-                      ? 'Se autoriza ahora y se captura al completar.'
-                      : 'Se autorizará al confirmar tu viaje.',
-                  style: const TextStyle(color: Colors.white70),
-                ),
-              ),
-            ],
             const Spacer(),
             if (_error != null)
               Padding(

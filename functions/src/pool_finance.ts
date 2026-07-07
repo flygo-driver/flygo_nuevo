@@ -11,7 +11,9 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
-import { getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import {
+  getComisionGiraPorcientoFijo,
+} from "./comision_viaje_pct.js";
 import { getComisionPrepagoConfig } from "./finance.js";
 import {
   fetchGiraAbusoUmbral,
@@ -30,6 +32,19 @@ import {
 const db = () => getFirestore();
 
 type AnyMap = Record<string, unknown>;
+
+function assertClienteCuentaReal(
+  request: { auth?: { token?: Record<string, unknown> } },
+): void {
+  const firebase = request.auth?.token?.firebase as Record<string, string> | undefined;
+  const provider = String(firebase?.sign_in_provider ?? "").trim().toLowerCase();
+  if (provider === "anonymous") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Regístrate con teléfono, Google o correo para reservar cupos.",
+    );
+  }
+}
 
 function numOr0(v: unknown): number {
   if (typeof v === "number" && Number.isFinite(v)) return v;
@@ -186,13 +201,47 @@ function splitRecaudoReservaTotal(
 ): { comisionRaiRd: number; netoOrganizadorRd: number } {
   const bruto = Math.max(0, Number.isFinite(total) ? total : 0);
   const comisionRaiRd = round2(bruto * (pct / 100));
+  // Recaudo central: RAI retiene el % del pago del cliente; el organizador recibe el neto.
   const netoOrganizadorRd = round2(bruto - comisionRaiRd);
   return { comisionRaiRd, netoOrganizadorRd };
 }
 
-/** Mismo % que viajes en efectivo (`config/comision`). */
+function etapaPrepagoGiraValidaParaInicio(etapa: string): boolean {
+  const e = etapa.trim().toLowerCase();
+  return e === "reservada_creacion" || e === "central_recaudo";
+}
+
+/** Recaudo central: comisión 10% sobre ventas − crédito prepago ya consumido = retención del recaudo. */
+function cierreRecaudoCentralDesdePool(pool: AnyMap): {
+  brutoRecaudadoRd: number;
+  comisionVentasRd: number;
+  prepagoAplicadoRd: number;
+  comisionRetenidaRecaudoRd: number;
+  netoOrganizadorFinalRd: number;
+} {
+  const bruto = Math.max(0, numOr0(pool.montoRecaudadoRaiRd));
+  const comisionVentas = Math.max(0, numOr0(pool.montoComisionRaiRd));
+  const prepagoRaw = Math.max(
+    0,
+    numOr0(pool.comisionGiraRealRd) ||
+      numOr0(pool.montoComisionCobradaPrepago) ||
+      numOr0(pool.prepagoComisionAplicadaRd),
+  );
+  const prepagoAplicado = round2(Math.min(prepagoRaw, comisionVentas));
+  const comisionRetenidaRecaudo = round2(Math.max(0, comisionVentas - prepagoAplicado));
+  const netoOrganizadorFinal = round2(Math.max(0, bruto - comisionRetenidaRecaudo));
+  return {
+    brutoRecaudadoRd: round2(bruto),
+    comisionVentasRd: round2(comisionVentas),
+    prepagoAplicadoRd: prepagoAplicado,
+    comisionRetenidaRecaudoRd: comisionRetenidaRecaudo,
+    netoOrganizadorFinalRd: netoOrganizadorFinal,
+  };
+}
+
+/** Fijo 10%: giras por cupos no usan `config/comision` del admin. */
 export async function getComisionGiraPorcientoFromRemote(): Promise<number> {
-  return getComisionViajePorcentajeCached();
+  return getComisionGiraPorcientoFijo();
 }
 
 /** Precio por asiento = monto final por persona (sin multiplicar por sentido). */
@@ -378,6 +427,20 @@ function stringListOrNull(raw: unknown): string[] | null {
   return out.length > 0 ? out : null;
 }
 
+const MAX_BANNER_URLS = 3;
+
+/** Unifica bannerUrl legacy + bannerUrls (máx. 3). */
+function mergeBannerFields(d: AnyMap): { bannerUrl?: string; bannerUrls?: string[] } {
+  const urls: string[] = [];
+  const fromList = stringListOrNull(d.bannerUrls);
+  if (fromList) urls.push(...fromList);
+  const single = trimOrNull(d.bannerUrl);
+  if (single && !urls.includes(single)) urls.unshift(single);
+  const capped = urls.slice(0, MAX_BANNER_URLS);
+  if (capped.length === 0) return {};
+  return { bannerUrl: capped[0], bannerUrls: capped };
+}
+
 const TOKEN_ENTRADA_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 function generarTokenEntradaGira(): string {
@@ -491,6 +554,20 @@ function mergePoolContenidoExtraFromInput(d: AnyMap): AnyMap {
       })
       .filter((x): x is { hora: string; actividad: string } => x != null);
     if (it.length > 0) out.itinerario = it;
+  }
+  if (Array.isArray(d.puntosRecogida)) {
+    const pr = d.puntosRecogida
+      .map((row) => {
+        if (!row || typeof row !== "object") return null;
+        const m = row as AnyMap;
+        const hora = trimOrNull(m.hora) ?? "";
+        const lugar = trimOrNull(m.lugar) ?? "";
+        if (!hora && !lugar) return null;
+        return { hora, lugar };
+      })
+      .filter((x): x is { hora: string; lugar: string } => x != null)
+      .slice(0, 20);
+    if (pr.length > 0) out.puntosRecogida = pr;
   }
   return out;
 }
@@ -632,24 +709,22 @@ export const crearPoolGira = onCall(async (request) => {
       );
     }
 
-    if (!recaudoCentral) {
-      if (bloqueoOperativoPorComisionEfectivo(bille, minOperativoRd)) {
-        const pend = comisionPendienteRdFromBilletera(bille);
-        if (pend >= UMBRAL_COMISION_LEGACY_RD - 1e-6) {
-          throw new HttpsError(
-            "failed-precondition",
-            "No puedes publicar salidas por cupos: comisión en efectivo pendiente ≥ RD$500. " +
-              "Deposita y sube comprobante en Mis pagos.",
-          );
-        }
-        const falta = round2(minOperativoRd - disponiblePre);
+    if (bloqueoOperativoPorComisionEfectivo(bille, minOperativoRd)) {
+      const pend = comisionPendienteRdFromBilletera(bille);
+      if (pend >= UMBRAL_COMISION_LEGACY_RD - 1e-6) {
         throw new HttpsError(
           "failed-precondition",
-          `No puedes publicar salidas por cupos: prepago libre RD$${disponiblePre.toFixed(2)}. ` +
-            `Necesitas al menos RD$${minOperativoRd.toFixed(0)}. ` +
-            `Recarga RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
+          "No puedes publicar salidas por cupos: comisión pendiente ≥ RD$500. " +
+            "Deposita y sube comprobante en Mis pagos.",
         );
       }
+      const falta = round2(minOperativoRd - disponiblePre);
+      throw new HttpsError(
+        "failed-precondition",
+        `No puedes publicar salidas por cupos: prepago libre RD$${disponiblePre.toFixed(2)}. ` +
+          `Necesitas al menos RD$${minOperativoRd.toFixed(0)}. ` +
+          `Recarga RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
+      );
     }
 
     let comisionReservar = 0;
@@ -657,19 +732,17 @@ export const crearPoolGira = onCall(async (request) => {
     const res = saldoReservadoGirasRdFromBilletera(bille);
     const disponible = disponiblePre;
 
-    if (!recaudoCentral) {
-      if (disponible + 1e-9 >= comisionObjetivo) {
-        comisionReservar = comisionObjetivo;
-      } else if (disponible + 1e-9 >= minOperativoRd) {
-        comisionReservar = round2(disponible);
-      } else {
-        const falta = round2(minOperativoRd - disponible);
-        throw new HttpsError(
-          "failed-precondition",
-          `Prepago libre RD$${disponible.toFixed(2)}. Para publicar salidas por cupos ` +
-            `recarga al menos RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
-        );
-      }
+    if (disponible + 1e-9 >= comisionObjetivo) {
+      comisionReservar = comisionObjetivo;
+    } else if (disponible + 1e-9 >= minOperativoRd) {
+      comisionReservar = round2(disponible);
+    } else {
+      const falta = round2(minOperativoRd - disponible);
+      throw new HttpsError(
+        "failed-precondition",
+        `Prepago libre RD$${disponible.toFixed(2)}. Para publicar salidas por cupos ` +
+          `recarga al menos RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
+      );
     }
 
     const ultimoTs = ud.ultimoReinicioContadorGiras;
@@ -733,7 +806,7 @@ export const crearPoolGira = onCall(async (request) => {
       );
     }
 
-    if (!recaudoCentral) {
+    if (comisionReservar > 1e-9) {
       const prepNuevo = round2(prep - comisionReservar);
       const resNuevo = round2(res + comisionReservar);
       tx.set(
@@ -768,7 +841,7 @@ export const crearPoolGira = onCall(async (request) => {
       taxistaNombre,
       createdAt: FieldValue.serverTimestamp(),
       cuposComisionRai,
-      comisionGiraEstimadaRd: recaudoCentral ? 0 : comisionReservar,
+      comisionGiraEstimadaRd: comisionReservar,
       comisionGiraObjetivoRd: comisionObjetivo,
       comisionGiraCuposReserva: cuposReserva,
       comisionGiraPctUsado: pct,
@@ -780,7 +853,6 @@ export const crearPoolGira = onCall(async (request) => {
     const optionalStrings: Array<[string, unknown]> = [
       ["agenciaNombre", d.agenciaNombre],
       ["agenciaLogoUrl", d.agenciaLogoUrl],
-      ["bannerUrl", d.bannerUrl],
       ["bannerVideoUrl", d.bannerVideoUrl],
       ["puntoSalida", d.puntoSalida],
       ["destinoPlaceId", d.destinoPlaceId],
@@ -808,6 +880,7 @@ export const crearPoolGira = onCall(async (request) => {
     }
     if (incluye) poolData.incluye = incluye;
     Object.assign(poolData, mergePoolContenidoExtraFromInput(d));
+    Object.assign(poolData, mergeBannerFields(d));
     if (recaudoCentral) {
       poolData.recaudoModelo = "central";
       poolData.montoRecaudoPct = 1;
@@ -818,7 +891,7 @@ export const crearPoolGira = onCall(async (request) => {
 
     tx.set(poolRef, poolData);
 
-    if (!recaudoCentral && comisionReservar > 1e-9) {
+    if (comisionReservar > 1e-9) {
       const led = db().collection("ledger_giras").doc();
       tx.set(led, {
         tipo: "reserva_comision",
@@ -839,7 +912,9 @@ export const crearPoolGira = onCall(async (request) => {
 
   let aviso: string | null = null;
   if (result.recaudoCentral) {
-    aviso = "Recaudo central activo: los clientes pagan el total a RAI por transferencia.";
+    aviso =
+      "Recaudo central: el cliente paga a RAI (10% comisión sobre ventas). Tu prepago reservado " +
+      "se descuenta de esa comisión; al cerrar, RAI transfiere el neto al organizador.";
   } else if (result.comisionReservar + 1e-9 < result.comisionObjetivo) {
     const posibleFalta = round2(result.comisionObjetivo - result.comisionReservar);
     aviso =
@@ -885,7 +960,6 @@ export const actualizarPoolGiraContenido = onCall(async (request) => {
     ["origenTown", d.origenTown],
     ["agenciaNombre", d.agenciaNombre],
     ["agenciaLogoUrl", d.agenciaLogoUrl],
-    ["bannerUrl", d.bannerUrl],
     ["bannerVideoUrl", d.bannerVideoUrl],
     ["puntoSalida", d.puntoSalida],
     ["destino", d.destino],
@@ -907,6 +981,7 @@ export const actualizarPoolGiraContenido = onCall(async (request) => {
   if (typeof d.precioPorAsiento === "number" && d.precioPorAsiento > 0) {
     patch.precioPorAsiento = d.precioPorAsiento;
   }
+  Object.assign(patch, mergeBannerFields(d));
   if (typeof d.capacidad === "number" && d.capacidad > 0) {
     const occ =
       Math.max(0, Math.trunc(numOr0(pool.asientosReservados))) +
@@ -1220,6 +1295,7 @@ function marcarReservaPagadaEnTx(args: MarcarReservaPagadaTxArgs): { alreadyProc
         comisionPct: pct,
         comisionRaiRd,
         netoOrganizadorRd,
+        comisionFuente: "recaudo_cliente",
         referenciaRecaudo: String(res.referenciaRecaudo ?? ""),
         verificadoPor: uidActor,
         createdAt: FieldValue.serverTimestamp(),
@@ -1438,96 +1514,6 @@ export const startPoolTrip = onCall(async (request) => {
       );
     }
 
-    if (poolUsaRecaudoCentral(pool)) {
-      const etapaCentral = String(pool.prepagoComisionEtapa ?? "").trim().toLowerCase();
-      if (etapaCentral !== "central_recaudo" && etapaCentral !== "central_en_ruta") {
-        throw new HttpsError(
-          "failed-precondition",
-          "Estado de recaudo central inconsistente; contactá soporte.",
-        );
-      }
-      if (!ownerTaxistaId) {
-        throw new HttpsError("failed-precondition", "Pool sin dueño registrado");
-      }
-
-      const asientosEfectivo = firmEfectivoSeatsFromReservaDocs(allResSnap.docs);
-      const pctPool = numOr0(pool.comisionGiraPctUsado);
-      const pct = pctPool > 1e-6 ? pctPool : pctRemote;
-      const comisionEfectivoRd = comisionRaiRdFromReservaDocs(
-        allResSnap.docs,
-        reservaEsEfectivoFirm,
-        pct,
-      );
-
-      const poolUpdate: AnyMap = {
-        estado: "en_ruta",
-        asientosFirmesSalida: firmSalida,
-        asientosEfectivoComision: asientosEfectivo,
-        prepagoComisionEtapa: "central_en_ruta",
-        iniciadoAt: FieldValue.serverTimestamp(),
-        comisionEstado:
-          asientosEfectivo > 0 && comisionEfectivoRd > 1e-6
-            ? "recaudo_central_y_prepago_efectivo"
-            : "por_reserva_recaudo",
-        updatedAt: FieldValue.serverTimestamp(),
-      };
-
-      if (comisionEfectivoRd > 1e-6) {
-        const billeRef = db().collection("billeteras_taxista").doc(ownerTaxistaId);
-        const billeSnap = await tx.get(billeRef);
-        const bille = (billeSnap.data() ?? {}) as AnyMap;
-        const prep = Math.max(0, numOr0(bille.saldoPrepagoComisionRd));
-        if (prep + 1e-9 < comisionEfectivoRd) {
-          const falta = round2(comisionEfectivoRd - prep);
-          throw new HttpsError(
-            "failed-precondition",
-            `Para iniciar con ${asientosEfectivo} cupo(s) en efectivo faltan RD$${falta.toFixed(2)} de prepago. ` +
-              "Recarga en Mis pagos → Recarga comisión (comisión RAI sobre cupos en efectivo al abordar).",
-          );
-        }
-        const descAcum = Math.max(0, numOr0(bille.comisionesDescontadas));
-        tx.set(
-          billeRef,
-          {
-            saldoPrepagoComisionRd: round2(prep - comisionEfectivoRd),
-            comisionesDescontadas: round2(descAcum + comisionEfectivoRd),
-            ultimaComisionGiraPoolId: poolId,
-            ultimaComisionGiraRd: comisionEfectivoRd,
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true },
-        );
-        const led = db().collection("ledger_giras").doc();
-        tx.set(led, {
-          tipo: "comision_efectivo_central_inicio",
-          poolId,
-          uidTaxista: ownerTaxistaId,
-          monto: comisionEfectivoRd,
-          asientosEfectivo,
-          pctUsado: pct,
-          createdAt: FieldValue.serverTimestamp(),
-        });
-        poolUpdate.comisionEfectivoPrepagoRd = comisionEfectivoRd;
-      }
-
-      tx.update(poolRef, poolUpdate);
-      logger.info("[POOL_RECAUDO] startPoolTrip central", {
-        poolId,
-        firmSalida,
-        asientosEfectivo,
-        comisionEfectivoRd,
-      });
-      return {
-        ok: true,
-        poolId,
-        alreadyStarted: false,
-        recaudoCentral: true,
-        asientosFirmes: firmSalida,
-        asientosEfectivo,
-        comisionEfectivoRd,
-      };
-    }
-
     if (!hasComisionGiraEstimadaValida(pool)) {
       logger.warn("[PRE_TEST] startPoolTrip bloqueado sin comisionGiraEstimadaRd válida", {
         poolId,
@@ -1535,8 +1521,9 @@ export const startPoolTrip = onCall(async (request) => {
       });
       throw new HttpsError("failed-precondition", MSG_LEGACY_GIRA_SIN_COMISION_ESTIMADA);
     }
+
     const etapa = String(pool.prepagoComisionEtapa ?? "").trim().toLowerCase();
-    if (etapa !== "reservada_creacion") {
+    if (!etapaPrepagoGiraValidaParaInicio(etapa)) {
       logger.warn("[PRE_TEST] startPoolTrip etapa inconsistente", { poolId, uidActor, etapa });
       throw new HttpsError(
         "failed-precondition",
@@ -1558,9 +1545,10 @@ export const startPoolTrip = onCall(async (request) => {
     const reserved = round2(Math.max(0, numOr0(pool.comisionGiraEstimadaRd)));
     const pctPool = numOr0(pool.comisionGiraPctUsado);
     const pct = pctPool > 1e-6 ? pctPool : pctRemote;
+    const poolEsCentral = poolUsaRecaudoCentral(pool);
     const comisionReal = comisionRaiRdFromReservaDocs(
       allResSnap.docs,
-      reservaEsFirmeParaComision,
+      poolEsCentral ? reservaEsEfectivoFirm : reservaEsFirmeParaComision,
       pct,
     );
 
@@ -1571,33 +1559,38 @@ export const startPoolTrip = onCall(async (request) => {
     const reservWallet = Math.max(0, numOr0(bille.saldoReservadoParaGiras));
 
     let reservedEfectiva = reserved;
+    // Faltante de comisión al arrancar (comisión real por ventas − lo reservado al publicar).
+    // NO se bloquea la gira: si el prepago no alcanza, se toma lo que haya y el resto queda
+    // como pendiente para cobrarlo en la liquidación (RAI se queda con lo que le deben).
+    let pendienteInicio = 0;
     const faltanteInicio = round2(comisionReal - reserved);
     if (faltanteInicio > 1e-6) {
-      if (prep + 1e-9 < faltanteInicio) {
-        const recargarMin = round2(faltanteInicio - prep);
-        throw new HttpsError(
-          "failed-precondition",
-          `Para iniciar esta gira faltan RD$${faltanteInicio.toFixed(2)} de prepago libre. ` +
-            `Tienes RD$${prep.toFixed(2)} disponible. Recarga al menos RD$${recargarMin.toFixed(2)} ` +
-            `en Mis pagos → Recarga comisión.`,
-        );
-      }
-      prep = round2(prep - faltanteInicio);
-      reservedEfectiva = comisionReal;
+      const topUpInicio = round2(Math.min(Math.max(0, prep), faltanteInicio));
+      pendienteInicio = round2(faltanteInicio - topUpInicio);
+      prep = round2(prep - topUpInicio);
+      reservedEfectiva = round2(reserved + topUpInicio);
       tx.update(poolRef, {
         comisionGiraEstimadaRd: comisionReal,
-        prepagoComisionTopUpInicioRd: faltanteInicio,
+        prepagoComisionTopUpInicioRd: topUpInicio,
+        comisionGiraPendienteInicioRd: pendienteInicio,
         updatedAt: FieldValue.serverTimestamp(),
       });
-      logger.info("[GIRA_PREPAGO] start top-up prepago libre", {
+      logger.info("[GIRA_PREPAGO] start top-up (sin bloqueo)", {
         poolId,
         faltanteInicio,
+        topUpInicio,
+        pendienteInicio,
         comisionReal,
         reserved,
       });
     }
 
-    const excess = round2(reservedEfectiva - comisionReal);
+    const excess = round2(Math.max(0, reservedEfectiva - comisionReal));
+    // No-central: solo se aplica lo realmente respaldado (reservado + top-up disponible);
+    // el faltante no cubierto queda como pendiente y se cobra en la liquidación.
+    const prepagoAplicadaGira = poolEsCentral
+      ? reservedEfectiva
+      : round2(Math.min(comisionReal, reservedEfectiva));
     logger.info("[PRE_TEST] startPoolTrip saldos antes", {
       uidActor,
       poolId,
@@ -1614,9 +1607,9 @@ export const startPoolTrip = onCall(async (request) => {
       );
     }
     const descAcum = Math.max(0, numOr0(bille.comisionesDescontadas));
-    const prepNuevo = round2(prep + excess);
+    const prepNuevo = poolEsCentral ? prep : round2(prep + excess);
     const reservNuevo = round2(reservWallet - reserved);
-    const descNuevo = round2(descAcum + comisionReal);
+    const descNuevo = round2(descAcum + prepagoAplicadaGira);
     tx.set(
       billeRef,
       {
@@ -1635,10 +1628,12 @@ export const startPoolTrip = onCall(async (request) => {
       tipo: "confirmacion_comision_inicio",
       poolId,
       uidTaxista: ownerTaxistaId,
-      monto: comisionReal,
-      montoDevueltoExceso: excess,
+      monto: prepagoAplicadaGira,
+      montoComisionEfectivo: comisionReal,
+      montoDevueltoExceso: poolEsCentral ? 0 : excess,
       asientosReales,
       pctUsado: pct,
+      recaudoCentral: poolEsCentral,
       createdAt: FieldValue.serverTimestamp(),
     });
 
@@ -1646,10 +1641,20 @@ export const startPoolTrip = onCall(async (request) => {
       estado: "en_ruta",
       asientosFirmesSalida: firmSalida,
       asientosRealesComision: asientosReales,
-      comisionGiraRealRd: comisionReal,
-      comisionGiraExcesoDevueltoRd: excess,
+      comisionGiraRealRd: prepagoAplicadaGira,
+      comisionGiraComisionRealTotalRd: comisionReal,
+      comisionGiraCobradaInicioRd: prepagoAplicadaGira,
+      comisionGiraPendienteInicioRd: pendienteInicio,
+      comisionGiraExcesoDevueltoRd: poolEsCentral ? 0 : excess,
+      prepagoComisionAplicadaRd: prepagoAplicadaGira,
       prepagoComisionEtapa: "confirmada_inicio",
       iniciadoAt: FieldValue.serverTimestamp(),
+      comisionEstado: poolEsCentral
+        ? "prepago_y_recaudo_central"
+        : pendienteInicio > 1e-6
+          ? "pendiente_transferencia_admin"
+          : "descontada_prepago_inicio",
+      comisionFuente: poolEsCentral ? "recaudo_cliente_y_prepago" : "prepago_taxista",
       updatedAt: FieldValue.serverTimestamp(),
     });
     logger.info("[GIRA_PREPAGO] startPoolTrip prepago confirmado", {
@@ -1776,57 +1781,54 @@ export const finalizePoolTrip = onCall(async (request) => {
           ? Math.max(0, montoReservado)
           : 0;
 
-    if (etapa === "confirmada_inicio") {
-      const comisionYa = Math.max(0, numOr0(pool.comisionGiraRealRd));
-      const pctPool = numOr0(pool.comisionGiraPctUsado);
-      const pct = pctPool > 1e-6 ? pctPool : pctRemote;
-      tx.update(poolRef, {
-        estado: "finalizado",
-        finalizadoAt: FieldValue.serverTimestamp(),
-        totalGira,
-        comisionPctAplicada: pct / 100,
-        montoComision: 0,
-        montoComisionTotal: comisionYa,
-        montoComisionCobradaPrepago: comisionYa,
-        montoComisionPendienteAdmin: 0,
-        montoNetoTaxista: Math.max(0, totalGira - comisionYa),
-        liquidado: true,
-        comisionPendientePagoAdmin: false,
-        comisionEstado: "descontada_prepago_inicio",
-        comisionMetodoPago: "prepago",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      logger.info("[GIRA_PREPAGO] finalizePoolTrip sin nuevo descuento (prepago en inicio)", { poolId });
-      return { ok: true, poolId, alreadyFinalized: false, prepagoEnInicio: true, comisionYaDescontada: comisionYa };
-    }
-
     if (poolUsaRecaudoCentral(pool)) {
-      const netoPend = Math.max(0, numOr0(pool.montoNetoOrganizadorRd));
+      const cierre = cierreRecaudoCentralDesdePool(pool);
+      const netoPend = cierre.netoOrganizadorFinalRd;
       const poolUpdate: AnyMap = {
         estado: "finalizado",
         finalizadoAt: FieldValue.serverTimestamp(),
-        totalGira,
+        totalGira: cierre.brutoRecaudadoRd,
         liquidacionOrganizadorEstado: netoPend > 1e-6 ? "pendiente_pago" : "sin_saldo",
         liquidacionOrganizadorAt: FieldValue.serverTimestamp(),
-        comisionEstado: "por_reserva_recaudo",
+        comisionEstado: "cierre_recaudo_central",
+        comisionFuente: "recaudo_cliente_y_prepago",
         montoNetoTaxista: netoPend,
+        montoNetoOrganizadorRd: netoPend,
+        montoNetoOrganizadorLiquidacionRd: netoPend,
+        montoRecaudadoBrutoRd: cierre.brutoRecaudadoRd,
+        montoComisionRaiTotalRd: cierre.comisionVentasRd,
+        montoComisionRaiRetenidaRd: cierre.comisionRetenidaRecaudoRd,
+        prepagoComisionAplicadaRd: cierre.prepagoAplicadoRd,
+        comisionRetenidaDelRecaudoRd: cierre.comisionRetenidaRecaudoRd,
         liquidado: netoPend <= 1e-6,
         updatedAt: FieldValue.serverTimestamp(),
       };
+      // Asientos vendidos (pagados y verificados) + precio, para desglose exacto en admin.
+      const asientosVendidos = Math.max(
+        0,
+        Math.trunc(numOr0(pool.asientosPagados) || numOr0(pool.asientosReservados)),
+      );
+      const precioPorAsiento = round2(numOr0(pool.precioPorAsiento));
       if (netoPend > 1e-6) {
         const liqRef = db().collection("liquidaciones_pool").doc();
         tx.set(liqRef, {
           poolId,
           ownerTaxistaId,
           netoTotalRd: netoPend,
-          montoRecaudadoRaiRd: numOr0(pool.montoRecaudadoRaiRd),
-          montoComisionRaiRd: numOr0(pool.montoComisionRaiRd),
+          asientosVendidos,
+          precioPorAsiento,
+          montoRecaudadoRaiRd: cierre.brutoRecaudadoRd,
+          montoComisionRaiRd: cierre.comisionVentasRd,
+          prepagoComisionAplicadaRd: cierre.prepagoAplicadoRd,
+          comisionRetenidaDelRecaudoRd: cierre.comisionRetenidaRecaudoRd,
+          comisionRaiTotalRd: cierre.comisionVentasRd,
           bancoNombre: String(pool.bancoNombre ?? ""),
           bancoCuenta: String(pool.bancoCuenta ?? ""),
           bancoTipoCuenta: String(pool.bancoTipoCuenta ?? ""),
           bancoTitular: String(pool.bancoTitular ?? ""),
           agenciaNombre: String(pool.agenciaNombre ?? pool.taxistaNombre ?? ""),
           destino: String(pool.destino ?? ""),
+          origenTown: String(pool.origenTown ?? ""),
           estado: "pendiente_pago",
           metodoSalida: "manual_admin",
           createdAt: FieldValue.serverTimestamp(),
@@ -1834,13 +1836,66 @@ export const finalizePoolTrip = onCall(async (request) => {
         poolUpdate.liquidacionPoolId = liqRef.id;
       }
       tx.update(poolRef, poolUpdate);
-      logger.info("[POOL_RECAUDO] finalizePoolTrip central", { poolId, netoPend });
-      return { ok: true, poolId, alreadyFinalized: false, recaudoCentral: true, netoOrganizadorPendiente: netoPend };
+      logger.info("[POOL_RECAUDO] finalizePoolTrip central cierre", { poolId, cierre });
+      return {
+        ok: true,
+        poolId,
+        alreadyFinalized: false,
+        recaudoCentral: true,
+        netoOrganizadorPendiente: netoPend,
+        cierre,
+      };
+    }
+
+    if (etapa === "confirmada_inicio") {
+      // Comisión cobrada al iniciar (del prepago) y lo que quedó pendiente por falta de saldo.
+      // El pendiente se cobra en la liquidación (RAI descuenta lo que le deben antes de pagar).
+      const cobradaInicio = Math.max(
+        0,
+        numOr0(pool.comisionGiraCobradaInicioRd) || numOr0(pool.comisionGiraRealRd),
+      );
+      const pendienteInicio = Math.max(0, numOr0(pool.comisionGiraPendienteInicioRd));
+      const comisionTotalReal = round2(cobradaInicio + pendienteInicio);
+      const tienePendiente = pendienteInicio > 1e-6;
+      const pctPool = numOr0(pool.comisionGiraPctUsado);
+      const pct = pctPool > 1e-6 ? pctPool : pctRemote;
+      tx.update(poolRef, {
+        estado: "finalizado",
+        finalizadoAt: FieldValue.serverTimestamp(),
+        totalGira,
+        comisionPctAplicada: pct / 100,
+        montoComision: round2(pendienteInicio),
+        montoComisionTotal: comisionTotalReal,
+        montoComisionCobradaPrepago: round2(cobradaInicio),
+        montoComisionPendienteAdmin: round2(pendienteInicio),
+        montoNetoTaxista: Math.max(0, totalGira),
+        liquidado: !tienePendiente,
+        comisionPendientePagoAdmin: tienePendiente,
+        comisionEstado: tienePendiente
+          ? "pendiente_transferencia_admin"
+          : "descontada_prepago_inicio",
+        comisionMetodoPago: tienePendiente ? "transferencia" : "prepago",
+        comisionFuente: "prepago_taxista",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      logger.info("[GIRA_PREPAGO] finalizePoolTrip cierre inicio", {
+        poolId,
+        cobradaInicio,
+        pendienteInicio,
+      });
+      return {
+        ok: true,
+        poolId,
+        alreadyFinalized: false,
+        prepagoEnInicio: true,
+        comisionYaDescontada: cobradaInicio,
+        comisionPendiente: pendienteInicio,
+      };
     }
 
     const comisionPctAplicada = pctRemote / 100;
     const montoComision = Math.max(0, totalGira * comisionPctAplicada);
-    const montoNetoTaxista = Math.max(0, totalGira - montoComision);
+    const montoNetoTaxista = Math.max(0, totalGira);
 
     let montoComisionCobradaPrepago = 0;
     let montoComisionPendienteAdmin = montoComision;
@@ -2308,6 +2363,7 @@ export const deletePoolForOwner = onCall(async (request) => {
 
 export const reservePoolSeats = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  assertClienteCuentaReal(request);
   const uidCliente = request.auth.uid;
 
   const poolId = typeof request.data?.poolId === "string" ? request.data.poolId.trim() : "";

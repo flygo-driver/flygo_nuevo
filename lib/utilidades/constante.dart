@@ -22,5 +22,8 @@ const rutaLoginTaxista = '/login_taxista';
 /// Bola Ahorro — tablero intermunicipal (misma ruta que [MaterialApp.routes] en `main.dart`).
 const rutaBolaPueblo = '/bola_pueblo';
 
+/// Nombre corto del producto en UI (pool, inicio, tablero). Lógica interna: `bola_ahorro`.
+const etiquetaBolaAhorroUi = 'Ahorra';
+
 /// Cliente: lista dedicada de conductores que publicaron «Voy para» (tipo oferta).
 const rutaBolaConductoresCliente = '/bola_conductores_cliente';

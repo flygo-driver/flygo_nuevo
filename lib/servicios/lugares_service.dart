@@ -10,8 +10,16 @@ class PrediccionLugar {
   final String placeId;
   final String primary;
   final String? secondary;
+
+  /// Distancia (metros) al punto de origen/sesgo cuando Google la provee.
+  /// Se usa para ordenar por cercanía (estilo Uber). Null si no aplica.
+  final int? distanceMeters;
+
   const PrediccionLugar(
-      {required this.placeId, required this.primary, this.secondary});
+      {required this.placeId,
+      required this.primary,
+      this.secondary,
+      this.distanceMeters});
 }
 
 class DetalleLugar {
@@ -359,11 +367,26 @@ class LugaresService {
       if (secondary.isNotEmpty && secondary.startsWith(nq)) score += 80;
       if (secondary.contains(nq)) score += 40;
       if (primary.contains(nq)) score += 20;
+      // Cercanía (estilo Uber): entre coincidencias parecidas, lo más cerca sube.
+      score += _proximityBoost(p.distanceMeters);
       return MapEntry(p, score);
     }).toList();
 
     scored.sort((a, b) => b.value.compareTo(a.value));
     return scored.map((e) => e.key).toList(growable: false);
+  }
+
+  /// Bonus por cercanía usando `distance_meters` de Google (si viene).
+  /// Es secundario a la coincidencia de texto: solo desempata resultados
+  /// parecidos priorizando lo más próximo al usuario (como Uber).
+  int _proximityBoost(int? meters) {
+    if (meters == null) return 0;
+    if (meters <= 1500) return 30;
+    if (meters <= 4000) return 24;
+    if (meters <= 10000) return 16;
+    if (meters <= 25000) return 9;
+    if (meters <= 60000) return 4;
+    return 0;
   }
 
   // Cuando el usuario escribe una dirección "larga" tipo:
@@ -428,7 +451,7 @@ class LugaresService {
       out.add(v);
     }
 
-    // Variantes por palabras (referencias parciales tipo Uber/InDrive).
+    // Variantes por palabras (referencias parciales de dirección).
     final words = q
         .split(RegExp(r'[\s,;]+'))
         .map((w) => w.trim())
@@ -542,6 +565,7 @@ class LugaresService {
           if (!seenIds.add(placeId)) continue;
 
           final desc = (m['description'] ?? '').toString();
+          final int? distanceMeters = (m['distance_meters'] as num?)?.round();
           String primary = desc;
           String? secondary;
           final sf = m['structured_formatting'] as Map<String, dynamic>?;
@@ -562,12 +586,13 @@ class LugaresService {
             placeId: placeId,
             primary: primary.isNotEmpty ? primary : desc,
             secondary: secondary,
+            distanceMeters: distanceMeters,
           ));
         }
       }
 
       Future<void> fetchVariant(String v) async {
-        if (v.trim().isEmpty || remotes.length >= 20) return;
+        if (v.trim().isEmpty || remotes.length >= 30) return;
         final params = <String, String>{...baseParams, 'input': v.trim()};
         final uri = Uri.https(
           'maps.googleapis.com',
@@ -579,13 +604,13 @@ class LugaresService {
 
       final variantList = expanded.toList();
       // Consulta principal + variantes en paralelo (más resultados al escribir).
-      final batch1 = variantList.take(4).map(fetchVariant).toList();
+      final batch1 = variantList.take(5).map(fetchVariant).toList();
       await Future.wait(batch1);
-      if (remotes.length < 8 && variantList.length > 4) {
-        await Future.wait(variantList.skip(4).take(4).map(fetchVariant));
+      if (remotes.length < 12 && variantList.length > 5) {
+        await Future.wait(variantList.skip(5).take(5).map(fetchVariant));
       }
-      if (remotes.isEmpty && variantList.length > 8) {
-        for (final v in variantList.skip(8)) {
+      if (remotes.length < 6 && variantList.length > 10) {
+        for (final v in variantList.skip(10)) {
           await fetchVariant(v);
           if (remotes.length >= 12) break;
         }

@@ -55,6 +55,10 @@ class PoolGiraContenidoPanel extends StatelessWidget {
       ));
     }
 
+    if (extra.puntosRecogida.isNotEmpty) {
+      sections.add(_recorridoRecogida());
+    }
+
     if (extra.itinerario.isNotEmpty) {
       sections.add(_itinerario());
     }
@@ -157,6 +161,79 @@ class PoolGiraContenidoPanel extends StatelessWidget {
             cuerpo,
             style: TextStyle(color: textMuted, height: 1.4, fontSize: 13),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _recorridoRecogida() {
+    final textPrimary =
+        estiloOscuroRojo ? Colors.white : const Color(0xFF101828);
+    final textMuted =
+        estiloOscuroRojo ? const Color(0xFF9CA3AF) : const Color(0xFF667085);
+    final accent = estiloOscuroRojo ? _kBorde : const Color(0xFF0D9488);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: estiloOscuroRojo ? _kFondo : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: estiloOscuroRojo ? _kBorde : const Color(0xFFE2E8F0),
+          width: estiloOscuroRojo ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.alt_route, color: accent, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Recorrido de recogida',
+                  style: TextStyle(
+                    color: textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'El conductor pasa por estas paradas antes de salir al destino.',
+            style: TextStyle(color: textMuted, fontSize: 12, height: 1.35),
+          ),
+          const SizedBox(height: 10),
+          for (final p in extra.puntosRecogida) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 78,
+                  child: Text(
+                    p.hora.trim().isEmpty ? '—' : p.hora.trim(),
+                    style: TextStyle(
+                      color: accent,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    p.lugar.trim(),
+                    style: TextStyle(color: textMuted, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+          ],
         ],
       ),
     );

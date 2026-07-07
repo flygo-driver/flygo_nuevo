@@ -131,6 +131,14 @@ abstract final class PoolRecaudoCentral {
   static double _round2(double v) =>
       double.parse(v.clamp(-1e12, 1e12).toStringAsFixed(2));
 
+  static double _firstPositiveNum(List<dynamic> vals) {
+    for (final v in vals) {
+      final n = v is num ? v.toDouble() : 0.0;
+      if (n > 1e-9) return n;
+    }
+    return 0;
+  }
+
   /// Monto que el cliente debe transferir a RAI (hoy: total de la reserva).
   static double montoRecaudoCliente({
     required Map<String, dynamic> pool,
@@ -145,6 +153,37 @@ abstract final class PoolRecaudoCentral {
         .toDouble()
         .clamp(0.0, 1.0);
     return totalReserva * montoPct;
+  }
+
+  /// Cierre contable: comisión 10% ventas − prepago ya consumido = retención del recaudo.
+  static PoolCierreRecaudoCentral cierreDesdePool(Map<String, dynamic> pool) {
+    final bruto =
+        ((pool['montoRecaudadoRaiRd'] ?? 0) as num).toDouble().clamp(0.0, 1e12);
+    final comisionVentas =
+        ((pool['montoComisionRaiRd'] ?? 0) as num).toDouble().clamp(0.0, 1e12);
+    final recargaComprada = _firstPositiveNum([
+      pool['prepagoComisionAplicadaRd'],
+      pool['comisionGiraRealRd'],
+      pool['comisionGiraEstimadaRd'],
+      pool['montoComisionCobradaPrepago'],
+    ]);
+    final prepagoAplicado = _round2(
+      recargaComprada.clamp(0.0, comisionVentas),
+    );
+    final comisionRetenida =
+        _round2((comisionVentas - prepagoAplicado).clamp(0.0, 1e12));
+    final netoOrganizador = _round2((bruto - comisionRetenida).clamp(0.0, 1e12));
+    final superoRecarga = comisionVentas > recargaComprada + 1e-9;
+    return PoolCierreRecaudoCentral(
+      brutoRecaudadoRd: _round2(bruto),
+      comisionVentasRd: _round2(comisionVentas),
+      recargaCompradaRd: _round2(recargaComprada),
+      prepagoAplicadoRd: prepagoAplicado,
+      comisionRetenidaRecaudoRd: comisionRetenida,
+      netoOrganizadorFinalRd: netoOrganizador,
+      superoRecargaComprada: superoRecarga,
+      montoFaltaRetenerDelRecaudoRd: comisionRetenida,
+    );
   }
 
   /// Recaudo central: no exige `comisionGiraEstimadaRd` al iniciar (prepago solo efectivo).
@@ -194,5 +233,58 @@ class PoolReservaDesglose {
           'Neto en mano: RD\$ ${netoOrganizador.toStringAsFixed(0)}';
     }
     return '$base · $comTxt · Neto organizador: RD\$ ${netoOrganizador.toStringAsFixed(0)}';
+  }
+}
+
+/// Cierre contable recaudo central (ventas − retención neta tras prepago).
+class PoolCierreRecaudoCentral {
+  const PoolCierreRecaudoCentral({
+    required this.brutoRecaudadoRd,
+    required this.comisionVentasRd,
+    required this.recargaCompradaRd,
+    required this.prepagoAplicadoRd,
+    required this.comisionRetenidaRecaudoRd,
+    required this.netoOrganizadorFinalRd,
+    required this.superoRecargaComprada,
+    required this.montoFaltaRetenerDelRecaudoRd,
+  });
+
+  final double brutoRecaudadoRd;
+  final double comisionVentasRd;
+  /// Monto de la recarga que compró el organizador (prepago reservado/consumido).
+  final double recargaCompradaRd;
+  final double prepagoAplicadoRd;
+  final double comisionRetenidaRecaudoRd;
+  final double netoOrganizadorFinalRd;
+  /// `true` si la comisión de ventas superó lo que pagó en recarga.
+  final bool superoRecargaComprada;
+  /// Lo que RAI aún retiene del recaudo (comisión − recarga aplicada).
+  final double montoFaltaRetenerDelRecaudoRd;
+
+  double get comisionTotalRaiRd => comisionVentasRd;
+
+  String get formulaTransferenciaExacta {
+    if (brutoRecaudadoRd <= 1e-9) {
+      return 'Sin ventas verificadas aún';
+    }
+    if (superoRecargaComprada) {
+      return 'RD\$ ${brutoRecaudadoRd.toStringAsFixed(2)} − '
+          'RD\$ ${montoFaltaRetenerDelRecaudoRd.toStringAsFixed(2)} '
+          '(comisión menos recarga) = '
+          'RD\$ ${netoOrganizadorFinalRd.toStringAsFixed(2)}';
+    }
+    return 'RD\$ ${brutoRecaudadoRd.toStringAsFixed(2)} '
+        '(la recarga cubrió toda la comisión)';
+  }
+
+  String get alertaSuperoRecarga {
+    if (!superoRecargaComprada) {
+      return 'La comisión NO superó la recarga (RD\$ ${recargaCompradaRd.toStringAsFixed(2)}). '
+          'No retener nada más del recaudo por comisión.';
+    }
+    return 'SÍ superó la recarga: comisión RD\$ ${comisionVentasRd.toStringAsFixed(2)} > '
+        'recarga RD\$ ${recargaCompradaRd.toStringAsFixed(2)}. '
+        'RAI retiene RD\$ ${montoFaltaRetenerDelRecaudoRd.toStringAsFixed(2)} '
+        'adicional del recaudo (ya cobró RD\$ ${prepagoAplicadoRd.toStringAsFixed(2)} en prepago).';
   }
 }

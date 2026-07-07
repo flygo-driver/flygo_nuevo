@@ -21,6 +21,7 @@ import 'package:flygo_nuevo/widgets/bola_pueblo_contraparte_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
+import 'package:flygo_nuevo/widgets/bola_pueblo_negociacion_ui.dart';
 export 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 
 double _pctComisionDesdeDoc(Map<String, dynamic> data) {
@@ -941,6 +942,7 @@ class BolaPuebloDialogs {
       }
     }
 
+    if (!context.mounted) return;
     final result =
         await Navigator.of(context).push<BolaPuebloCrearPublicacionResult>(
       MaterialPageRoute(
@@ -1113,52 +1115,16 @@ class BolaPuebloDialogs {
                 backgroundColor: col.surface,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(24)),
-                title: Text('Tu contraoferta',
+                title: Text('Contraoferta',
                     style: TextStyle(color: col.onSurface)),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '${taxistaNombre.trim().isEmpty ? "Conductor" : taxistaNombre.trim()} '
-                      'propuso RD\$${montoTaxista.toStringAsFixed(0)}. '
-                      'Indicá el monto con el que te quedarías; el conductor puede aceptar o rechazar.',
-                      style: TextStyle(
-                          color: col.onMuted, fontSize: 13, height: 1.4),
-                    ),
-                    if (ofertaMinRd != null &&
-                        ofertaMaxRd != null &&
-                        ofertaMaxRd >= ofertaMinRd) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Rango permitido: RD\$${ofertaMinRd.toStringAsFixed(0)} – RD\$${ofertaMaxRd.toStringAsFixed(0)}',
-                        style: TextStyle(color: col.onMuted, fontSize: 12),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: montoCtrl,
-                      style: TextStyle(
-                          color: col.onSurface,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800),
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(
-                        labelText: 'Tu monto (RD\$)',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: msgCtrl,
-                      style: TextStyle(color: col.onSurface),
-                      maxLines: 2,
-                      decoration: const InputDecoration(
-                        labelText: 'Mensaje (opcional)',
-                        alignLabelWithHint: true,
-                      ),
-                    ),
-                  ],
+                content: BolaNegociacionUi.contraofertaForm(
+                  context,
+                  counterpartyName: taxistaNombre,
+                  theirAmountRd: montoTaxista,
+                  montoCtrl: montoCtrl,
+                  msgCtrl: msgCtrl,
+                  minRd: ofertaMinRd,
+                  maxRd: ofertaMaxRd,
                 ),
                 actions: [
                   TextButton(
@@ -1266,52 +1232,16 @@ class BolaPuebloDialogs {
                 backgroundColor: col.surface,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(24)),
-                title: Text('Tu contraoferta',
+                title: Text('Contraoferta',
                     style: TextStyle(color: col.onSurface)),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '${clienteNombre.trim().isEmpty ? "Pasajero" : clienteNombre.trim()} '
-                      'propuso RD\$${montoCliente.toStringAsFixed(0)}. '
-                      'Indicá el monto con el que te quedarías; el pasajero puede aceptar o rechazar.',
-                      style: TextStyle(
-                          color: col.onMuted, fontSize: 13, height: 1.4),
-                    ),
-                    if (ofertaMinRd != null &&
-                        ofertaMaxRd != null &&
-                        ofertaMaxRd >= ofertaMinRd) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Rango permitido: RD\$${ofertaMinRd.toStringAsFixed(0)} – RD\$${ofertaMaxRd.toStringAsFixed(0)}',
-                        style: TextStyle(color: col.onMuted, fontSize: 12),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: montoCtrl,
-                      style: TextStyle(
-                          color: col.onSurface,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800),
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(
-                        labelText: 'Tu monto (RD\$)',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: msgCtrl,
-                      style: TextStyle(color: col.onSurface),
-                      maxLines: 2,
-                      decoration: const InputDecoration(
-                        labelText: 'Mensaje (opcional)',
-                        alignLabelWithHint: true,
-                      ),
-                    ),
-                  ],
+                content: BolaNegociacionUi.contraofertaForm(
+                  context,
+                  counterpartyName: clienteNombre,
+                  theirAmountRd: montoCliente,
+                  montoCtrl: montoCtrl,
+                  msgCtrl: msgCtrl,
+                  minRd: ofertaMinRd,
+                  maxRd: ofertaMaxRd,
                 ),
                 actions: [
                   TextButton(
@@ -1650,42 +1580,13 @@ class BolaPuebloDialogs {
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                      child: Column(
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 4,
-                            decoration: BoxDecoration(
-                              color: cc.dragHandle,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            tipoPublicacion == 'pedido'
-                                ? 'Ofertas de conductores'
-                                : 'Propuestas de pago',
-                            style: TextStyle(
-                              color: cc.onSurface,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.4,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            tipoPublicacion == 'pedido'
-                                ? 'Compará montos de los conductores. Podés aceptar, descartar o enviar una contraoferta '
-                                    'con otro monto (el conductor la verá en su tarjeta y puede aceptarla o rechazarla). '
-                                    'La publicación sigue abierta hasta que cierres un acuerdo.'
-                                : 'Compará montos y mensajes (horario, condiciones, etc.). '
-                                    'Podés aceptar una propuesta para cerrar el precio, o descartar la que no te sirve: '
-                                    'la publicación sigue abierta en el tablero y en el pool hasta que aceptes una. '
-                                    'Si alguien reenvía cifra, ves su última pendiente.',
-                            style: TextStyle(
-                                color: cc.onMuted, fontSize: 13, height: 1.4),
-                          ),
-                        ],
+                      child: BolaNegociacionUi.offersSheetHeader(
+                        sheetCtx,
+                        title: tipoPublicacion == 'pedido'
+                            ? 'Ofertas de conductores'
+                            : 'Propuestas de pago',
+                        minRd: ofertaMinRd,
+                        maxRd: ofertaMaxRd,
                       ),
                     ),
                     Expanded(
@@ -1786,6 +1687,13 @@ class BolaPuebloDialogs {
                               final monto =
                                   ((m['montoRd'] ?? 0) as num).toDouble();
                               final msg = (m['mensaje'] ?? '').toString();
+                              final String? badgeFila = esContraCliente
+                                  ? 'Contraoferta pasajero'
+                                  : esContraConductor
+                                      ? 'Contraoferta conductor'
+                                      : esMiContraPendiente
+                                          ? 'Tu contraoferta'
+                                          : null;
                               return Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
                                 child: Material(
@@ -1797,37 +1705,13 @@ class BolaPuebloDialogs {
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                tituloFila,
-                                                style: TextStyle(
-                                                  color: cc.onSurface,
-                                                  fontWeight: FontWeight.w800,
-                                                  fontSize: 16,
-                                                ),
-                                              ),
-                                            ),
-                                            Text(
-                                              'RD\$${monto.toStringAsFixed(0)}',
-                                              style: const TextStyle(
-                                                color: BolaPuebloTheme.accent,
-                                                fontWeight: FontWeight.w900,
-                                                fontSize: 18,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          msg.isEmpty ? 'Sin mensaje' : msg,
-                                          style: TextStyle(
-                                            color: cc.onSurface.withValues(
-                                                alpha: cc.isDark ? 0.75 : 0.72),
-                                            fontSize: 14,
-                                            height: 1.35,
-                                          ),
+                                        BolaNegociacionUi.offerRowHeader(
+                                          sheetCtx,
+                                          title: tituloFila,
+                                          montoRd: monto,
+                                          badge: badgeFila,
+                                          message:
+                                              msg.isEmpty ? null : msg,
                                         ),
                                         const SizedBox(height: 12),
                                         if (esMiContraPendiente)
@@ -1837,10 +1721,10 @@ class BolaPuebloDialogs {
                                             children: [
                                               Text(
                                                 esMiContraPendientePedido
-                                                    ? 'Esperando al conductor. Si cambiás de idea, podés retirar tu contraoferta o enviar otra cifra desde «Proponer otro monto».'
+                                                    ? 'Esperando respuesta. Podés retirar o enviar otro monto.'
                                                     : esMiContraPendienteOferta
-                                                        ? 'Esperando al pasajero. Si cambiás de idea, podés retirar tu contraoferta.'
-                                                        : 'Esperando al conductor. Si cambiás de idea, podés retirar tu contraoferta.',
+                                                        ? 'Esperando al pasajero.'
+                                                        : 'Esperando respuesta.',
                                                 style: TextStyle(
                                                   color: cc.onMuted,
                                                   fontSize: 13,
@@ -2540,6 +2424,7 @@ class BolaPuebloDialogs {
         if (q.docs.isNotEmpty) vid = q.docs.first.id;
       }
       if (vid.isEmpty) {
+        if (!context.mounted) return;
         await confirmarFinalizacionDialog(context, bolaId, uid);
         return;
       }
@@ -2803,7 +2688,7 @@ class _BolaEnCursoDestinoAccionesState extends State<BolaEnCursoDestinoAcciones>
                     ? null
                     : () async {
                         await _marcarDestinoNavListo();
-                        if (!mounted) return;
+                        if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           BolaPuebloTheme.snack(
                             context,
@@ -2948,11 +2833,11 @@ class BolaClientePedirPedidoPanel extends StatelessWidget {
   static String _etiquetaEstado(String estado) {
     switch (estado) {
       case 'abierta':
-        return 'Esperando conductor en el tablero';
+        return 'Esperando conductor';
       case 'acordada':
-        return 'Acordada — seguí con el viaje';
+        return 'Precio acordado';
       case 'en_curso':
-        return 'Viaje en curso';
+        return 'En viaje';
       default:
         return estado;
     }
@@ -2980,98 +2865,31 @@ class BolaClientePedirPedidoPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1B5E20).withValues(alpha: 0.28),
-              borderRadius: BorderRadius.circular(BolaPuebloUi.radiusButton),
-              border: Border.all(
-                color: const Color(0xFF69F0AE).withValues(alpha: 0.45),
+          Row(
+            children: [
+              BolaPuebloUi.statusChip(
+                context,
+                label: _etiquetaEstado(estado),
+                color: BolaPuebloTheme.accent,
               ),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  Icons.info_outline_rounded,
-                  color: Color(0xFF69F0AE),
-                  size: 22,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Tenés una bola activa',
-                        style: BolaPuebloUi.panelBody(context).copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _etiquetaEstado(estado),
-                        style: BolaPuebloUi.panelBody(context).copyWith(
-                          color: const Color(0xFFB9F6CA),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Solo podés pedir una bola a la vez. Seguí la tuya o cancelala en su tarjeta antes de publicar otra.',
-                        style: BolaPuebloUi.panelBody(context).copyWith(
-                          fontSize: 12.5,
-                          height: 1.35,
-                          color: Colors.white.withValues(alpha: 0.88),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            ],
           ),
-          const SizedBox(height: 14),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF2962FF),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius:
-                    BorderRadius.circular(BolaPuebloUi.radiusButton),
-              ),
-            ),
+          const SizedBox(height: 10),
+          BolaPuebloUi.bigAction(
+            context: context,
+            label: _continuarLabel(estado),
+            icon: Icons.arrow_forward_rounded,
             onPressed: id.isEmpty ? null : () => onContinuarBola(id),
-            icon: const Icon(Icons.arrow_forward_rounded, size: 22),
-            label: Text(
-              _continuarLabel(estado),
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
+            background: const Color(0xFF2962FF),
           ),
         ],
       );
     }
 
-    return FilledButton.icon(
-      style: FilledButton.styleFrom(
-        backgroundColor: const Color(0xFF00C853),
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(BolaPuebloUi.radiusButton),
-        ),
-        elevation: 6,
-        shadowColor: const Color(0xFF00E676).withValues(alpha: 0.65),
-      ).copyWith(
-        overlayColor: WidgetStatePropertyAll(
-          Colors.white.withValues(alpha: 0.08),
-        ),
-      ),
+    return BolaPuebloUi.bigAction(
+      context: context,
+      label: 'Pedir bola',
+      icon: Icons.add_road_rounded,
       onPressed: guardando
           ? null
           : () => BolaPuebloDialogs.crearPublicacion(
@@ -3082,22 +2900,6 @@ class BolaClientePedirPedidoPanel extends StatelessWidget {
                 tipo: 'pedido',
                 onBusy: onBusy,
               ),
-      icon: const Icon(Icons.add_road_rounded, size: 22),
-      label: const Text(
-        'Pedir bola',
-        style: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.2,
-          shadows: [
-            Shadow(
-              color: Color(0x5500FF95),
-              blurRadius: 12,
-              offset: Offset(0, 0),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -4053,13 +3855,8 @@ class _BolaPuebloContraofertasInboundState
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            BolaPuebloUi.sectionLabel(context, 'Te propusieron otro monto'),
-            const SizedBox(height: 6),
-            Text(
-              'El pasajero envió una contraoferta. Podés aceptarla para cerrar al precio que indica, o rechazarla y seguir negociando.',
-              style: TextStyle(color: cs.onMuted, fontSize: 12.5, height: 1.4),
-            ),
-            const SizedBox(height: 10),
+            BolaPuebloUi.sectionTitle(context, 'Contraoferta para vos'),
+            const SizedBox(height: 4),
             ...items.map((d) {
               final m = d.data();
               final nombre = (m['fromNombre'] ?? 'Pasajero').toString();
@@ -4068,210 +3865,130 @@ class _BolaPuebloContraofertasInboundState
               final rejBusy = _busy == 'rej:${d.id}';
               final accBusy = _busy == 'acc:${d.id}';
               final anyBusy = _busy != null;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Material(
-                  color: cs.surfaceRaised,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(
-                        color: cs.outlineSoft.withValues(alpha: 0.35)),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          nombre,
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 15,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'RD\$${monto.toStringAsFixed(0)}',
-                          style: const TextStyle(
-                            color: BolaPuebloTheme.accent,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 20,
-                          ),
-                        ),
-                        if (msg.trim().isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            msg,
-                            style: TextStyle(
-                                color: cs.onMuted, fontSize: 13, height: 1.3),
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: cs.onSurface,
-                                  side: BorderSide(
-                                      color:
-                                          cs.onSurface.withValues(alpha: 0.35)),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                onPressed: anyBusy && !rejBusy
-                                    ? null
-                                    : () async {
-                                        setState(() => _busy = 'rej:${d.id}');
-                                        try {
-                                          final motivo = await BolaPuebloDialogs
-                                              .pedirMotivoRechazoContraoferta(
-                                                  context);
-                                          if (motivo == null) return;
-                                          await BolaPuebloRepo
-                                              .rechazarContraofertaClienteBola(
-                                            bolaId: widget.bolaId,
-                                            ofertaId: d.id,
-                                            motivo: motivo,
-                                          );
-                                          if (!context.mounted) return;
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
-                                            BolaPuebloTheme.snack(context,
-                                                'Contraoferta rechazada'),
-                                          );
-                                        } catch (e) {
-                                          if (context.mounted) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              BolaPuebloTheme.snack(
-                                                  context, '$e',
-                                                  error: true),
-                                            );
-                                          }
-                                        } finally {
-                                          if (mounted) {
-                                            setState(() => _busy = null);
-                                          }
-                                        }
-                                      },
-                                child: rejBusy
-                                    ? SizedBox(
-                                        height: 20,
-                                        width: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: cs.onSurface
-                                              .withValues(alpha: 0.8),
-                                        ),
-                                      )
-                                    : const Text('Rechazar'),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: FilledButton(
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: BolaPuebloTheme.accent,
-                                  foregroundColor: Colors.white,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                onPressed: anyBusy && !accBusy
-                                    ? null
-                                    : () async {
-                                        final NavigatorState?
-                                            navAntesDeCrear =
-                                            NavigationService
-                                                .navigatorKey.currentState ??
-                                            Navigator.of(context,
-                                                rootNavigator: true);
-                                        setState(() => _busy = 'acc:${d.id}');
-                                        try {
-                                          await BolaPuebloRepo
-                                              .aceptarContraofertaClienteBola(
-                                            bolaId: widget.bolaId,
-                                            ofertaId: d.id,
-                                          );
-                                          if (!context.mounted) return;
-                                          await BolaPuebloDialogs
-                                              .mostrarPostAceptarOfertaDialog(
-                                                  context);
-                                          await BolaPuebloDialogs
-                                              ._navegarTrasBolaAcordada(
-                                            preNav: navAntesDeCrear,
-                                            bolaId: widget.bolaId,
-                                          );
-                                        } catch (e) {
-                                          if (context.mounted) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              BolaPuebloTheme.snack(
-                                                  context, '$e',
-                                                  error: true),
-                                            );
-                                          }
-                                        } finally {
-                                          if (mounted) {
-                                            setState(() => _busy = null);
-                                          }
-                                        }
-                                      },
-                                child: accBusy
-                                    ? const SizedBox(
-                                        height: 20,
-                                        width: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Text('Aceptar monto'),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: BolaPuebloTheme.accent,
-                            side: BorderSide(
-                              color: BolaPuebloTheme.accent
-                                  .withValues(alpha: 0.55),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: anyBusy
-                              ? null
-                              : () async {
-                                  final u =
-                                      FirebaseAuth.instance.currentUser;
-                                  if (u == null) return;
-                                  await BolaPuebloDialogs.enviarOferta(
-                                    context: context,
-                                    bolaId: widget.bolaId,
-                                    uid: u.uid,
-                                    nombre: u.displayName ?? 'Conductor',
-                                    rol: 'taxista',
-                                    montoInicial: monto,
+              return BolaNegociacionUi.inboundContraofertaShell(
+                context,
+                fromName: nombre,
+                montoRd: monto,
+                message: msg.trim().isEmpty ? null : msg,
+                actions: [
+                  BolaNegociacionUi.actionRow(
+                    reject: OutlinedButton(
+                      style: BolaNegociacionUi.rejectBtn(context),
+                      onPressed: anyBusy && !rejBusy
+                          ? null
+                          : () async {
+                              setState(() => _busy = 'rej:${d.id}');
+                              try {
+                                final motivo = await BolaPuebloDialogs
+                                    .pedirMotivoRechazoContraoferta(context);
+                                if (motivo == null) return;
+                                await BolaPuebloRepo
+                                    .rechazarContraofertaClienteBola(
+                                  bolaId: widget.bolaId,
+                                  ofertaId: d.id,
+                                  motivo: motivo,
+                                );
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  BolaPuebloTheme.snack(
+                                      context, 'Contraoferta rechazada'),
+                                );
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    BolaPuebloTheme.snack(context, '$e',
+                                        error: true),
                                   );
-                                },
-                          icon: const Icon(Icons.swap_horiz_rounded, size: 20),
-                          label: const Text('Proponer otro monto'),
-                        ),
-                      ],
+                                }
+                              } finally {
+                                if (mounted) setState(() => _busy = null);
+                              }
+                            },
+                      child: rejBusy
+                          ? SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: cs.onSurface.withValues(alpha: 0.8),
+                              ),
+                            )
+                          : const Text('Rechazar'),
+                    ),
+                    accept: FilledButton(
+                      style: BolaNegociacionUi.acceptBtn(),
+                      onPressed: anyBusy && !accBusy
+                          ? null
+                          : () async {
+                              final NavigatorState? navAntesDeCrear =
+                                  NavigationService.navigatorKey.currentState ??
+                                      Navigator.of(context,
+                                          rootNavigator: true);
+                              setState(() => _busy = 'acc:${d.id}');
+                              try {
+                                await BolaPuebloRepo
+                                    .aceptarContraofertaClienteBola(
+                                  bolaId: widget.bolaId,
+                                  ofertaId: d.id,
+                                );
+                                if (!context.mounted) return;
+                                await BolaPuebloDialogs
+                                    .mostrarPostAceptarOfertaDialog(context);
+                                await BolaPuebloDialogs._navegarTrasBolaAcordada(
+                                  preNav: navAntesDeCrear,
+                                  bolaId: widget.bolaId,
+                                );
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    BolaPuebloTheme.snack(context, '$e',
+                                        error: true),
+                                  );
+                                }
+                              } finally {
+                                if (mounted) setState(() => _busy = null);
+                              }
+                            },
+                      child: accBusy
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Aceptar'),
                     ),
                   ),
+                ],
+                footer: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BolaPuebloTheme.accent,
+                    side: BorderSide(
+                      color: BolaPuebloTheme.accent.withValues(alpha: 0.55),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: anyBusy
+                      ? null
+                      : () async {
+                          final u = FirebaseAuth.instance.currentUser;
+                          if (u == null) return;
+                          await BolaPuebloDialogs.enviarOferta(
+                            context: context,
+                            bolaId: widget.bolaId,
+                            uid: u.uid,
+                            nombre: u.displayName ?? 'Conductor',
+                            rol: 'taxista',
+                            montoInicial: monto,
+                          );
+                        },
+                  icon: const Icon(Icons.swap_horiz_rounded, size: 20),
+                  label: const Text('Otro monto'),
                 ),
               );
             }),
@@ -4304,7 +4021,6 @@ class _BolaPuebloContraofertasInboundClienteState
 
   @override
   Widget build(BuildContext context) {
-    final cs = BolaPuebloColors.of(context);
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: BolaPuebloRepo.streamOfertas(widget.bolaId),
       builder: (context, snap) {
@@ -4324,13 +4040,8 @@ class _BolaPuebloContraofertasInboundClienteState
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            BolaPuebloUi.sectionLabel(context, 'Te propusieron otro monto'),
-            const SizedBox(height: 6),
-            Text(
-              'El conductor envió una contraoferta. Podés aceptarla para cerrar el precio y seguir al viaje, o rechazarla y seguir negociando.',
-              style: TextStyle(color: cs.onMuted, fontSize: 12.5, height: 1.4),
-            ),
-            const SizedBox(height: 10),
+            BolaPuebloUi.sectionTitle(context, 'Contraoferta para vos'),
+            const SizedBox(height: 4),
             ...items.map((d) {
               final m = d.data();
               final nombre = (m['fromNombre'] ?? 'Conductor').toString();
@@ -4339,160 +4050,100 @@ class _BolaPuebloContraofertasInboundClienteState
               final rejBusy = _busy == 'rej:${d.id}';
               final accBusy = _busy == 'acc:${d.id}';
               final anyBusy = _busy != null;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Material(
-                  color: cs.surfaceRaised,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(
-                        color: cs.outlineSoft.withValues(alpha: 0.35)),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          nombre,
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 15,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'RD\$${monto.toStringAsFixed(0)}',
-                          style: const TextStyle(
-                            color: BolaPuebloTheme.accent,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 20,
-                          ),
-                        ),
-                        if (msg.trim().isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            msg,
-                            style: TextStyle(
-                                color: cs.onMuted, fontSize: 13, height: 1.3),
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: anyBusy && !rejBusy
-                                    ? null
-                                    : () async {
-                                        setState(() => _busy = 'rej:${d.id}');
-                                        try {
-                                          final motivo = await BolaPuebloDialogs
-                                              .pedirMotivoRechazoContraoferta(
-                                                  context);
-                                          if (motivo == null) return;
-                                          await BolaPuebloRepo
-                                              .rechazarContraofertaConductorBola(
-                                            bolaId: widget.bolaId,
-                                            ofertaId: d.id,
-                                            motivo: motivo,
-                                          );
-                                          if (!context.mounted) return;
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
-                                            BolaPuebloTheme.snack(context,
-                                                'Contraoferta rechazada'),
-                                          );
-                                        } catch (e) {
-                                          if (context.mounted) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              BolaPuebloTheme.snack(
-                                                  context, '$e',
-                                                  error: true),
-                                            );
-                                          }
-                                        } finally {
-                                          if (mounted) {
-                                            setState(() => _busy = null);
-                                          }
-                                        }
-                                      },
-                                child: rejBusy
-                                    ? const SizedBox(
-                                        height: 20,
-                                        width: 20,
-                                        child: CircularProgressIndicator(
-                                            strokeWidth: 2),
-                                      )
-                                    : const Text('Rechazar'),
+              return BolaNegociacionUi.inboundContraofertaShell(
+                context,
+                fromName: nombre,
+                montoRd: monto,
+                message: msg.trim().isEmpty ? null : msg,
+                actions: [
+                  BolaNegociacionUi.actionRow(
+                    reject: OutlinedButton(
+                      style: BolaNegociacionUi.rejectBtn(context),
+                      onPressed: anyBusy && !rejBusy
+                          ? null
+                          : () async {
+                              setState(() => _busy = 'rej:${d.id}');
+                              try {
+                                final motivo = await BolaPuebloDialogs
+                                    .pedirMotivoRechazoContraoferta(context);
+                                if (motivo == null) return;
+                                await BolaPuebloRepo
+                                    .rechazarContraofertaConductorBola(
+                                  bolaId: widget.bolaId,
+                                  ofertaId: d.id,
+                                  motivo: motivo,
+                                );
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  BolaPuebloTheme.snack(
+                                      context, 'Contraoferta rechazada'),
+                                );
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    BolaPuebloTheme.snack(context, '$e',
+                                        error: true),
+                                  );
+                                }
+                              } finally {
+                                if (mounted) setState(() => _busy = null);
+                              }
+                            },
+                      child: rejBusy
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Rechazar'),
+                    ),
+                    accept: FilledButton(
+                      style: BolaNegociacionUi.acceptBtn(),
+                      onPressed: anyBusy && !accBusy
+                          ? null
+                          : () async {
+                              final NavigatorState? navAntesDeCrear =
+                                  NavigationService.navigatorKey.currentState ??
+                                      Navigator.of(context,
+                                          rootNavigator: true);
+                              setState(() => _busy = 'acc:${d.id}');
+                              try {
+                                await BolaPuebloRepo
+                                    .aceptarContraofertaConductorBola(
+                                  bolaId: widget.bolaId,
+                                  ofertaId: d.id,
+                                );
+                                if (!context.mounted) return;
+                                await BolaPuebloDialogs
+                                    .mostrarPostAceptarOfertaDialog(context);
+                                await BolaPuebloDialogs._navegarTrasBolaAcordada(
+                                  preNav: navAntesDeCrear,
+                                  bolaId: widget.bolaId,
+                                );
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    BolaPuebloTheme.snack(context, '$e',
+                                        error: true),
+                                  );
+                                }
+                              } finally {
+                                if (mounted) setState(() => _busy = null);
+                              }
+                            },
+                      child: accBusy
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: FilledButton(
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: BolaPuebloTheme.accent,
-                                  foregroundColor: Colors.white,
-                                ),
-                                onPressed: anyBusy && !accBusy
-                                    ? null
-                                    : () async {
-                                        final NavigatorState? navAntesDeCrear =
-                                            NavigationService
-                                                .navigatorKey.currentState ??
-                                            Navigator.of(context,
-                                                rootNavigator: true);
-                                        setState(() => _busy = 'acc:${d.id}');
-                                        try {
-                                          await BolaPuebloRepo
-                                              .aceptarContraofertaConductorBola(
-                                            bolaId: widget.bolaId,
-                                            ofertaId: d.id,
-                                          );
-                                          if (!context.mounted) return;
-                                          await BolaPuebloDialogs
-                                              .mostrarPostAceptarOfertaDialog(
-                                                  context);
-                                          await BolaPuebloDialogs
-                                              ._navegarTrasBolaAcordada(
-                                            preNav: navAntesDeCrear,
-                                            bolaId: widget.bolaId,
-                                          );
-                                        } catch (e) {
-                                          if (context.mounted) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              BolaPuebloTheme.snack(
-                                                  context, '$e',
-                                                  error: true),
-                                            );
-                                          }
-                                        } finally {
-                                          if (mounted) {
-                                            setState(() => _busy = null);
-                                          }
-                                        }
-                                      },
-                                child: accBusy
-                                    ? const SizedBox(
-                                        height: 20,
-                                        width: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Text('Aceptar monto'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                            )
+                          : const Text('Aceptar'),
                     ),
                   ),
-                ),
+                ],
               );
             }),
           ],
@@ -4728,11 +4379,6 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
     final bool bloqueadoOperacionBola = esTaxistaRol && !puedeOperarEnPool;
     final bool modoCompactoTablero =
         !_viajeActivoParticipante(data, user);
-    final String resumenRuta = BolaPuebloUi.resumenRutaTablero(
-      origen: origen,
-      destino: destino,
-      esPedido: esPedido,
-    );
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -4843,41 +4489,30 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
             ),
             const SizedBox(height: 14),
             if (modoCompactoTablero) ...[
-              Text(
-                resumenRuta,
-                style: TextStyle(
-                  color: fg,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  height: 1.35,
-                  letterSpacing: -0.2,
-                ),
+              BolaNegociacionUi.compactRoute(
+                context,
+                origen: origen,
+                destino: destino,
               ),
               if (estado == 'abierta') ...[
-                const SizedBox(height: 6),
-                Text(
-                  'RD\$${monto.toStringAsFixed(0)} · $fecha'
-                  '${distanciaKm > 0 ? ' · ${distanciaKm.toStringAsFixed(0)} km' : ''}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: fgMuted,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    height: 1.3,
-                  ),
+                const SizedBox(height: 10),
+                BolaNegociacionUi.priceHero(
+                  context,
+                  amountRd: monto,
+                  label: esPedido ? 'Ofrece' : 'Precio',
+                  meta: [
+                    if (distanciaKm > 0) '${distanciaKm.toStringAsFixed(0)} km',
+                    fecha,
+                  ].join(' · '),
                 ),
               ] else if (estado == 'acordada' || estado == 'en_curso') ...[
-                const SizedBox(height: 6),
-                Text(
-                  'Acordado RD\$${(montoAcordadoRd > 0 ? montoAcordadoRd : monto).toStringAsFixed(0)} · $fecha',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: fgMuted,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+                const SizedBox(height: 10),
+                BolaNegociacionUi.priceHero(
+                  context,
+                  amountRd:
+                      montoAcordadoRd > 0 ? montoAcordadoRd : monto,
+                  label: 'Acordado',
+                  meta: fecha,
                 ),
               ],
               const SizedBox(height: 12),
@@ -4901,7 +4536,7 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                     label: Text(
                       bloqueadoOperacionBola
                           ? 'Activa disponibilidad'
-                          : 'Ver ofertas y aceptar',
+                          : 'Ver ofertas',
                     ),
                   ),
                 ),
@@ -4948,7 +4583,7 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                     size: 22,
                   ),
                   label: Text(
-                    _detallesExpandidos ? 'Ocultar detalles' : 'Ver detalles',
+                    _detallesExpandidos ? 'Menos' : 'Más',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
@@ -5040,9 +4675,9 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                     Text(
                       esMio
                           ? (tipo == 'pedido'
-                              ? 'Recibís propuestas dentro del rango. Abrí «Ver ofertas y aceptar» las veces que quieras; '
+                              ? 'Recibís propuestas dentro del rango. Abrí «Ver ofertas» las veces que quieras; '
                                   'cuando toques Aceptar en una fila, queda el precio cerrado y el viaje sigue en esta tarjeta.'
-                              : 'Recibís propuestas de pago dentro del rango. Revisalas en «Ver ofertas y aceptar»; '
+                              : 'Recibís propuestas de pago dentro del rango. Revisalas en «Ver ofertas»; '
                                   'al aceptar una, cerrás el precio y el traslado continúa aquí (código, navegación, finalizar).')
                           : (tipo == 'pedido'
                               ? 'Proponé montos dentro del rango; si cambiás de idea, enviá otra oferta (solo cuenta la última pendiente tuya). '
@@ -5155,7 +4790,7 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                     label: Text(
                       bloqueadoOperacionBola
                           ? 'Activa disponibilidad'
-                          : 'Ver ofertas y aceptar',
+                          : 'Ver ofertas',
                     ),
                   ),
                 ),
@@ -5439,7 +5074,7 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                   Text(
                     'Referencia RD\$${monto.toStringAsFixed(0)}. Podés enviar esa cifra u otra dentro del rango; '
                     'si ajustás, mandá otra oferta (solo cuenta tu última pendiente). '
-                    '${tipo == 'pedido' ? 'El pasajero' : 'El conductor'} cierra el precio en «Ver ofertas y aceptar» y el viaje sigue en esta bola.',
+                    '${tipo == 'pedido' ? 'El pasajero' : 'El conductor'} cierra el precio en «Ver ofertas» y el viaje sigue en esta bola.',
                     style: TextStyle(
                         color: fgMuted,
                         fontSize: 12.5,

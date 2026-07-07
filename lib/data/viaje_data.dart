@@ -13,6 +13,8 @@ import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
@@ -239,6 +241,8 @@ class ViajeData {
   }) async {
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) throw Exception('No autenticado');
+    ClienteCuentaRealPolicy.exigirParaPedirViaje();
+    await ClienteVerificacionIdentidadService.exigirParaPedirViaje();
 
     final Map<String, int> partidas = _partidasCentsDesdePrecio(precio);
     final int precioCents = partidas['precio_cents']!;

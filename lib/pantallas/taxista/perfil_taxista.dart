@@ -112,7 +112,7 @@ class PerfilTaxista extends StatelessWidget {
 
               // Disponibilidad — capturamos el messenger ANTES del gap async
               SwitchListTile.adaptive(
-                activeColor: Colors.greenAccent,
+                activeThumbColor: Colors.greenAccent,
                 value: disponible,
                 title: const Text('Disponible para aceptar viajes',
                     style: TextStyle(color: Colors.white)),

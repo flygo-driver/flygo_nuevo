@@ -7,7 +7,7 @@ class TripPublishWindows {
   TripPublishWindows._();
 
   /// Minutos antes de la recogida en que el viaje entra al pool (visible y aceptable).
-  /// Estilo apps tipo Uber/Lyft: ventana corta (~45 min), no horas antes.
+  /// Ventana corta RAI (~45 min), no horas antes.
   /// Si cambias esto, actualiza `functions/src/trip_publish_windows.ts`.
   static const int poolLeadMinutesProgramado = 45;
 

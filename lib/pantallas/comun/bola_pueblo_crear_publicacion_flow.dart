@@ -235,22 +235,19 @@ class _BolaPuebloCrearPublicacionFlowState
         return (
           icon: Icons.route_rounded,
           title: 'Tu ruta',
-          subtitle:
-              'Elegí origen y destino con autocompletado. En el siguiente paso definís pasajeros y distancia para calcular el rango de precios.',
+          subtitle: '¿De dónde a dónde?',
         );
       case 1:
         return (
           icon: Icons.groups_rounded,
-          title: 'Detalle del viaje',
-          subtitle:
-              'Indicá cuántas personas van y la distancia en km (se completa sola si elegís lugares con coordenadas).',
+          title: 'Detalle',
+          subtitle: 'Personas y distancia.',
         );
       default:
         return (
           icon: Icons.payments_rounded,
-          title: 'Precio y salida',
-          subtitle:
-              'Tu monto queda dentro del rango permitido. Elegí fecha y hora estimada; al publicar, la bola aparece en el tablero en vivo.',
+          title: 'Precio',
+          subtitle: 'Monto y hora de salida.',
         );
     }
   }
@@ -326,11 +323,7 @@ class _BolaPuebloCrearPublicacionFlowState
                           children: <Widget>[
                             BolaPuebloUi.sectionLabel(
                                 context, 'Origen y destino'),
-                            Text(
-                              'Buscá en República Dominicana. Si ves sugerencias, tocá una para fijar coordenadas.',
-                              style: BolaPuebloUi.panelBody(context),
-                            ),
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 10),
                             CampoLugarAutocomplete(
                               label: 'Estoy en',
                               hint: 'Pueblo, ciudad o dirección',

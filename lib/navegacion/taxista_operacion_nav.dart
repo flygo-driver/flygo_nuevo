@@ -197,7 +197,7 @@ abstract final class TaxistaOperacionNav {
           ((d['uidTaxista'] ?? d['taxistaId'] ?? '').toString()).trim();
       if (uidAsignado != uid) return false;
 
-      if (!PagosTaxistaRepo.viajeEsEfectivoParaComisionPrepago(d)) return false;
+      if (!PagosTaxistaRepo.viajeAplicaComisionPrepago(d)) return false;
 
       final DocumentSnapshot<Map<String, dynamic>> bSnap =
           await FirebaseFirestore.instance

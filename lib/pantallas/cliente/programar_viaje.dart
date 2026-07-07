@@ -18,7 +18,6 @@ import 'package:geolocator/geolocator.dart';
 
 // ✅ Confirmación de viaje programado (no confundir con “en curso”)
 
-import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart'
     hide DestinoSeleccionado;
 
@@ -28,7 +27,6 @@ import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
-import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
@@ -51,8 +49,6 @@ import 'package:flygo_nuevo/widgets/rai_cotizacion_offline_hint.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_pendiente.dart';
-
 // ✅ IMPORTS PARA TURISMO
 import 'package:flygo_nuevo/widgets/turismo_destinos_sheet_host.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
@@ -421,16 +417,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (mounted) _nudgeCtrl.stop();
     });
 
-  }
-
-  // 🔥 Función para normalizar tipo de vehículo
-  String _normalizarTipoVehiculo(String tipo) {
-    final t = tipo.toLowerCase();
-    if (t.contains('carro')) return 'carro';
-    if (t.contains('jeepeta')) return 'jeepeta';
-    if (t.contains('minivan')) return 'minivan';
-    if (t.contains('bus')) return 'bus';
-    return 'carro';
   }
 
   // 🔥 Función para determinar el subtipo de turismo basado en el nombre del destino
@@ -1912,6 +1898,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   ) async {
     if (_cargando) return;
     if (!_formKey.currentState!.validate()) return;
+    if (!mounted) return;
+    final ({NavigatorState? tab, NavigatorState? raiz}) navCapturado =
+        NavigationService.capturarNavigadoresFormulario(context);
 
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) {
@@ -1958,8 +1947,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
 
     setState(() => _cargando = true);
-    final ({NavigatorState? tab, NavigatorState? raiz}) nav =
-        NavigationService.capturarNavigadoresFormulario(context);
+    final ({NavigatorState? tab, NavigatorState? raiz}) nav = navCapturado;
     try {
       if (widget.modoAhora) {
         if (!mounted) return;
@@ -4852,7 +4840,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                           ),
                                           Switch.adaptive(
                                             value: idaYVuelta,
-                                            activeColor: Colors.white,
+                                            activeThumbColor: Colors.white,
                                             activeTrackColor: switchAccent,
                                             // Thumb/track del estado OFF
                                             // calculados por contraste sobre

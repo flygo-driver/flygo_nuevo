@@ -377,7 +377,7 @@ class LocationPermissionService {
         concedido: false,
         gpsApagado: true,
         abrioAjustesApp: false,
-        abrioAjustesGps: true,
+        abrioAjustesGps: abrioAjustesGps,
         permission: await Geolocator.checkPermission(),
       );
     }
@@ -495,6 +495,7 @@ class LocationPermissionService {
 
     _alwaysDialogShownThisSession = true;
     await _markAlwaysPromptHandled();
+    if (!context.mounted) return;
     print('[LOCATION] mostrar diálogo permiso always (isTaxista=$isTaxista)');
 
     final String body = isTaxista
@@ -503,6 +504,7 @@ class LocationPermissionService {
         : 'Para que el conductor pueda ver tu ubicación en tiempo real y la tarifa sea precisa, '
             'necesitamos acceso a tu ubicación incluso cuando no estés usando la app. ¿Permitir siempre?';
 
+    if (!context.mounted) return;
     final agreed = await showDialog<bool>(
           context: context,
           builder: (ctx) {

@@ -24,6 +24,7 @@ import { assertTaxistaAptoParaClaimPool } from "./taxista_operacion_gate.js";
 import {
   PREPAGO_INSUFICIENTE_COMISION_VIAJE,
   prepagoInsuficienteParaViajeEfectivo,
+  viajeAplicaComisionPrepago,
 } from "./prepago_comision_viaje.js";
 
 const db = () => getFirestore();
@@ -36,7 +37,7 @@ const ANDROID_CHANNEL_TAXISTA = "rai_driver_notifications";
 const UMBRAL_COMISION_LEGACY_RD = 500;
 /** Tope de deuda acumulada por comisiones de pool pendientes de validar por admin. */
 const UMBRAL_DEUDA_POOL_RD = 500;
-/** Tras el primer viaje en efectivo gratis, hace falta este saldo prepago mínimo para pool / tomar viajes. */
+/** Tras el primer viaje gratis, hace falta este saldo prepago mínimo para pool / tomar viajes. */
 const MIN_SALDO_PREPAGO_COMISION_RD = 200;
 /** Aviso preventivo antes del bloqueo por prepago. */
 const UMBRAL_AVISO_PREVENTIVO_PREPAGO_RD = 250;
@@ -259,7 +260,7 @@ export async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: n
 /**
  * Pool / aceptar viaje: bloqueo estricto (modelo empresarial).
  * - Cualquier `comisionPendiente` > 0 → bloqueo inmediato (sin zona gris 0–500).
- * - Tras el 1.er viaje efectivo gratis: saldo prepago disponible < mínimo operativo → bloqueo.
+ * - Tras el 1.er viaje gratis: saldo prepago disponible < mínimo operativo → bloqueo.
  */
 function bloqueoOperativoPrepago(
   data: AnyMap | undefined,
@@ -394,7 +395,7 @@ async function notificarSaldoPrepagoInsuficiente(
     await enviarPushComisionTaxista(
       uid,
       "Falta crédito prepago",
-      `Tu saldo de comisión (efectivo) quedó en RD$${saldoDespues.toFixed(2)}. Recarga RD$${minimo.toFixed(0)} o más desde Mis pagos para seguir en pool y tomar viajes (el ${pctLabel}% de cada viaje en efectivo se descuenta de tu saldo).`,
+      `Tu saldo de comisión quedó en RD$${saldoDespues.toFixed(2)}. Recarga RD$${minimo.toFixed(0)} o más desde Mis pagos para seguir en pool y tomar viajes (el ${pctLabel}% de cada viaje RAI se descuenta de tu saldo).`,
       "taxista_prepago_comision_bajo_min",
     );
   } catch (e) {
@@ -442,7 +443,7 @@ async function notificarComisionPendienteInmediata(
     await enviarPushComisionTaxista(
       uid,
       "Cuenta suspendida — comisión pendiente",
-      `Quedó RD$${pendDespues.toFixed(2)} en comisión efectivo pendiente. Deposita y envía comprobante en Mis pagos; al verificar el admin podrás volver a operar.`,
+      `Quedó RD$${pendDespues.toFixed(2)} en comisión pendiente. Deposita y envía comprobante en Mis pagos; al verificar el admin podrás volver a operar.`,
       "taxista_comision_pendiente_bloqueo",
     );
   } catch (e) {
@@ -457,7 +458,7 @@ async function notificarLegacyComisionTope(uid: string, pendAntes: number, pendD
       await enviarPushComisionTaxista(
         uid,
         "Tope de comisión (histórico)",
-        `Tienes RD$${pendDespues.toFixed(2)} en comisión efectivo pendiente (tope RD$${UMBRAL_COMISION_LEGACY_RD.toFixed(0)}). Deposita y envía comprobante en Mis pagos; al verificar el admin se regulariza.`,
+        `Tienes RD$${pendDespues.toFixed(2)} en comisión pendiente (tope RD$${UMBRAL_COMISION_LEGACY_RD.toFixed(0)}). Deposita y envía comprobante en Mis pagos; al verificar el admin se regulariza.`,
         "taxista_comision_legacy_bloqueo_500",
       );
     }
@@ -904,6 +905,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const esEfectivo = metodo.includes("efectivo");
     const metodoAsiento = esEfectivo ? "efectivo" : (metodo.includes("transfer") ? "transferencia" : "tarjeta");
     const pagoRegistrado = d.pagoRegistrado === true;
+    const aplicaPrepagoComision = viajeAplicaComisionPrepago(d);
 
     const precioCents = (precioCentsDb !== null && precioCentsDb > 0)
       ? precioCentsDb
@@ -922,7 +924,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     let ledgerMovSnapPre: DocumentSnapshot | null = null;
     if (!pagoRegistrado) {
       asientoSnapPre = await tx.get(asientoRef);
-      if (esEfectivo) {
+      if (aplicaPrepagoComision) {
         ledgerMovSnapPre = await tx.get(comisionViajeEfectivoLedgerRef(uidTaxista, viajeId));
       }
     }
@@ -954,9 +956,9 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const uData = (uSnap.data() ?? {}) as AnyMap;
     const perfilFacturaSnap = snapshotPerfilTaxistaParaFactura(uData);
 
-    /** Saldo prepago comisión tras este cierre (solo viajes en efectivo); `null` = no aplica (transferencia/tarjeta). */
+    /** Saldo prepago comisión tras este cierre; `null` = no aplica (bola ahorro, gira recaudo central). */
     let facturaSaldoPrepagoComisionRd: number | null = null;
-    if (esEfectivo) {
+    if (aplicaPrepagoComision) {
       facturaSaldoPrepagoComisionRd = Number.parseFloat(
         saldoPrepagoRdFromBilletera((billeSnapPre.data() ?? {}) as AnyMap).toFixed(2),
       );
@@ -1001,7 +1003,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         ultimaGananciaCents: gananciaCents,
         updatedAt: FieldValue.serverTimestamp(),
       };
-      if (esEfectivo) {
+      if (aplicaPrepagoComision) {
         const pend = comisionPendienteRdFromBilletera(bData);
         const flag = bData.primerViajeComisionGratisConsumido === true;
         const saldoIni = saldoPrepagoRdFromBilletera(bData);

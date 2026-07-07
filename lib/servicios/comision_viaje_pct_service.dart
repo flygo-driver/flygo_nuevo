@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 /// Lee `config/comision.porcentaje` y actualiza [PlataformaEconomia] (TTL 60s).
-/// El mismo valor alimenta giras por cupos (antes `comision_gira_porcentaje` aparte).
+/// Giras por cupos usan % fijo [PlataformaEconomia.comisionGiraPorcentajeFijo] (10%).
 class ComisionViajePctService {
   ComisionViajePctService._();
 
@@ -24,13 +24,10 @@ class ComisionViajePctService {
       final double p = raw is num ? raw.toDouble() : 20.0;
       final double pct = p.clamp(0.0, 100.0);
       PlataformaEconomia.syncComisionViajePorcentajeFromRemote(pct);
-      // Giras por cupos usan el mismo % global (config/comision).
-      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(pct);
       _lastFetch = DateTime.now();
     } catch (_) {
       const double fallback = 20.0;
       PlataformaEconomia.syncComisionViajePorcentajeFromRemote(fallback);
-      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(fallback);
       _lastFetch = DateTime.now();
     }
   }
@@ -56,7 +53,6 @@ class ComisionViajePctService {
     return _db.collection('config').doc('comision').snapshots().map((snap) {
       final p = _parsePorcentajeDoc(snap.data());
       PlataformaEconomia.syncComisionViajePorcentajeFromRemote(p);
-      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(p);
       _lastFetch = DateTime.now();
       return p;
     });

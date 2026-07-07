@@ -268,10 +268,85 @@ class PagosTaxistaRepo {
         minimo;
   }
 
+  /// Viajes RAI estándar (efectivo/transferencia/tarjeta) descuentan comisión del prepago.
+  static bool viajeAplicaComisionPrepago(Map<String, dynamic> viajeData) {
+    final String tipo =
+        (viajeData['tipoServicio'] ?? 'normal').toString().trim().toLowerCase();
+    if (tipo == 'bola_ahorro') return false;
+    final String? metodo = viajeData['metodoPago']?.toString();
+    if (MetodoPagoViaje.esEfectivo(metodo)) return true;
+    if (MetodoPagoViaje.esTransferencia(metodo)) return true;
+    if (MetodoPagoViaje.esTarjeta(metodo)) return true;
+    return (metodo ?? '').trim().isEmpty;
+  }
+
   static bool viajeEsEfectivoParaComisionPrepago(
     Map<String, dynamic> viajeData,
   ) {
-    return MetodoPagoViaje.esEfectivo(viajeData['metodoPago']?.toString());
+    return viajeAplicaComisionPrepago(viajeData);
+  }
+
+  /// Descuenta comisión del prepago (1.er viaje gratis) dentro de una transacción Firestore.
+  static Future<void> aplicarDescuentoComisionPrepagoEnTransaccion({
+    required Transaction tx,
+    required String taxistaId,
+    required String viajeId,
+    required double comisionRd,
+    required String fuenteLedger,
+  }) async {
+    final billeRef = _db.collection('billeteras_taxista').doc(taxistaId);
+    final billeSnap = await tx.get(billeRef);
+    final b = billeSnap.data() ?? <String, dynamic>{};
+    final pend = comisionPendienteDesdeBilletera(b);
+    final flag = primerViajeComisionGratisConsumido(b);
+    final saldoIni = saldoPrepagoComisionDesdeBilletera(b);
+    final comision = double.parse(comisionRd.abs().toStringAsFixed(2));
+    final Map<String, dynamic> bPatch = {
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    if (!flag && pend < 1e-6) {
+      bPatch['primerViajeComisionGratisConsumido'] = true;
+      await TaxistaPrepagoLedger.appendComisionViajeEfectivo(
+        tx: tx,
+        uidTaxista: taxistaId,
+        viajeId: viajeId,
+        fuente: fuenteLedger,
+        comisionTotalRd: comision,
+        pendienteAntes: pend,
+        saldoPrepagoAntes: saldoIni,
+        pendienteDespues: pend,
+        saldoPrepagoDespues: saldoIni,
+        primerEfectivoSinDescuento: true,
+      );
+    } else {
+      var p = pend;
+      var saldo = saldoIni;
+      final fromPend = p < comision ? p : comision;
+      p = double.parse((p - fromPend).toStringAsFixed(2));
+      final rem = double.parse((comision - fromPend).toStringAsFixed(2));
+      final prepagoLibreIni = saldoDisponiblePrepagoComisionDesdeBilletera(b);
+      final cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
+      final faltantePrepago =
+          double.parse((rem - cubiertoPrepago).toStringAsFixed(2));
+      saldo = double.parse((saldo - cubiertoPrepago).toStringAsFixed(2));
+      p = double.parse((p + faltantePrepago).toStringAsFixed(2));
+      bPatch['comisionPendiente'] = p;
+      bPatch['saldoPrepagoComisionRd'] = saldo;
+      bPatch['primerViajeComisionGratisConsumido'] = true;
+      await TaxistaPrepagoLedger.appendComisionViajeEfectivo(
+        tx: tx,
+        uidTaxista: taxistaId,
+        viajeId: viajeId,
+        fuente: fuenteLedger,
+        comisionTotalRd: comision,
+        pendienteAntes: pend,
+        saldoPrepagoAntes: saldoIni,
+        pendienteDespues: p,
+        saldoPrepagoDespues: saldo,
+        primerEfectivoSinDescuento: false,
+      );
+    }
+    tx.set(billeRef, bPatch, SetOptions(merge: true));
   }
 
   static double pctComisionDesdeViaje(
@@ -306,7 +381,7 @@ class PagosTaxistaRepo {
     required Map<String, dynamic> viajeData,
     double? pctComision,
   }) {
-    if (!viajeEsEfectivoParaComisionPrepago(viajeData)) return null;
+    if (!viajeAplicaComisionPrepago(viajeData)) return null;
     final double pend = comisionPendienteDesdeBilletera(billeData);
     if (!primerViajeComisionGratisConsumido(billeData) && pend <= 1e-6) {
       return null;
@@ -331,13 +406,13 @@ class PagosTaxistaRepo {
       pctComision: pctComision,
     );
     final double disp = saldoDisponiblePrepagoComisionDesdeBilletera(billeData);
-    return 'Este viaje en efectivo requiere RD\$${comision.toStringAsFixed(0)} de prepago '
+    return 'Este viaje requiere RD\$${comision.toStringAsFixed(0)} de prepago '
         'disponible para la comisión RAI (${PlataformaEconomia.etiquetaPorcentajeComision()}). '
         'Tenés RD\$${disp.toStringAsFixed(0)} disponible. Recarga en Mis pagos antes de aceptar.';
   }
 
   static const String mensajePrepagoInsuficienteComisionViajeGenerico =
-      'Tu prepago disponible no alcanza para la comisión de este viaje en efectivo. '
+      'Tu prepago disponible no alcanza para la comisión de este viaje. '
       'Recarga en Mis pagos antes de aceptar.';
 
   /// Una sola fuente para pool, reclamar viaje, encadenar siguiente y asignación turismo:

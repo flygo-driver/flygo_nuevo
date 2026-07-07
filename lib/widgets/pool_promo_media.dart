@@ -557,12 +557,132 @@ class PoolAgencyLogoHeader extends StatelessWidget {
   }
 }
 
+/// Carrusel de hasta 3 fotos del banner (gira por cupos).
+class PoolGiraBannerCarousel extends StatefulWidget {
+  const PoolGiraBannerCarousel({
+    super.key,
+    required this.urls,
+    required this.title,
+    this.fit = BoxFit.cover,
+    this.placeholder,
+    this.onTapImage,
+  });
+
+  final List<String> urls;
+  final String title;
+  final BoxFit fit;
+  final Widget? placeholder;
+  final void Function(String url)? onTapImage;
+
+  @override
+  State<PoolGiraBannerCarousel> createState() => _PoolGiraBannerCarouselState();
+}
+
+class _PoolGiraBannerCarouselState extends State<PoolGiraBannerCarousel> {
+  late final PageController _pageCtrl;
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageCtrl = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = widget.urls.where((u) => u.trim().isNotEmpty).toList();
+    if (urls.isEmpty) {
+      return widget.placeholder ?? const SizedBox.shrink();
+    }
+    if (urls.length == 1) {
+      return _imageTile(urls.first);
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        PageView.builder(
+          controller: _pageCtrl,
+          itemCount: urls.length,
+          onPageChanged: (i) => setState(() => _index = i),
+          itemBuilder: (_, i) => _imageTile(urls[i]),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 8,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(urls.length, (i) {
+              final active = i == _index;
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                width: active ? 18 : 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: active
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              );
+            }),
+          ),
+        ),
+        Positioned(
+          top: 8,
+          right: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '${_index + 1}/${urls.length}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _imageTile(String url) {
+    final child = Image.network(
+      url,
+      fit: widget.fit,
+      errorBuilder: (_, __, ___) =>
+          widget.placeholder ?? const Icon(Icons.broken_image, size: 40),
+    );
+    if (widget.onTapImage == null) return child;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => widget.onTapImage!(url),
+        child: child,
+      ),
+    );
+  }
+}
+
 /// Franja promocional: imagen opcional, video opcional, o ambos (imagen + botón play para el video).
 /// Con [routeLabel] / [priceLabel] activa diseño hero con overlay (detalle cliente).
 class PoolPromoStrip extends StatelessWidget {
   const PoolPromoStrip({
     super.key,
     required this.bannerUrl,
+    this.bannerUrls = const <String>[],
     required this.bannerVideoUrl,
     required this.title,
     required this.height,
@@ -583,6 +703,7 @@ class PoolPromoStrip extends StatelessWidget {
   });
 
   final String bannerUrl;
+  final List<String> bannerUrls;
   final String bannerVideoUrl;
   final String title;
   final double height;
@@ -612,21 +733,31 @@ class PoolPromoStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final b = bannerUrl.trim();
+    final gallery = bannerUrls.isNotEmpty
+        ? bannerUrls.where((u) => u.trim().isNotEmpty).take(3).toList()
+        : <String>[];
+    final b = bannerUrl.trim().isNotEmpty
+        ? bannerUrl.trim()
+        : (gallery.isNotEmpty ? gallery.first : '');
+    final images = gallery.isNotEmpty
+        ? gallery
+        : (b.isNotEmpty ? <String>[b] : <String>[]);
     final v = bannerVideoUrl.trim();
-    if (b.isEmpty && v.isEmpty) return const SizedBox.shrink();
+    if (images.isEmpty && v.isEmpty) return const SizedBox.shrink();
 
     final tropical = PoolGiraTropicalTheme.of(context);
-    final hasI = b.isNotEmpty;
+    final hasI = images.isNotEmpty;
     final hasV = v.isNotEmpty;
     final logo = (agencyLogoUrl ?? '').trim();
     final hasLogo = logo.isNotEmpty;
 
     String chipText;
     if (hasI && hasV) {
-      chipText = 'Toca la imagen · ▶ video';
+      chipText = images.length > 1
+          ? 'Desliza fotos · ▶ video'
+          : 'Toca la imagen · ▶ video';
     } else if (hasI) {
-      chipText = 'Toca para ampliar';
+      chipText = images.length > 1 ? 'Desliza las fotos' : 'Toca para ampliar';
     } else {
       chipText = 'Toca para ver video';
     }
@@ -641,13 +772,18 @@ class PoolPromoStrip extends StatelessWidget {
               children: [
             if (mediaOnly) const ColoredBox(color: Colors.black),
                 if (hasI)
-              Image.network(
-                      b,
-                      fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => _TropicalPlaceholder(
-                  tropical: tropical,
-                  softFill: softFill,
-                  textMuted: textMuted,
+                  PoolGiraBannerCarousel(
+                    urls: images,
+                    title: title,
+                    placeholder: _TropicalPlaceholder(
+                      tropical: tropical,
+                      softFill: softFill,
+                      textMuted: textMuted,
+                    ),
+                    onTapImage: (url) => showPoolPromoImageDialog(
+                      context,
+                      imageUrl: url,
+                      title: title,
                     ),
                   )
                 else
@@ -841,19 +977,6 @@ class PoolPromoStrip extends StatelessWidget {
                 ),
               ),
             ],
-            if (hasI)
-              Positioned.fill(
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => showPoolPromoImageDialog(
-                      context,
-                      imageUrl: b,
-                      title: title,
-                    ),
-                  ),
-                ),
-              ),
             if (!hasI && hasV)
               Positioned.fill(
                 child: Material(

@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 import 'package:flygo_nuevo/servicios/giras_cupos_cliente_alerts.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
+import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
+import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -461,8 +463,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     final cap = (d['capacidad'] ?? 0) as int;
                     final occ = (d['asientosReservados'] ?? 0) as int;
                     final estado = (d['estado'] ?? '').toString();
-                    final precio = (d['precioPorAsiento'] as num).toDouble();
-                    final precioCliente = precio;
+                    final precioCliente =
+                        PoolRecaudoCentral.precioPorPersona(d);
                     final fecha = _fechaSalida(d);
 
                     final left = (cap - occ).clamp(0, cap);
@@ -487,7 +489,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         (d['agenciaLogoUrl'] ?? '').toString().trim();
                     final taxistaNombre =
                         (d['taxistaNombre'] ?? '').toString().trim();
-                    final bannerUrl = (d['bannerUrl'] ?? '').toString().trim();
+                    final bannerUrls = PoolGiraBannerUrls.fromPool(d);
+                    final bannerUrl = PoolGiraBannerUrls.primary(d);
                     final bannerVideoUrl =
                         (d['bannerVideoUrl'] ?? '').toString().trim();
                     final marcaAgencia =
@@ -531,10 +534,11 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                               ),
                               const SizedBox(height: 10),
                             ],
-                            if (bannerUrl.isNotEmpty ||
+                            if (bannerUrls.isNotEmpty ||
                                 bannerVideoUrl.isNotEmpty) ...[
                               PoolPromoStrip(
                                 bannerUrl: bannerUrl,
+                                bannerUrls: bannerUrls,
                                 bannerVideoUrl: bannerVideoUrl,
                                 title: '$origen -> $destino',
                                 height: 200,
@@ -577,7 +581,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                         ),
                                       ),
                                       if (marcaAgencia &&
-                                          bannerUrl.isEmpty &&
+                                          bannerUrls.isEmpty &&
                                           bannerVideoUrl.isEmpty) ...[
                                         const SizedBox(height: 4),
                                         Text(

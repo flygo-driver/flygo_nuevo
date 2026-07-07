@@ -4,8 +4,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
+import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
+import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
@@ -373,8 +375,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                   estadoL == 'disponible' ||
                   estadoL == 'buscando');
 
-          final precioSeat = ((d['precioPorAsiento'] ?? 0.0) as num).toDouble();
-          final precioTotalPorSeat = precioSeat;
+          final precioTotalPorSeat = PoolRecaudoCentral.precioPorPersona(d);
           final depositPct =
               ((d['depositPct'] ?? 0.3) as num).toDouble().clamp(0, 1);
           // feePct eliminado porque no se usa aquí para evitar warning
@@ -392,7 +393,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
               ? agenciaNombre
               : (taxistaNombre.isNotEmpty ? taxistaNombre : 'Dueño del viaje');
           final agenciaLogoUrl = (d['agenciaLogoUrl'] ?? '').toString().trim();
-          final bannerUrl = (d['bannerUrl'] ?? '').toString().trim();
+          final bannerUrls = PoolGiraBannerUrls.fromPool(d);
+          final bannerUrl = PoolGiraBannerUrls.primary(d);
           final bannerVideoUrl = (d['bannerVideoUrl'] ?? '').toString().trim();
           final choferTelefono = (d['choferTelefono'] ?? '').toString().trim();
           final choferWhatsApp = (d['choferWhatsApp'] ?? '').toString().trim();
@@ -473,7 +475,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                       ),
                       const SizedBox(height: 12),
                     ],
-                    if (bannerUrl.isNotEmpty || bannerVideoUrl.isNotEmpty) ...[
+                    if (bannerUrls.isNotEmpty || bannerVideoUrl.isNotEmpty) ...[
                       Container(
                         decoration: BoxDecoration(
                           color: _kGiraFondo,
@@ -483,6 +485,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         clipBehavior: Clip.antiAlias,
                         child: PoolPromoStrip(
                           bannerUrl: bannerUrl,
+                          bannerUrls: bannerUrls,
                           bannerVideoUrl: bannerVideoUrl,
                           title: titulo,
                           height: 340,
@@ -1057,6 +1060,12 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 
     setState(() => _saving = true);
     try {
+      final verificado =
+          await ClienteVerificacionIdentidadService.ensureVerificadoOMostrar(
+        context,
+      );
+      if (!verificado || !mounted) return;
+
       final result = await PoolRepo.reservarCupos(
         poolId: widget.poolId,
         seats: seats,

@@ -329,7 +329,7 @@ void _configureAndroidPhotoPicker() {
 }
 
 /// Barra de estado y **barra de navegación del sistema** (inicio / atrás / recientes)
-/// siempre visibles en toda la app (no modo inmersivo), estilo apps tipo Uber.
+/// siempre visibles en toda la app (no modo inmersivo), estilo RAI.
 void _configureGlobalSystemUi() {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 }

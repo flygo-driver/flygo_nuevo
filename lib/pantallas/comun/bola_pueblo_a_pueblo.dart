@@ -8,6 +8,7 @@ import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.d
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/utilidades/constante.dart' show etiquetaBolaAhorroUi;
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
@@ -148,34 +149,11 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
   Widget _bolaSeccionListaCliente(
     BolaPuebloColors col, {
     required String titulo,
-    required String subtitulo,
     EdgeInsets padding = const EdgeInsets.fromLTRB(16, 14, 16, 6),
   }) {
     return Padding(
       padding: padding,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            titulo,
-            style: TextStyle(
-              color: col.onSurface,
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.35,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitulo,
-            style: TextStyle(
-              color: col.onMuted,
-              fontSize: 12,
-              height: 1.35,
-            ),
-          ),
-        ],
-      ),
+      child: BolaPuebloUi.sectionTitle(context, titulo),
     );
   }
 
@@ -224,7 +202,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Bola Ahorro',
+                  etiquetaBolaAhorroUi,
                   style: BolaPuebloUi.screenTitleBola(context),
                 ),
               ),
@@ -338,164 +316,68 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                               child: BolaPuebloUi.boardHeader(
                                 context,
                                 subtitle: esTaxista
-                                    ? 'Publicá tu ruta con el botón «Voy para» o respondé a pedidos de pasajeros abajo.'
+                                    ? 'Publicá tu ruta o respondé pedidos.'
                                     : bolaActivaCliente != null
-                                        ? 'Tenés una bola activa abajo. Solo podés tener una a la vez hasta que termine o la canceles.'
-                                        : 'Abajo ves primero conductores con ruta; después pedidos de otros pasajeros. '
-                                            '«Pedir bola» es para cuando vos necesitás el viaje.',
+                                        ? 'Tenés un viaje activo.'
+                                        : 'Elegí conductor o pedí el tuyo.',
                               ),
                             ),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              child: Text(
-                                'El mapa es fijo; esta lista se desplaza para no tapar las tarjetas.',
-                                style: TextStyle(
-                                  color: col.onMuted,
-                                  fontSize: 11.5,
-                                  height: 1.35,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 6),
                             if (!esTaxista)
                               Padding(
                                 padding:
                                     const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                                child: BolaPuebloUi.actionPanel(
-                                  context,
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      BolaPuebloUi.sectionLabel(
-                                          context, 'Para vos (pasajero)'),
-                                      Text(
-                                        'Los conductores publican «estoy en X, voy para Y» con un precio; '
-                                        'negociás en la tarjeta y podés quedar más barato que un viaje normal.',
-                                        style: BolaPuebloUi.panelBody(context),
-                                      ),
-                                      const SizedBox(height: 14),
-                                      BolaClientePedirPedidoPanel(
-                                        bolaActiva: bolaActivaCliente,
-                                        uid: user.uid,
-                                        rol: rol,
-                                        nombre: nombre,
-                                        guardando: _guardando,
-                                        onBusy: (b) =>
-                                            setState(() => _guardando = b),
-                                        onContinuarBola: _abrirModoViajeBola,
-                                      ),
-                                      const SizedBox(height: 10),
-                                      OutlinedButton.icon(
-                                        onPressed: () => NavigationService.push(
-                                          const BolaConductoresEnRutaClientePage(),
-                                        ),
-                                        icon: const Icon(
-                                            Icons.local_taxi_outlined,
-                                            size: 20),
-                                        label: const Text(
-                                          'Pantalla solo conductores (estoy en → voy para)',
-                                        ),
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: Colors.white,
-                                          backgroundColor:
-                                              const Color(0xFF3D5AFE),
-                                          side: BorderSide(
-                                            color: const Color(0xFF8C9EFF)
-                                                .withValues(alpha: 0.95),
-                                            width: 1.4,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    BolaClientePedirPedidoPanel(
+                                      bolaActiva: bolaActivaCliente,
+                                      uid: user.uid,
+                                      rol: rol,
+                                      nombre: nombre,
+                                      guardando: _guardando,
+                                      onBusy: (b) =>
+                                          setState(() => _guardando = b),
+                                      onContinuarBola: _abrirModoViajeBola,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: BolaPuebloUi.secondaryTile(
+                                            context: context,
+                                            label: 'Conductores',
+                                            icon: Icons.local_taxi_rounded,
+                                            onPressed: () =>
+                                                NavigationService.push(
+                                              const BolaConductoresEnRutaClientePage(),
+                                            ),
                                           ),
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 14, horizontal: 12),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                                BolaPuebloUi.radiusButton),
-                                          ),
-                                          elevation: 4,
-                                          shadowColor: const Color(0xFF536DFE)
-                                              .withValues(alpha: 0.45),
                                         ),
-                                      ),
-                                    ],
-                                  ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
                               ),
                             if (esTaxista)
                               Padding(
                                 padding:
                                     const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                                child: BolaPuebloUi.actionPanel(
-                                  context,
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      BolaPuebloUi.sectionLabel(context,
-                                          'Conductor · publicá tu ruta'),
-                                      Text(
-                                        'Ej.: estoy en La Vega → voy para Santo Domingo (capital). '
-                                        'Los pasajeros te ven en la lista y negocian el monto.',
-                                        style: BolaPuebloUi.panelBody(context),
-                                      ),
-                                      const SizedBox(height: 14),
-                                      FilledButton.icon(
-                                        style:
-                                            BolaPuebloUi.filledPrimary.copyWith(
-                                          padding: const WidgetStatePropertyAll(
-                                            EdgeInsets.symmetric(
-                                                horizontal: 20, vertical: 18),
+                                child: BolaPuebloUi.bigAction(
+                                  context: context,
+                                  label: 'Voy para…',
+                                  icon: Icons.route_rounded,
+                                  onPressed: _guardando
+                                      ? null
+                                      : () => BolaPuebloDialogs.crearPublicacion(
+                                            context: context,
+                                            uid: user.uid,
+                                            rol: rol,
+                                            nombre: nombre,
+                                            tipo: 'oferta',
+                                            onBusy: (b) =>
+                                                setState(() => _guardando = b),
                                           ),
-                                        ),
-                                        onPressed: _guardando
-                                            ? null
-                                            : () => BolaPuebloDialogs
-                                                    .crearPublicacion(
-                                                  context: context,
-                                                  uid: user.uid,
-                                                  rol: rol,
-                                                  nombre: nombre,
-                                                  tipo: 'oferta',
-                                                  onBusy: (b) => setState(
-                                                      () => _guardando = b),
-                                                ),
-                                        icon: const Icon(Icons.route_rounded,
-                                            size: 26),
-                                        label: const Text(
-                                          'Voy para…',
-                                          style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w900,
-                                            letterSpacing: 0.2,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          const Icon(
-                                            Icons.touch_app_rounded,
-                                            color:
-                                                BolaPuebloTheme.accentSecondary,
-                                            size: 20,
-                                          ),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            child: Text(
-                                              'También podés ofertar en los pedidos de pasajeros que aparecen abajo. '
-                                              'Chat y teléfono se habilitan cuando el precio queda acordado.',
-                                              style: BolaPuebloUi.panelBody(
-                                                  context),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
                                 ),
                               ),
                             Padding(
@@ -532,11 +414,10 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
 
                           if (docs.isEmpty) {
                             final emptyMsg = esTaxista
-                                ? 'Publicá «Voy para…» o esperá pedidos de pasajeros; las tarjetas aparecen acá.'
+                                ? 'Publicá «Voy para» o esperá pedidos.'
                                 : bolaActivaCliente != null
-                                    ? 'Tu bola activa está en el tablero abajo. Negociá o seguí el viaje desde su tarjeta.'
-                                    : 'Cuando un conductor publique ruta u otro pasajero un pedido, lo verás abajo. '
-                                        'Usá «Pedir bola» arriba para publicar el tuyo.';
+                                    ? 'Tu viaje activo está abajo.'
+                                    : 'Aún no hay publicaciones. Tocá «Pedir bola».';
                             return ListView(
                               controller: scrollController,
                               padding: EdgeInsets.only(bottom: bottomPad),
@@ -607,9 +488,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                 if (j == 0) {
                                   return _bolaSeccionListaCliente(
                                     col,
-                                    titulo: 'Conductores · rutas publicadas',
-                                    subtitulo:
-                                        'Van de un sitio a otro con precio negociable; suele salir más barato que pedir taxi solo.',
+                                    titulo: 'Conductores',
                                   );
                                 }
                                 j--;
@@ -627,10 +506,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                 if (j == 0) {
                                   return _bolaSeccionListaCliente(
                                     col,
-                                    titulo: 'Pasajeros · pedidos publicados',
-                                    subtitulo: bolaActivaCliente != null
-                                        ? 'Otros viajeros buscan conductor; tu pedido activo está en el tablero.'
-                                        : 'Otros viajeros buscan conductor; podés ver la ruta. Para tu viaje usá «Pedir bola» arriba.',
+                                    titulo: 'Otros pasajeros',
                                     padding: const EdgeInsets.fromLTRB(
                                         16, 18, 16, 6),
                                   );

@@ -7,6 +7,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
+import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
+
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
@@ -444,6 +447,7 @@ class PoolRepo {
     String? agenciaNombre,
     String? agenciaLogoUrl,
     String? bannerUrl,
+    List<String>? bannerUrls,
     String? bannerVideoUrl,
     String? puntoSalida,
     double? puntoSalidaLat,
@@ -500,6 +504,12 @@ class PoolRepo {
           'agenciaNombre': agenciaNombre.trim(),
         if (agenciaLogoUrl != null && agenciaLogoUrl.trim().isNotEmpty)
           'agenciaLogoUrl': agenciaLogoUrl.trim(),
+        if (bannerUrls != null && bannerUrls.isNotEmpty)
+          'bannerUrls': bannerUrls
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .take(3)
+              .toList(),
         if (bannerUrl != null && bannerUrl.trim().isNotEmpty)
           'bannerUrl': bannerUrl.trim(),
         if (bannerVideoUrl != null && bannerVideoUrl.trim().isNotEmpty)
@@ -602,6 +612,7 @@ class PoolRepo {
     String? agenciaNombre,
     String? agenciaLogoUrl,
     String? bannerUrl,
+    List<String>? bannerUrls,
     String? bannerVideoUrl,
     String? puntoSalida,
     String? destino,
@@ -630,6 +641,12 @@ class PoolRepo {
         'agenciaNombre': agenciaNombre.trim(),
       if (agenciaLogoUrl != null && agenciaLogoUrl.trim().isNotEmpty)
         'agenciaLogoUrl': agenciaLogoUrl.trim(),
+      if (bannerUrls != null && bannerUrls.isNotEmpty)
+        'bannerUrls': bannerUrls
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .take(3)
+            .toList(),
       if (bannerUrl != null && bannerUrl.trim().isNotEmpty)
         'bannerUrl': bannerUrl.trim(),
       if (bannerVideoUrl != null && bannerVideoUrl.trim().isNotEmpty)
@@ -846,6 +863,8 @@ class PoolRepo {
   }) async {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) throw 'Debes iniciar sesión';
+    ClienteCuentaRealPolicy.exigirParaPedirViaje();
+    await ClienteVerificacionIdentidadService.exigirParaPedirViaje();
     final fx = FirebaseFunctions.instanceFor(region: 'us-central1');
     final callable = fx.httpsCallable('reservePoolSeats');
     final resp = await callable.call(<String, dynamic>{

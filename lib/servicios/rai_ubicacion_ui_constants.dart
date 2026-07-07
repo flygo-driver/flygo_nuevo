@@ -1,4 +1,4 @@
-/// Textos compartidos cliente + taxista (estilo Uber / inDriver).
+/// Textos compartidos cliente + taxista (estilo RAI).
 class RaiUbicacionUiConstants {
   RaiUbicacionUiConstants._();
 

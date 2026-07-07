@@ -47,6 +47,7 @@ class _PoolGiraContenidoFormSectionState
   late bool _ninosPermitidos;
   late bool _mascotasPermitidas;
   final List<PoolGiraItinerarioItem> _itinerario = <PoolGiraItinerarioItem>[];
+  final List<PoolGiraPuntoRecogida> _puntosRecogida = <PoolGiraPuntoRecogida>[];
 
   @override
   void initState() {
@@ -70,6 +71,7 @@ class _PoolGiraContenidoFormSectionState
     _ninosPermitidos = i.ninosPermitidos;
     _mascotasPermitidas = i.mascotasPermitidas;
     _itinerario.addAll(i.itinerario);
+    _puntosRecogida.addAll(i.puntosRecogida);
   }
 
   @override
@@ -110,6 +112,7 @@ class _PoolGiraContenidoFormSectionState
       mascotasPermitidas: _mascotasPermitidas,
       maxAsientosPorCompra: maxC.clamp(1, 99),
       itinerario: List<PoolGiraItinerarioItem>.from(_itinerario),
+      puntosRecogida: List<PoolGiraPuntoRecogida>.from(_puntosRecogida),
     );
   }
 
@@ -139,6 +142,13 @@ class _PoolGiraContenidoFormSectionState
   void _addItinerarioRow() {
     setState(() {
       _itinerario.add(const PoolGiraItinerarioItem(hora: '', actividad: ''));
+    });
+    _emit();
+  }
+
+  void _addPuntoRecogidaRow() {
+    setState(() {
+      _puntosRecogida.add(const PoolGiraPuntoRecogida(hora: '', lugar: ''));
     });
     _emit();
   }
@@ -272,6 +282,85 @@ class _PoolGiraContenidoFormSectionState
         _area('Reglas de la gira', _reglasCtrl),
         const SizedBox(height: 10),
         _area('Observaciones importantes', _observacionesCtrl, lines: 2),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Icon(Icons.alt_route, color: widget.accent, size: 18),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Recorrido de recogida',
+                style: TextStyle(
+                  color: widget.inputText,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _addPuntoRecogidaRow,
+              icon: const Icon(Icons.add_location_alt_outlined, size: 18),
+              label: const Text('Agregar parada'),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Text(
+            'Paradas y hora por donde pasas a buscar clientes antes de salir '
+            'al destino. Ej: 4:30 AM Lucerna · 6:00 AM Megacentro · 8:00 AM Sambil.',
+            style: TextStyle(
+              color: widget.labelColor,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+        ),
+        for (var i = 0; i < _puntosRecogida.length; i++) ...[
+          const SizedBox(height: 6),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 88,
+                child: TextFormField(
+                  initialValue: _puntosRecogida[i].hora,
+                  style: TextStyle(color: widget.inputText, fontSize: 13),
+                  decoration: _dec('Hora', hint: '4:30 AM'),
+                  onChanged: (v) {
+                    _puntosRecogida[i] = PoolGiraPuntoRecogida(
+                      hora: v,
+                      lugar: _puntosRecogida[i].lugar,
+                    );
+                    _emit();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextFormField(
+                  initialValue: _puntosRecogida[i].lugar,
+                  style: TextStyle(color: widget.inputText, fontSize: 13),
+                  decoration: _dec('Lugar de recogida', hint: 'Ej: Lucerna'),
+                  onChanged: (v) {
+                    _puntosRecogida[i] = PoolGiraPuntoRecogida(
+                      hora: _puntosRecogida[i].hora,
+                      lugar: v,
+                    );
+                    _emit();
+                  },
+                ),
+              ),
+              IconButton(
+                tooltip: 'Quitar',
+                onPressed: () {
+                  setState(() => _puntosRecogida.removeAt(i));
+                  _emit();
+                },
+                icon: Icon(Icons.close, color: widget.labelColor, size: 20),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 12),
         Row(
           children: [

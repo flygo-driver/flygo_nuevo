@@ -6,16 +6,17 @@ class PlataformaEconomia {
   PlataformaEconomia._();
 
   static double _comisionViajePct = 20;
-  static double _comisionGiraPct = 20;
 
-  /// Porcentaje global (0–100) usado en cotización y comisión en efectivo estándar.
+  /// Giras por cupos: % fijo del prepago (no sigue el % global del admin).
+  static const double comisionGiraPorcentajeFijo = 10.0;
+
+  /// Porcentaje global (0–100) usado en cotización y comisión en viajes / recargas.
   static double get comisionViajePorcentaje => _comisionViajePct;
 
-  /// Comisión RAI sobre **Giras por cupos** (`viajes_pool`): mismo % que [comisionViajePorcentaje]
-  /// (`config/comision`; legacy `comision_gira_porcentaje` solo si falta config/comision).
-  static double get comisionGiraPorcentaje => _comisionGiraPct;
+  /// Comisión RAI sobre **Giras por cupos** (`viajes_pool`): siempre [comisionGiraPorcentajeFijo].
+  static double get comisionGiraPorcentaje => comisionGiraPorcentajeFijo;
 
-  static double get factorComisionGira => _comisionGiraPct / 100.0;
+  static double get factorComisionGira => comisionGiraPorcentajeFijo / 100.0;
 
   /// Entero redondeado (etiquetas simples). Preferir [comisionViajePorcentaje] en cálculos.
   static int get comisionPorcento => _comisionViajePct.round();
@@ -26,11 +27,8 @@ class PlataformaEconomia {
     _comisionViajePct = p;
   }
 
-  static void syncComisionGiraPorcentajeFromRemote(double p) {
-    if (!p.isFinite) return;
-    if (p < 0 || p > 100) return;
-    _comisionGiraPct = p;
-  }
+  /// Sin efecto: giras usan [comisionGiraPorcentajeFijo]. Mantenido por compat de llamadas.
+  static void syncComisionGiraPorcentajeFromRemote(double p) {}
 
   /// Obsoleto: el cliente unifica con [comisionViajePorcentaje] en espejo Bola (`comisionPorcentaje` en doc).
   static const int comisionPorcentoBolaEspejo = 10;

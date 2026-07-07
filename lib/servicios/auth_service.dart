@@ -73,14 +73,26 @@ class AuthService {
     required User user,
     required String entradaRol,
   }) async {
-    final snap = await _db.collection('usuarios').doc(user.uid).get();
-    final rol = AppFlavorRolGuard.rolCanonicoDesdeMaps(usuario: snap.data());
-    if (!AppFlavorRolGuard.esRolOperativo(rol)) return;
-    AppFlavorRolGuard.assertRolEntradaPermitida(
-      rolFirestore: rol,
-      entradaRol: entradaRol,
-      email: user.email,
+    final uid = user.uid;
+    final snap = await _db.collection('usuarios').doc(uid).get();
+    final rolesSnap = await _db.collection('roles').doc(uid).get();
+    final rol = AppFlavorRolGuard.rolCanonicoDesdeMaps(
+      usuario: snap.data(),
+      roles: rolesSnap.data(),
     );
+    if (!AppFlavorRolGuard.esRolOperativo(rol)) return;
+    try {
+      AppFlavorRolGuard.assertRolEntradaPermitida(
+        rolFirestore: rol,
+        entradaRol: entradaRol,
+        email: user.email,
+      );
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'role-mismatch') {
+        await AppFlavorRolGuard.cerrarSesionTrasRechazo();
+      }
+      rethrow;
+    }
     if (!AppFlavorRolGuard.rolCompatibleConFlavor(rol)) {
       await AppFlavorRolGuard.rechazarSesionRolIncorrecto(
         rolFirestore: rol,

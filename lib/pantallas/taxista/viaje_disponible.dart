@@ -686,7 +686,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         _OfertaPoolPendiente(
           id: key,
           data: null,
-          titulo: 'Nueva Bola Ahorro',
+          titulo: 'Nueva oferta · Ahorra',
           cuerpo: '$origen → $destino',
         ),
       );
@@ -1962,7 +1962,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       case 'turismo':
         return '🏝️ TURISMO 🏝️';
       case 'bola_ahorro':
-        return '💚 BOLA AHORRO';
+        return '💚 AHORRA';
       case 'normal':
       default:
         return '🚗 NORMAL';
@@ -2653,7 +2653,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       builder: (context, ubicacionSnapshot) {
         // 🔥 MOSTRAR INMEDIATAMENTE CON CACHÉ MIENTRAS LLEGA LA REAL
         if (ubicacionSnapshot.connectionState == ConnectionState.waiting) {
-          // Para producción (tipo Uber/indriver): no bloqueamos la entrada
+          // Para producción RAI: no bloqueamos la entrada
           // al pool esperando GPS; usamos caché si existe o una posición
           // por defecto hasta llegar la real.
           if (_ubicacionCache != null) {
@@ -2759,7 +2759,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             unselectedLabelColor: pal.textMuted,
             dividerColor: cs.outlineVariant.withValues(alpha: 0.45),
             tabs: const [
-              Tab(text: 'BOLA'),
+              Tab(text: 'AHORRA'),
               Tab(text: 'AHORA'),
               Tab(text: 'PROGRAMADOS'),
             ],
@@ -2795,26 +2795,24 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                       _arrancarTimbres();
                     });
                   }
-                  final Object debtKey = Object.hash(
-                    uData?['tienePagoPendiente'] == true,
-                    (uData?['updatedAt'] ?? '').toString(),
-                  );
-                  return FutureBuilder<List<bool>>(
-                    key: ValueKey<Object>(debtKey),
-                    future: Future.wait<bool>([
-                      PagosTaxistaRepo.tieneBloqueoSemanal(u.uid),
-                      PagosTaxistaRepo.tieneBloqueoComisionEfectivo(u.uid),
-                    ]),
-                    builder: (context, pagoSnap) {
-                      final vals = pagoSnap.data;
-                      final bool deudaSemanal =
-                          vals != null && vals.isNotEmpty && vals[0];
+                  return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: fs.FirebaseFirestore.instance
+                        .collection('billeteras_taxista')
+                        .doc(u.uid)
+                        .snapshots(),
+                    builder: (context, billeSnap) {
+                      return FutureBuilder<bool>(
+                        future: PagosTaxistaRepo.tieneBloqueoSemanal(u.uid),
+                        builder: (context, semanalSnap) {
+                      final bool deudaSemanal = semanalSnap.data ?? false;
                       final bool deudaComision =
-                          vals != null && vals.length > 1 && vals[1];
+                          PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(
+                        billeSnap.data?.data(),
+                      );
                       final bool bloqueoPorBanderaUsuario =
                           uData?['tienePagoPendiente'] == true;
-                      // `deudaComision` = billetera (prepago/legacy). `tienePagoPendiente` incluye también
-                      // deuda pool ≥ umbral (misma regla que Cloud Functions).
+                      // `deudaComision` = billetera en vivo (prepago/legacy).
+                      // `tienePagoPendiente` incluye también deuda pool ≥ umbral (CF).
                       final bool bloqueadoPago =
                           deudaComision || bloqueoPorBanderaUsuario;
                       if (bloqueadoPago) {
@@ -2906,6 +2904,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                             ),
                           ),
                         ],
+                      );
+                        },
                       );
                     },
                   );

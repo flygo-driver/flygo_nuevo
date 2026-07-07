@@ -8,11 +8,12 @@ import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.d
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
+import 'package:flygo_nuevo/servicios/cliente_viaje_navegacion.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
-import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
+import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo, etiquetaBolaAhorroUi;
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
 import 'package:flygo_nuevo/widgets/promo_taxi_pista_animation.dart';
@@ -171,13 +172,13 @@ class SeleccionServicio extends StatelessWidget {
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
                       child: _HomePrimaryTripBlock(
                         onPedirAhora: () {
-                          unawaited(NavigationService.pushEnTabShell(
+                          unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
                             context,
                             const ProgramarViaje(modoAhora: true),
                           ));
                         },
                         onProgramar: () {
-                          unawaited(NavigationService.pushEnTabShell(
+                          unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
                             context,
                             const ProgramarViaje(modoAhora: false),
                           ));
@@ -302,7 +303,7 @@ class SeleccionServicio extends StatelessWidget {
                                 badge: const Icon(Icons.alt_route,
                                     color: Colors.white, size: 16),
                                 onTap: () {
-                                  unawaited(NavigationService.pushEnTabShell(
+                                  unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
                                     context,
                                     const ProgramarViajeMulti(),
                                   ));
@@ -339,7 +340,7 @@ class SeleccionServicio extends StatelessWidget {
                                 badge: const Icon(Icons.speed,
                                     color: Colors.white, size: 16),
                                 onTap: () {
-                                  unawaited(NavigationService.pushEnTabShell(
+                                  unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
                                     context,
                                     const ProgramarViaje(
                                       modoAhora: true,
@@ -569,7 +570,7 @@ class SeleccionServicio extends StatelessWidget {
     required bool modoAhora,
   }) {
     if (!context.mounted) return;
-    unawaited(NavigationService.pushEnTabShell(
+    unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
       context,
       ProgramarViaje(
         modoAhora: modoAhora,
@@ -608,7 +609,7 @@ class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
     final det = await RaiDireccionInteligenteSheet.mostrar(context);
     if (det == null || !mounted) return;
     if (!context.mounted) return;
-    unawaited(NavigationService.pushEnTabShell(
+    unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
       context,
       ProgramarViaje(
         modoAhora: !_programar,
@@ -1161,17 +1162,17 @@ class _FeaturedBolaAhorroCard extends StatelessWidget {
 
   String get _subtitle {
     if (bolaActiva == null) {
-      return 'Viajes compartidos hasta 50% más baratos';
+      return 'Viajes compartidos · hasta 50% menos';
     }
     switch ((bolaActiva!['estado'] ?? '').toString()) {
       case 'abierta':
-        return 'Pedido activo — tocá para ver tu bola en el tablero';
+        return 'Pedido activo — continuar';
       case 'acordada':
-        return 'Bola acordada — tocá para continuar el viaje';
+        return 'Precio acordado — continuar';
       case 'en_curso':
-        return 'Viaje en curso — tocá para abrir Mi viaje';
+        return 'En viaje — abrir';
       default:
-        return 'Tenés una bola activa — tocá para continuar';
+        return 'Ahorra activo — continuar';
     }
   }
 
@@ -1254,14 +1255,40 @@ class _FeaturedBolaAhorroCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Wrap(
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 6,
-                        runSpacing: 4,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Text('Bola', style: titleWord),
-                          const RaiHeaderLogoInline(height: 26),
-                          Text('Ahorro', style: titleWord),
+                          Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: useGradient
+                                  ? Colors.white.withValues(alpha: 0.22)
+                                  : const Color(0xFF00C853)
+                                      .withValues(alpha: 0.18),
+                              border: Border.all(
+                                color: useGradient
+                                    ? Colors.white.withValues(alpha: 0.55)
+                                    : const Color(0xFF00C853),
+                                width: 2,
+                              ),
+                            ),
+                            child: Center(
+                              child: Container(
+                                width: 12,
+                                height: 12,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: useGradient
+                                      ? Colors.white
+                                      : const Color(0xFF00C853),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(etiquetaBolaAhorroUi, style: titleWord),
                         ],
                       ),
                       const SizedBox(height: 4),

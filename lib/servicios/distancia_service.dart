@@ -3,8 +3,6 @@ import 'dart:math' as math;
 import 'tarifa_service_unificado.dart';
 
 class DistanciaService {
-  static const double _tarifaBase = 120.0; // RD$ (legacy, ver calcularPrecio)
-  static const double _tarifaPorKm = 45.0; // RD$ por km (legacy)
   static const double _minimo = 150.0;
 
   /// Tope técnico RD (interurbano largo, ej. 200–400 km por carretera).

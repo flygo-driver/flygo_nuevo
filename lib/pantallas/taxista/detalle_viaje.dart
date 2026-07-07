@@ -22,7 +22,6 @@ import '../../utils/viaje_pool_taxista_gate.dart';
 import '../../servicios/navegacion_externa_launcher.dart';
 import '../../servicios/navigation_service.dart';
 import '../../servicios/active_trip_service.dart';
-import 'viaje_en_curso_taxista.dart';
 
 class DetalleViaje extends StatefulWidget {
   final String viajeId;
@@ -885,7 +884,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
                           sinTaxista
                               ? (bolaNegociacionAbierta &&
                                       bolaPuebloId.isNotEmpty
-                                  ? 'Precio por Bola Ahorro: el cliente acepta una oferta en el tablero; '
+                                  ? 'Precio por Ahorra: el cliente acepta una oferta en el tablero; '
                                       'acá ves el trayecto y podés proponer monto abajo. No uses «Aceptar viaje».'
                                   : 'Este viaje no está disponible para aceptar en este momento.')
                               : 'Este viaje ya tiene chofer asignado o está cerrado.',
@@ -1149,7 +1148,7 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
           return const Padding(
             padding: EdgeInsets.all(12),
             child: Text(
-              'Publicación Bola no encontrada. Abrí Bola Ahorro desde el menú.',
+              'Publicación no encontrada. Abrí Ahorra desde el menú.',
               style: TextStyle(color: Colors.white54, fontSize: 13),
             ),
           );
@@ -1197,7 +1196,7 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Bola Ahorro (tiempo real)',
+                      'Ahorra (tiempo real)',
                       style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w800,
@@ -1211,7 +1210,7 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
               Text(
                 estado == 'abierta'
                     ? 'Las ofertas se guardan en el tablero; el cliente las ve al instante en «Ver ofertas y aceptar».'
-                    : 'Estado en tablero: $estado. Los detalles del traslado siguen en la app Bola Ahorro.',
+                    : 'Estado en tablero: $estado. Los detalles del traslado siguen en Ahorra.',
                 style: const TextStyle(
                     color: Colors.white70, fontSize: 13, height: 1.35),
               ),
@@ -1289,7 +1288,7 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
               ] else if (estado == 'abierta' && ownerUid == uid) ...[
                 const SizedBox(height: 10),
                 const Text(
-                  'Sos quien publicó: revisá ofertas en la pantalla Bola Ahorro.',
+                  'Sos quien publicó: revisá ofertas en la pantalla Ahorra.',
                   style: TextStyle(color: Colors.white54, fontSize: 12),
                 ),
               ],

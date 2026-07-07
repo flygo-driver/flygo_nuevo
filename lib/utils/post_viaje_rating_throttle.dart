@@ -2,7 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Limita cuánto se insiste con la pantalla de **calificación mutua** post-viaje
-/// (estilo Uber: no en cada carrera).
+/// (RAI: no en cada carrera).
 ///
 /// Solo cuenta viajes **completados del cliente** (SharedPreferences).
 /// El taxista no lleva contador: lee `solicitarCalificacionMutua` en el doc del viaje.

@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/utils/bancos_rd.dart';
+import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/pool_gira_contenido_form.dart';
@@ -187,11 +188,29 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
 
   String _fmtFecha(DateTime? dt) {
     if (dt == null) return 'Seleccionar';
-    return DateFormat('EEE d MMM, HH:mm', 'es').format(dt);
+    try {
+      return DateFormat('EEE d MMM, HH:mm', 'es').format(dt);
+    } catch (_) {
+      return DateFormat('d/M/y HH:mm').format(dt);
+    }
   }
 
   void _snack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Incluye valor legacy de Firestore aunque ya no esté en el catálogo fijo.
+  List<String> _catalogoDropdown(String actual, List<String> catalog) {
+    final v = actual.trim();
+    if (v.isEmpty || catalog.contains(v)) {
+      return List<String>.from(catalog);
+    }
+    return [v, ...catalog];
+  }
+
+  String? _dropdownValue(String actual) {
+    final v = actual.trim();
+    return v.isEmpty ? null : v;
   }
 
   Future<void> _guardar() async {
@@ -235,13 +254,15 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
     setState(() => _saving = true);
     try {
       final tieneVuelta = _sentido == 'ida_y_vuelta';
+      final banners = PoolGiraBannerUrls.fromPool(_pool);
       await PoolRepo.actualizarPoolGiraContenido(
         poolId: widget.poolId,
         contenidoExtra: _contenidoExtraParaGuardar(),
         origenTown: _origenTown.trim(),
         agenciaNombre: _agenciaNombre.trim().isEmpty ? null : _agenciaNombre.trim(),
         agenciaLogoUrl: (_pool['agenciaLogoUrl'] ?? '').toString(),
-        bannerUrl: (_pool['bannerUrl'] ?? '').toString(),
+        bannerUrls: banners.isEmpty ? null : banners,
+        bannerUrl: banners.isEmpty ? null : banners.first,
         bannerVideoUrl: (_pool['bannerVideoUrl'] ?? '').toString(),
         puntoSalida: _puntoSalida.trim(),
         destino: _destino.trim(),
@@ -307,12 +328,17 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
   }
 
   Widget _puebloOrigenDropdown(bool isDark) {
+    final opciones = _catalogoDropdown(
+      _origenTown,
+      PoolGiraPueblosOrigen.opciones,
+    );
     return DropdownButtonFormField<String?>(
       decoration: _fieldDeco('Pueblo (origen)', isDark: isDark),
-      value: _origenTown.isEmpty ? null : _origenTown,
+      // ignore: deprecated_member_use
+      value: _dropdownValue(_origenTown),
       items: [
         const DropdownMenuItem<String?>(value: null, child: Text('Seleccionar')),
-        ...PoolGiraPueblosOrigen.opciones.map(
+        ...opciones.map(
           (p) => DropdownMenuItem<String?>(value: p, child: Text(p)),
         ),
       ],
@@ -321,12 +347,14 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
   }
 
   Widget _bancoNombreDropdown(bool isDark) {
+    final opciones = _catalogoDropdown(_bancoNombre, BancosRd.nombres);
     return DropdownButtonFormField<String?>(
       decoration: _fieldDeco('Banco', isDark: isDark),
-      value: _bancoNombre.isEmpty ? null : _bancoNombre,
+      // ignore: deprecated_member_use
+      value: _dropdownValue(_bancoNombre),
       items: [
         const DropdownMenuItem<String?>(value: null, child: Text('Seleccionar')),
-        ...BancosRd.nombres.map(
+        ...opciones.map(
           (b) => DropdownMenuItem<String?>(value: b, child: Text(b)),
         ),
       ],
@@ -335,12 +363,15 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
   }
 
   Widget _bancoTipoCuentaDropdown(bool isDark) {
+    final opciones =
+        _catalogoDropdown(_bancoTipoCuenta, BancosRd.tiposCuentaGira);
     return DropdownButtonFormField<String?>(
       decoration: _fieldDeco('Tipo de cuenta', isDark: isDark),
-      value: _bancoTipoCuenta.isEmpty ? null : _bancoTipoCuenta,
+      // ignore: deprecated_member_use
+      value: _dropdownValue(_bancoTipoCuenta),
       items: [
         const DropdownMenuItem<String?>(value: null, child: Text('Seleccionar')),
-        ...BancosRd.tiposCuentaGira.map(
+        ...opciones.map(
           (t) => DropdownMenuItem<String?>(value: t, child: Text(t)),
         ),
       ],
@@ -413,7 +444,9 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
     final fieldFill = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC);
     final inputText = isDark ? Colors.white : const Color(0xFF101828);
     final tipo = (_pool['tipo'] ?? '').toString();
-    final nombreGira = (_pool['nombreGira'] ?? _servicioBadge).toString();
+    final nombreGira = _contenido.nombreGira.trim().isNotEmpty
+        ? _contenido.nombreGira.trim()
+        : _servicioBadge;
 
     return Scaffold(
       appBar: AppBar(

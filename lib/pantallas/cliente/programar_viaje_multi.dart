@@ -605,7 +605,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _distKm > 0;
   }
 
-  /// Uber-like: solo confirmar con cotización cerrada y ruta alineada.
+  /// RAI: solo confirmar con cotización cerrada y ruta alineada.
   bool get _puedeConfirmarViajeMulti {
     if (_cargando || (_calculoDebounce?.isActive ?? false)) return false;
     if (_origen == null || _destino == null) return false;

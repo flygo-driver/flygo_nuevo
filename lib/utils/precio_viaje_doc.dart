@@ -46,7 +46,7 @@ String etiquetaTipoServicioFactura(Map<String, dynamic> data) {
     case 'turismo':
       return 'Turismo';
     case 'bola_ahorro':
-      return 'Bola Ahorro';
+      return 'Ahorra';
     case 'normal':
       return 'Normal';
     case 'programado':

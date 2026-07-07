@@ -138,6 +138,12 @@ class GoogleAuthService {
           rolEntrada: rolEntrada,
         );
         _pendingEntradaRol = null;
+      } on FirebaseAuthException catch (e) {
+        _pendingEntradaRol = null;
+        if (e.code == 'role-mismatch') {
+          await AppFlavorRolGuard.cerrarSesionTrasRechazo();
+        }
+        rethrow;
       } catch (e) {
         debugPrint('GoogleAuth Firestore sync omitido: $e');
       }
@@ -303,6 +309,7 @@ class GoogleAuthService {
         rolFirestore: rolActual,
         entradaRol: rolEntrada,
         email: user.email,
+        telefono: user.phoneNumber,
       );
       if (!AppFlavorRolGuard.rolCompatibleConFlavor(rolActual)) {
         throw FirebaseAuthException(
@@ -310,6 +317,7 @@ class GoogleAuthService {
           message: AppFlavorRolGuard.mensajeMismatch(
             rolFirestore: rolActual,
             email: user.email,
+            telefono: user.phoneNumber,
           ),
         );
       }

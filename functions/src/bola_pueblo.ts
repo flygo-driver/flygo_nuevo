@@ -978,7 +978,6 @@ export const finalizarBolaPueblo = onCall(async (request) => {
       updates.estadoViajeBola = "finalizada";
       updates.finalizadaEn = FieldValue.serverTimestamp();
       if (d.comisionAplicada !== true && !mirrorViajeYaFacturadoEnApp) {
-        if (esEfectivo) {
         const bRef = db.collection("billeteras_taxista").doc(uidTx);
         const bSnap = await tx.get(bRef);
         const b0 = (bSnap.data() ?? {}) as Record<string, unknown>;
@@ -1063,12 +1062,8 @@ export const finalizarBolaPueblo = onCall(async (request) => {
           );
         }
         updates.comisionAplicada = true;
-        updates.estadoPago = "pagado";
+        updates.estadoPago = esEfectivo ? "pagado" : "pendiente";
         updates.facturaSaldoPrepagoComisionRd = saldo;
-        } else {
-          updates.comisionAplicada = true;
-          updates.estadoPago = "pendiente";
-        }
       } else if (d.comisionAplicada !== true && mirrorViajeYaFacturadoEnApp) {
         updates.comisionAplicada = true;
       }

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../widgets/admin_pool_comprobante_dialog.dart';
+import '../../widgets/admin_pool_cierre_recaudo_panel.dart';
 import '../../servicios/pool_repo.dart';
 import '../../utils/pool_recaudo_central.dart';
 import '../../utils/pools_producto_copy.dart';
@@ -862,10 +863,9 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                     final yaAnuladaTrasFinal =
                         d['anuladaTrasFinalizar'] == true;
                     final recaudoCentral = PoolRecaudoCentral.esPoolCentral(d);
-                    final recaudadoRai =
-                        ((d['montoRecaudadoRaiRd'] ?? 0) as num).toDouble();
-                    final netoOrg =
-                        ((d['montoNetoOrganizadorRd'] ?? 0) as num).toDouble();
+                    final cierreCentral = recaudoCentral
+                        ? PoolRecaudoCentral.cierreDesdePool(d)
+                        : null;
                     final liqEstado =
                         (d['liquidacionOrganizadorEstado'] ?? '').toString();
 
@@ -932,18 +932,11 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                             color: AdminUi.secondary(context),
                                             fontSize: 12),
                                       ),
-                                      if (recaudoCentral) ...[
-                                        Text(
-                                          'Recaudado RAI: RD\$ ${recaudadoRai.toStringAsFixed(0)} · '
-                                          'Neto org.: RD\$ ${netoOrg.toStringAsFixed(0)}'
-                                          '${liqEstado.isNotEmpty ? " · Liq.: $liqEstado" : ""}',
-                                          style: TextStyle(
-                                            color: AdminUi.progressAccent(context),
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                          ),
+                                      if (recaudoCentral && cierreCentral != null)
+                                        AdminPoolCierreRecaudoPanel(
+                                          cierre: cierreCentral,
+                                          liquidacionEstado: liqEstado,
                                         ),
-                                      ],
                                       if (d['cuposComisionRai'] != null)
                                         Text(
                                           'Comisión RAI: solo cupos vendidos en la app · tope ${d['cuposComisionRai']} cupos'

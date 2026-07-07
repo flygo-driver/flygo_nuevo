@@ -5,6 +5,9 @@ import 'dart:developer' as dev;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
+import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:geolocator/geolocator.dart';
@@ -320,6 +323,9 @@ class ViajesRepo {
     /// % comisión RAI (0–100) alineado con [PlataformaEconomia] para espejo Bola / cierre efectivo.
     double? comisionPorcentajeViaje,
   }) async {
+    ClienteCuentaRealPolicy.exigirParaPedirViaje();
+    await ClienteVerificacionIdentidadService.exigirParaPedirViaje();
+
     double _round6Coord(num v) => double.parse(v.toStringAsFixed(6));
 
     bool _coordsInvalidas(double lat, double lon) =>
@@ -392,7 +398,7 @@ class ViajesRepo {
     } else if (tipoSrvFinal == 'normal') {
       tipoVehiculoFormateado = '🚗 NORMAL';
     } else if (tipoSrvFinal == 'bola_ahorro') {
-      tipoVehiculoFormateado = '💚 BOLA AHORRO';
+      tipoVehiculoFormateado = '💚 AHORRA';
     }
 
     String estadoInicial;
@@ -824,7 +830,7 @@ class ViajesRepo {
       } else if (tipoServicio == 'normal') {
         tipoVehiculoFormateado = '🚗 NORMAL';
       } else if (tipoServicio == 'bola_ahorro') {
-        tipoVehiculoFormateado = '💚 BOLA AHORRO';
+        tipoVehiculoFormateado = '💚 AHORRA';
       }
 
       final String bolaPidClaim =
@@ -1100,7 +1106,7 @@ class ViajesRepo {
         } else if (tipoServicio == 'normal') {
           tipoVehiculoFormateado = '🚗 NORMAL';
         } else if (tipoServicio == 'bola_ahorro') {
-          tipoVehiculoFormateado = '💚 BOLA AHORRO';
+          tipoVehiculoFormateado = '💚 AHORRA';
         }
 
         final String bolaPidTx =

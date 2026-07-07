@@ -81,6 +81,10 @@ class TaxistaColaPostCompletar {
 
     unawaited(NotificationService.I.stopTimbre());
     PoolTimbreReentradaGuard.marcarTrasFinalizarViaje();
-    await NavigationService.irAlInicioTaxista(context: context);
+    if (context != null && context.mounted) {
+      await NavigationService.irAlInicioTaxista(context: context);
+    } else {
+      await NavigationService.irAlInicioTaxista();
+    }
   }
 }

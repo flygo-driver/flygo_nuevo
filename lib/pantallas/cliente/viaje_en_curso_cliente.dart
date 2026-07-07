@@ -2212,7 +2212,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     ActiveTripService.cancelarMantenimientoOverlayViaje();
     ClientePostViajeReopenGuard.markOpened(viajeId);
 
+    if (!mounted) return;
+
     try {
+      if (!context.mounted) return;
       await PostViajeClienteNav.abrirFacturaYFlujo(
         context: context,
         viajeId: viajeId,

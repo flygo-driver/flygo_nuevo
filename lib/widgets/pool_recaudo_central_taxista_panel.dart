@@ -29,12 +29,11 @@ class PoolRecaudoCentralTaxistaPanel extends StatelessWidget {
         ? const Color(0xFFF59E0B)
         : const Color(0xFFF59E0B);
 
-    final neto =
-        ((poolData['montoNetoOrganizadorRd'] ?? 0) as num).toDouble();
-    final comision =
-        ((poolData['montoComisionRaiRd'] ?? 0) as num).toDouble();
-    final recaudado =
-        ((poolData['montoRecaudadoRaiRd'] ?? 0) as num).toDouble();
+    final cierre = PoolRecaudoCentral.cierreDesdePool(poolData);
+    final neto = cierre.netoOrganizadorFinalRd;
+    final comision = cierre.comisionVentasRd;
+    final recaudado = cierre.brutoRecaudadoRd;
+    final prepagoAplicado = cierre.prepagoAplicadoRd;
     final liqEstado =
         (poolData['liquidacionOrganizadorEstado'] ?? '').toString().trim();
 
@@ -105,7 +104,8 @@ class PoolRecaudoCentralTaxistaPanel extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               'Verificado en RAI: ${FormatosMoneda.rd(recaudado)} · '
-              'Comisión RAI (transferencias): ${FormatosMoneda.rd(comision)}',
+              'Comisión 10%: ${FormatosMoneda.rd(comision)}'
+              '${prepagoAplicado > 0.01 ? ' · Prepago aplicado: ${FormatosMoneda.rd(prepagoAplicado)}' : ''}',
               style: TextStyle(color: textSecondary, fontSize: 12),
             ),
           ],

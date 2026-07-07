@@ -27,6 +27,27 @@ class PoolGiraItinerarioItem {
   }
 }
 
+/// Punto del recorrido de recogida: el chofer pasa por varios lugares a
+/// diferentes horas antes de salir al destino (ej. 4:30am Lucerna, 6am Megacentro).
+class PoolGiraPuntoRecogida {
+  const PoolGiraPuntoRecogida({required this.hora, required this.lugar});
+  final String hora;
+  final String lugar;
+
+  Map<String, dynamic> toMap() => <String, dynamic>{
+        'hora': hora.trim(),
+        'lugar': lugar.trim(),
+      };
+
+  static PoolGiraPuntoRecogida? fromMap(dynamic raw) {
+    if (raw is! Map) return null;
+    final h = (raw['hora'] ?? '').toString().trim();
+    final l = (raw['lugar'] ?? '').toString().trim();
+    if (h.isEmpty && l.isEmpty) return null;
+    return PoolGiraPuntoRecogida(hora: h, lugar: l);
+  }
+}
+
 /// Campos extendidos de contenido (Firestore en `viajes_pool`).
 class PoolGiraContenidoExtra {
   const PoolGiraContenidoExtra({
@@ -46,6 +67,7 @@ class PoolGiraContenidoExtra {
     this.mascotasPermitidas = false,
     this.maxAsientosPorCompra = 10,
     this.itinerario = const <PoolGiraItinerarioItem>[],
+    this.puntosRecogida = const <PoolGiraPuntoRecogida>[],
   });
 
   PoolGiraContenidoExtra copyWith({
@@ -65,6 +87,7 @@ class PoolGiraContenidoExtra {
     bool? mascotasPermitidas,
     int? maxAsientosPorCompra,
     List<PoolGiraItinerarioItem>? itinerario,
+    List<PoolGiraPuntoRecogida>? puntosRecogida,
   }) {
     return PoolGiraContenidoExtra(
       nombreGira: nombreGira ?? this.nombreGira,
@@ -83,6 +106,7 @@ class PoolGiraContenidoExtra {
       mascotasPermitidas: mascotasPermitidas ?? this.mascotasPermitidas,
       maxAsientosPorCompra: maxAsientosPorCompra ?? this.maxAsientosPorCompra,
       itinerario: itinerario ?? this.itinerario,
+      puntosRecogida: puntosRecogida ?? this.puntosRecogida,
     );
   }
 
@@ -102,6 +126,7 @@ class PoolGiraContenidoExtra {
   final bool mascotasPermitidas;
   final int maxAsientosPorCompra;
   final List<PoolGiraItinerarioItem> itinerario;
+  final List<PoolGiraPuntoRecogida> puntosRecogida;
 
   Map<String, dynamic> toFirestore() {
     final m = <String, dynamic>{};
@@ -130,6 +155,9 @@ class PoolGiraContenidoExtra {
     if (itinerario.isNotEmpty) {
       m['itinerario'] = itinerario.map((e) => e.toMap()).toList();
     }
+    if (puntosRecogida.isNotEmpty) {
+      m['puntosRecogida'] = puntosRecogida.map((e) => e.toMap()).toList();
+    }
     return m;
   }
 
@@ -140,6 +168,14 @@ class PoolGiraContenidoExtra {
       for (final item in rawIt) {
         final parsed = PoolGiraItinerarioItem.fromMap(item);
         if (parsed != null) it.add(parsed);
+      }
+    }
+    final List<PoolGiraPuntoRecogida> pr = <PoolGiraPuntoRecogida>[];
+    final rawPr = d['puntosRecogida'];
+    if (rawPr is List) {
+      for (final item in rawPr) {
+        final parsed = PoolGiraPuntoRecogida.fromMap(item);
+        if (parsed != null) pr.add(parsed);
       }
     }
     return PoolGiraContenidoExtra(
@@ -161,6 +197,7 @@ class PoolGiraContenidoExtra {
           ? (d['maxAsientosPorCompra'] as num).toInt().clamp(1, 99)
           : 10,
       itinerario: it,
+      puntosRecogida: pr,
     );
   }
 }

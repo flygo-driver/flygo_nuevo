@@ -64,7 +64,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Firebase Analytics (sin AdMob). Play Console → ID de publicidad → Sí → Análisis. -->
-    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+    <uses-permission
+        android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="merge" />
 
     <!-- Galería: Photo Picker (image_picker + main.dart). Estas líneas solo evitan que
          dependencias fusionen permisos de medios amplios; no se añaden al APK final. -->
@@ -101,6 +103,22 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name="com.google.firebase.auth.internal.RecaptchaActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            tools:replace="android:launchMode,android:theme" />
+
+        <activity
+            android:name="com.google.firebase.auth.internal.GenericIdpActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            tools:replace="android:launchMode,android:theme" />
+
         <!-- Tema normal de Flutter al volver del splash -->
         <meta-data
             android:name="io.flutter.embedding.android.NormalTheme"
@@ -111,6 +129,11 @@
         <meta-data
             android:name="flutter_deeplinking_enabled"
             android:value="false" />
+
+        <!-- Alineado con Play Console → ID de publicidad → Análisis (Firebase Analytics). -->
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="true" />
 
         <!-- Google Maps / Places -->
         <meta-data

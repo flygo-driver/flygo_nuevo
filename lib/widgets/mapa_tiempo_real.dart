@@ -9,7 +9,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 
-/// Mapa oscuro (Google Maps JSON) para resaltar la ruta blanca tipo Uber.
+/// Mapa oscuro (Google Maps JSON) para resaltar la ruta blanca estilo RAI.
 const String _kMapStyleBolaRealtimeDark = r'''
 [{"elementType":"geometry","stylers":[{"color":"#242f3e"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#8d9aa8"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#242f3e"}]},{"featureType":"road","elementType":"geometry","stylers":[{"color":"#38414e"}]},{"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#212a37"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#9ca5b3"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#746855"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#17263c"}]}]
 ''';

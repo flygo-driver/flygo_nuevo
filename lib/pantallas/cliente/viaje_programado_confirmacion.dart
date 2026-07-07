@@ -18,7 +18,7 @@ String _textoVentanaPoolCliente(int minutos) {
     return 'Poco antes de la recogida tu viaje entra al pool de conductores cercanos.';
   }
   if (minutos < 60) {
-    return 'Unos $minutos minutos antes de la recogida los conductores podrán ver y aceptar tu viaje (modelo tipo Uber).';
+    return 'Unos $minutos minutos antes de la recogida los conductores podrán ver y aceptar tu viaje en RAI.';
   }
   final h = minutos ~/ 60;
   final r = minutos % 60;

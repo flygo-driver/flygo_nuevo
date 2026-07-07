@@ -98,8 +98,10 @@ class BolaPuebloColors {
 
 /// Estilo visual tipo inDrive (solo UI; no afecta lógica ni datos).
 abstract final class BolaPuebloTheme {
-  static const Color accent = Color(0xFF12C97A);
-  static const Color accentSecondary = Color(0xFF5C6BC0);
+  static const Color accent = Color(0xFF00E676);
+  static const Color accentDark = Color(0xFF00C853);
+  static const Color accentSecondary = Color(0xFF7C4DFF);
+  static const Color accentWarm = Color(0xFFFF6D00);
 
   static ThemeData dialogTheme(BuildContext context) {
     final c = BolaPuebloColors.of(context);
@@ -293,63 +295,266 @@ abstract final class BolaPuebloUi {
     );
   }
 
-  /// Encabezado del panel deslizable (tablero).
-  static Widget boardHeader(
+  /// Encabezado compacto del panel (estilo inDriver).
+  static Widget compactBoardHeader(
     BuildContext context, {
-    required String subtitle,
+    required String title,
+    String? hint,
   }) {
     final c = BolaPuebloColors.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(11),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                BolaPuebloTheme.accent.withValues(alpha: 0.28),
-                BolaPuebloTheme.accent.withValues(alpha: 0.1),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            BolaPuebloTheme.accent.withValues(alpha: c.isDark ? 0.22 : 0.14),
+            BolaPuebloTheme.accentSecondary.withValues(alpha: c.isDark ? 0.14 : 0.08),
+          ],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: BolaPuebloTheme.accent.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [BolaPuebloTheme.accent, BolaPuebloTheme.accentDark],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.savings_rounded, color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: c.onSurface,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.35,
+                    height: 1.15,
+                  ),
+                ),
+                if (hint != null && hint.trim().isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    hint,
+                    style: TextStyle(
+                      color: c.onMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
               ],
             ),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-                color: BolaPuebloTheme.accent.withValues(alpha: 0.35)),
           ),
-          child: const Icon(Icons.hub_rounded,
-              color: BolaPuebloTheme.accent, size: 24),
+        ],
+      ),
+    );
+  }
+
+  /// Botón principal grande (Pedir bola / Voy para).
+  static Widget bigAction({
+    required BuildContext context,
+    required String label,
+    required IconData icon,
+    required VoidCallback? onPressed,
+    Color? background,
+    Color? foreground,
+  }) {
+    final bg = background ?? BolaPuebloTheme.accent;
+    final fg = foreground ?? Colors.white;
+    return SizedBox(
+      width: double.infinity,
+      height: 54,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: background == null
+              ? const LinearGradient(
+                  colors: [BolaPuebloTheme.accent, BolaPuebloTheme.accentDark],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                )
+              : null,
+          color: background,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: bg.withValues(alpha: 0.35),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
-        const SizedBox(width: 14),
-        Expanded(
+        child: FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: background == null ? Colors.transparent : bg,
+            foregroundColor: fg,
+            disabledBackgroundColor: bg.withValues(alpha: 0.45),
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.1,
+            ),
+          ),
+          onPressed: onPressed,
+          icon: Icon(icon, size: 22),
+          label: Text(label),
+        ),
+      ),
+    );
+  }
+
+  /// Botón secundario en fila (2 columnas).
+  static Widget secondaryTile({
+    required BuildContext context,
+    required String label,
+    required IconData icon,
+    required VoidCallback? onPressed,
+    Color? tint,
+  }) {
+    final c = BolaPuebloColors.of(context);
+    final color = tint ?? BolaPuebloTheme.accentSecondary;
+    return Material(
+      color: color.withValues(alpha: c.isDark ? 0.18 : 0.1),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
+              Icon(icon, color: color, size: 24),
+              const SizedBox(height: 6),
               Text(
-                'Tablero en vivo',
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: c.onSurface,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.45,
-                  height: 1.15,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: c.onMuted,
                   fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  height: 1.35,
-                  letterSpacing: 0.12,
+                  fontWeight: FontWeight.w700,
+                  height: 1.2,
                 ),
               ),
             ],
           ),
         ),
-      ],
+      ),
+    );
+  }
+
+  /// Separador de sección mínimo (sin párrafos).
+  static Widget sectionTitle(BuildContext context, String text) {
+    final c = BolaPuebloColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 12, 0, 8),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: c.onSurface,
+          fontSize: 14,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.2,
+        ),
+      ),
+    );
+  }
+
+  /// Chip de estado (activa, acordada, etc.).
+  static Widget statusChip(
+    BuildContext context, {
+    required String label,
+    Color? color,
+  }) {
+    final c = BolaPuebloColors.of(context);
+    final tint = color ?? BolaPuebloTheme.accent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: c.isDark ? 0.22 : 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: tint.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: tint,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+
+  /// Pasos compactos (3 iconos en fila).
+  static Widget quickSteps(
+    BuildContext context, {
+    required List<({IconData icon, String label})> steps,
+  }) {
+    final c = BolaPuebloColors.of(context);
+    return Row(
+      children: steps.map((s) {
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Column(
+              children: [
+                Icon(s.icon, color: BolaPuebloTheme.accent, size: 22),
+                const SizedBox(height: 4),
+                Text(
+                  s.label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: c.onMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  /// Encabezado del panel deslizable (tablero).
+  static Widget boardHeader(
+    BuildContext context, {
+    required String subtitle,
+  }) {
+    return compactBoardHeader(
+      context,
+      title: 'Viajes compartidos',
+      hint: subtitle,
     );
   }
 
@@ -731,7 +936,7 @@ abstract final class BolaPuebloUi {
     );
   }
 
-  /// Cabecera del paso actual (icono + título + subtítulo).
+  /// Cabecera del paso actual (icono + título + subtítulo opcional).
   static Widget crearPublicacionHero(
     BuildContext context, {
     required IconData icon,
@@ -740,33 +945,17 @@ abstract final class BolaPuebloUi {
   }) {
     final c = BolaPuebloColors.of(context);
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         Container(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: <Color>[
-                BolaPuebloTheme.accent.withValues(alpha: 0.42),
-                BolaPuebloTheme.accentSecondary.withValues(alpha: 0.2),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-                color: BolaPuebloTheme.accent.withValues(alpha: 0.42)),
-            boxShadow: <BoxShadow>[
-              BoxShadow(
-                color: BolaPuebloTheme.accent.withValues(alpha: 0.2),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
+            color: BolaPuebloTheme.accent.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(14),
           ),
-          child: Icon(icon, color: Colors.white, size: 26),
+          child: Icon(icon, color: BolaPuebloTheme.accent, size: 24),
         ),
-        const SizedBox(width: 14),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -775,16 +964,24 @@ abstract final class BolaPuebloUi {
                 title,
                 style: TextStyle(
                   color: c.onSurface,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -0.55,
-                  height: 1.12,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.4,
+                  height: 1.15,
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(subtitle,
-                  style:
-                      panelBody(context).copyWith(fontSize: 14, height: 1.45)),
+              if (subtitle.trim().isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: c.onMuted,
+                    fontSize: 13,
+                    height: 1.3,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

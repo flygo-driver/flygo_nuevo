@@ -4,12 +4,31 @@ import {
   PREPAGO_INSUFICIENTE_COMISION_VIAJE,
   comisionEstimadaRdDesdeViaje,
   prepagoInsuficienteParaViajeEfectivo,
+  viajeAplicaComisionPrepago,
   viajeEsEfectivoParaComisionPrepago,
 } from "../lib/prepago_comision_viaje.js";
 
-test("viajeEsEfectivoParaComisionPrepago", () => {
-  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Efectivo" }), true);
-  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Transferencia" }), false);
+test("viajeAplicaComisionPrepago — métodos RAI estándar", () => {
+  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Efectivo" }), true);
+  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Transferencia" }), true);
+  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Tarjeta" }), true);
+  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "" }), true);
+});
+
+test("viajeAplicaComisionPrepago — exclusiones", () => {
+  assert.equal(
+    viajeAplicaComisionPrepago({ tipoServicio: "bola_ahorro", metodoPago: "Efectivo" }),
+    false,
+  );
+  assert.equal(
+    viajeAplicaComisionPrepago({ recaudoCentral: true, metodoPago: "Efectivo" }),
+    true,
+    "giras recaudo central: comisión igual del prepago del taxista",
+  );
+});
+
+test("viajeEsEfectivoParaComisionPrepago delega al modelo unificado", () => {
+  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Transferencia" }), true);
 });
 
 test("prepago insuficiente: comisión mayor que saldo", () => {
@@ -30,7 +49,7 @@ test("prepago insuficiente: comisión mayor que saldo", () => {
   );
 });
 
-test("primer viaje efectivo gratis: no exige prepago por comisión", () => {
+test("primer viaje gratis: no exige prepago por comisión", () => {
   const viaje = { metodoPago: "Efectivo", precio: 2000 };
   const bille = { saldoPrepagoComisionRd: 0, comisionPendiente: 0 };
   assert.equal(
@@ -43,14 +62,14 @@ test("primer viaje efectivo gratis: no exige prepago por comisión", () => {
   );
 });
 
-test("transferencia: no aplica", () => {
+test("transferencia: aplica prepago igual que efectivo", () => {
   assert.equal(
     prepagoInsuficienteParaViajeEfectivo({
       billeData: { saldoPrepagoComisionRd: 0, primerViajeComisionGratisConsumido: true },
       viajeData: { metodoPago: "Transferencia", precio: 2000 },
       globalComisionPct: 18,
     }),
-    false,
+    true,
   );
 });
 

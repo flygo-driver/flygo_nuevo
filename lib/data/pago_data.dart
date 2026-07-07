@@ -2,7 +2,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/pagos/payment_gateway.dart' as pg;
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
-import 'package:flygo_nuevo/servicios/taxista_prepago_ledger.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 
@@ -173,62 +172,16 @@ class PagoData {
       final ganancia = (total - comision).clamp(0.0, double.infinity);
       final gananciaCents = _toCents(ganancia);
 
-      // 1) Billetera: primer efectivo gratis; luego descuenta legacy y/o saldo prepago.
-      final billeteraRef = _db.collection('billeteras_taxista').doc(taxistaId);
-      final billeSnap = await tx.get(billeteraRef);
-      final b = billeSnap.data() ?? <String, dynamic>{};
-      final pend = PagosTaxistaRepo.comisionPendienteDesdeBilletera(b);
-      final flag = PagosTaxistaRepo.primerViajeComisionGratisConsumido(b);
-      final saldoIni = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(b);
-      final comisionRd = comision.abs();
-      final Map<String, dynamic> bPatch = {
-        'updatedAt': FieldValue.serverTimestamp()
-      };
-      if (!flag && pend < 1e-6) {
-        bPatch['primerViajeComisionGratisConsumido'] = true;
-        await TaxistaPrepagoLedger.appendComisionViajeEfectivo(
+      // 1) Billetera: primer viaje gratis; luego descuenta legacy y/o saldo prepago.
+      if (PagosTaxistaRepo.viajeAplicaComisionPrepago(m)) {
+        await PagosTaxistaRepo.aplicarDescuentoComisionPrepagoEnTransaccion(
           tx: tx,
-          uidTaxista: taxistaId,
+          taxistaId: taxistaId,
           viajeId: viajeId,
-          fuente: 'pago_data_registrar_comision_cash',
-          comisionTotalRd: comisionRd,
-          pendienteAntes: pend,
-          saldoPrepagoAntes: saldoIni,
-          pendienteDespues: pend,
-          saldoPrepagoDespues: saldoIni,
-          primerEfectivoSinDescuento: true,
-        );
-      } else {
-        var p = pend;
-        var saldo = saldoIni;
-        final fromPend = p < comisionRd ? p : comisionRd;
-        p = _round2(p - fromPend);
-        final rem = _round2(comisionRd - fromPend);
-        final prepagoLibreIni =
-            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(b);
-        // Solo prepago libre (no invadir reserva de giras); el resto → legacy.
-        final cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
-        final faltantePrepago = _round2(rem - cubiertoPrepago);
-        saldo = _round2(saldo - cubiertoPrepago);
-        p = _round2(p + faltantePrepago);
-        final saldoFin = saldo;
-        bPatch['comisionPendiente'] = _round2(p);
-        bPatch['saldoPrepagoComisionRd'] = saldoFin;
-        bPatch['primerViajeComisionGratisConsumido'] = true;
-        await TaxistaPrepagoLedger.appendComisionViajeEfectivo(
-          tx: tx,
-          uidTaxista: taxistaId,
-          viajeId: viajeId,
-          fuente: 'pago_data_registrar_comision_cash',
-          comisionTotalRd: comisionRd,
-          pendienteAntes: pend,
-          saldoPrepagoAntes: saldoIni,
-          pendienteDespues: _round2(p),
-          saldoPrepagoDespues: saldoFin,
-          primerEfectivoSinDescuento: false,
+          comisionRd: comision.abs(),
+          fuenteLedger: 'pago_data_registrar_comision_cash',
         );
       }
-      tx.set(billeteraRef, bPatch, SetOptions(merge: true));
 
       // 2) Marcar el viaje con método efectivo + partidas + flags
       tx.update(viajeRef, {
@@ -338,8 +291,15 @@ class PagoData {
       final comisionCents = _toCents(comision);
       final gananciaCents = _toCents(gananciaTaxista);
 
-      // OJO: para transferencia NO tocamos billetera.comisionPendiente.
-      // La "pendiente" se calcula desde los viajes con liquidado==false.
+      if (PagosTaxistaRepo.viajeAplicaComisionPrepago(m)) {
+        await PagosTaxistaRepo.aplicarDescuentoComisionPrepagoEnTransaccion(
+          tx: tx,
+          taxistaId: uidTaxista,
+          viajeId: viajeId,
+          comisionRd: comision.abs(),
+          fuenteLedger: 'pago_data_registrar_transferencia_cliente',
+        );
+      }
 
       tx.update(viajeRef, {
         'metodoPago': 'Transferencia',
@@ -383,6 +343,7 @@ class PagoData {
     });
 
     if (actualizado) {
+      await PagosTaxistaRepo.sincronizarBloqueoOperativo(uidTaxista);
       // Asiento histórico a favor del taxista (por liquidar)
       await _pagos.add({
         'tipo': 'taxista',
@@ -468,60 +429,17 @@ class PagoData {
 
       // 2) Actualizar billetera del taxista (misma lógica prepago que el resto del sistema)
       final billeRef = _db.collection('billeteras_taxista').doc(taxistaId);
-      final billeSnap = await tx.get(billeRef);
-      final b0 = billeSnap.data() ?? <String, dynamic>{};
-      final pend = PagosTaxistaRepo.comisionPendienteDesdeBilletera(b0);
-      final flag = PagosTaxistaRepo.primerViajeComisionGratisConsumido(b0);
-      final saldoIni = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(b0);
-      final comisionRd = _round2(comision);
-      final Map<String, dynamic> bPatch = {
+      tx.set(billeRef, {
         'saldoAcumulado': FieldValue.increment(_round2(ganancia)),
         'updatedAt': FieldValue.serverTimestamp(),
-      };
-      if (!flag && pend < 1e-6) {
-        bPatch['primerViajeComisionGratisConsumido'] = true;
-        await TaxistaPrepagoLedger.appendComisionViajeEfectivo(
-          tx: tx,
-          uidTaxista: taxistaId,
-          viajeId: v.id,
-          fuente: 'pago_data_registrar_movimiento_por_viaje',
-          comisionTotalRd: comisionRd,
-          pendienteAntes: pend,
-          saldoPrepagoAntes: saldoIni,
-          pendienteDespues: pend,
-          saldoPrepagoDespues: saldoIni,
-          primerEfectivoSinDescuento: true,
-        );
-      } else {
-        var p = pend;
-        var saldo = saldoIni;
-        final fromPend = p < comisionRd ? p : comisionRd;
-        p = _round2(p - fromPend);
-        final rem = _round2(comisionRd - fromPend);
-        final prepagoLibreIni =
-            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(b0);
-        final cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
-        final faltantePrepago = _round2(rem - cubiertoPrepago);
-        saldo = _round2(saldo - cubiertoPrepago);
-        p = _round2(p + faltantePrepago);
-        final saldoFin = saldo;
-        bPatch['comisionPendiente'] = _round2(p);
-        bPatch['saldoPrepagoComisionRd'] = saldoFin;
-        bPatch['primerViajeComisionGratisConsumido'] = true;
-        await TaxistaPrepagoLedger.appendComisionViajeEfectivo(
-          tx: tx,
-          uidTaxista: taxistaId,
-          viajeId: v.id,
-          fuente: 'pago_data_registrar_movimiento_por_viaje',
-          comisionTotalRd: comisionRd,
-          pendienteAntes: pend,
-          saldoPrepagoAntes: saldoIni,
-          pendienteDespues: _round2(p),
-          saldoPrepagoDespues: saldoFin,
-          primerEfectivoSinDescuento: false,
-        );
-      }
-      tx.set(billeRef, bPatch, SetOptions(merge: true));
+      }, SetOptions(merge: true));
+      await PagosTaxistaRepo.aplicarDescuentoComisionPrepagoEnTransaccion(
+        tx: tx,
+        taxistaId: taxistaId,
+        viajeId: v.id,
+        comisionRd: _round2(comision),
+        fuenteLedger: 'pago_data_registrar_movimiento_por_viaje',
+      );
     });
     await PagosTaxistaRepo.sincronizarBloqueoOperativo(taxistaId);
   }

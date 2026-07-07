@@ -1,6 +1,4 @@
 // lib/servicios/places_service.dart
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 
@@ -111,19 +109,5 @@ class PlacesService {
       address: addr.isNotEmpty ? addr : det.name,
       latLng: SimpleLatLng(det.lat, det.lon),
     );
-  }
-
-  // -------------------- HTTP helper --------------------
-  Future<Map<String, dynamic>?> _getJson(Uri uri) async {
-    final client = HttpClient();
-    try {
-      final req = await client.getUrl(uri);
-      final res = await req.close();
-      if (res.statusCode != 200) return null;
-      final body = await res.transform(utf8.decoder).join();
-      return jsonDecode(body) as Map<String, dynamic>;
-    } finally {
-      client.close(force: true);
-    }
   }
 }

@@ -602,6 +602,14 @@ Contactanos por esta via para mas informacion y confirmacion.
                           ),
                       ],
                     ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Precio: RD\$ ${PoolRecaudoCentral.precioPorPersona(d).toStringAsFixed(0)} / pers',
+                      style: TextStyle(
+                        color: accent,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       f.format((d['fechaSalida'] as Timestamp).toDate()),

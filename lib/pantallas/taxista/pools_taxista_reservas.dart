@@ -50,7 +50,7 @@ class _PoolsTaxistaReservasState extends State<PoolsTaxistaReservas> {
   ) async {
     if (_cancelando) return;
     if (!await confirmarCancelarGiraSalida(context, poolData)) return;
-    if (!mounted) return;
+    if (!context.mounted) return;
     setState(() => _cancelando = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -64,7 +64,7 @@ class _PoolsTaxistaReservasState extends State<PoolsTaxistaReservas> {
         motivo: motivo,
         comisionDevuelta: dev,
       ));
-      if (!mounted) return;
+      if (!context.mounted) return;
       messenger.showSnackBar(
         const SnackBar(content: Text('Salida cancelada — desaparece del catálogo')),
       );

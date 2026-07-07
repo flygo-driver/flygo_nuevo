@@ -54,13 +54,22 @@ function toCents(v: unknown): number {
   return 0;
 }
 
-export function viajeEsEfectivoParaComisionPrepago(viaje: AnyMap): boolean {
+/** Viajes RAI estándar (efectivo/transferencia/tarjeta) usan prepago de comisión. */
+export function viajeAplicaComisionPrepago(viaje: AnyMap): boolean {
+  const tipo = String(viaje.tipoServicio ?? "normal").trim().toLowerCase();
+  if (tipo === "bola_ahorro") return false;
+
   const metodo = String(viaje.metodoPago ?? "").toLowerCase().trim();
-  if (!metodo) return false;
-  if (metodo.includes("transfer") || metodo.includes("tarjeta") || metodo.includes("card")) {
-    return false;
-  }
-  return metodo.includes("efectivo") || metodo === "cash";
+  if (!metodo) return true;
+  if (metodo.includes("efectivo") || metodo === "cash") return true;
+  if (metodo.includes("transfer")) return true;
+  if (metodo.includes("tarjeta") || metodo.includes("card")) return true;
+  return false;
+}
+
+/** @deprecated Usar [viajeAplicaComisionPrepago]. Mantenido por compatibilidad de imports. */
+export function viajeEsEfectivoParaComisionPrepago(viaje: AnyMap): boolean {
+  return viajeAplicaComisionPrepago(viaje);
 }
 
 export function precioCentsDesdeViaje(viaje: AnyMap): number {
@@ -85,13 +94,13 @@ export function comisionEstimadaRdDesdeViaje(viaje: AnyMap, globalPct: number): 
   return comisionCentsDesdePrecioCents(precioCents, pct) / 100;
 }
 
-/** true si el taxista no tiene prepago libre suficiente para la comisión de este viaje en efectivo. */
+/** true si el taxista no tiene prepago libre suficiente para la comisión de este viaje RAI. */
 export function prepagoInsuficienteParaViajeEfectivo(args: {
   billeData: AnyMap | undefined;
   viajeData: AnyMap;
   globalComisionPct: number;
 }): boolean {
-  if (!viajeEsEfectivoParaComisionPrepago(args.viajeData)) return false;
+  if (!viajeAplicaComisionPrepago(args.viajeData)) return false;
 
   const bData = args.billeData ?? {};
   const pend = comisionPendienteRdFromBilletera(bData);

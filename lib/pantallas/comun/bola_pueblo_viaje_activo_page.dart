@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/servicios/bola_nav_coordination_guard.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/utilidades/constante.dart' show etiquetaBolaAhorroUi;
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
@@ -147,7 +148,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Bola Ahorro')),
+        appBar: AppBar(title: Text(etiquetaBolaAhorroUi)),
         body: const Center(child: Text('Iniciá sesión')),
       );
     }
@@ -183,7 +184,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                 onPressed: () =>
                     NavigationService.popOrGoBolaTablero(context),
               ),
-              title: const Text('Bola Ahorro'),
+              title: Text(etiquetaBolaAhorroUi),
             ),
             body: Center(
               child: Column(
@@ -249,7 +250,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                 onPressed: () =>
                     NavigationService.popOrGoBolaTablero(context),
               ),
-              title: const Text('Bola Ahorro'),
+              title: Text(etiquetaBolaAhorroUi),
             ),
             body: Padding(
               padding: const EdgeInsets.all(24),
@@ -371,7 +372,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Viaje · Bola Ahorro',
+                      'Viaje · $etiquetaBolaAhorroUi',
                       style: BolaPuebloUi.screenTitleBola(context),
                     ),
                     Text(
@@ -1324,7 +1325,7 @@ class _BolaViajeTerminalPageState extends State<BolaViajeTerminalPage> {
           tooltip: 'Salir',
           onPressed: () => unawaited(_salir()),
         ),
-        title: const Text('Bola Ahorro'),
+        title: Text(etiquetaBolaAhorroUi),
       ),
       body: Padding(
         padding: const EdgeInsets.all(24),

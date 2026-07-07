@@ -213,9 +213,9 @@ class TaxistaServiciosTab extends StatelessWidget {
             Card(
               child: ListTile(
                 leading: Icon(Icons.swap_horiz_rounded, color: cs.outline),
-                title: const Text(
-                  'Bola ahorro',
-                  style: TextStyle(fontWeight: FontWeight.w600),
+                title: Text(
+                  etiquetaBolaAhorroUi,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 subtitle: const Text('Inicia sesión'),
                 enabled: false,
@@ -238,9 +238,9 @@ class TaxistaServiciosTab extends StatelessWidget {
                       Icons.swap_horiz_rounded,
                       color: bloqueado ? cs.outline : cs.secondary,
                     ),
-                    title: const Text(
-                      'Bola ahorro',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                    title: Text(
+                      etiquetaBolaAhorroUi,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     subtitle: Text(
                       bloqueado

@@ -2,7 +2,7 @@
  * Única fuente de verdad para ventanas de viajes programados (pool de conductores).
  * Duplicado en app: lib/utils/trip_publish_windows.dart — si cambias aquí, actualiza allí.
  */
-/** Misma ventana que Flutter `trip_publish_windows.dart` (estilo Uber: ~45 min antes de recogida). */
+/** Misma ventana que Flutter `trip_publish_windows.dart` (~45 min antes de recogida). */
 export const POOL_LEAD_MINUTES_PROGRAMADO = 45;
 export const READY_MINUTES_BEFORE_PICKUP = 45;
 export const AHORA_THRESHOLD_MINUTES = 15;

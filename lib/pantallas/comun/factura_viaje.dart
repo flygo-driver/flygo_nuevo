@@ -325,8 +325,11 @@ class _FacturaContentState extends State<_FacturaContent> {
   }
 
   String _lineaSaldoPrepagoFactura() {
-    if (!MetodoPagoViaje.esEfectivo(
-        (data['metodoPago'] ?? 'Efectivo').toString())) {
+    final String metodo = (data['metodoPago'] ?? 'Efectivo').toString();
+    final bool aplicaPrepago = MetodoPagoViaje.esEfectivo(metodo) ||
+        MetodoPagoViaje.esTransferencia(metodo) ||
+        MetodoPagoViaje.esTarjeta(metodo);
+    if (!aplicaPrepago) {
       return 'Saldo restante en tu billetera de recargas (comisión): No aplica';
     }
     final v = data['facturaSaldoPrepagoComisionRd'];
@@ -726,8 +729,8 @@ class _FacturaContentState extends State<_FacturaContent> {
                     ? 'Los montos reflejan el cierre en servidor. En efectivo, la comisión RAI '
                         'impacta tu prepago y/o comisión pendiente; regularizá en Mis pagos.'
                     : 'Los montos reflejan el cierre en servidor. En transferencia, cobrás el '
-                        'total al pasajero; la comisión RAI y el estado de tu cuenta (prepago, '
-                        'legacy o bloqueo) se gestionan en Mis pagos.',
+                        'neto al pasajero y la comisión RAI se descuenta de tu prepago (recarga); '
+                        'si no alcanzó, queda como comisión pendiente. Regularizá en Mis pagos.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: cs.onSurfaceVariant,
                       height: 1.35,
@@ -1036,8 +1039,8 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
 
             final String pie = esTransferencia
                 ? 'Este viaje se cobró por transferencia al pasajero (arriba: datos bancarios y comprobante). '
-                    'La comisión RAI de este servicio figura en «Liquidación RAI». '
-                    'Tu prepago, deuda legacy y bloqueos siguen en Mis pagos → recarga con bauche → revisión del administrador.'
+                    'Al cerrar, la comisión RAI se descontó de tu prepago (arriba «Saldo prepago tras este cierre»). '
+                    'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.'
                 : 'Este viaje fue en efectivo: al cerrar, el servidor actualizó tu prepago (arriba «Saldo prepago tras este cierre»). '
                     'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.';
 
@@ -1089,7 +1092,7 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-                if (esEfectivo)
+                if (esEfectivo || esTransferencia)
                   _Row(
                     icon: Icons.account_balance_wallet_outlined,
                     iconColor: cs.primary,
@@ -1098,14 +1101,6 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
                       lineaSaldoPrepagoFactura,
                       saldoPrepago,
                     ),
-                  )
-                else
-                  _Row(
-                    icon: Icons.info_outline_rounded,
-                    iconColor: cs.secondary,
-                    label: 'Prepago en este cierre',
-                    value:
-                        'No se descuenta (transferencia). Saldo actual: ${FormatosMoneda.rd(disponible)}',
                   ),
                 _Row(
                   icon: Icons.savings_outlined,

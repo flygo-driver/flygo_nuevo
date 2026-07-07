@@ -2,8 +2,6 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'package:flygo_nuevo/config/plataforma_economia.dart';
-
 /// Umbrales de cancelación “abusiva” en giras (pruebas en calle vía `configuracion_globals/pruebas`).
 class GiraAbusoRemote {
   const GiraAbusoRemote({
@@ -18,8 +16,8 @@ class GiraAbusoRemote {
   final bool disabled;
 }
 
-/// Giras: prioriza `config/comision.porcentaje` (mismo % que viajes estándar).
-/// Si falta, lee `configuracion_globals/app.comision_gira_porcentaje` (legacy).
+/// Giras por cupos: % fijo en [PlataformaEconomia.comisionGiraPorcentajeFijo] (10%).
+/// Este refresh solo mantiene compat; no altera el % de giras.
 class ConfiguracionGlobalsService {
   ConfiguracionGlobalsService._();
 
@@ -28,36 +26,11 @@ class ConfiguracionGlobalsService {
   static const Duration _ttl = Duration(seconds: 60);
   static Timer? _timer;
 
-  static double _normalizeGiraPct(num raw) {
-    double v = raw.toDouble();
-    if (v > 0 && v <= 1.001) v *= 100;
-    return v.clamp(0.0, 100.0);
-  }
-
   static Future<void> refreshGiraComision({bool force = false}) async {
     if (!force && _lastFetch != null) {
       if (DateTime.now().difference(_lastFetch!) < _ttl) return;
     }
-    try {
-      final comSnap = await _db.collection('config').doc('comision').get();
-      final rawCom = comSnap.data()?['porcentaje'];
-      if (rawCom is num && rawCom.isFinite) {
-        PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(
-          rawCom.toDouble().clamp(0.0, 100.0),
-        );
-        _lastFetch = DateTime.now();
-        return;
-      }
-      final snap =
-          await _db.collection('configuracion_globals').doc('app').get();
-      final raw = snap.data()?['comision_gira_porcentaje'];
-      final double g = raw is num ? _normalizeGiraPct(raw) : 20.0;
-      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(g);
-      _lastFetch = DateTime.now();
-    } catch (_) {
-      PlataformaEconomia.syncComisionGiraPorcentajeFromRemote(20.0);
-      _lastFetch = DateTime.now();
-    }
+    _lastFetch = DateTime.now();
   }
 
   static void startPeriodicRefresh() {

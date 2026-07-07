@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_cuenta_tab.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_experiencias_tab.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
@@ -373,7 +374,19 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
         ),
       );
     }
-    return Scaffold(
+    final Color barSurface = Theme.of(context).colorScheme.surface;
+    final bool barOscura =
+        ThemeData.estimateBrightnessForColor(barSurface) == Brightness.dark;
+    final overlayBarra = SystemUiOverlayStyle(
+      systemNavigationBarColor: barSurface,
+      systemNavigationBarIconBrightness:
+          barOscura ? Brightness.light : Brightness.dark,
+      systemNavigationBarContrastEnforced: false,
+    );
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayBarra,
+      child: Scaffold(
       floatingActionButton: const RaiAsistenteFab(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Column(
@@ -399,36 +412,45 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
           ),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) {
-          setState(() => _index = i);
-          if (i == _kTabExperiencias) _notificarDeepLinkSiListo();
-        },
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: 'Inicio',
+      bottomNavigationBar: ColoredBox(
+        color: barSurface,
+        child: SafeArea(
+          top: false,
+          child: NavigationBar(
+            backgroundColor: barSurface,
+            surfaceTintColor: Colors.transparent,
+            selectedIndex: _index,
+            onDestinationSelected: (i) {
+              setState(() => _index = i);
+              if (i == _kTabExperiencias) _notificarDeepLinkSiListo();
+            },
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home_rounded),
+                label: 'Inicio',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.directions_car_outlined),
+                selectedIcon: Icon(Icons.directions_car),
+                label: 'Mis viajes',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.travel_explore_outlined),
+                selectedIcon: Icon(Icons.travel_explore),
+                label: 'Experiencias',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.person_outline),
+                selectedIcon: Icon(Icons.person_rounded),
+                label: 'Cuenta',
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.directions_car_outlined),
-            selectedIcon: Icon(Icons.directions_car),
-            label: 'Mis viajes',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.travel_explore_outlined),
-            selectedIcon: Icon(Icons.travel_explore),
-            label: 'Experiencias',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: 'Cuenta',
-          ),
-        ],
+        ),
       ),
+    ),
     );
   }
 

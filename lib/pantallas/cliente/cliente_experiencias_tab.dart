@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_mis_giras.dart';
-import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
+import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo, etiquetaBolaAhorroUi;
 import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
@@ -99,9 +99,9 @@ class ClienteExperienciasTab extends StatelessWidget {
                 ? 'Viajes compartidos · tablero'
                 : switch ((activa['estado'] ?? '').toString()) {
                     'abierta' => 'Pedido activo · tocá para continuar',
-                    'acordada' => 'Bola acordada · Mi viaje',
+                    'acordada' => 'Ahorra acordado · Mi viaje',
                     'en_curso' => 'Viaje en curso · Mi viaje',
-                    _ => 'Bola activa · tocá para continuar',
+                    _ => 'Ahorra activo · tocá para continuar',
                   };
             return Card(
               clipBehavior: Clip.antiAlias,
@@ -113,9 +113,9 @@ class ClienteExperienciasTab extends StatelessWidget {
                   foregroundColor: cs.onSecondaryContainer,
                   child: const Icon(Icons.swap_horiz_rounded),
                 ),
-                title: const Text(
-                  'Bola ahorro',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                title: Text(
+                  etiquetaBolaAhorroUi,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
                 ),
                 subtitle: Text(subtitle),
                 trailing: Icon(Icons.chevron_right, color: cs.outline),

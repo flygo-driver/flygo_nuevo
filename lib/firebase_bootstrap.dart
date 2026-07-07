@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'package:flygo_nuevo/servicios/phone_auth_config.dart';
+
 import 'firebase_options.dart';
 
 /// Inicialización idempotente: evita carreras y el error
@@ -81,6 +83,7 @@ class FirebaseBootstrap {
         );
       }
       await _configureFirestoreForScale();
+      await PhoneAuthConfig.aplicarTrasFirebaseInit();
       _didInit = true;
       return;
     }
@@ -92,12 +95,14 @@ class FirebaseBootstrap {
         'bucket=${options.storageBucket}',
       );
       await _configureFirestoreForScale();
+      await PhoneAuthConfig.aplicarTrasFirebaseInit();
       _didInit = true;
     } on FirebaseException catch (e) {
       if (e.code == 'duplicate-app' ||
           e.code == 'core/duplicate-app' ||
           (e.message ?? '').toLowerCase().contains('already exists')) {
         await _configureFirestoreForScale();
+        await PhoneAuthConfig.aplicarTrasFirebaseInit();
         _didInit = true;
         return;
       }
@@ -107,6 +112,7 @@ class FirebaseBootstrap {
       final msg = e.toString().toLowerCase();
       if (msg.contains('duplicate') && msg.contains('already exists')) {
         await _configureFirestoreForScale();
+        await PhoneAuthConfig.aplicarTrasFirebaseInit();
         _didInit = true;
         return;
       }

@@ -17,6 +17,7 @@ import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/utils/bancos_rd.dart';
+import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_gira_contenido_form.dart';
@@ -111,7 +112,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   final TextEditingController _incluyeCtrl = TextEditingController();
   String _agenciaNombre = '';
   String _agenciaLogoUrl = '';
-  String _bannerUrl = '';
+  final List<String> _bannerUrls = <String>[];
   String _bannerVideoUrl = '';
   String _choferTelefono = '';
   String _choferWhatsApp = '';
@@ -166,7 +167,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       _recaudoCentral = FinanceConfigService.poolRecaudoCentralHabilitado;
       if (_recaudoCentral) {
         _deposit = 1.0;
-        _fee = PlataformaEconomia.comisionViajePorcentaje / 100.0;
+        _fee = PlataformaEconomia.comisionGiraPorcentaje / 100.0;
       }
     });
   }
@@ -211,7 +212,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       minParaConfirmar: minC,
       capacidad: cap,
     );
-    final pct = PlataformaEconomia.comisionViajePorcentaje / 100.0;
+    final pct = PlataformaEconomia.comisionGiraPorcentaje / 100.0;
     return cupos * precio * pct;
   }
 
@@ -296,7 +297,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       return;
     }
 
-    if (_bannerUrl.trim().isEmpty && _bannerVideoUrl.trim().isEmpty) {
+    if (_bannerUrls.isEmpty && _bannerVideoUrl.trim().isEmpty) {
       _snack(
         'Sube al menos una imagen o video banner para publicar la salida.',
       );
@@ -359,7 +360,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         ? 1.0
         : (_deposit > 1 ? _deposit / 100.0 : _deposit);
     final double fee = _recaudoCentral
-        ? PlataformaEconomia.comisionViajePorcentaje / 100.0
+        ? PlataformaEconomia.comisionGiraPorcentaje / 100.0
         : (_fee > 1 ? _fee / 100.0 : _fee);
 
     setState(() => _loading = true);
@@ -375,6 +376,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
       final tipoInput = _tipo.trim();
       final tipoCanon = _tipoCanonico(tipoInput);
+      final banners = PoolGiraBannerUrls.sanitizeForSave(_bannerUrls);
       final CrearPoolResult creado = await PoolRepo.crearPool(
         tipo: tipoCanon,
         sentido: _sentido,
@@ -393,7 +395,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
             _agenciaNombre.trim().isEmpty ? null : _agenciaNombre.trim(),
         agenciaLogoUrl:
             _agenciaLogoUrl.trim().isEmpty ? null : _agenciaLogoUrl.trim(),
-        bannerUrl: _bannerUrl.trim().isEmpty ? null : _bannerUrl.trim(),
+        bannerUrls: banners.isEmpty ? null : banners,
+        bannerUrl: banners.isEmpty ? null : banners.first,
         bannerVideoUrl:
             _bannerVideoUrl.trim().isEmpty ? null : _bannerVideoUrl.trim(),
         puntoSalida: _puntoSalida.trim(),
@@ -776,7 +779,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
                       PoolsProductoCopy.comisionRaiFormula(
-                        PlataformaEconomia.comisionViajePorcentaje,
+                        PlataformaEconomia.comisionGiraPorcentaje,
                       ),
                       style: TextStyle(
                         color: context._poolsCrearPalette.subtitleMuted,
@@ -807,7 +810,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                           capacidad: _capacidad ?? 0,
                         );
                         final prep = _prepagoApartadoEstimadoRd();
-                        final pct = PlataformaEconomia.comisionViajePorcentaje;
+                        final pct = PlataformaEconomia.comisionGiraPorcentaje;
                         final precioTxt = (_precio ?? 0).toStringAsFixed(0);
                         return Container(
                           width: double.infinity,
@@ -846,7 +849,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                         ),
                       ),
                       child: Text(
-                        '${PoolsProductoCopy.formRecaudoCentralPagoFijo(PlataformaEconomia.comisionViajePorcentaje)}\n\n'
+                        '${PoolsProductoCopy.formRecaudoCentralPagoFijo(PlataformaEconomia.comisionGiraPorcentaje)}\n\n'
                         'Tu cuenta bancaria (más abajo) es solo para que RAI te transfiera tu neto.',
                         style: TextStyle(
                           color: context._poolsCrearPalette.inputText,
@@ -1599,43 +1602,93 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
   Widget _bannerPicker() {
     final p = context._poolsCrearPalette;
-    final hasBanner = _bannerUrl.trim().isNotEmpty;
+    final photos = List<String>.from(_bannerUrls);
+    final hasPhotos = photos.isNotEmpty;
     final hasVideo = _bannerVideoUrl.trim().isNotEmpty;
+    final canAddPhoto = photos.length < PoolGiraBannerUrls.maxCount;
+    final previewUrl = hasPhotos ? photos.first : '';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Banner e imagen / video promocional (opcional)',
-            style: TextStyle(color: p.labelMuted)),
-        const SizedBox(height: 8),
+        Text(
+          'Fotos y video promocional',
+          style: TextStyle(
+            color: p.labelMuted,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Hasta ${PoolGiraBannerUrls.maxCount} fotos del banner + video opcional. '
+          'Sube al menos una foto o un video.',
+          style: TextStyle(color: p.subtitleMuted, fontSize: 12),
+        ),
+        const SizedBox(height: 10),
         ClipRRect(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           child: Container(
             width: double.infinity,
-            height: 120,
+            height: 148,
             color: p.placeholderBox,
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (hasBanner)
+                if (hasPhotos)
                   Image.network(
-                    _bannerUrl,
+                    previewUrl,
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => Icon(
-                        Icons.image_not_supported,
-                        color: p.faintIcon,
-                        size: 36),
+                      Icons.image_not_supported,
+                      color: p.faintIcon,
+                      size: 36,
+                    ),
                   )
                 else if (hasVideo)
                   Center(
-                    child: Icon(Icons.play_circle_outline,
-                        color: p.accent, size: 56),
+                    child: Icon(
+                      Icons.play_circle_outline,
+                      color: p.accent,
+                      size: 56,
+                    ),
                   )
                 else
                   Center(
-                    child: Text('Sin banner ni video',
-                        style: TextStyle(color: p.faintIcon)),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.photo_library_outlined,
+                            color: p.faintIcon, size: 40),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Agrega fotos del tour',
+                          style: TextStyle(color: p.faintIcon, fontSize: 13),
+                        ),
+                      ],
+                    ),
                   ),
-                if (hasVideo && hasBanner)
+                if (hasPhotos && photos.length > 1)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        '${photos.length} fotos',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (hasVideo && hasPhotos)
                   Align(
                     alignment: Alignment.center,
                     child: Container(
@@ -1651,20 +1704,43 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
             ),
           ),
         ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 92,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: photos.length + (canAddPhoto ? 1 : 0),
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, i) {
+              if (i < photos.length) {
+                return _bannerThumbTile(
+                  url: photos[i],
+                  index: i,
+                  palette: p,
+                );
+              }
+              return _bannerAddThumbTile(palette: p);
+            },
+          ),
+        ),
         const SizedBox(height: 8),
         OutlinedButton.icon(
-          onPressed: _subiendoBanner ? null : _subirBannerViaje,
+          onPressed: (_subiendoBanner || !canAddPhoto)
+              ? null
+              : _subirBannerViaje,
           icon: _subiendoBanner
               ? const SizedBox(
                   width: 16,
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.photo_library_outlined),
+              : const Icon(Icons.add_photo_alternate_outlined),
           label: Text(
             _subiendoBanner
                 ? 'Subiendo…'
-                : (hasBanner ? 'Cambiar imagen banner' : 'Subir imagen banner'),
+                : (hasPhotos
+                    ? 'Agregar otra foto (${photos.length}/${PoolGiraBannerUrls.maxCount})'
+                    : 'Subir foto del banner'),
           ),
         ),
         const SizedBox(height: 6),
@@ -1697,11 +1773,161 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
           ),
         const SizedBox(height: 6),
         Text(
-          'Imagen: hasta 5 MB, horizontal recomendado. Video: hasta 40 MB; preferí MP4 (H.264): en Android los .MOV de iPhone a veces no se reproducen en la app.',
+          'Fotos: hasta 5 MB c/u, horizontal recomendado. Video: hasta 40 MB; preferí MP4 (H.264): en Android los .MOV de iPhone a veces no se reproducen en la app.',
           style: TextStyle(color: p.subtitleMuted, fontSize: 12),
         ),
       ],
     );
+  }
+
+  Widget _bannerThumbTile({
+    required String url,
+    required int index,
+    required ({
+      bool isDark,
+      Color scaffoldBg,
+      Color appBarBg,
+      Color foreground,
+      Color accent,
+      Color accentSoft,
+      Color fieldFill,
+      Color inputText,
+      Color subtitleMuted,
+      Color labelMuted,
+      Color cardGradA,
+      Color cardGradB,
+      Color cardBorder,
+      Color chipBg,
+      Color chipSelectedTint,
+      Color chipListTint,
+      Color tealBtnBg,
+      Color tealBtnFg,
+      Color placeholderBox,
+      Color faintIcon,
+    }) palette,
+  }) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: 92,
+            height: 92,
+            color: palette.placeholderBox,
+            child: Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Icon(
+                Icons.broken_image,
+                color: palette.faintIcon,
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          top: -6,
+          right: -6,
+          child: Material(
+            color: Colors.red.shade700,
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: _subiendoBanner ? null : () => _quitarBannerFoto(index),
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 16, color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+        if (index == 0)
+          Positioned(
+            left: 6,
+            bottom: 6,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: palette.accent.withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Principal',
+                style: TextStyle(
+                  color: palette.tealBtnFg,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _bannerAddThumbTile({
+    required ({
+      bool isDark,
+      Color scaffoldBg,
+      Color appBarBg,
+      Color foreground,
+      Color accent,
+      Color accentSoft,
+      Color fieldFill,
+      Color inputText,
+      Color subtitleMuted,
+      Color labelMuted,
+      Color cardGradA,
+      Color cardGradB,
+      Color cardBorder,
+      Color chipBg,
+      Color chipSelectedTint,
+      Color chipListTint,
+      Color tealBtnBg,
+      Color tealBtnFg,
+      Color placeholderBox,
+      Color faintIcon,
+    }) palette,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _subiendoBanner ? null : _subirBannerViaje,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          width: 92,
+          height: 92,
+          decoration: BoxDecoration(
+            color: palette.fieldFill,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: palette.accent.withValues(alpha: 0.45),
+              width: 1.5,
+            ),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.add_a_photo_outlined, color: palette.accent, size: 28),
+              const SizedBox(height: 4),
+              Text(
+                'Agregar',
+                style: TextStyle(
+                  color: palette.accentSoft,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _quitarBannerFoto(int index) {
+    if (index < 0 || index >= _bannerUrls.length) return;
+    setState(() => _bannerUrls.removeAt(index));
   }
 
   Widget _paradasEditor() {
@@ -1811,6 +2037,12 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   }
 
   Future<void> _subirBannerViaje() async {
+    if (_bannerUrls.length >= PoolGiraBannerUrls.maxCount) {
+      _snack(
+        'Ya tienes ${PoolGiraBannerUrls.maxCount} fotos. Quita una para agregar otra.',
+      );
+      return;
+    }
     final x = await _picker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 85,
@@ -1835,8 +2067,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
       if (!mounted) return;
-      setState(() => _bannerUrl = url);
-      _snack('✅ Banner cargado');
+      setState(() => _bannerUrls.add(url));
+      _snack('✅ Foto ${_bannerUrls.length}/${PoolGiraBannerUrls.maxCount} cargada');
     } catch (e) {
       _snack('❌ Error subiendo banner: $e');
     } finally {

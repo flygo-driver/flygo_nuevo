@@ -11,10 +11,12 @@ import 'package:flygo_nuevo/pantallas/taxista/bloqueado_por_pagos.dart';
 import 'package:flygo_nuevo/pantallas/taxista/completar_registro_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
+import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
+import 'package:flygo_nuevo/widgets/cliente_cuenta_real_wall.dart';
 import 'package:flygo_nuevo/widgets/verify_email_gate.dart';
 
 /// Splash unificado post-arranque nativo (misma imagen que [flutter_native_splash]).
@@ -249,6 +251,9 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'cliente') {
+      if (kReleaseMode && !ClienteCuentaRealPolicy.tieneCuentaReal(user)) {
+        return const ClienteCuentaRealWall();
+      }
       return const VerifyEmailGate(
         childWhenVerified: ClienteShellWithDeepLink(),
       );
@@ -295,6 +300,9 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'cliente') {
+      if (kReleaseMode && !ClienteCuentaRealPolicy.tieneCuentaReal(user)) {
+        return const ClienteCuentaRealWall();
+      }
       return const VerifyEmailGate(
         childWhenVerified: ClienteShellWithDeepLink(),
       );

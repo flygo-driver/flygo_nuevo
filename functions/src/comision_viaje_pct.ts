@@ -3,6 +3,9 @@ import { getFirestore } from "firebase-admin/firestore";
 const COMISION_DOC = "comision";
 const TTL_MS = 60_000;
 
+/** Giras por cupos: % fijo del prepago (no sigue `config/comision` del admin). */
+export const COMISION_GIRA_POR_CUPOS_PCT = 10;
+
 let _cache: { loadedAt: number; pct: number } | null = null;
 
 const db = () => getFirestore();
@@ -42,6 +45,11 @@ export async function getComisionViajePorcentajeCached(): Promise<number> {
     _cache = { loadedAt: now, pct: 20 };
     return 20;
   }
+}
+
+/** % de comisión en prepago para giras por cupos (`viajes_pool`). */
+export function getComisionGiraPorcientoFijo(): number {
+  return COMISION_GIRA_POR_CUPOS_PCT;
 }
 
 /** Comisión en centavos: round2(totalRd * pct/100) → centavos enteros. */
