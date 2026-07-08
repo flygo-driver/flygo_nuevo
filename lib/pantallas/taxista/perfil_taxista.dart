@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 // Reutilizamos tu screen de foto y el avatar redondo
 import 'panel_taxista.dart' show PerfilFotoScreen; // ya lo tienes ahí
+import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
@@ -181,21 +182,21 @@ class PerfilTaxista extends StatelessWidget {
                 subtitle: const Text('Estado: Aprobado',
                     style: TextStyle(color: Colors.white54)),
                 onTap: () {
-                  final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(const SnackBar(
-                      content: Text('TODO: Pantalla de documentación')));
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const DocumentosTaxista(),
+                    ),
+                  );
                 },
               ),
 
-              // Ajustes (placeholder)
+              // Ajustes
               ListTile(
                 leading: const Icon(Icons.settings, color: Colors.greenAccent),
                 title: const Text('Ajustes',
                     style: TextStyle(color: Colors.white)),
                 onTap: () {
-                  final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(const SnackBar(
-                      content: Text('TODO: Pantalla de ajustes')));
+                  Navigator.of(context).pushNamed('/configuracion_perfil');
                 },
               ),
             ],

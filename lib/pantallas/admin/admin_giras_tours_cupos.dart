@@ -1050,14 +1050,17 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                       ? null
                                       : () async {
                                           await _ejecutarAccion(() async {
-                                            final n = await PoolRepo
+                                            await PoolRepo
                                                 .limpiarReservasVencidas(id);
                                             if (context.mounted) {
                                               ScaffoldMessenger.of(context)
                                                   .showSnackBar(
-                                                SnackBar(
-                                                    content: Text(
-                                                        'Reservas vencidas limpiadas: $n')),
+                                                const SnackBar(
+                                                  content: Text(
+                                                    'Las reservas vencidas se liberan solas '
+                                                    'cada ~15 min en servidor RAI.',
+                                                  ),
+                                                ),
                                               );
                                             }
                                           });

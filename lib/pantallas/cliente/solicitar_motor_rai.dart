@@ -1441,6 +1441,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
             right: 16,
             bottom: 220,
             child: FloatingActionButton(
+              heroTag: 'solicitar_rai_centrar',
               mini: true,
               backgroundColor: scheme.surfaceContainerHigh,
               foregroundColor: scheme.onSurface,

@@ -42,6 +42,23 @@ class _PoolPromoImageFullScreenPage extends StatelessWidget {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         elevation: 0,
+        // "X" con contraste garantizado en claro/oscuro: ícono blanco sobre
+        // círculo oscuro translúcido, para que siempre se distinga.
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 8),
+          child: IconButton(
+            tooltip: 'Cerrar',
+            onPressed: () => Navigator.of(context).maybePop(),
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.black54,
+              foregroundColor: Colors.white,
+              shape: const CircleBorder(
+                side: BorderSide(color: Colors.white70, width: 1.5),
+              ),
+            ),
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ),
         title: Text(
                       title.isEmpty ? 'Banner del viaje' : title,
                       maxLines: 1,

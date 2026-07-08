@@ -615,7 +615,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
             mainAxisSize: MainAxisSize.min,
             children: [
               FloatingActionButton(
-                heroTag: 'follow_me',
+                // null: el mapa puede estar en dos rutas a la vez durante una
+                // transición (p. ej. al cancelar un viaje); un tag fijo chocaría.
+                heroTag: null,
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black87,
                 onPressed: centrarEnMiUbicacion,
@@ -627,7 +629,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
                   widget.origen != null &&
                   widget.mostrarOrigen)
                 FloatingActionButton(
-                  heroTag: 'center_origen',
+                  heroTag: null,
                   mini: true,
                   backgroundColor: Colors.black87,
                   foregroundColor: Colors.white,
@@ -639,7 +641,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
               if ((widget.destino != null && widget.mostrarDestino) ||
                   _destinoSeleccionado != null)
                 FloatingActionButton(
-                  heroTag: 'center_destino',
+                  heroTag: null,
                   mini: true,
                   backgroundColor: Colors.black87,
                   foregroundColor: Colors.white,
@@ -649,7 +651,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
               const SizedBox(height: 10),
               if (_destinoSeleccionado != null)
                 FloatingActionButton(
-                  heroTag: 'clear_dest',
+                  heroTag: null,
                   mini: true,
                   backgroundColor: Colors.redAccent,
                   foregroundColor: Colors.white,

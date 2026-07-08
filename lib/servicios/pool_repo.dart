@@ -215,6 +215,7 @@ class PoolRepo {
     return _db
         .collectionGroup('reservas')
         .where('uidCliente', isEqualTo: u)
+        .orderBy('createdAt', descending: true)
         .limit(limit)
         .snapshots()
         .asyncMap((snap) async {
@@ -1100,49 +1101,11 @@ class PoolRepo {
         : Map<String, dynamic>.from(raw as Map);
   }
 
+  /// Las reservas vencidas se liberan en servidor (`scheduledCleanupExpiredPoolReservations`,
+  /// cada ~15 min). Ya no se escribe desde cliente (reglas Firestore endurecidas).
   static Future<int> limpiarReservasVencidas(String poolId) async {
-    final poolRef = pools.doc(poolId);
-    final now = Timestamp.fromDate(DateTime.now());
-    final q = await poolRef
-        .collection('reservas')
-        .where('estado', isEqualTo: 'reservado')
-        .where('expiresAt', isLessThan: now)
-        .get();
-
-    int canceladas = 0;
-    for (final doc in q.docs) {
-      await _db.runTransaction((tx) async {
-        final resSnap = await tx.get(doc.reference);
-        if (!resSnap.exists) return;
-        final r = resSnap.data()!;
-        if (r['estado'] != 'reservado') return;
-
-        final seats = ((r['seats'] ?? 0) as num).toInt();
-        final total = ((r['total'] ?? 0.0) as num).toDouble();
-
-        final poolSnap = await tx.get(poolRef);
-        final p = poolSnap.data()!;
-
-        final occ = ((p['asientosReservados'] ?? 0) as num).toInt();
-        final newOcc = (occ - seats).clamp(0, 1 << 30);
-
-        final metodo = (r['metodoPago'] ?? '').toString().toLowerCase().trim();
-        final poolPatch = <String, dynamic>{
-          'asientosReservados': newOcc,
-          'montoReservado':
-              ((p['montoReservado'] ?? 0.0) as num).toDouble() - total,
-          if (p['estado'] == 'lleno') 'estado': 'abierto',
-        };
-        if (metodo == 'efectivo' && p['asientosFirmesSalida'] != null) {
-          poolPatch['asientosFirmesSalida'] = FieldValue.increment(-seats);
-        }
-
-        tx.update(poolRef, poolPatch);
-        tx.update(doc.reference, {'estado': 'cancelado'});
-      });
-      canceladas++;
-    }
-    return canceladas;
+    if (poolId.trim().isEmpty) return 0;
+    return 0;
   }
 
   /// Cliente cancela su reserva activa (solo `reservado`, antes de salida en ruta).

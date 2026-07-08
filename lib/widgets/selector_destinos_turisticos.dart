@@ -53,6 +53,7 @@ class SelectorDestinosTuristicos extends StatefulWidget {
 class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  final List<TabController> _tabControllersPendientesDispose = <TabController>[];
   String _searchQuery = '';
   String? _tipoVehiculoSeleccionado;
   int _pasajeros = 1;
@@ -131,7 +132,22 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       (o) => o['value'] == _tipoVehiculoSeleccionado,
       orElse: () => {'maxPasajeros': 4},
     );
-    return opcion['maxPasajeros'] as int;
+    final dynamic max = opcion['maxPasajeros'];
+    if (max is int) return max;
+    if (max is num) return max.toInt();
+    return 4;
+  }
+
+  /// Coerción segura de coordenadas: acepta double/int/String y descarta nulos o inválidos.
+  static double? _coordDouble(dynamic v) {
+    if (v is double) return v.isFinite ? v : null;
+    if (v is int) return v.toDouble();
+    if (v is num) {
+      final double d = v.toDouble();
+      return d.isFinite ? d : null;
+    }
+    final double? d = double.tryParse('$v');
+    return (d != null && d.isFinite) ? d : null;
   }
 
   List<TurismoLugar> _catalogoBase = TurismoCatalogoRD.lugares;
@@ -271,9 +287,10 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
 
     if (initTabs || reinitTabs || orden.length != _subtiposOrdenados.length) {
       final prevIndex = initTabs ? 0 : _tabController.index;
-      if (!initTabs) {
-        _tabController.dispose();
-      }
+      // No desechar el controller viejo en medio del rebuild: el TabBar/TabBarView
+      // aún dependen de él y dispararía «_dependents.isEmpty: is not true».
+      // Se desecha tras el frame, cuando el subárbol ya se reconstruyó con el nuevo.
+      final TabController? viejo = initTabs ? null : _tabController;
       _subtiposOrdenados = orden;
       _tabController = TabController(
         length: orden.isEmpty ? 1 : orden.length,
@@ -282,6 +299,14 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
             ? 0
             : prevIndex.clamp(0, orden.length - 1),
       );
+      if (viejo != null) {
+        _tabControllersPendientesDispose.add(viejo);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_tabControllersPendientesDispose.remove(viejo)) {
+            viejo.dispose();
+          }
+        });
+      }
     } else {
       _subtiposOrdenados = orden;
     }
@@ -292,6 +317,10 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     _debounceTimer?.cancel();
     if (_voz.isListening) unawaited(_voz.stop());
     _searchCtrl.dispose();
+    for (final TabController c in _tabControllersPendientesDispose) {
+      c.dispose();
+    }
+    _tabControllersPendientesDispose.clear();
     _tabController.dispose();
     super.dispose();
   }
@@ -325,11 +354,18 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       for (var pred in resultadosLimitados) {
         final detalle = await service.detalleDesdePrediccion(pred);
         if (detalle != null && mounted) {
+          final double? lat = _coordDouble(detalle.lat);
+          final double? lon = _coordDouble(detalle.lon);
+          if (lat == null || lon == null) continue;
+          final String nombre = detalle.name.trim();
+          final String direccion = (detalle.address ?? '').trim();
           detalles.add({
-            'nombre': detalle.name,
-            'direccion': detalle.address ?? '',
-            'lat': detalle.lat,
-            'lon': detalle.lon,
+            'nombre': nombre.isEmpty
+                ? (direccion.isEmpty ? 'Lugar seleccionado' : direccion)
+                : nombre,
+            'direccion': direccion,
+            'lat': lat,
+            'lon': lon,
             'placeId': pred.placeId,
           });
         }
@@ -394,14 +430,36 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       return;
     }
 
+    final String nombre = (lugar['nombre'] ?? '').toString().trim();
+    final String direccion = (lugar['direccion'] ?? '').toString().trim();
+    final double? lat = _coordDouble(lugar['lat']);
+    final double? lon = _coordDouble(lugar['lon']);
+
+    if (lat == null || lon == null || (nombre.isEmpty && direccion.isEmpty)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No pudimos usar este lugar. Elige otro destino.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    final String nombreFinal = nombre.isEmpty ? direccion : nombre;
+    final String ciudad = direccion.contains(',')
+        ? direccion.split(',').first.trim()
+        : (direccion.isEmpty ? nombreFinal : direccion);
+
     final lugarTemp = TurismoLugar(
-      id: 'google_${lugar['placeId']}',
-      nombre: lugar['nombre'],
-      ciudad: lugar['direccion'].split(',').first.trim(),
-      lat: lugar['lat'],
-      lon: lugar['lon'],
+      id: 'google_${(lugar['placeId'] ?? '').toString()}',
+      nombre: nombreFinal,
+      ciudad: ciudad.isEmpty ? nombreFinal : ciudad,
+      lat: lat,
+      lon: lon,
       subtipo: 'busqueda',
-      descripcion: lugar['direccion'],
+      descripcion: direccion.isEmpty ? nombreFinal : direccion,
       imagen: null,
       popularidad: 0,
     );
@@ -840,7 +898,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                             color: Colors.white),
                       ),
                       title: Text(
-                        lugar['nombre'],
+                        (lugar['nombre'] ?? 'Lugar').toString(),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -848,7 +906,7 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                             fontWeight: FontWeight.bold),
                       ),
                       subtitle: Text(
-                        lugar['direccion'],
+                        (lugar['direccion'] ?? '').toString(),
                         style: TextStyle(color: textSubtle),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -901,8 +959,12 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
       }
     }
 
-    // Vista normal con tabs
+    // Vista normal con tabs.
+    // El `key` ligado al controller fuerza un subárbol nuevo cuando el
+    // controller se recrea (llegada de destinos Firestore), evitando que el
+    // TabBar/TabBarView queden atados a un controller ya desechado.
     return Column(
+      key: ValueKey<int>(identityHashCode(_tabController)),
       children: [
         TabBar(
           controller: _tabController,

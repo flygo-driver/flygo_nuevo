@@ -1,16 +1,10 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flygo_nuevo/utils/release_build_flags.dart';
 
 /// Ajustes de Phone Auth (reCAPTCHA / Play Integrity).
 abstract final class PhoneAuthConfig {
   PhoneAuthConfig._();
-
-  /// Solo QA interno en release: `flutter run --dart-define=QA_PHONE_NO_CAPTCHA=true`
-  /// Requiere números de prueba en Firebase Console.
-  static const bool qaSinCaptcha = bool.fromEnvironment(
-    'QA_PHONE_NO_CAPTCHA',
-    defaultValue: false,
-  );
 
   static Future<void> aplicarTrasFirebaseInit() async {
     await _aplicarSettings();
@@ -25,9 +19,8 @@ abstract final class PhoneAuthConfig {
     if (kIsWeb) return;
     try {
       // En release/Play NUNCA desactivar verificación (Play Integrity).
-      // Solo debug o QA interno con --dart-define=QA_PHONE_NO_CAPTCHA=true.
-      final desactivar =
-          !kReleaseMode && (kDebugMode || qaSinCaptcha);
+      final bool desactivar = kDebugMode ||
+          ReleaseBuildFlags.qaPhoneNoCaptchaEnabled;
       await FirebaseAuth.instance.setSettings(
         appVerificationDisabledForTesting: desactivar,
       );

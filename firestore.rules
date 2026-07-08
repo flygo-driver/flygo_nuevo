@@ -783,7 +783,8 @@ service cloud.firestore {
       }
     }
 
-    // Recarga de comisión por viajes en efectivo: taxista crea con comprobante; solo admin actualiza.
+    // Recarga de comisión por viajes en efectivo: taxista crea con comprobante;
+    // aprobación/rechazo solo vía Cloud Functions (Admin SDK).
     match /recargas_comision_taxista/{id} {
       allow read: if isAdmin() ||
         (isTaxista() && resource.data.uidTaxista == request.auth.uid);
@@ -802,8 +803,7 @@ service cloud.firestore {
           "montoDeclaradoRd", "comprobanteUrl", "metodoPago", "estado",
           "createdAt", "updatedAt"
         ]);
-      allow update: if isAdmin();
-      allow delete: if false;
+      allow update, delete: if false;
     }
 
     // Liquidaciones administrativas (tabs: pendiente/aprobado/rechazado)
@@ -910,42 +910,15 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // Viajes por cupos (chofer crea, clientes reservan asientos)
+    // Viajes por cupos (giras): lectura en app; escritura solo Admin SDK (CF) o admin manual.
     match /viajes_pool/{poolId} {
       allow read: if isAuth();
 
-      // Solo taxista o admin crea viajes por cupos
-      allow create: if isAdmin() || (
-        isTaxista() &&
-        request.resource.data.ownerTaxistaId == request.auth.uid
-      );
+      // crearPoolGira / reservePoolSeats / startPoolTrip / finalizePoolTrip → Cloud Functions.
+      allow create: if false;
 
-      // El dueño del pool (taxista) o admin puede actualizar metadata operativa.
-      // Campos financieros sensibles quedan reservados al backend/admin.
-      allow update: if isAdmin() || (
-        isTaxista() &&
-        resource.data.ownerTaxistaId == request.auth.uid &&
-        changedOnly([
-          "tipo", "sentido", "origenTown", "destino",
-          "fechaSalida", "fechaVuelta", "pickupPoints",
-          "capacidad", "minParaConfirmar", "cuposComisionRai", "precioPorAsiento",
-          "depositPct", "feePct", "estado", "taxistaNombre",
-          "asientosReservados", "asientosPagados",
-          "montoReservado", "montoPagado",
-          "updatedAt", "confirmadoAt", "canceladoAt",
-          "canceladoPorPagoSemanal", "estadoPrevioPorPagoSemanal", "canceladoPorPagoSemanalEn",
-          "motivoCancelacion",
-          "comisionGiraEstimadaRd", "comisionGiraPctUsado", "prepagoComisionEtapa",
-          "comisionGiraRealRd", "comisionGiraExcesoDevueltoRd", "asientosRealesComision",
-          "asientosConfirmadosPorDueno", "asientosFirmesSalida",
-          "iniciadoAt", "finalizadoAt", "totalGira",
-          "montoComision", "montoComisionTotal", "montoComisionCobradaPrepago",
-          "montoComisionPendienteAdmin", "montoNetoTaxista", "liquidado",
-          "comisionPendientePagoAdmin", "comisionEstado", "comisionMetodoPago", "comisionPctAplicada"
-        ])
-      );
-
-      allow delete: if isAdmin();
+      // Admin: correcciones manuales (ej. validar comisión gira legacy en Verificar pagos).
+      allow update, delete: if isAdmin();
 
       match /reservas/{reservaId} {
         // Lectura cliente/taxista del pool (path concreto). Admin también puede usar
@@ -956,19 +929,8 @@ service cloud.firestore {
             get(/databases/$(database)/documents/viajes_pool/$(poolId)).data.ownerTaxistaId == request.auth.uid
           ));
 
-        // Cliente autenticado puede crear su propia reserva
-        allow create: if isAuth() &&
-          request.resource.data.uidCliente == request.auth.uid;
-
-        // Cliente solo puede cancelar su reserva; taxista/admin pueden gestionar estado
-        allow update: if isAdmin() || (
-          isAuth() && (
-            resource.data.uidCliente == request.auth.uid ||
-            get(/databases/$(database)/documents/viajes_pool/$(poolId)).data.ownerTaxistaId == request.auth.uid
-          )
-        );
-
-        allow delete: if isAdmin();
+        // reservePoolSeats / cancelPoolReservation / verifyPoolReservaRecaudo → Cloud Functions.
+        allow create, update, delete: if false;
       }
     }
 

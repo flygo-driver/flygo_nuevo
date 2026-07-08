@@ -285,26 +285,39 @@ function reservaEsEfectivoFirm(r: AnyMap): boolean {
   return e === "reservado" && m === "efectivo";
 }
 
-function reservaEsFirmeParaComision(r: AnyMap): boolean {
-  const e = String(r.estado ?? "").toLowerCase().trim();
+/** Transferencia central: solo cuenta como pagada si RAI verificó (estadoPago). */
+function transferenciaPagadaEsFirme(r: AnyMap, pool?: AnyMap): boolean {
   const m = String(r.metodoPago ?? "").toLowerCase().trim();
-  if (e === "pagado") return true;
-  return e === "reservado" && m === "efectivo";
+  if (m !== "transferencia") return true;
+  if (pool && poolUsaRecaudoCentral(pool)) {
+    return String(r.estadoPago ?? "").trim().toLowerCase() === "verificado";
+  }
+  return true;
 }
 
-/** Cupos que cuentan para salir: pagados + reservas en efectivo (compromiso al abordar). No cuenta transferencia pendiente de comprobante. */
+function reservaEsFirmeParaSalida(r: AnyMap, pool?: AnyMap): boolean {
+  const e = String(r.estado ?? "").toLowerCase().trim();
+  const m = String(r.metodoPago ?? "").toLowerCase().trim();
+  if (e === "reservado" && m === "efectivo") return true;
+  if (e === "pagado" && transferenciaPagadaEsFirme(r, pool)) return true;
+  return false;
+}
+
+function reservaEsFirmeParaComision(r: AnyMap, pool?: AnyMap): boolean {
+  return reservaEsFirmeParaSalida(r, pool);
+}
+
+/** Cupos firmes para salir: efectivo reservado + pagados verificados (central exige estadoPago). */
 function firmSeatsFromReservaDocs(
   docs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[],
+  pool?: AnyMap,
 ): number {
   let firm = 0;
   for (const d of docs) {
     const r = (d.data() ?? {}) as AnyMap;
-    const e = String(r.estado ?? "").toLowerCase().trim();
-    const m = String(r.metodoPago ?? "").toLowerCase().trim();
     const s = Number(r.seats ?? 0);
     if (!Number.isFinite(s) || s <= 0) continue;
-    if (e === "pagado") firm += s;
-    else if (e === "reservado" && m === "efectivo") firm += s;
+    if (reservaEsFirmeParaSalida(r, pool)) firm += s;
   }
   return firm;
 }
@@ -329,17 +342,23 @@ function firmEfectivoSeatsFromReservaDocs(
 function firmSeatsAfterConfirmPayment(
   docs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[],
   confirmedId: string,
+  pool?: AnyMap,
+  aplicarRecaudoCentral = false,
 ): number {
   let firm = 0;
   for (const d of docs) {
     const raw = (d.data() ?? {}) as AnyMap;
-    const r = d.id === confirmedId ? { ...raw, estado: "pagado" } : raw;
-    const e = String(r.estado ?? "").toLowerCase().trim();
-    const m = String(r.metodoPago ?? "").toLowerCase().trim();
+    const r =
+      d.id === confirmedId
+        ? {
+            ...raw,
+            estado: "pagado",
+            ...(aplicarRecaudoCentral ? { estadoPago: "verificado" } : {}),
+          }
+        : raw;
     const s = Number(r.seats ?? 0);
     if (!Number.isFinite(s) || s <= 0) continue;
-    if (e === "pagado") firm += s;
-    else if (e === "reservado" && m === "efectivo") firm += s;
+    if (reservaEsFirmeParaSalida(r, pool)) firm += s;
   }
   return firm;
 }
@@ -702,29 +721,34 @@ export const crearPoolGira = onCall(async (request) => {
     const ud = (userSnap.data() ?? {}) as AnyMap;
     const disponiblePre = saldoDisponiblePrepagoRdFromBilletera(bille);
 
-    if (ud.tienePagoPendiente === true) {
-      throw new HttpsError(
-        "failed-precondition",
-        "No puedes publicar salidas por cupos: hay un pago pendiente de validación. Revisa Mis pagos.",
-      );
-    }
-
-    if (bloqueoOperativoPorComisionEfectivo(bille, minOperativoRd)) {
-      const pend = comisionPendienteRdFromBilletera(bille);
-      if (pend >= UMBRAL_COMISION_LEGACY_RD - 1e-6) {
+    // Recaudo central: la empresa recibe el dinero del cliente por la venta de asientos.
+    // Las giras por cupos NO dependen de la recarga del chofer: no se bloquea al publicar
+    // ni se aparta prepago. La comisión de RAI se retiene del recaudo en la liquidación.
+    if (!recaudoCentral) {
+      if (ud.tienePagoPendiente === true) {
         throw new HttpsError(
           "failed-precondition",
-          "No puedes publicar salidas por cupos: comisión pendiente ≥ RD$500. " +
-            "Deposita y sube comprobante en Mis pagos.",
+          "No puedes publicar salidas por cupos: hay un pago pendiente de validación. Revisa Mis pagos.",
         );
       }
-      const falta = round2(minOperativoRd - disponiblePre);
-      throw new HttpsError(
-        "failed-precondition",
-        `No puedes publicar salidas por cupos: prepago libre RD$${disponiblePre.toFixed(2)}. ` +
-          `Necesitas al menos RD$${minOperativoRd.toFixed(0)}. ` +
-          `Recarga RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
-      );
+
+      if (bloqueoOperativoPorComisionEfectivo(bille, minOperativoRd)) {
+        const pend = comisionPendienteRdFromBilletera(bille);
+        if (pend >= UMBRAL_COMISION_LEGACY_RD - 1e-6) {
+          throw new HttpsError(
+            "failed-precondition",
+            "No puedes publicar salidas por cupos: comisión pendiente ≥ RD$500. " +
+              "Deposita y sube comprobante en Mis pagos.",
+          );
+        }
+        const falta = round2(minOperativoRd - disponiblePre);
+        throw new HttpsError(
+          "failed-precondition",
+          `No puedes publicar salidas por cupos: prepago libre RD$${disponiblePre.toFixed(2)}. ` +
+            `Necesitas al menos RD$${minOperativoRd.toFixed(0)}. ` +
+            `Recarga RD$${falta.toFixed(2)} en Mis pagos → Recarga comisión.`,
+        );
+      }
     }
 
     let comisionReservar = 0;
@@ -732,7 +756,10 @@ export const crearPoolGira = onCall(async (request) => {
     const res = saldoReservadoGirasRdFromBilletera(bille);
     const disponible = disponiblePre;
 
-    if (disponible + 1e-9 >= comisionObjetivo) {
+    if (recaudoCentral) {
+      // No se aparta recarga del chofer: la comisión se cobra 100% del recaudo al liquidar.
+      comisionReservar = 0;
+    } else if (disponible + 1e-9 >= comisionObjetivo) {
       comisionReservar = comisionObjetivo;
     } else if (disponible + 1e-9 >= minOperativoRd) {
       comisionReservar = round2(disponible);
@@ -1251,7 +1278,12 @@ function marcarReservaPagadaEnTx(args: MarcarReservaPagadaTxArgs): { alreadyProc
   const minConf = Number(pool.minParaConfirmar ?? 0);
   const estadoPool = String(pool.estado ?? "abierto");
   const ownerTaxistaId = String(pool.ownerTaxistaId ?? "");
-  const firmSalida = firmSeatsAfterConfirmPayment(allResDocs, reservaId);
+  const firmSalida = firmSeatsAfterConfirmPayment(
+    allResDocs,
+    reservaId,
+    pool,
+    aplicarSplitRecaudoCentral,
+  );
 
   const reservaPatch: AnyMap = {
     estado: "pagado",
@@ -1492,7 +1524,7 @@ export const startPoolTrip = onCall(async (request) => {
     const minConf = Number(pool.minParaConfirmar ?? 0);
 
     const allResSnap = await tx.get(poolRef.collection("reservas").limit(500));
-    const firmSalida = firmSeatsFromReservaDocs(allResSnap.docs);
+    const firmSalida = firmSeatsFromReservaDocs(allResSnap.docs, pool);
 
     if (estado === "en_ruta") return { ok: true, poolId, alreadyStarted: true };
     if (estado === "cancelado" || estado === "finalizado") {
@@ -1514,7 +1546,9 @@ export const startPoolTrip = onCall(async (request) => {
       );
     }
 
-    if (!hasComisionGiraEstimadaValida(pool)) {
+    // Recaudo central no aparta prepago al publicar (comisión estimada puede ser 0);
+    // solo se exige comisión estimada válida en el modelo legacy (prepago del chofer).
+    if (!poolUsaRecaudoCentral(pool) && !hasComisionGiraEstimadaValida(pool)) {
       logger.warn("[PRE_TEST] startPoolTrip bloqueado sin comisionGiraEstimadaRd válida", {
         poolId,
         uidActor,
@@ -1548,7 +1582,9 @@ export const startPoolTrip = onCall(async (request) => {
     const poolEsCentral = poolUsaRecaudoCentral(pool);
     const comisionReal = comisionRaiRdFromReservaDocs(
       allResSnap.docs,
-      poolEsCentral ? reservaEsEfectivoFirm : reservaEsFirmeParaComision,
+      poolEsCentral
+        ? reservaEsEfectivoFirm
+        : (r) => reservaEsFirmeParaComision(r, pool),
       pct,
     );
 
@@ -2437,7 +2473,7 @@ export const reservePoolSeats = onCall(async (request) => {
       : Math.max(0, total * depositPct);
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 horas
 
-    let firmSalida = firmSeatsFromReservaDocs(allResSnap.docs);
+    let firmSalida = firmSeatsFromReservaDocs(allResSnap.docs, pool);
     if (metodoPago === "efectivo") firmSalida += seats;
 
     // Snapshot de contacto del cliente para el dueño del viaje
@@ -2737,6 +2773,7 @@ export const adminRevertPoolReservaPagada = onCall(async (request) => {
     const allResSnap = await tx.get(poolRef.collection("reservas").limit(500));
     const firmSalida = firmSeatsFromReservaDocs(
       allResSnap.docs.filter((d) => d.id !== reservaId),
+      pool,
     );
 
     const pag = Math.max(0, Math.trunc(numOr0(pool.asientosPagados)));

@@ -791,14 +791,13 @@ Contactanos por esta via para mas informacion y confirmacion.
                           onPressed: _accionEnCurso
                               ? null
                               : () async {
-                                  final n =
-                                      await PoolRepo.limpiarReservasVencidas(
-                                          id);
+                                  await PoolRepo.limpiarReservasVencidas(id);
                                   if (!ctx.mounted) return;
                                   ScaffoldMessenger.of(ctx).showSnackBar(
-                                    SnackBar(
+                                    const SnackBar(
                                       content: Text(
-                                        'Reservas vencidas limpiadas: $n',
+                                        'Las reservas vencidas se liberan solas cada ~15 min '
+                                        '(servidor RAI). Si hace falta antes, esperá un momento.',
                                       ),
                                     ),
                                   );

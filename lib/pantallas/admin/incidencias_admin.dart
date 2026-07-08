@@ -251,6 +251,7 @@ class _IncidenciasAdminPageState extends State<IncidenciasAdminPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'admin_incidencias_nueva',
         onPressed: _crearIncidencia,
         icon: const Icon(Icons.add),
         label: const Text('Nueva incidencia'),

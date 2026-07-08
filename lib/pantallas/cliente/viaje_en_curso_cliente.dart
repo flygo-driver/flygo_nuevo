@@ -5,7 +5,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kDebugMode, kIsWeb;
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -22,6 +22,7 @@ import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/release_build_flags.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
@@ -172,11 +173,8 @@ class ViajeEnCursoCliente extends StatefulWidget {
 
 class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  /// Misma bandera que taxista: `kDebugMode` o `--dart-define=FLYGO_SIM_CASA=true`.
-  static const bool _kSimCasaFromDefine =
-      bool.fromEnvironment('FLYGO_SIM_CASA', defaultValue: false);
-
-  bool get _simCasa => kDebugMode || _kSimCasaFromDefine;
+  /// Pruebas en silla: solo debug/profile con define; nunca en Play Store.
+  bool get _simCasa => ReleaseBuildFlags.simCasaEnabled;
 
   /// Forzar “conductor cerca del pickup” sin GPS real (solo [_simCasa]).
   bool _debugConductorCercaPickup = false;
@@ -195,6 +193,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   String? _bolaPickupWatchId;
   Map<String, dynamic>? _bolaPickupDocData;
   String _lastNotifiedState = '';
+
+  /// Evita avisar dos veces al cliente que el conductor canceló (una por marca de tiempo).
+  DateTime? _cancelacionTaxistaAvisada;
 
   /// Para evitar abrir la pantalla de Factura más de una vez por viaje.
   String _postViajeFlujoIniciadoParaViajeId = '';
@@ -2303,8 +2304,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }
     if (_viajeClienteCanceladoORechazado(data)) {
       print('[VIAJE_ACTIVO] cliente $origen: viaje cancelado → inicio');
+      final String canceladoPor =
+          (data['canceladoPor'] ?? '').toString().trim();
+      final bool porConductor =
+          canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado';
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        if (porConductor) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('El conductor canceló el viaje.'),
+              backgroundColor: Color(0xFFB45309),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
         unawaited(NavigationService.irAlInicioCliente(context: context));
       });
     }
@@ -2530,7 +2544,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         },
       );
     } finally {
-      motivoCtrl.dispose();
+      // No liberar el controlador de inmediato: al cerrar el diálogo aún corre
+      // su animación de salida y el TextField se reconstruye. Si se hace dispose
+      // sincrónico, usa un controlador ya destruido y rompe la pantalla.
+      // Se espera a que termine la transición de cierre.
+      Future<void>.delayed(
+        const Duration(milliseconds: 500),
+        motivoCtrl.dispose,
+      );
     }
 
     if (motivo == null || motivo.isEmpty) {
@@ -2766,11 +2787,51 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         }
       }
 
+      // El conductor canceló: en viajes normales el pedido vuelve a "pendiente"
+      // (se busca otro conductor). Avisamos al cliente para que sepa por qué.
+      _avisarSiConductorCancelo(d, estN);
+
       // Post-viaje (recibo + calificación): solo desde [_abrirFlujoPostViaje].
       // `_postViajeFlujoIniciadoParaViajeId` evita abrir el flujo dos veces.
       _intentarRedirigirEsperaTurismo(viajeId, d);
       _syncTurismoReasignacion(viajeId, d);
     }, onError: (Object _) {});
+  }
+
+  /// Avisa al cliente cuando el conductor canceló su viaje.
+  /// - Normal: el pedido vuelve a "pendiente" y buscamos otro conductor.
+  /// - Forzado: el viaje queda "cancelado" (el flujo de salida lo maneja aparte).
+  void _avisarSiConductorCancelo(Map<String, dynamic> d, String estN) {
+    final String canceladoPor = (d['canceladoPor'] ?? '').toString().trim();
+    if (canceladoPor != 'taxista' && canceladoPor != 'taxista_forzado') return;
+
+    // Solo el caso "vuelve a búsqueda"; el "cancelado" total ya se maneja en
+    // _manejarEstadosEspecialesCliente (navega al inicio).
+    if (estN != EstadosViaje.pendiente) return;
+
+    final dynamic ts = d['canceladoTaxistaEn'];
+    DateTime? cancelTs;
+    if (ts is Timestamp) cancelTs = ts.toDate();
+    if (ts is DateTime) cancelTs = ts;
+    if (cancelTs == null) return;
+
+    // Evita repetir el aviso en cada snapshot (misma marca de tiempo) y avisos viejos.
+    final bool reciente =
+        DateTime.now().difference(cancelTs) < const Duration(minutes: 3);
+    final bool yaAvisado = _cancelacionTaxistaAvisada == cancelTs;
+    if (!reciente || yaAvisado) return;
+    _cancelacionTaxistaAvisada = cancelTs;
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'El conductor canceló el viaje. Buscando otro conductor para ti…',
+        ),
+        backgroundColor: Color(0xFFB45309),
+        duration: Duration(seconds: 5),
+      ),
+    );
   }
 
   Widget _buildCodigoVerificacionClienteSection({

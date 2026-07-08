@@ -34,6 +34,7 @@ import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/release_build_flags.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/ux_log.dart';
@@ -102,12 +103,8 @@ class ViajeEnCursoTaxista extends StatefulWidget {
 
 class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
-  /// Pruebas en silla: sin GPS real ni distancias al finalizar.
-  /// `kDebugMode` o `--dart-define=FLYGO_SIM_CASA=true` (profile/release).
-  static const bool _kSimCasaFromDefine =
-      bool.fromEnvironment('FLYGO_SIM_CASA', defaultValue: false);
-
-  bool get _flygoSimCasa => kDebugMode || _kSimCasaFromDefine;
+  /// Pruebas en silla: solo debug/profile con define; nunca en Play Store.
+  bool get _flygoSimCasa => ReleaseBuildFlags.simCasaEnabled;
 
   /// Pruebas en casa / Bola Ahorro: abrir Maps y finalizar sin recorrer distancia real.
   bool _permitePruebaSinRecorrido(Viaje v) =>
@@ -748,16 +745,29 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               ? null
               : () => unawaited(_confirmarLlegadaDestinoMulti(v)),
         ),
-        const SizedBox(height: 10),
-        OutlinedButton.icon(
+        const SizedBox(height: 12),
+        ElevatedButton.icon(
           onPressed: () => unawaited(_abrirGoogleMapsRutaMultiRestante(v)),
-          icon: const Icon(Icons.map, size: 20),
-          label: const Text('Ver ruta completa restante (Google Maps)'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.lightBlueAccent,
-            side: BorderSide(color: Colors.lightBlueAccent.withValues(alpha: 0.5)),
-            minimumSize: const Size(double.infinity, 48),
+          icon: const Icon(Icons.alt_route, size: 24),
+          label: const Text(
+            'VER RUTA COMPLETA RESTANTE (GOOGLE MAPS)',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
           ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF1565C0),
+            foregroundColor: Colors.white,
+            elevation: 3,
+            minimumSize: const Size(double.infinity, 54),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Muestra todas las paradas encadenadas en un solo mapa.',
+          style: TextStyle(color: Colors.white60, fontSize: 12),
         ),
       ],
     ];

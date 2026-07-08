@@ -41,6 +41,7 @@ class PanelTaxista extends StatelessWidget {
       ),
       body: const ViajeDisponible(),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'panel_taxista_foto',
         backgroundColor: Colors.greenAccent,
         foregroundColor: Colors.black,
         icon: const Icon(Icons.edit),

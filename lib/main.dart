@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
-    show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show debugPrint, defaultTargetPlatform, kIsWeb, kReleaseMode, TargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -38,6 +38,7 @@ import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/utils/release_build_flags.dart';
 // 🔐 Auth / Gates
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/auth/login_admin.dart';
@@ -82,8 +83,7 @@ import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
 import 'package:flygo_nuevo/pantallas/admin/verificar_pagos.dart';
 
 // ================== FLAGS ==================
-const bool kUseEmus =
-    bool.fromEnvironment('USE_EMULATORS', defaultValue: false);
+bool get kUseEmus => ReleaseBuildFlags.useEmulatorsEnabled;
 
 const String kHost = String.fromEnvironment('HOST', defaultValue: 'localhost');
 
@@ -137,48 +137,87 @@ Widget _raiSplashScaffold({String? subtitle}) =>
     RaiIdentitySplash.scaffold(subtitle: subtitle);
 
 void _installErrorHandlers() {
-  ErrorWidget.builder = (details) => Material(
-        color: Colors.black,
-        child: Builder(
-          builder: (context) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      '⚠️ Ocurrió un error',
-                      style: TextStyle(color: Colors.redAccent),
-                      textAlign: TextAlign.center,
+  ErrorWidget.builder = (details) {
+    // Reporta siempre (Crashlytics/consola), aunque el usuario no toque nada.
+    ErrorReporting.reportError(
+      details.exceptionAsString(),
+      context: 'ErrorWidget.builder',
+    );
+    final String detalleTecnico = details.exceptionAsString();
+    return Material(
+      color: Colors.black,
+      child: Builder(
+        builder: (context) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    '⚠️ Ocurrió un error',
+                    style: TextStyle(color: Colors.redAccent),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'No pudimos cargar esta pantalla. Intenta nuevamente.',
+                    style: TextStyle(color: Colors.white70),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  if (!kReleaseMode) ...[
+                    // Detalle técnico solo en debug/profile (piloto interno).
+                    Theme(
+                      data: ThemeData.dark().copyWith(
+                        dividerColor: Colors.transparent,
+                      ),
+                      child: ExpansionTile(
+                        title: const Text(
+                          'Ver detalle técnico',
+                          style: TextStyle(
+                            color: Colors.white54,
+                            fontSize: 12,
+                          ),
+                        ),
+                        childrenPadding:
+                            const EdgeInsets.symmetric(horizontal: 8),
+                        children: [
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 220),
+                            child: SingleChildScrollView(
+                              child: SelectableText(
+                                detalleTecnico,
+                                style: const TextStyle(
+                                  color: Colors.orangeAccent,
+                                  fontSize: 11,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      'No pudimos cargar esta pantalla. Intenta nuevamente.',
-                      style: TextStyle(color: Colors.white70),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 18),
-                    ElevatedButton(
-                      onPressed: () {
-                        ErrorReporting.reportError(
-                          details.exceptionAsString(),
-                          context: 'ErrorWidget.builder',
-                        );
-                        Navigator.of(context).pushNamedAndRemoveUntil(
-                          '/auth_check',
-                          (r) => false,
-                        );
-                      },
-                      child: const Text('Reintentar'),
-                    ),
+                    const SizedBox(height: 12),
                   ],
-                ),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(context).pushNamedAndRemoveUntil(
+                        '/auth_check',
+                        (r) => false,
+                      );
+                    },
+                    child: const Text('Reintentar'),
+                  ),
+                ],
               ),
-            );
-          },
-        ),
-      );
+            ),
+          );
+        },
+      ),
+    );
+  };
 
   FlutterError.onError = (details) {
     FlutterError.dumpErrorToConsole(details);

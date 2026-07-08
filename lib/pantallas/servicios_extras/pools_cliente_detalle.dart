@@ -961,16 +961,19 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                           ],
                         ),
                     ],
-                    const SizedBox(height: 10),
-                    _metodoTile(
-                      value: 'efectivo',
-                      groupValue: _metodo,
-                      onChanged: (v) => setState(() => _metodo = v),
-                      title: 'Efectivo al abordar',
-                      subtitle: esCentral
-                          ? 'Pagas al organizador el día de la salida; la comisión RAI sale de su recarga prepago.'
-                          : 'Pagas el total el día del viaje',
-                    ),
+                    // Giras por cupos (recaudo central): el cliente SIEMPRE
+                    // paga a RAI por transferencia. No se ofrece efectivo para
+                    // que RAI cobre su comisión de la venta real del asiento.
+                    if (!esCentral) ...[
+                      const SizedBox(height: 10),
+                      _metodoTile(
+                        value: 'efectivo',
+                        groupValue: _metodo,
+                        onChanged: (v) => setState(() => _metodo = v),
+                        title: 'Efectivo al abordar',
+                        subtitle: 'Pagas el total el día del viaje',
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -997,7 +1000,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                             total: total,
                             deposito: deposito,
                             restante: restante,
-                            metodo: _metodo,
+                            // Central (giras por cupos): siempre transferencia a RAI.
+                            metodo: esCentral ? 'transferencia' : _metodo,
                             origen: origen,
                             destino: destino,
                             choferWhatsApp: choferWhatsApp,

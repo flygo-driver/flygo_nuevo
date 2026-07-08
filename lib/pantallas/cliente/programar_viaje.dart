@@ -3452,6 +3452,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             right: 16,
             bottom: 220,
             child: FloatingActionButton(
+              heroTag: 'programar_viaje_centrar',
               mini: true,
               backgroundColor: mapFloating
                   ? const Color(0xFF0F172A).withValues(alpha: 0.93)
