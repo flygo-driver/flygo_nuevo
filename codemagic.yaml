@@ -1,0 +1,61 @@
+# RAI Driver — build iOS únicamente (no toca Android).
+# Certificados y perfiles: configurar en Codemagic → Team settings → iOS code signing
+# o con la integración Apple Developer Portal.
+#
+# Rama sugerida: feature/ios-codemagic
+
+workflows:
+  rai-driver-ios:
+    name: RAI Driver iOS
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      flutter: stable
+      xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.flygo.rd2
+
+    # Descomenta si quieres auto-build al push en esta rama:
+    # triggering:
+    #   events:
+    #     - push
+    #   branch_patterns:
+    #     - pattern: feature/ios-codemagic
+    #       include: true
+
+    scripts:
+      - name: Instalar dependencias Flutter
+        script: flutter pub get
+
+      # GoogleService-Info.plist está en .gitignore — súbelo en Codemagic:
+      # App settings → Environment variables → Secure files
+      # Ruta: ios/Runner/GoogleService-Info.plist
+      - name: Verificar GoogleService-Info.plist
+        script: |
+          PLIST=ios/Runner/GoogleService-Info.plist
+          if [ ! -f "$PLIST" ]; then
+            echo "ERROR: Falta $PLIST"
+            echo "Codemagic → Environment → Secure files → ios/Runner/GoogleService-Info.plist"
+            exit 1
+          fi
+
+      # Requiere perfiles de aprovisionamiento cargados en Codemagic
+      - name: Configurar firma en el proyecto Xcode
+        script: xcode-project use-profiles
+
+      - name: Compilar IPA (solo iOS)
+        script: flutter build ipa --release
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      email:
+        recipients:
+          - ventasopenask@gmail.com
+        notify:
+          success: true
+          failure: true
