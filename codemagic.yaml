@@ -29,18 +29,6 @@ workflows:
       - name: Instalar dependencias Flutter
         script: flutter pub get
 
-      # GoogleService-Info.plist está en .gitignore — súbelo en Codemagic:
-      # App settings → Environment variables → Secure files
-      # Ruta: ios/Runner/GoogleService-Info.plist
-      - name: Verificar GoogleService-Info.plist
-        script: |
-          PLIST=ios/Runner/GoogleService-Info.plist
-          if [ ! -f "$PLIST" ]; then
-            echo "ERROR: Falta $PLIST"
-            echo "Codemagic → Environment → Secure files → ios/Runner/GoogleService-Info.plist"
-            exit 1
-          fi
-
       # Requiere perfiles de aprovisionamiento cargados en Codemagic
       - name: Configurar firma en el proyecto Xcode
         script: xcode-project use-profiles
