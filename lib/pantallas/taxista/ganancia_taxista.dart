@@ -160,59 +160,72 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
           int totalComisionCents = 0;
           int totalGananciaCents = 0;
 
-          // 🔥 NUEVO: Acumuladores por tipo de servicio
+          // Acumuladores por tipo de servicio
           int viajesNormales = 0;
           int viajesMotor = 0;
           int viajesTurismo = 0;
+          int viajesCorporativo = 0;
           int gananciaNormalesCents = 0;
           int gananciaMotorCents = 0;
           int gananciaTurismoCents = 0;
+          int gananciaCorporativoCents = 0;
 
           for (final d in docs) {
             final Map<String, dynamic> m = d.data();
 
-            // Determinar tipo de servicio
             final String tipoServicio =
                 (m['tipoServicio'] ?? 'normal').toString();
+            final bool esCorporativo = m['corporativo'] == true ||
+                (m['categoria'] ?? '').toString().toLowerCase() ==
+                    'corporativo';
 
-            // Precio
+            // Preferir ganancia neta ya escrita al finalizar
+            int gananciaC = _asInt(m['ganancia_cents']);
+            if (gananciaC == 0) {
+              gananciaC = _toCents(_asDouble(m['gananciaTaxista']));
+            }
+
             final int precioC = _asInt(m['precio_cents']) == 0
                 ? _toCents(_asDouble(m['precioFinal'] ?? m['precio']))
                 : _asInt(m['precio_cents']);
 
-            // Comisión (si existe en el documento)
             int comisionC = _asInt(m['comision_cents']);
-
-            // Si no hay comisión guardada, calcular según tipo
-            if (comisionC == 0) {
+            if (comisionC == 0 && gananciaC == 0) {
               if (tipoServicio == 'turismo') {
-                // Turismo: 15% comisión
                 comisionC = ((precioC * 15) + 50) ~/ 100;
               } else {
-                // Normal/Motor: comisión global plataforma
-                comisionC = PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioC);
+                comisionC =
+                    PlataformaEconomia.comisionViajeCentsDesdePrecioCents(
+                        precioC);
               }
             }
+            if (gananciaC == 0) {
+              gananciaC = precioC - comisionC;
+            }
+            if (comisionC == 0 && precioC > gananciaC) {
+              comisionC = precioC - gananciaC;
+            }
 
-            final int gananciaC = precioC - comisionC;
-
-            // Acumular totales
             totalComisionCents += comisionC;
             totalGananciaCents += gananciaC;
 
-            // 🔥 NUEVO: Acumular por tipo
-            switch (tipoServicio) {
-              case 'motor':
-                viajesMotor++;
-                gananciaMotorCents += gananciaC;
-                break;
-              case 'turismo':
-                viajesTurismo++;
-                gananciaTurismoCents += gananciaC;
-                break;
-              default:
-                viajesNormales++;
-                gananciaNormalesCents += gananciaC;
+            if (esCorporativo) {
+              viajesCorporativo++;
+              gananciaCorporativoCents += gananciaC;
+            } else {
+              switch (tipoServicio) {
+                case 'motor':
+                  viajesMotor++;
+                  gananciaMotorCents += gananciaC;
+                  break;
+                case 'turismo':
+                  viajesTurismo++;
+                  gananciaTurismoCents += gananciaC;
+                  break;
+                default:
+                  viajesNormales++;
+                  gananciaNormalesCents += gananciaC;
+              }
             }
           }
 
@@ -291,36 +304,59 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                 ),
                 const SizedBox(height: 14),
 
-                // 🔥 NUEVO: Tarjeta de resumen por tipo de servicio
-                if (viajesNormales > 0 || viajesMotor > 0 || viajesTurismo > 0)
+                if (viajesCorporativo > 0 ||
+                    viajesNormales > 0 ||
+                    viajesMotor > 0 ||
+                    viajesTurismo > 0)
                   _SummaryCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Desglose por servicio:',
+                          'Desglose por servicio',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                             color: cs.onSurface,
                           ),
                         ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Corporativo: tras el código de verificación y '
+                          'entregar cada destino, al finalizar se suma aquí tu neto. '
+                          'RAI te transfiere al liquidar el período con la empresa.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.35,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
                         const SizedBox(height: 12),
 
-                        // Normales
+                        if (viajesCorporativo > 0) ...[
+                          _buildTipoRow(
+                            context: context,
+                            icon: Icons.business_center_outlined,
+                            color: const Color(0xFF0F766E),
+                            label: 'Corporativo (empresas)',
+                            cantidad: viajesCorporativo,
+                            ganancia: _fromCents(gananciaCorporativoCents),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+
                         if (viajesNormales > 0) ...[
                           _buildTipoRow(
                             context: context,
                             icon: Icons.directions_car,
                             color: gain,
-                            label: 'Normales',
+                            label: 'Calle / normales',
                             cantidad: viajesNormales,
                             ganancia: _fromCents(gananciaNormalesCents),
                           ),
                           const SizedBox(height: 8),
                         ],
 
-                        // Motor
                         if (viajesMotor > 0) ...[
                           _buildTipoRow(
                             context: context,
@@ -333,7 +369,6 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
                           const SizedBox(height: 8),
                         ],
 
-                        // Turismo
                         if (viajesTurismo > 0) ...[
                           _buildTipoRow(
                             context: context,

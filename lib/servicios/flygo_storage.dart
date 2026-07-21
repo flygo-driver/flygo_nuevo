@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -89,26 +88,10 @@ class FlygoStorage {
 
     log(
       'upload tipo=$tipo path=$storagePath bytes=${bytes.length} '
-      'localFilePath=$localFilePath',
+      'web=$kIsWeb localFilePath=$localFilePath',
     );
 
-    if (localFilePath != null && localFilePath.isNotEmpty) {
-      try {
-        final File file = File(localFilePath);
-        if (await file.exists()) {
-          final int len = await file.length();
-          log('putFile intento len=$len');
-          await ref.putFile(file, meta);
-          final String url = await ref.getDownloadURL();
-          log('putFile OK tipo=$tipo');
-          return url;
-        }
-        log('putFile omitido: archivo no existe');
-      } on FirebaseException catch (e) {
-        log('putFile error code=${e.code} msg=${e.message}');
-      }
-    }
-
+    // Web/laptop/tablet: solo putData (sin dart:io File / putFile).
     Future<String> putDataIntento() async {
       await user.getIdToken(true);
       log('putData intento bytes=${bytes.length}');
@@ -124,29 +107,28 @@ class FlygoStorage {
       log(
         'putData error code=${e.code} msg=${e.message} '
         '(permission-denied=reglas, unauthenticated=sesión, '
-        'bucket-not-found=config, unknown=nativo/red/API-key)',
+        'bucket-not-found=config, unknown=CORS/red/API-key)',
       );
       if (e.code == 'unauthenticated' ||
           e.code == 'unknown' ||
-          (e.message ?? '').toLowerCase().contains('auth')) {
+          (e.message ?? '').toLowerCase().contains('auth') ||
+          (e.message ?? '').toLowerCase().contains('cors') ||
+          (e.message ?? '').toLowerCase().contains('network')) {
         log('reintento putData tras ${e.code}');
         await Future<void>.delayed(const Duration(milliseconds: 600));
         try {
           return await putDataIntento();
         } on FirebaseException catch (e2) {
           log('putData reintento falló code=${e2.code} msg=${e2.message}');
-          if (e2.code == 'unknown' || e.code == 'unknown') {
-            return _fallbackTrasStorageFallido(
-              user: user,
-              tipo: tipo,
-              storagePath: storagePath,
-              bytes: bytes,
-            );
-          }
-          rethrow;
+          return _fallbackTrasStorageFallido(
+            user: user,
+            tipo: tipo,
+            storagePath: storagePath,
+            bytes: bytes,
+          );
         }
       }
-      if (e.code == 'unknown') {
+      if (e.code == 'unknown' || e.code == 'retry-limit-exceeded') {
         return _fallbackTrasStorageFallido(
           user: user,
           tipo: tipo,
@@ -155,6 +137,14 @@ class FlygoStorage {
         );
       }
       rethrow;
+    } catch (e) {
+      log('putData error no-Firebase: $e → fallback');
+      return _fallbackTrasStorageFallido(
+        user: user,
+        tipo: tipo,
+        storagePath: storagePath,
+        bytes: bytes,
+      );
     }
   }
 
@@ -173,6 +163,13 @@ class FlygoStorage {
       );
     } on FirebaseException catch (e) {
       log('REST falló code=${e.code} msg=${e.message} → firestore fallback');
+      return _uploadViaFirestoreFallback(
+        user: user,
+        tipo: tipo,
+        bytes: bytes,
+      );
+    } catch (e) {
+      log('REST error general: $e → firestore fallback');
       return _uploadViaFirestoreFallback(
         user: user,
         tipo: tipo,
@@ -279,7 +276,9 @@ class FlygoStorage {
       throw FirebaseException(
         plugin: 'firebase_storage',
         code: 'invalid-argument',
-        message: 'La imagen es demasiado grande (máx. 900 KB en modo respaldo).',
+        message:
+            'La imagen es demasiado grande para el respaldo (máx. ~900 KB). '
+            'Elegí una foto más liviana o comprimida.',
       );
     }
 

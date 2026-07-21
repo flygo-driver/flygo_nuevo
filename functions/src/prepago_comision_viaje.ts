@@ -56,6 +56,14 @@ function toCents(v: unknown): number {
 
 /** Viajes RAI estándar (efectivo/transferencia/tarjeta) usan prepago de comisión. */
 export function viajeAplicaComisionPrepago(viaje: AnyMap): boolean {
+  // Paridad con Flutter PagosTaxistaRepo.viajeAplicaComisionPrepago.
+  if (viaje.corporativo === true) return false;
+  if (String(viaje.recaudoDestino ?? "").trim() === "empresa_corporativa") return false;
+  if (String(viaje.canalAsignacion ?? "").trim() === "corporativo_fijo") return false;
+  if (viaje.exentoBloqueoPrepago === true) return false;
+  const categoria = String(viaje.categoria ?? "").trim().toLowerCase();
+  if (categoria === "corporativo") return false;
+
   const tipo = String(viaje.tipoServicio ?? "normal").trim().toLowerCase();
   if (tipo === "bola_ahorro") return false;
 

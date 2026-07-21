@@ -1,6 +1,9 @@
 const String kTermsVersion = '1.1';
 const String kTaxistaContractVersion = '1.0';
 
+/// Contrato digital módulo RAI Corporativo (empresa / encargado).
+const String kCorporativoContractVersion = '1.0';
+
 /// Base pública en Firebase Hosting (Play Console y enlaces in-app).
 const String kLegalPublicBaseUrl = 'https://flygo-rd.web.app';
 
@@ -17,6 +20,10 @@ const String kAccountDeletionPublicUrl =
 /// Contrato digital conductor (web).
 const String kTaxistaContractPdfUrl =
     '$kLegalPublicBaseUrl/legal/contrato-taxista';
+
+/// Contrato servicio corporativo (web).
+const String kCorporativoContractPublicUrl =
+    '$kLegalPublicBaseUrl/legal/contrato-corporativo';
 
 const String kTermsLastUpdate = '24/06/2026';
 const String kTermsContactEmail = 'ventasopenask@gmail.com';
@@ -145,4 +152,48 @@ La aceptacion digital de este contrato queda registrada con usuario, fecha/hora 
 
 7) Legislacion:
 Este acuerdo se rige por las leyes de Republica Dominicana.
+''';
+
+const String kCorporativoContractText = '''
+CONTRATO DE SERVICIO CORPORATIVO — RAI DRIVER
+Version: 1.0 · Open ASK Service SRL (RNC 1320-11767)
+
+1) NATURALEZA DEL SERVICIO
+RAI DRIVER es plataforma tecnologica de intermediacion. No es empresa de transporte, no tiene flota ni emplea conductores. El transporte lo ejecutan conductores independientes registrados en RAI.
+
+2) PARTES
+Prestador: Open ASK Service SRL (RAI). Cliente: su empresa. Usted actua como encargado autorizado y declara tener facultad para aceptar este contrato en nombre de la empresa.
+
+3) ACTIVACION
+RAI debe activar el contrato comercial y tarifas antes de publicar viajes operativos. Puede configurar rutas mientras tanto; la operacion en calle inicia cuando RAI active el servicio.
+
+4) RUTAS Y CONDUCTORES
+La empresa define origen, pasajeros y horarios. RAI asigna el conductor fijo verificado. Los viajes son exclusivos (no pool publico) salvo contingencia gestionada por RAI. RAI puede sustituir conductores por seguridad, fuerza mayor o indisponibilidad.
+
+5) CODIGO DEL PERIODO
+PIN valido durante el ciclo de facturacion. Viajes completados en la plataforma con registro valido generan cargo segun tarifa acordada. Los registros digitales de RAI son evidencia primaria del servicio.
+
+6) FACTURACION Y PAGO
+Viajes completados se acumulan por periodo (ej. 15 o 30 dias). La empresa paga a RAI en el plazo acordado. Mora puede suspender el servicio. RAI emite e-CF conforme ley dominicana. La empresa paga a RAI; RAI liquida al conductor. No hay pago directo empresa-conductor salvo pacto escrito con RAI.
+
+7) OBLIGACIONES DE LA EMPRESA
+Informacion veraz; encargados autorizados; pago puntual; cumplimiento legal con pasajeros/empleados; puntos de recogida seguros; no uso ilicito del servicio.
+
+8) LIMITES DE RAI
+RAI provee plataforma con diligencia razonable. No garantiza ausencia de retrasos ni disponibilidad ininterrumpida (trafico, clima, fuerza mayor). En la maxima medida legal, RAI no responde por accidentes ni actos de conductores independientes. Responsabilidad total de RAI limitada a lo pagado por la empresa en los 3 meses anteriores al reclamo.
+
+9) DISPUTAS DE FACTURACION
+Reclamos por escrito a RAI dentro de 5 dias habiles del corte. Sin reclamacion fundada en plazo, el monto se considera aceptado.
+
+10) DATOS PERSONALES
+La empresa es responsable de la base legal para datos de pasajeros en plantillas. RAI trata datos segun Politica de Privacidad. La empresa indemniza a RAI por reclamos imputables a su manejo de datos.
+
+11) INDEMNIZACION Y SUSPENSION
+La empresa indemniza a Open ASK Service SRL por incumplimientos, informacion falsa o violaciones de ley. RAI puede suspender o terminar por mora, fraude, riesgo o abuso.
+
+12) PROPIEDAD INTELECTUAL Y LEY
+Marca y software son de Open ASK Service SRL. Licencia limitada para usar el modulo. Leyes de Republica Dominicana; tribunales del Distrito Nacional.
+
+ACEPTACION DIGITAL
+Al firmar, declara autorizacion para obligar a la empresa, acepta intermediacion de RAI, conductores independientes y facturacion por periodos.
 ''';

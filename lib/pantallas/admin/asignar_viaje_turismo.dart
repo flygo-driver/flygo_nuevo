@@ -7,6 +7,7 @@ import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -89,6 +90,9 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
       case 'chofer-bloqueo-prepago':
         return 'Chofer bloqueado por prepago/comisión RAI (misma regla que pool): '
             'regularizar billetera antes de asignar.';
+      case 'prepago-insuficiente-comision-viaje':
+        return 'El prepago disponible del chofer no alcanza para la comisión '
+            'de este viaje turismo. Pedile recarga en Mis pagos o elegí otro chofer.';
       default:
         if (res.startsWith('firebase:')) {
           final code = res.substring('firebase:'.length);
@@ -130,6 +134,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.asignarTurismo,
         title: 'Asignar chofer de turismo',
       ),
       body: Column(

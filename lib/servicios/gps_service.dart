@@ -319,6 +319,45 @@ class GpsService {
     }
   }
 
+  /// Cel / laptop / PC / tablet: pide permiso si hace falta y obtiene GPS
+  /// para mapa y cotización en producción (mismo flujo en todas las plataformas).
+  static Future<Position?> obtenerUbicacionMapaProduccion({
+    Duration timeout = const Duration(seconds: 12),
+    bool pedirPermisoSiFalta = true,
+  }) async {
+    var serviceOn = await isServiceEnabled();
+    if (!serviceOn) {
+      debugPrint('[GPS] servicio ubicación apagado');
+      return null;
+    }
+
+    var perm = await checkPermission();
+    if (!permissionUsable(perm) && pedirPermisoSiFalta) {
+      perm = await requestPermissionExplicitUser();
+    }
+    serviceOn = await isServiceEnabled();
+    if (!serviceOn || !permissionUsable(perm)) {
+      debugPrint('[GPS] sin permiso usable ($perm)');
+      // Sin diálogo: último intento pasivo (móvil con permiso previo).
+      if (!pedirPermisoSiFalta) {
+        return obtenerUbicacionActual(timeout: timeout);
+      }
+      return null;
+    }
+
+    try {
+      return await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: timeout,
+      );
+    } on TimeoutException {
+      return Geolocator.getLastKnownPosition();
+    } catch (e) {
+      debugPrint('[GPS] getCurrentPosition: $e');
+      return Geolocator.getLastKnownPosition();
+    }
+  }
+
   static Stream<Position> streamUbicacion({
     LocationAccuracy accuracy = LocationAccuracy.high,
     int distanceFilterMeters = 10,

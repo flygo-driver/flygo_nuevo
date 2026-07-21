@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
@@ -40,6 +41,13 @@ bool _estadoClienteEsActivo(String estado) {
 }
 
 bool _clienteDebeEntrarViajeEnCurso(Map<String, dynamic> v) {
+  final String canceladoPor = (v['canceladoPor'] ?? '').toString().trim();
+  // Taxista canceló (total o legado republicado a pendiente): no reabrir viaje en curso.
+  if (canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado') {
+    return false;
+  }
+  if (v['rechazado'] == true) return false;
+
   final String tipo = (v['tipoServicio'] ?? '').toString().trim().toLowerCase();
   if (tipo == 'turismo') {
     final String taxista =
@@ -123,6 +131,13 @@ class _TaxistaTripRouterState extends State<TaxistaTripRouter> {
       if (!mounted || _navegando) return;
       if (snap.docs.isEmpty) return;
       final v = snap.docs.first.data();
+      if (v['taxistaLiberado'] == true) return;
+      final estado = EstadosViaje.normalizar((v['estado'] ?? '').toString());
+      if (estado == EstadosViaje.esperandoCodigoEncargado ||
+          estado == EstadosViaje.codigoBloqueado ||
+          estado == EstadosViaje.canceladoPorTiempo) {
+        return;
+      }
       if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(v)) return;
       _goOnce(() async {
         await Navigator.of(context).pushReplacement(
@@ -198,6 +213,7 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
     await _subUser?.cancel();
     _subUser = userRef.snapshots().listen((snap) async {
       if (!mounted || _navegando) return;
+      if (ActiveTripService.debeForzarInicioClienteShell) return;
 
       final data = snap.data();
       final String siguiente =
@@ -256,6 +272,7 @@ class _ClienteTripRouterState extends State<ClienteTripRouter> {
     await _subActivos?.cancel();
     _subActivos = qFinal.snapshots().listen((snap) async {
       if (!mounted || _navegando) return;
+      if (ActiveTripService.debeForzarInicioClienteShell) return;
       if (snap.docs.isEmpty) return;
       final v = snap.docs.first.data();
       if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(v)) return;

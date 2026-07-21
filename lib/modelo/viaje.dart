@@ -367,10 +367,16 @@ class Viaje {
     final String? codigoVerif = _primerCodigoVerificacion(data);
     final bool codigoVerifOk = _asBool(data['codigoVerificado']);
 
-    // ✅ NUEVO: waypoints
-    List<Map<String, dynamic>>? waypoints = data['waypoints'] is List
-        ? List<Map<String, dynamic>>.from(data['waypoints'])
-        : null;
+    // ✅ NUEVO: waypoints (nunca List.from crudo: un item no-Map tumba el viaje en curso)
+    List<Map<String, dynamic>>? waypoints;
+    if (data['waypoints'] is List) {
+      waypoints = <Map<String, dynamic>>[];
+      for (final dynamic e in data['waypoints'] as List) {
+        if (e is Map) {
+          waypoints.add(Map<String, dynamic>.from(e));
+        }
+      }
+    }
     if (waypoints != null && waypoints.length > 1) {
       waypoints.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
         final int oa = (a['orden'] is num) ? (a['orden'] as num).toInt() : 0;
@@ -398,10 +404,51 @@ class Viaje {
               )
             : null;
 
-    // 👇 NUEVO: extras
-    final Map<String, dynamic>? extras = data['extras'] is Map
+    // 👇 NUEVO: extras (+ campos corporativos en raíz del doc)
+    Map<String, dynamic>? extras = data['extras'] is Map
         ? Map<String, dynamic>.from(data['extras'])
         : null;
+    if (data['corporativo'] == true || _asString(data['categoria']) == 'corporativo') {
+      extras = Map<String, dynamic>.from(extras ?? {});
+      extras['corporativo'] = true;
+      if (data['clienteAbordo'] == true) {
+        extras['clienteAbordo'] = true;
+      }
+      if (data['pickupConfirmadoEn'] != null) {
+        extras['pickupConfirmadoEn'] = data['pickupConfirmadoEn'];
+      }
+      for (final key in [
+        'corporativoEmpresaNombre',
+        'corporativoReferencia',
+        'corporativoHoraRecogidaGrupo',
+        'corporativoPlantillaNombre',
+        'corporativoPasajeros',
+        'corporativoGoogleMapsRutaUrl',
+        'corporativoWazeOrigenUrl',
+        'corporativoPasajerosActualizadosEn',
+        'corporativoModoInformativo',
+      ]) {
+        // Raíz del doc (CF) gana sobre extras viejos en merge parcial.
+        if (data[key] != null) {
+          extras[key] = data[key];
+        }
+      }
+      // Si extras quedó con menos pasajeros que la raíz (merge viejo), priorizar raíz.
+      final rootPas = data['corporativoPasajeros'];
+      final exPas = extras['corporativoPasajeros'];
+      if (rootPas is List && exPas is List && rootPas.length >= exPas.length) {
+        extras['corporativoPasajeros'] = rootPas;
+      }
+      // CF auto-publish escribe URLs en raíz sin prefijo corporativo*.
+      if (!extras.containsKey('corporativoGoogleMapsRutaUrl')) {
+        final maps = _asString(data['googleMapsRutaUrl']);
+        if (maps.isNotEmpty) extras['corporativoGoogleMapsRutaUrl'] = maps;
+      }
+      if (!extras.containsKey('corporativoWazeOrigenUrl')) {
+        final waze = _asString(data['wazeOrigenUrl']);
+        if (waze.isNotEmpty) extras['corporativoWazeOrigenUrl'] = waze;
+      }
+    }
 
     return Viaje(
       id: id,

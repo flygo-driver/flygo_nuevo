@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -317,7 +318,8 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         user: u,
         tipo: tipo,
         bytes: bytes,
-        localFilePath: img.path,
+        // En web el path es blob: y rompe putFile; solo bytes.
+        localFilePath: kIsWeb ? null : img.path,
       );
       _logDocUpload('storage OK tipo=$tipo');
 
@@ -375,6 +377,13 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
 
   Future<void> _elegirFuenteYSubir(String tipo) async {
     if (_subiendo) return;
+
+    // En laptop/PC/tablet web: abrir selector de archivos directo (sin cámara).
+    if (kIsWeb) {
+      await _seleccionarFotoYSubir(tipo, ImageSource.gallery);
+      return;
+    }
+
     final ImageSource? source = await showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1C),

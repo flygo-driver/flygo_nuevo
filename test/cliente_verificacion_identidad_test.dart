@@ -35,5 +35,26 @@ void main() {
           DateTime.now().subtract(const Duration(days: 31)),
     };
     expect(ClienteVerificacionIdentidadService.debeVerificarAhora(data), true);
+    expect(
+      ClienteVerificacionIdentidadService.estadoDesde(data),
+      ClienteVerificacionIdentidadEstado.vencida,
+    );
+  });
+
+  test('selfie reciente marca estado vigente', () {
+    final data = <String, dynamic>{
+      ...cliente,
+      'verificacionIdentidadEn': DateTime.now().subtract(const Duration(days: 2)),
+    };
+    expect(
+      ClienteVerificacionIdentidadService.estadoDesde(data),
+      ClienteVerificacionIdentidadEstado.vigente,
+    );
+    expect(
+      ClienteVerificacionIdentidadService.etiquetaEstado(
+        ClienteVerificacionIdentidadEstado.vigente,
+      ),
+      'Selfie al día',
+    );
   });
 }

@@ -4,13 +4,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_cancelar_ui.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
@@ -21,7 +21,10 @@ import 'pools_taxista_reservas.dart';
 import 'pools_taxista_crear.dart';
 
 class PoolsTaxistaLista extends StatefulWidget {
-  const PoolsTaxistaLista({super.key});
+  const PoolsTaxistaLista({super.key, this.embeddedInOrganizadorShell = false});
+
+  /// En [OrganizadorGirasShell] el FAB ya publica; ocultar + duplicado en AppBar.
+  final bool embeddedInOrganizadorShell;
 
   @override
   State<PoolsTaxistaLista> createState() => _PoolsTaxistaListaState();
@@ -29,10 +32,13 @@ class PoolsTaxistaLista extends StatefulWidget {
 
 class _PoolsTaxistaListaState extends State<PoolsTaxistaLista> {
   bool _accionEnCurso = false;
-  bool _esActivoVisible(Map<String, dynamic> d) {
-    return !PoolRepo.giraEstadoOcultoEnListados(
-      (d['estado'] ?? '').toString(),
-    );
+  /// Cancelada / finalizada → pestaña Historial. El resto (abierto, en_ruta…) queda
+  /// en Activas para editar / operar.
+  bool _esHistorialEstado(String raw) {
+    final s = raw.trim().toLowerCase();
+    return s == 'cancelado' ||
+        s == 'cancelado_por_admin' ||
+        s == 'finalizado';
   }
 
   String _cleanPhone(String raw) {
@@ -79,7 +85,7 @@ class _PoolsTaxistaListaState extends State<PoolsTaxistaLista> {
     final agencia = (d['agenciaNombre'] ?? '').toString().trim();
     final taxistaNombre = (d['taxistaNombre'] ?? '').toString().trim();
     final precio = ((d['precioPorAsiento'] ?? 0) as num).toDouble();
-    final fechaTxt = DateFormat('EEE d MMM • HH:mm', 'es').format(fechaSalida);
+    final fechaTxt = fmtFechaHoraAmPm(fechaSalida, sep: '•');
     final paradasTxt =
         paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ');
     final quien = agencia.isNotEmpty
@@ -188,7 +194,7 @@ Contactanos por esta via para mas informacion y confirmacion.
         return;
       }
 
-      final fechaTxt = DateFormat('d MMM, HH:mm', 'es').format(fecha);
+      final fechaTxt = fmtDiaMesHoraAmPm(fecha);
       final msg = Uri.encodeComponent(
         'Hola! Recordatorio de tu salida por cupos ($origen -> $destino). '
         'Salida: $fechaTxt. Por favor confirmar asistencia.',
@@ -431,8 +437,28 @@ Contactanos por esta via para mas informacion y confirmacion.
   @override
   Widget build(BuildContext context) {
     final u = FirebaseAuth.instance.currentUser;
-    final f = DateFormat('EEE d MMM • HH:mm', 'es');
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    if (u == null) {
+      return Scaffold(
+        backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
+        appBar: AppBar(
+          title: const Text(PoolsProductoCopy.salidasMis),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Inicia sesión como conductor u organizador para ver tus salidas.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isDark ? Colors.white70 : const Color(0xFF667085),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
     final Color textSecondary =
         isDark ? Colors.white70 : const Color(0xFF475467);
@@ -443,67 +469,118 @@ Contactanos por esta via para mas informacion y confirmacion.
     final Color cardBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color softFill = isDark ? Colors.white10 : const Color(0xFFEFF1F5);
 
-    return Scaffold(
-      backgroundColor: scaffoldBg,
-      appBar: AppBar(
-        backgroundColor: isDark ? Colors.black : Colors.white,
-        foregroundColor: textPrimary,
-        elevation: isDark ? 0 : 0.5,
-        title: Text(
-          PoolsProductoCopy.salidasMis,
-          style: TextStyle(
-            color: accent,
-            fontWeight: FontWeight.w800,
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        backgroundColor: scaffoldBg,
+        appBar: AppBar(
+          backgroundColor: isDark ? Colors.black : Colors.white,
+          foregroundColor: textPrimary,
+          elevation: isDark ? 0 : 0.5,
+          title: Text(
+            PoolsProductoCopy.salidasMis,
+            style: TextStyle(
+              color: accent,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          centerTitle: true,
+          actions: [
+            if (!widget.embeddedInOrganizadorShell)
+              IconButton(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PoolsTaxistaCrear()),
+                ),
+                icon: const Icon(Icons.add),
+                tooltip: 'Publicar salida',
+              ),
+          ],
+          bottom: TabBar(
+            labelColor: accent,
+            unselectedLabelColor: textMuted,
+            indicatorColor: accent,
+            tabs: const [
+              Tab(text: 'Activas'),
+              Tab(text: 'Historial'),
+            ],
           ),
         ),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const PoolsTaxistaCrear()),
-            ),
-            icon: const Icon(Icons.add),
-            tooltip: 'Publicar salida',
-          ),
-        ],
-      ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: PoolRepo.streamPoolsTaxista(ownerTaxistaId: u!.uid),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return Center(
-              child: CircularProgressIndicator(color: accent),
-            );
-          }
-          if (snap.hasError) {
-            return Center(
-              child: Text(
-                'No se pudieron cargar tus salidas por cupos.\n${snap.error}',
-                style: TextStyle(color: textMuted),
-                textAlign: TextAlign.center,
-              ),
-            );
-          }
-          final docs = (snap.data?.docs ?? [])
-              .where((e) => _esActivoVisible(e.data()))
-              .toList()
-            ..sort(_sortTaxistaPools);
-          if (docs.isEmpty) {
-            return Center(
-              child: Text(
-                'No tienes salidas activas por cupos (${PoolsProductoCopy.tipos}).',
-                style: TextStyle(color: textMuted),
-              ),
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemCount: docs.length,
-            itemBuilder: (ctx, i) {
-              final d = docs[i].data();
-              final id = docs[i].id;
+        body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: PoolRepo.streamPoolsTaxista(ownerTaxistaId: u.uid),
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return Center(
+                child: CircularProgressIndicator(color: accent),
+              );
+            }
+            if (snap.hasError) {
+              return Center(
+                child: Text(
+                  'No se pudieron cargar tus salidas por cupos.\n${snap.error}',
+                  style: TextStyle(color: textMuted),
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            final all = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+              snap.data?.docs ?? const [],
+            )..sort(_sortTaxistaPools);
+            final activas = all
+                .where(
+                  (e) => !_esHistorialEstado(
+                    (e.data()['estado'] ?? '').toString(),
+                  ),
+                )
+                .toList();
+            final historial = all
+                .where(
+                  (e) => _esHistorialEstado(
+                    (e.data()['estado'] ?? '').toString(),
+                  ),
+                )
+                .toList();
+
+            Widget lista(
+              List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+              required String vacio,
+              bool tipEditar = false,
+            }) {
+              if (docs.isEmpty) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      vacio,
+                      style: TextStyle(color: textMuted, height: 1.35),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                );
+              }
+              final tipOffset = tipEditar ? 1 : 0;
+              return ListView.separated(
+                padding: const EdgeInsets.all(12),
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemCount: docs.length + tipOffset,
+                itemBuilder: (ctx, i) {
+                  if (tipEditar && i == 0) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        'Al publicar una gira queda aquí con tu cuenta. '
+                        'Usá «Editar y republicar» para cambiar destino, cupos, fotos o precio.',
+                        style: TextStyle(
+                          color: textSecondary,
+                          fontSize: 13,
+                          height: 1.35,
+                        ),
+                      ),
+                    );
+                  }
+                  final doc = docs[i - tipOffset];
+                  final d = doc.data();
+                  final id = doc.id;
 
               final cap = ((d['capacidad'] ?? 0) as num).toInt();
               final occ = ((d['asientosReservados'] ?? 0) as num).toInt();
@@ -612,7 +689,10 @@ Contactanos por esta via para mas informacion y confirmacion.
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      f.format((d['fechaSalida'] as Timestamp).toDate()),
+                      fmtFechaHoraAmPm(
+                        (d['fechaSalida'] as Timestamp).toDate(),
+                        sep: '•',
+                      ),
                       style: TextStyle(color: textSecondary),
                     ),
                     if (paradas.isNotEmpty) ...[
@@ -884,9 +964,27 @@ Contactanos por esta via para mas informacion y confirmacion.
                   ],
                 ),
               );
-            },
-          );
-        },
+                },
+              );
+            }
+
+            return TabBarView(
+              children: [
+                lista(
+                  activas,
+                  tipEditar: true,
+                  vacio:
+                      'No tienes salidas activas.\nPublicá una con + o «Publicar salida por cupos»; '
+                      'quedará aquí para editarla.',
+                ),
+                lista(
+                  historial,
+                  vacio: 'Aún no hay salidas finalizadas o canceladas.',
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }

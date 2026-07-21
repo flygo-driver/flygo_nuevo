@@ -878,35 +878,12 @@ class PoolRepo {
     return PoolReservaResult.fromCallableData(resp.data);
   }
 
+  /// @Deprecated — usar [marcarReservaPagadaSegura] (CF). No mutar cupos en cliente.
   static Future<void> marcarReservaPagada({
     required String poolId,
     required String reservaId,
   }) async {
-    final poolRef = pools.doc(poolId);
-    final resRef = poolRef.collection('reservas').doc(reservaId);
-
-    await _db.runTransaction((tx) async {
-      final resSnap = await tx.get(resRef);
-      if (!resSnap.exists) throw 'Reserva no encontrada';
-      final r = resSnap.data()!;
-      if (r['estado'] == 'pagado') return;
-
-      final seats = (r['seats'] ?? 0) as int;
-      final total = ((r['total'] ?? 0.0) as num).toDouble();
-
-      final poolSnap = await tx.get(poolRef);
-      final p = poolSnap.data()!;
-      final minConf = (p['minParaConfirmar'] ?? 0) as int;
-      final pag = (p['asientosPagados'] ?? 0) as int;
-
-      tx.update(poolRef, {
-        'asientosPagados': pag + seats,
-        'montoPagado': ((p['montoPagado'] ?? 0.0) as num).toDouble() + total,
-        if ((pag + seats) >= minConf && (p['estado'] != 'confirmado'))
-          'estado': 'confirmado',
-      });
-      tx.update(resRef, {'estado': 'pagado'});
-    });
+    await marcarReservaPagadaSegura(poolId: poolId, reservaId: reservaId);
   }
 
   static Future<void> marcarReservaPagadaSegura({

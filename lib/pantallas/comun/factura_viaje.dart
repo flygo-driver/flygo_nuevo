@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/comprobante_transferencia_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
@@ -446,6 +447,8 @@ class _FacturaContentState extends State<_FacturaContent> {
     );
 
     final bool esTaxista = role == 'taxista';
+    final bool esCorporativo =
+        CorporativoTaxistaService.esViajeCorporativoDoc(data);
     final ({double comision, double ganancia}) liq =
         _liquidacionTaxistaDesdeDoc(total);
     final double comisionCond = liq.comision;
@@ -689,19 +692,34 @@ class _FacturaContentState extends State<_FacturaContent> {
             _Row(
               icon: Icons.payments_rounded,
               iconColor: cs.primary,
-              label: 'Total del servicio (RD\$)',
+              label: esCorporativo && esTaxista
+                  ? 'Tu neto acumulado (RD\$)'
+                  : 'Total del servicio (RD\$)',
               value: montoPendienteServidor
                   ? 'Confirmando…'
-                  : FormatosMoneda.rd(total),
+                  : FormatosMoneda.rd(
+                      esCorporativo && esTaxista ? gananciaCond : total,
+                    ),
               valueBold: true,
             ),
+            if (esCorporativo && esTaxista && total > 1e-6)
+              _Row(
+                icon: Icons.receipt_long_outlined,
+                iconColor: cs.outline,
+                label: 'Tarifa ruta (empresa)',
+                value: FormatosMoneda.rd(total),
+              ),
             _Row(
-              icon: esTransferencia
-                  ? Icons.account_balance_rounded
-                  : Icons.attach_money_rounded,
+              icon: esCorporativo
+                  ? Icons.business_center_outlined
+                  : (esTransferencia
+                      ? Icons.account_balance_rounded
+                      : Icons.attach_money_rounded),
               iconColor: cs.secondary,
               label: 'Medio de pago acordado',
-              value: MetodoPagoViaje.etiquetaDocumento(metodoPago),
+              value: esCorporativo
+                  ? 'Corporativo (empresa)'
+                  : MetodoPagoViaje.etiquetaDocumento(metodoPago),
             ),
           ],
         ),
@@ -725,7 +743,10 @@ class _FacturaContentState extends State<_FacturaContent> {
               ),
               const SizedBox(height: 8),
               Text(
-                esEfectivo
+                esCorporativo
+                    ? 'Ruta corporativa B2B: este neto se acumula en Ganancias → Corporativo. '
+                        'RAI cobra a la empresa y te transfiere al liquidar el período.'
+                    : esEfectivo
                     ? 'Los montos reflejan el cierre en servidor. En efectivo, la comisión RAI '
                         'impacta tu prepago y/o comisión pendiente; regularizá en Mis pagos.'
                     : 'Los montos reflejan el cierre en servidor. En transferencia, cobrás el '
@@ -754,7 +775,7 @@ class _FacturaContentState extends State<_FacturaContent> {
             ],
           ),
         ],
-        if (esTransferencia) ...[
+        if (esTransferencia && !esCorporativo) ...[
           const SizedBox(height: 12),
           if (usaRecaudoRai)
             _FacturaSectionRecaudoRai(
@@ -802,6 +823,7 @@ class _FacturaContentState extends State<_FacturaContent> {
             uidTaxista: uidTaxista,
             esEfectivo: esEfectivo,
             esTransferencia: esTransferencia,
+            esCorporativo: esCorporativo,
             comisionViaje: comisionCond,
             gananciaViaje: gananciaCond,
             lineaSaldoPrepagoFactura: _lineaSaldoPrepagoFactura(),
@@ -932,6 +954,7 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
     required this.uidTaxista,
     required this.esEfectivo,
     required this.esTransferencia,
+    required this.esCorporativo,
     required this.comisionViaje,
     required this.gananciaViaje,
     required this.lineaSaldoPrepagoFactura,
@@ -940,6 +963,7 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
   final String uidTaxista;
   final bool esEfectivo;
   final bool esTransferencia;
+  final bool esCorporativo;
   final double comisionViaje;
   final double gananciaViaje;
   final String lineaSaldoPrepagoFactura;
@@ -1037,7 +1061,11 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
                     ? 'ALERTA: prepago bajo para viajes en efectivo. Recargá en Mis pagos antes de quedar bloqueado.'
                     : 'ACTIVO: podés operar (efectivo y transferencia) según las reglas de RAI.');
 
-            final String pie = esTransferencia
+            final String pie = esCorporativo
+                ? 'Ruta corporativa B2B: tu neto de este viaje se acumula en '
+                    'Ganancias → Corporativo. RAI cobra a la empresa y te transfiere '
+                    'según el ciclo acordado — no pidas pago al pasajero.'
+                : esTransferencia
                 ? 'Este viaje se cobró por transferencia al pasajero (arriba: datos bancarios y comprobante). '
                     'Al cerrar, la comisión RAI se descontó de tu prepago (arriba «Saldo prepago tras este cierre»). '
                     'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.'
@@ -1048,12 +1076,16 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
               title: 'Comisión, recarga y bloqueo',
               children: [
                 _Row(
-                  icon: esTransferencia
-                      ? Icons.account_balance_rounded
-                      : Icons.attach_money_rounded,
+                  icon: esCorporativo
+                      ? Icons.business_center_outlined
+                      : (esTransferencia
+                          ? Icons.account_balance_rounded
+                          : Icons.attach_money_rounded),
                   iconColor: cs.primary,
                   label: 'Forma de pago de este viaje',
-                  value: esTransferencia ? 'Transferencia' : 'Efectivo',
+                  value: esCorporativo
+                      ? 'Corporativo (empresa)'
+                      : (esTransferencia ? 'Transferencia' : 'Efectivo'),
                 ),
                 Container(
                   width: double.infinity,

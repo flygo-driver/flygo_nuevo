@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 /// Ticket digital de gira por cupos (QR + datos del pasajero).
@@ -37,7 +37,6 @@ class PoolGiraTicketCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fFecha = DateFormat('EEE d MMM yyyy · HH:mm', 'es');
     final usado = tokenEstado.trim().toLowerCase() == 'usado';
     final anulado = tokenEstado.trim().toLowerCase() == 'anulado';
     final textPrimary = estiloOscuro ? Colors.white : const Color(0xFF101828);
@@ -105,9 +104,19 @@ class PoolGiraTicketCard extends StatelessWidget {
           _fila('Gira', giraNombre, textPrimary, textMuted),
           if (empresa.isNotEmpty) _fila('Empresa', empresa, textPrimary, textMuted),
           _fila('Asientos', '$asientos', textPrimary, textMuted),
-          _fila('Salida', fFecha.format(fechaSalida), textPrimary, textMuted),
+          _fila(
+            'Salida',
+            fmtFechaHoraAmPm(fechaSalida, conAnio: true),
+            textPrimary,
+            textMuted,
+          ),
           if (fechaRegreso != null)
-            _fila('Regreso', fFecha.format(fechaRegreso!), textPrimary, textMuted),
+            _fila(
+              'Regreso',
+              fmtFechaHoraAmPm(fechaRegreso!, conAnio: true),
+              textPrimary,
+              textMuted,
+            ),
           if (puntoEncuentro.isNotEmpty)
             _fila('Encuentro', puntoEncuentro, textPrimary, textMuted),
           const SizedBox(height: 12),

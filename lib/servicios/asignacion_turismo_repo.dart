@@ -212,6 +212,15 @@ class AsignacionTurismoRepo {
             uSnap.data(), bSnap.data())) {
           throw 'chofer-bloqueo-prepago';
         }
+        // Misma regla que claim / pool: prepago libre ≥ comisión estimada de este viaje.
+        final String? prepViaje =
+            PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
+          billeData: bSnap.data(),
+          viajeData: Map<String, dynamic>.from(vData),
+        );
+        if (prepViaje != null) {
+          throw prepViaje;
+        }
 
         final Map<String, dynamic> updViaje = {
           'uidTaxista': uidChofer,

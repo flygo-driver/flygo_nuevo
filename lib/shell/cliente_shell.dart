@@ -10,6 +10,7 @@ import 'package:flygo_nuevo/pantallas/cliente/cliente_experiencias_tab.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_home.dart';
 import 'package:flygo_nuevo/pantallas/cliente/cliente_mis_viajes_hub.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
+import 'package:flygo_nuevo/widgets/viaje_overlay_error_shield.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
@@ -23,6 +24,7 @@ import 'package:flygo_nuevo/widgets/rai_asistente_fab.dart';
 import 'package:flygo_nuevo/widgets/cliente_registro_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_banner_scope.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_detalle.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
@@ -185,9 +187,17 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     });
   }
 
+  void _onShellTabController() {
+    final i = ShellTabController.clienteIndex.value;
+    if (!mounted || i == _index) return;
+    setState(() => _index = i);
+  }
+
   @override
   void initState() {
     super.initState();
+    ShellTabController.clienteIndex.value = 0;
+    ShellTabController.clienteIndex.addListener(_onShellTabController);
     ClientePoolDeepLinkBridge.bindShell(
       isReady: _shellListoParaDeepLinkGira,
       openPool: _abrirGiraDeepLinkEnExperiencias,
@@ -216,6 +226,13 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
       _shellRebuildListener = () {
         if (!mounted) return;
+        if (ActiveTripService.debeForzarInicioClienteShell) {
+          if (_viajeActivoShell != false) {
+            print('[VIAJE_ACTIVO] cliente_shell rebuild tick → forzar inicio');
+            setState(() => _viajeActivoShell = false);
+          }
+          return;
+        }
         if (!ActiveTripService.debeMantenerOverlayViajeEnShell) return;
         if (_viajeActivoShell != true) {
           print('[VIAJE_ACTIVO] cliente_shell rebuild tick → overlay viaje');
@@ -228,6 +245,19 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
           ActiveTripService.streamTieneViajeActivo(uid).listen((bool ok) {
         if (!mounted) return;
         _bootstrapViajeTimeout?.cancel();
+        if (ActiveTripService.debeForzarInicioClienteShell) {
+          if (_viajeActivoShell != false) {
+            print('[VIAJE_ACTIVO] cliente_shell forzar inicio → home');
+            setState(() {
+              _viajeActivoShell = false;
+              _lastDeepLinkPoolOpened = null;
+            });
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              PoolDeepLink.notifyClienteShellReady();
+            });
+          }
+          return;
+        }
         if (_viajeActivoShell == true &&
             !ok &&
             ActiveTripService.debeMantenerOverlayViajeEnShell) {
@@ -270,7 +300,9 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     _bootstrapViajeTimeout?.cancel();
 
     bool mostrarViaje = false;
-    if (RaiConnectivityService.instance.isOffline ||
+    if (ActiveTripService.debeForzarInicioClienteShell) {
+      mostrarViaje = false;
+    } else if (RaiConnectivityService.instance.isOffline ||
         ActiveTripService.debeMantenerOverlayViajeEnShell) {
       mostrarViaje = ActiveTripService.debeMantenerOverlayViajeEnShell;
       if (!mostrarViaje) {
@@ -303,6 +335,7 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
   @override
   void dispose() {
+    ShellTabController.clienteIndex.removeListener(_onShellTabController);
     ClientePoolDeepLinkBridge.unbindShell();
     _bootstrapViajeTimeout?.cancel();
     if (_offlineListener != null) {
@@ -333,10 +366,22 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     );
   }
 
+  void _seleccionarTab(int i) {
+    ShellTabController.clienteIndex.value = i;
+    if (!mounted) return;
+    setState(() => _index = i);
+    if (i == _kTabExperiencias) _notificarDeepLinkSiListo();
+  }
+
   @override
   Widget build(BuildContext context) {
     final String? uidOffline = FirebaseAuth.instance.currentUser?.uid;
-    if (_viajeActivoShell == null) {
+    // Si ya pedimos overlay (p. ej. tras confirmar viaje), no quedarse en spinner
+    // aunque el stream de viajeActivo aún no haya emitido.
+    final bool forzarInicio = ActiveTripService.debeForzarInicioClienteShell;
+    final bool overlayForzado =
+        !forzarInicio && ActiveTripService.debeMantenerOverlayViajeEnShell;
+    if (_viajeActivoShell == null && !overlayForzado && !forzarInicio) {
       return Scaffold(
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -352,25 +397,27 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
         ),
       );
     }
-    final bool full = _viajeActivoShell == true ||
-        ActiveTripService.debeMantenerOverlayViajeEnShell;
+    final bool full =
+        !forzarInicio && (_viajeActivoShell == true || overlayForzado);
     if (full) {
       print(
           '[VIAJE_ACTIVO] cliente_shell: pantalla completa ViajeEnCursoCliente (sin tabs)');
       return Scaffold(
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            RaiOfflineBanner(uid: uidOffline),
-            const RaiUbicacionClienteBanner(),
-            Expanded(
-              child: RaiUbicacionBannerScope(
-                child: ClientePantallaViajeActivo(
-                  viajeEnCursoKey: _viajeEnCursoShellKey,
+        body: ViajeOverlayErrorShield(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              RaiOfflineBanner(uid: uidOffline),
+              const RaiUbicacionClienteBanner(),
+              Expanded(
+                child: RaiUbicacionBannerScope(
+                  child: ClientePantallaViajeActivo(
+                    viajeEnCursoKey: _viajeEnCursoShellKey,
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
@@ -420,10 +467,7 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
             backgroundColor: barSurface,
             surfaceTintColor: Colors.transparent,
             selectedIndex: _index,
-            onDestinationSelected: (i) {
-              setState(() => _index = i);
-              if (i == _kTabExperiencias) _notificarDeepLinkSiListo();
-            },
+            onDestinationSelected: _seleccionarTab,
             labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
             destinations: const [
               NavigationDestination(

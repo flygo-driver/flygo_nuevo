@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <script>
+    // Evita que el service worker de Flutter (admin web) intercepte /rai en laptop.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        regs.forEach(function (r) { r.unregister(); });
+      });
+    }
+  </script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>RAI Driver — Descargar en Google Play</title>
+  <meta name="description" content="RAI Driver: pasajero y conductor en una sola app. Viajes, motor, giras y turismo en República Dominicana." />
+
+  <!-- Open Graph / WhatsApp / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="RAI Driver" />
+  <meta property="og:title" content="RAI Driver — Movilidad inteligente" />
+  <meta property="og:description" content="Pasajero y conductor en una sola app. Descargá RAI Driver en Google Play." />
+  <meta property="og:image" content="https://flygo-rd.web.app/pool/rai-share-card.png" />
+  <meta property="og:image:alt" content="RAI Driver — Movilidad inteligente" />
+  <meta property="og:url" content="https://flygo-rd.web.app/rai.html" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="RAI Driver — Movilidad inteligente" />
+  <meta name="twitter:description" content="Pasajero y conductor en una sola app. Descargá en Google Play." />
+  <meta name="twitter:image" content="https://flygo-rd.web.app/pool/rai-share-card.png" />
+
+  <link rel="icon" type="image/png" href="/pool/rai-logo.png" />
+
+  <style>
+    :root {
+      --sunset: #ff7a45;
+      --coral: #ff5e62;
+      --ocean: #00c9a7;
+      --lagoon: #5bc0be;
+      --sand: #ffe08a;
+      --bg: #071018;
+      --card: rgba(17, 24, 39, 0.94);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --border: rgba(0, 201, 167, 0.35);
+      --shadow: rgba(255, 122, 69, 0.22);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #fff8f0;
+        --card: rgba(255, 255, 255, 0.96);
+        --text: #0f172a;
+        --muted: #475569;
+        --border: rgba(255, 122, 69, 0.35);
+        --shadow: rgba(255, 94, 98, 0.18);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background:
+        radial-gradient(900px 480px at 95% -5%, rgba(255, 224, 138, 0.35), transparent 55%),
+        radial-gradient(700px 420px at 0% 0%, rgba(0, 201, 167, 0.22), transparent 50%),
+        radial-gradient(600px 400px at 50% 100%, rgba(255, 122, 69, 0.15), transparent 55%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 440px; margin: 0 auto; padding: 28px 16px 40px; }
+    .brand {
+      display: flex; align-items: center; gap: 14px; margin-bottom: 20px;
+    }
+    .brand img {
+      width: 64px; height: 64px; border-radius: 18px;
+      box-shadow: 0 10px 28px var(--shadow);
+      border: 2px solid rgba(255, 255, 255, 0.15);
+    }
+    .brand strong { display: block; font-size: 1.2rem; letter-spacing: 0.02em; }
+    .brand span { color: var(--muted); font-size: 0.88rem; }
+    .card {
+      background: var(--card);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28);
+      position: relative;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .card::before {
+      content: "";
+      position: absolute; inset: 0; border-radius: 20px; padding: 2px;
+      background: linear-gradient(135deg, var(--sunset), var(--sand), var(--ocean));
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+    .hero {
+      min-height: 140px;
+      background: linear-gradient(135deg, var(--sunset), var(--sand), var(--ocean));
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+    }
+    .hero img {
+      width: 100%; max-height: 180px; object-fit: cover; display: block;
+    }
+    .body { padding: 22px 18px 24px; position: relative; z-index: 1; }
+    .badge {
+      display: inline-block; margin-bottom: 12px;
+      background: rgba(0, 201, 167, 0.14); color: var(--ocean);
+      padding: 5px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 800;
+      border: 1px solid var(--border);
+    }
+    h1 { margin: 0 0 10px; font-size: 1.45rem; line-height: 1.2; font-weight: 900; }
+    .tagline {
+      font-size: 1rem; font-weight: 700;
+      background: linear-gradient(90deg, var(--sunset), var(--ocean));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      margin: 0 0 14px;
+    }
+    .features {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px;
+    }
+    .chip {
+      font-size: 0.78rem; font-weight: 700; padding: 6px 10px; border-radius: 999px;
+      background: rgba(91, 192, 190, 0.12); border: 1px solid var(--border); color: var(--text);
+    }
+    .meta { color: var(--muted); font-size: 0.94rem; line-height: 1.55; margin: 0 0 16px; }
+    a.btn {
+      display: block; margin-top: 10px; padding: 15px 18px; text-align: center;
+      font-weight: 800; text-decoration: none; border-radius: 12px; font-size: 1rem;
+    }
+    .primary {
+      background: linear-gradient(135deg, var(--sunset), var(--ocean));
+      color: #fff; box-shadow: 0 12px 28px rgba(0, 201, 167, 0.28);
+    }
+    .secondary {
+      background: rgba(127, 127, 127, 0.12); color: var(--text);
+      border: 1px solid var(--border); font-size: 0.9rem;
+    }
+    p.muted { color: var(--muted); font-size: 0.86rem; line-height: 1.45; margin-top: 16px; text-align: center; }
+    .legal { margin-top: 20px; text-align: center; font-size: 0.8rem; }
+    .legal a { color: var(--lagoon); text-decoration: none; }
+    .legal a:hover { text-decoration: underline; }
+    .media-section { margin-top: 22px; }
+    .media-section h2 {
+      margin: 0 0 12px; font-size: 1.1rem; font-weight: 900; text-align: center;
+    }
+    .video-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-bottom: 14px;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    }
+    .video-card video {
+      width: 100%; display: block; background: #000; max-height: 260px; object-fit: cover;
+    }
+    .video-label {
+      padding: 10px 14px; font-size: 0.82rem; font-weight: 700; color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <img src="/pool/rai-logo.png" alt="RAI Driver" />
+      <div>
+        <strong>RAI Driver</strong>
+        <span>Open ASK Service SRL · República Dominicana</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hero">
+        <img src="/pool/rai-share-card.png" alt="RAI Driver" />
+      </div>
+      <div class="body">
+        <span class="badge">Google Play</span>
+        <h1>Descargá RAI Driver</h1>
+        <p class="tagline">Pasajero y conductor en una sola app</p>
+        <div class="features">
+          <span class="chip">Viajes al instante</span>
+          <span class="chip">Motor RAI</span>
+          <span class="chip">Giras por cupos</span>
+          <span class="chip">Turismo</span>
+        </div>
+        <p class="meta">
+          Conectá con conductores independientes, programá viajes, reservá giras y explorá destinos turísticos.
+        </p>
+        <a id="playStore" class="btn primary" href="https://play.google.com/store/apps/details?id=com.flygo.rd2">
+          Descargar en Google Play
+        </a>
+        <a class="btn secondary" href="https://play.google.com/store/apps/details?id=com.flygo.rd2&amp;hl=es">
+          Ver en Play Store (español)
+        </a>
+      </div>
+    </div>
+
+    <section class="media-section" aria-label="Videos RAI Driver">
+      <h2>Conocé RAI Driver</h2>
+      <div class="video-card">
+        <video controls playsinline preload="metadata" poster="/pool/rai-share-card.png">
+          <source src="/rai/media/video-1.mp4" type="video/mp4" />
+        </video>
+        <div class="video-label">RAI Driver — Video 1</div>
+      </div>
+      <div class="video-card">
+        <video controls playsinline preload="metadata" poster="/pool/rai-share-card.png">
+          <source src="/rai/media/video-2.mp4" type="video/mp4" />
+        </video>
+        <div class="video-label">RAI Driver — Video 2</div>
+      </div>
+      <div class="video-card">
+        <video controls playsinline preload="metadata" poster="/pool/rai-share-card.png">
+          <source src="/rai/media/video-3.mp4" type="video/mp4" />
+        </video>
+        <div class="video-label">RAI Driver — Video 3</div>
+      </div>
+      <div class="video-card">
+        <video controls playsinline preload="metadata" poster="/pool/rai-share-card.png">
+          <source src="/rai/media/video-4.mp4" type="video/mp4" />
+        </video>
+        <div class="video-label">RAI Driver — Video 4</div>
+      </div>
+    </section>
+
+    <p class="muted" id="status"></p>
+
+    <div class="legal">
+      <a href="/legal/privacidad">Privacidad</a> ·
+      <a href="/legal/terminos">Términos</a> ·
+      <a href="/legal/eliminar-cuenta">Eliminar cuenta</a>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var PLAY = 'https://play.google.com/store/apps/details?id=com.flygo.rd2';
+      var PLAY_ES = PLAY + '&hl=es';
+      var MARKET = 'market://details?id=com.flygo.rd2';
+      var ua = navigator.userAgent || '';
+      var isAndroid = /Android/i.test(ua);
+      var isIOS = /iPhone|iPad|iPod/i.test(ua);
+      var inApp = /(FBAN|FBAV|Instagram|WhatsApp|Line\/|Twitter|Telegram|wv\))/i.test(ua);
+      var status = document.getElementById('status');
+      var playBtn = document.getElementById('playStore');
+
+      function openPlayStore(e) {
+        if (e) e.preventDefault();
+        if (isAndroid && !inApp) {
+          var opened = false;
+          var t = setTimeout(function () {
+            if (!opened) window.location.href = PLAY_ES;
+          }, 900);
+          try {
+            window.location.href = MARKET;
+            opened = true;
+          } catch (_) {
+            window.location.href = PLAY_ES;
+          }
+          clearTimeout(t);
+          return;
+        }
+        window.location.href = PLAY_ES;
+      }
+
+      playBtn.addEventListener('click', openPlayStore);
+
+      if (inApp) {
+        status.textContent = 'Tocá "Descargar en Google Play" para abrir la tienda. Si no carga, usá los tres puntos y "Abrir en navegador".';
+      } else if (isIOS) {
+        status.textContent = 'RAI Driver está en Google Play (Android). En iPhone podés ver la ficha en el navegador.';
+      } else if (isAndroid) {
+        status.textContent = 'Tocá el botón verde para abrir Google Play e instalar RAI Driver.';
+      } else {
+        status.textContent = 'Disponible en Google Play para Android.';
+      }
+    })();
+  </script>
+</body>
+</html>

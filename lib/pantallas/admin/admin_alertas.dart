@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 
 import '../../servicios/admin_dashboard_service.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
+import 'admin_corporativo_plantillas.dart';
 import 'admin_ui_theme.dart';
 
 class AdminAlertasPage extends StatefulWidget {
@@ -58,6 +60,38 @@ class _AdminAlertasPageState extends State<AdminAlertasPage> {
     }
   }
 
+  Future<void> _onTapAlerta({
+    required String id,
+    required bool leida,
+    required String tipo,
+    required Map<String, dynamic> data,
+  }) async {
+    if (leida) return;
+
+    final meta = data['metadata'];
+    final empresaId = meta is Map
+        ? (meta['empresaId'] ?? '').toString().trim()
+        : '';
+    final empresaNombre = meta is Map
+        ? (meta['empresaNombre'] ?? 'Empresa').toString().trim()
+        : 'Empresa';
+
+    if ((tipo == 'corporativo_sin_chofer' || tipo == 'corporativo_publicacion') &&
+        empresaId.isNotEmpty &&
+        mounted) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => AdminCorporativoPlantillasPage(
+            empresaId: empresaId,
+            empresaNombre: empresaNombre,
+          ),
+        ),
+      );
+    }
+
+    await _marcarLeida(id);
+  }
+
   Future<void> _marcarTodas() async {
     if (_marcando) return;
     setState(() => _marcando = true);
@@ -85,6 +119,7 @@ class _AdminAlertasPageState extends State<AdminAlertasPage> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.alertas,
         title: 'Alertas operativas',
         actions: [
           IconButton(
@@ -164,7 +199,14 @@ class _AdminAlertasPageState extends State<AdminAlertasPage> {
                       borderRadius: BorderRadius.circular(12),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
-                        onTap: leida ? null : () => _marcarLeida(d.id),
+                        onTap: leida
+                            ? null
+                            : () => _onTapAlerta(
+                                  id: d.id,
+                                  leida: leida,
+                                  tipo: tipo,
+                                  data: data,
+                                ),
                         child: Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
@@ -225,7 +267,10 @@ class _AdminAlertasPageState extends State<AdminAlertasPage> {
                               if (!leida) ...[
                                 const SizedBox(height: 8),
                                 Text(
-                                  'Toca para marcar como leída',
+                                  (tipo == 'corporativo_sin_chofer' ||
+                                          tipo == 'corporativo_publicacion')
+                                      ? 'Toca para asignar chofer'
+                                      : 'Toca para marcar como leída',
                                   style: TextStyle(
                                     color: AdminUi.accentGreen(context),
                                     fontSize: 11,

@@ -228,7 +228,7 @@ abstract final class TaxistaOperacionNav {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_mensajeViajeDevueltoAlPool(tipoSrv)),
+            content: Text(_mensajeViajeCanceladoPorPrepago(tipoSrv)),
             backgroundColor: Colors.orangeAccent,
             duration: const Duration(seconds: 4),
           ),
@@ -244,11 +244,11 @@ abstract final class TaxistaOperacionNav {
     }
   }
 
-  static String _mensajeViajeDevueltoAlPool(String tipoServicio) {
+  static String _mensajeViajeCanceladoPorPrepago(String tipoServicio) {
     if (tipoServicio == 'turismo') {
-      return 'Viaje turístico devuelto al pool. Recarga prepago para tomarlo de nuevo.';
+      return 'Viaje turístico cancelado por saldo prepago insuficiente. Recarga para tomar nuevos viajes.';
     }
-    return 'Viaje devuelto al pool. Recarga prepago para tomarlo de nuevo.';
+    return 'Viaje cancelado por saldo prepago insuficiente. Recarga para tomar nuevos viajes.';
   }
 
   /// Punto único de navegación: libera viaje en curso si aplica y abre Mis pagos → recarga.

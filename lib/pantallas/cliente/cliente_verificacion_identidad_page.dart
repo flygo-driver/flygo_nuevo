@@ -81,7 +81,6 @@ class _ClienteVerificacionIdentidadPageState
       await FirebaseFirestore.instance.collection('usuarios').doc(uid).update({
         'verificacionIdentidadEn': FieldValue.serverTimestamp(),
         'verificacionIdentidadUrl': url,
-        'fotoUrl': url,
         'actualizadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
@@ -89,7 +88,7 @@ class _ClienteVerificacionIdentidadPageState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Verificación completada. Ya puedes pedir tu viaje.'),
+          content: Text('✅ Confirmación completada. Ya puedes pedir tu viaje.'),
         ),
       );
       Navigator.of(context).pop(true);
@@ -119,7 +118,7 @@ class _ClienteVerificacionIdentidadPageState
         backgroundColor:
             isDark ? const Color(0xFF0B1020) : const Color(0xFFF4F7FB),
         appBar: AppBar(
-          title: const Text('Verificación de identidad'),
+          title: const Text('Confirmación de identidad'),
           centerTitle: true,
           automaticallyImplyLeading: false,
         ),
@@ -154,7 +153,7 @@ class _ClienteVerificacionIdentidadPageState
                 Text(
                   'Por seguridad, cada cierto tiempo (por defecto cada 30 días) '
                   'te pedimos una selfie rápida antes de pedir un viaje o reservar una gira.\n\n'
-                  'No es en cada viaje: solo cuando vence el plazo desde la última verificación.',
+                  'Es una confirmación periódica, no una verificación con documento.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: cs.onSurfaceVariant,

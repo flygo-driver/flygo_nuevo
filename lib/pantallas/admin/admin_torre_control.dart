@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../servicios/admin_dashboard_service.dart';
 import '../../utils/calculos/estados.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -103,6 +104,7 @@ class _AdminTorreControlState extends State<AdminTorreControl>
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.torre,
         title: 'Torre de control',
         bottom: TabBar(
           controller: _tabs,

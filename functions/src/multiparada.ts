@@ -81,7 +81,40 @@ function legEsperada(
   return { label, lat: dest.lat, lon: dest.lon, esFinal: true };
 }
 
+export function esCorporativoModoInformativo(d: AnyMap): boolean {
+  if (d.corporativoModoInformativo === true) return true;
+  if (d.corporativoModoInformativo === false) return false;
+  if (typeof d.extras === "object" && d.extras !== null) {
+    const ex = d.extras as AnyMap;
+    if (ex.corporativoModoInformativo === true) return true;
+    if (ex.corporativoModoInformativo === false) return false;
+  }
+  if (d.corporativo === true) return true;
+  const canal = String(d.canalAsignacion ?? "").trim();
+  if (canal === "corporativo_fijo") return true;
+  const cat = String(d.categoria ?? "").trim().toLowerCase();
+  if (cat === "corporativo") return true;
+  const recaudo = String(d.recaudoDestino ?? "").trim().toLowerCase();
+  return recaudo === "empresa_corporativa";
+}
+
 export function assertMultiparadaCompletaParaFinalizar(d: AnyMap): void {
+  const corpModoInformativo = esCorporativoModoInformativo(d);
+  if (corpModoInformativo) {
+    const pas = d.corporativoPasajeros;
+    if (!Array.isArray(pas) || pas.length === 0) return;
+    const total = pas.length;
+    const hechas = Array.isArray(d.corporativoParadasHechas)
+      ? (d.corporativoParadasHechas as unknown[]).length
+      : typeof d.multiparadaLegCompletadas === "number"
+        ? Math.trunc(d.multiparadaLegCompletadas as number)
+        : 0;
+    if (d.multiparadaCompleta === true || hechas >= total) return;
+    throw new HttpsError(
+      "failed-precondition",
+      `Ruta corporativa: marcá todas las entregas antes de finalizar (${hechas}/${total}).`,
+    );
+  }
   if (!esViajeMultiparada(d)) return;
   const total =
     typeof d.multiparadaLegsTotal === "number" && (d.multiparadaLegsTotal as number) > 0
@@ -155,7 +188,7 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
 
   const viajeRef = db().collection("viajes").doc(viajeId);
 
-  return db().runTransaction(async (tx) => {
+  const result = await db().runTransaction(async (tx) => {
     const snap = await tx.get(viajeRef);
     if (!snap.exists) throw new HttpsError("not-found", "Viaje no encontrado.");
     const d = (snap.data() ?? {}) as AnyMap;
@@ -254,6 +287,30 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
       legCompletadas: newDone,
       legsTotal: total,
       multiparadaCompleta: completa,
+      corpNotify:
+        d.corporativo === true ||
+        String(d.categoria ?? "").trim() === "corporativo"
+          ? { legIndex, legLabel: leg.label }
+          : null,
     };
   });
+
+  const corp = (result as AnyMap).corpNotify as
+    | { legIndex: number; legLabel: string }
+    | null
+    | undefined;
+  if (corp) {
+    const { notificarDestinoPasajeroCorporativo } = await import(
+      "./corporativo_abordaje.js"
+    );
+    void notificarDestinoPasajeroCorporativo({
+      viajeId,
+      legIndex: corp.legIndex,
+      legLabel: corp.legLabel,
+    }).catch((e) =>
+      logger.warn("notificarDestinoPasajeroCorporativo", { viajeId, e }),
+    );
+  }
+
+  return result;
 });

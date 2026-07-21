@@ -48,11 +48,28 @@ class RolesService {
 
   static Future<void> setRol(String uid, String rol,
       {Map<String, dynamic>? extra}) async {
-    await _usuarios.doc(uid).set({
-      'rol': rol.toLowerCase().trim(),
+    final canon = normalizarRolLeido(rol) ?? rol.toLowerCase().trim();
+    final bool esAdmin = esRolAdmin(canon);
+    final payload = <String, dynamic>{
+      'rol': canon,
+      'isAdmin': esAdmin,
+      'admin': esAdmin,
       'actualizadoEn': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
       if (extra != null) ...extra,
-    }, SetOptions(merge: true));
+    };
+    if (canon == Roles.cliente) {
+      payload['disponible'] = false;
+      payload['puedeRecibirViajes'] = false;
+    }
+    await _usuarios.doc(uid).set(payload, SetOptions(merge: true));
+    try {
+      await _db.collection('roles').doc(uid).set({
+        'rol': canon,
+        'actualizadoEn': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
   }
 
   static Future<void> ensureUserDoc(String uid,

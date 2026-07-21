@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 
 /// Catálogo profesional de inclusiones para Giras por Cupos.
 class PoolGiraIncluyeOpcion {
@@ -281,13 +281,9 @@ class PoolGiraContenidoCatalog {
     required DateTime salida,
     DateTime? regreso,
   }) {
-    final fFecha = DateFormat('EEE d MMM yyyy', 'es');
-    final fHora = DateFormat('HH:mm');
-    final salidaTxt =
-        'Salida: ${fFecha.format(salida)} · ${fHora.format(salida)}';
+    final salidaTxt = 'Salida: ${fmtFechaHoraAmPm(salida, conAnio: true)}';
     if (regreso == null) return <String>[salidaTxt];
-    final regresoTxt =
-        'Regreso: ${fFecha.format(regreso)} · ${fHora.format(regreso)}';
+    final regresoTxt = 'Regreso: ${fmtFechaHoraAmPm(regreso, conAnio: true)}';
     return <String>[salidaTxt, regresoTxt];
   }
 }

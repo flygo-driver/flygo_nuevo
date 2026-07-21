@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flygo_nuevo/servicios/organizador_giras_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 
 /// Datos de registro operativo del conductor (Google o email).
@@ -57,6 +58,9 @@ abstract final class TaxistaRegistroPerfilData {
 
   /// Perfil listo: datos + servicio + vehículo (foto va en [DocumentosTaxista]).
   static bool taxistaRegistroPerfilCompleto(Map<String, dynamic> data) {
+    if (OrganizadorGirasPerfilData.esOrganizadorGiras(data)) {
+      return OrganizadorGirasPerfilData.registroCompleto(data);
+    }
     if (data['registroTaxistaCompleto'] == false) return false;
     final bool datosYVehiculo = taxistaDatosServicioCompleto(data);
     if (data['registroTaxistaCompleto'] == true) return datosYVehiculo;

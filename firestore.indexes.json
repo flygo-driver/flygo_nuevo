@@ -707,7 +707,34 @@
         { "fieldPath": "viajeId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "plantillas_ruta",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activa", "order": "ASCENDING" },
+        { "fieldPath": "choferPreferidoUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "plantillas_ruta",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "choferPreferidoUid", "order": "ASCENDING" },
+        { "fieldPath": "activa", "order": "ASCENDING" }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "plantillas_ruta",
+      "fieldPath": "choferPreferidoUid",
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    }
+  ]
 }

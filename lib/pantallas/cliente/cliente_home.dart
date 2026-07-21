@@ -4,9 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/seleccion_servicio.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
-import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
 class ClienteHome extends StatefulWidget {
   const ClienteHome({super.key});
@@ -21,19 +19,8 @@ class _ClienteHomeState extends State<ClienteHome> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      NavigatorState? preNav = NavigationService.navigatorKey.currentState;
-      if (preNav == null) {
-        preNav = Navigator.of(context, rootNavigator: true);
-      }
-      unawaited(
-        ViajeSolicitadoActivo.redirigirSiHayViajeActivo(
-          context,
-          preNav: preNav,
-        ),
-      );
-    });
+    // El [ClienteShell] ya abre viaje en curso vía stream; no redirigir aquí
+    // (evita reabrir el viaje al tocar «Volver al inicio»).
   }
 
   @override

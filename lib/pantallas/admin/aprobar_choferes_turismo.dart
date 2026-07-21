@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_expediente_chofer_utils.dart';
 import 'admin_solicitud_turismo_utils.dart';
@@ -406,6 +407,7 @@ class _AprobarChoferesTurismoState extends State<AprobarChoferesTurismo>
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.aprobarTurismo,
         title: 'Solicitudes turismo',
         bottom: TabBar(
           controller: _tabCtrl,

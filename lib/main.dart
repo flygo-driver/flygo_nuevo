@@ -28,6 +28,7 @@ import 'package:flygo_nuevo/utilidades/constante.dart'
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/push_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
@@ -35,6 +36,8 @@ import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/text_scale_service.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/finance_config_service.dart';
+import 'package:flygo_nuevo/servicios/google_auth.dart';
+import 'package:flygo_nuevo/servicios/web_auth_bootstrap.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
@@ -42,6 +45,7 @@ import 'package:flygo_nuevo/utils/release_build_flags.dart';
 // 🔐 Auth / Gates
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/auth/login_admin.dart';
+import 'package:flygo_nuevo/auth/auth_check.dart';
 import 'package:flygo_nuevo/auth/rai_identity_router.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
@@ -52,6 +56,8 @@ import 'package:flygo_nuevo/pantallas/legal/politica_privacidad_page.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
+import 'package:flygo_nuevo/pantallas/corporativo/corporativo_web_entry.dart';
+import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/historial_viajes_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/metodos_pago.dart';
@@ -144,10 +150,61 @@ void _installErrorHandlers() {
       context: 'ErrorWidget.builder',
     );
     final String detalleTecnico = details.exceptionAsString();
+    final low = detalleTecnico.toLowerCase();
+    final esMapa = low.contains('googlemap') ||
+        low.contains('maps.googleapis') ||
+        low.contains('platformview') ||
+        low.contains('gmp_');
+    final bool viajeForzado =
+        ActiveTripService.debeMantenerOverlayViajeEnShell ||
+            ActiveTripService.debeBloquearShellSinViajeTaxista;
     return Material(
       color: Colors.black,
       child: Builder(
         builder: (context) {
+          if (viajeForzado) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Entrando a tu viaje…',
+                      style: TextStyle(color: Colors.white, fontSize: 17),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Hubo un fallo al dibujar la pantalla. '
+                      'Toca para abrir el viaje de nuevo (sin mapa si hace falta).',
+                      style: TextStyle(color: Colors.white70, height: 1.35),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      onPressed: () {
+                        ActiveTripService.mantenerOverlayViajeEnShell(
+                          const Duration(seconds: 120),
+                        );
+                        if (ActiveTripService
+                            .debeBloquearShellSinViajeTaxista) {
+                          unawaited(
+                            NavigationService.clearAndGoViajeEnCursoTaxista(),
+                          );
+                        } else {
+                          unawaited(
+                            NavigationService.clearAndGoViajeEnCursoCliente(),
+                          );
+                        }
+                      },
+                      child: const Text('Abrir mi viaje'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -160,9 +217,12 @@ void _installErrorHandlers() {
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 10),
-                  const Text(
-                    'No pudimos cargar esta pantalla. Intenta nuevamente.',
-                    style: TextStyle(color: Colors.white70),
+                  Text(
+                    esMapa
+                        ? 'No se pudo cargar el mapa en este equipo. '
+                            'Recargá la página (Ctrl+F5) o usá Chrome/Edge actualizado.'
+                        : 'No pudimos cargar esta pantalla. Intenta nuevamente.',
+                    style: const TextStyle(color: Colors.white70),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 12),
@@ -249,6 +309,9 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
   Future<void> _init() async {
     try {
       await FirebaseBootstrap.ensureInitialized();
+      if (kIsWeb) {
+        await WebAuthBootstrap.ensureGoogleRedirectHandled();
+      }
       // En Windows evitamos FCM (MissingPluginException en métodos de firebase_messaging).
       if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
         FirebaseMessaging.onBackgroundMessage(
@@ -395,6 +458,31 @@ void main() {
 }
 
 // ================== APP ==================
+Widget _raizWebSegunUrl() {
+  if (!kIsWeb) return const AuthGatePublic();
+  final path = Uri.base.path.replaceAll(RegExp(r'/+$'), '');
+  // Admin ANTES que /login… (evita confundir /login_admin con pasajero).
+  if (path == '/login_admin' || path == '/admin-login') {
+    return const LoginAdmin();
+  }
+  if (path == '/admin' || path.startsWith('/admin/')) {
+    return const AdminGate();
+  }
+  if (path == '/empresas' ||
+      path.startsWith('/empresas/') ||
+      path == '/corporativo' ||
+      path.startsWith('/corporativo/') ||
+      path == '/login/corporativo' ||
+      path.startsWith('/login/corporativo')) {
+    // Misma pantalla: Google (elegir cuenta) + correo/contraseña.
+    return const CorporativoWebEntry();
+  }
+  if (path == '/login' || path.startsWith('/login/')) {
+    return const SeleccionUsuario();
+  }
+  return const AuthGatePublic();
+}
+
 class RaiApp extends StatefulWidget {
   const RaiApp({super.key});
 
@@ -562,7 +650,7 @@ class _RaiAppState extends State<RaiApp> {
         themeMode: mode,
         routes: {
           '/login': (_) => const SeleccionUsuario(),
-          '/auth_check': (_) => const AuthGatePublic(),
+          '/auth_check': (_) => const AuthCheck(),
 
           // 🔴 NUEVO - REGISTRO (DESDE AUTH)
           '/registro_cliente': (_) => const RegistroCliente(),
@@ -570,10 +658,17 @@ class _RaiAppState extends State<RaiApp> {
 
           // Cliente
           '/cliente_home': (_) => const ClienteShellWithDeepLink(),
-          '/solicitar_viaje_ahora': (_) =>
-              const ProgramarViaje(modoAhora: true),
-          '/programar_viaje': (_) => const ProgramarViaje(modoAhora: false),
-          '/programar_viaje_multi': (_) => const ProgramarViajeMulti(),
+          '/solicitar_viaje_ahora': (_) => const ClienteBloqueoGate(
+                child: ProgramarViaje(modoAhora: true),
+              ),
+          '/programar_viaje': (_) => const ClienteBloqueoGate(
+                child: ProgramarViaje(modoAhora: false),
+              ),
+          '/programar_viaje_multi': (_) => const ClienteBloqueoGate(
+                child: ProgramarViajeMulti(),
+              ),
+          '/corporativo': (_) => const CorporativoWebEntry(),
+          '/empresas': (_) => const CorporativoWebEntry(),
           '/viaje_en_curso_cliente': (_) => const ClientePantallaViajeActivo(),
           '/historial_viajes_cliente': (_) => const HistorialViajesCliente(),
           '/metodos_pago': (_) => const MetodosPago(),
@@ -618,16 +713,30 @@ class _RaiAppState extends State<RaiApp> {
           '/privacidad': (_) => const PoliticaPrivacidadPage(),
           '/eliminar_cuenta': (_) => const EliminarCuentaPage(),
           '/login_admin': (_) => const LoginAdmin(),
+          '/login/corporativo': (_) => const CorporativoWebEntry(),
           '/admin': (_) => const AdminGate(),
         },
-        onGenerateRoute: (settings) => null,
+        onGenerateRoute: (settings) {
+          final name = settings.name ?? '';
+          if (name == '/corporativo' ||
+              name == '/empresas' ||
+              name.startsWith('/empresas') ||
+              name == '/login/corporativo' ||
+              name.startsWith('/login/corporativo')) {
+            return MaterialPageRoute<void>(
+              builder: (_) => const CorporativoWebEntry(),
+              settings: settings,
+            );
+          }
+          return null;
+        },
         onUnknownRoute: (settings) {
           return MaterialPageRoute<void>(
-            builder: (_) => const AuthGatePublic(),
+            builder: (_) => _raizWebSegunUrl(),
             settings: settings,
           );
         },
-        home: const AuthGatePublic(),
+        home: _raizWebSegunUrl(),
       );
       },
     );
@@ -705,10 +814,11 @@ class _AuthGate extends StatelessWidget {
       builder: (context, authSnap) {
         final user = authSnap.data ?? FirebaseAuth.instance.currentUser;
         if (user == null) {
-          final bool isDesktop =
-              defaultTargetPlatform == TargetPlatform.windows ||
-                  defaultTargetPlatform == TargetPlatform.macOS;
-          return isDesktop ? const LoginAdmin() : const SeleccionUsuario();
+          final bool isDesktopNativo =
+              !kIsWeb &&
+              (defaultTargetPlatform == TargetPlatform.windows ||
+                  defaultTargetPlatform == TargetPlatform.macOS);
+          return isDesktopNativo ? const LoginAdmin() : const SeleccionUsuario();
         }
 
         PushService.ensureInitedAndSaved();

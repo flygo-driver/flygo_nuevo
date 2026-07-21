@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 import 'package:flygo_nuevo/widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 
 class AdminComisionIncentivosTaxista extends StatefulWidget {
@@ -191,6 +192,7 @@ class _AdminComisionIncentivosTaxistaState
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.incentivos,
         title: 'Incentivos comisión taxista',
       ),
       body: _cargando

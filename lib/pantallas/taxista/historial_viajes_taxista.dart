@@ -7,7 +7,10 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/taxista_historial_repo.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/widgets/corporativo_empresa_logo_badge.dart';
 
 class HistorialViajesTaxista extends StatefulWidget {
   const HistorialViajesTaxista({super.key});
@@ -18,7 +21,10 @@ class HistorialViajesTaxista extends StatefulWidget {
 
 class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
   List<Viaje> historial = <Viaje>[];
+  final Map<String, Map<String, dynamic>> _rawPorId =
+      <String, Map<String, dynamic>>{};
   bool cargando = true;
+  String? _borrandoId;
 
   @override
   void initState() {
@@ -36,7 +42,12 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
     return PlataformaEconomia.gananciaTaxistaRdDesdeTotal(v.precio);
   }
 
-  Color _getColorForTipo(BuildContext context, String tipo) {
+  Color _getColorForTipo(BuildContext context, String tipo, {bool corporativo = false}) {
+    if (corporativo) {
+      return Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFFEAB308)
+          : const Color(0xFFB45309);
+    }
     final b = Theme.of(context).brightness;
     switch (tipo) {
       case 'motor':
@@ -50,7 +61,8 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
     }
   }
 
-  IconData _getIconForTipo(String tipo) {
+  IconData _getIconForTipo(String tipo, {bool corporativo = false}) {
+    if (corporativo) return Icons.apartment_rounded;
     switch (tipo) {
       case 'motor':
         return Icons.motorcycle;
@@ -61,7 +73,8 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
     }
   }
 
-  String _getLabelForTipo(String tipo) {
+  String _getLabelForTipo(String tipo, {bool corporativo = false}) {
+    if (corporativo) return 'CORPORATIVO';
     switch (tipo) {
       case 'motor':
         return 'MOTOR';
@@ -70,6 +83,18 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
       default:
         return 'NORMAL';
     }
+  }
+
+  bool _esViajeCorporativo(Viaje v, Map<String, dynamic> raw) {
+    if (raw['corporativo'] == true) return true;
+    if (v.extras?['corporativo'] == true) return true;
+    return CorporativoTaxistaService.esViajeCorporativoDoc(raw);
+  }
+
+  double _acumuladoCorpPeriodo(Map<String, dynamic> raw) {
+    final directo = raw['corporativoChoferAcumuladoPeriodoRd'];
+    if (directo is num && directo > 0) return directo.toDouble();
+    return 0;
   }
 
   Future<void> _cargarHistorial() async {
@@ -82,16 +107,23 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
         return;
       }
 
-      final List<Viaje> datos = await ViajeData.obtenerHistorialTaxista(user.uid)
+      final List<Viaje> datos =
+          await ViajeData.obtenerHistorialTaxista(user.uid)
           .timeout(
         const Duration(seconds: 25),
         onTimeout: () => throw TimeoutException(
           'Tiempo de espera al cargar el historial. Revisá la conexión.',
         ),
       );
+      final raw = await ViajeData.rawHistorialTaxista(user.uid);
 
       if (!mounted) return;
-      setState(() => historial = datos);
+      setState(() {
+        historial = datos;
+        _rawPorId
+          ..clear()
+          ..addAll(raw);
+      });
     } catch (e, st) {
       debugPrint('Error cargando historial: $e\n$st');
       if (mounted) {
@@ -115,6 +147,69 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
       if (mounted) {
         setState(() => cargando = false);
       }
+    }
+  }
+
+  Future<void> _confirmarQuitar(Viaje v) async {
+    final raw = _rawPorId[v.id] ?? <String, dynamic>{};
+    if (!TaxistaHistorialRepo.viajePagadoParaOcultar(raw)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Este viaje aún no figura como pagado. '
+            'Podrás quitarlo cuando RAI liquide tu pago.',
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Quitar del historial'),
+        content: Text(
+          '¿Quitar «${v.origen} → ${v.destino}» de tu historial?\n\n'
+          'Se borra de tu lista en el teléfono. RAI y la empresa '
+          'conservan el registro del viaje.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Quitar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) return;
+
+    setState(() => _borrandoId = v.id);
+    try {
+      await TaxistaHistorialRepo.ocultarViaje(uid: uid, viajeId: v.id);
+      if (!mounted) return;
+      setState(() {
+        historial = historial.where((x) => x.id != v.id).toList();
+        _rawPorId.remove(v.id);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Viaje quitado de tu historial.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    } finally {
+      if (mounted) setState(() => _borrandoId = null);
     }
   }
 
@@ -194,13 +289,41 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                     itemCount: historial.length,
                     itemBuilder: (context, index) {
                       final v = historial[index];
-                      final Color servicioColor =
-                          _getColorForTipo(context, v.tipoServicio);
-                      final IconData servicioIcon =
-                          _getIconForTipo(v.tipoServicio);
-                      final String servicioLabel =
-                          _getLabelForTipo(v.tipoServicio);
+                      final raw = _rawPorId[v.id] ?? <String, dynamic>{};
+                      final esCorp = _esViajeCorporativo(v, raw);
+                      final Color servicioColor = _getColorForTipo(
+                        context,
+                        v.tipoServicio,
+                        corporativo: esCorp,
+                      );
+                      final IconData servicioIcon = _getIconForTipo(
+                        v.tipoServicio,
+                        corporativo: esCorp,
+                      );
+                      final String servicioLabel = _getLabelForTipo(
+                        v.tipoServicio,
+                        corporativo: esCorp,
+                      );
                       final double ganancia = _calcularGanancia(v);
+                      final acumuladoCorp = _acumuladoCorpPeriodo(raw);
+                      final empresaNombre = (raw['corporativoEmpresaNombre'] ??
+                              v.extras?['corporativoEmpresaNombre'] ??
+                              '')
+                          .toString()
+                          .trim();
+                      final empresaId = (raw['corporativoEmpresaId'] ??
+                              v.extras?['corporativoEmpresaId'] ??
+                              '')
+                          .toString()
+                          .trim();
+                      final empresaLogoUrl = (raw['corporativoEmpresaLogoUrl'] ??
+                              v.extras?['corporativoEmpresaLogoUrl'] ??
+                              '')
+                          .toString()
+                          .trim();
+                      final puedeQuitar =
+                          TaxistaHistorialRepo.viajePagadoParaOcultar(raw);
+                      final quitando = _borrandoId == v.id;
 
                       return Card(
                         color: cs.surfaceContainerHighest.withValues(
@@ -233,19 +356,31 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                             children: [
                               Row(
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          servicioColor.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(8),
+                                  if (esCorp && empresaId.isNotEmpty)
+                                    CorporativoEmpresaLogoBadge(
+                                      empresaId: empresaId,
+                                      logoUrlSnapshot: empresaLogoUrl.isNotEmpty
+                                          ? empresaLogoUrl
+                                          : null,
+                                      size: 40,
+                                      fallbackColor: servicioColor,
+                                      fallbackIcon: servicioIcon,
+                                    )
+                                  else
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: servicioColor.withValues(
+                                          alpha: 0.2,
+                                        ),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Icon(
+                                        servicioIcon,
+                                        color: servicioColor,
+                                        size: 20,
+                                      ),
                                     ),
-                                    child: Icon(
-                                      servicioIcon,
-                                      color: servicioColor,
-                                      size: 20,
-                                    ),
-                                  ),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
@@ -280,7 +415,18 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                 ],
                               ),
                               const SizedBox(height: 12),
-                              if (v.clienteId.isNotEmpty) ...[
+                              if (esCorp && empresaNombre.isNotEmpty) ...[
+                                Text(
+                                  empresaNombre,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: servicioColor,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              if (v.clienteId.isNotEmpty && !esCorp) ...[
                                 Text(
                                   "Cliente: ${v.clienteId}",
                                   style: TextStyle(
@@ -337,7 +483,7 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       Text(
-                                        "Ganaste",
+                                        esCorp ? 'Neto viaje' : 'Ganaste',
                                         style: TextStyle(
                                           fontSize: 12,
                                           color: cs.onSurfaceVariant,
@@ -355,6 +501,29 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                   ),
                                 ],
                               ),
+                              if (esCorp && acumuladoCorp > 0) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.savings_outlined,
+                                      size: 14,
+                                      color: cs.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        'Acumulado período: ${FormatosMoneda.rd(acumuladoCorp)}',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: cs.onSurfaceVariant,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                               const SizedBox(height: 10),
                               Row(
                                 children: [
@@ -365,7 +534,9 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
-                                    'Ver comprobante del viaje',
+                                    esCorp
+                                        ? 'Ver comprobante y acumulado'
+                                        : 'Ver comprobante del viaje',
                                     style: TextStyle(
                                       color: servicioColor,
                                       fontSize: 13,
@@ -410,6 +581,51 @@ class _HistorialViajesTaxistaState extends State<HistorialViajesTaxista> {
                                   ),
                                 ),
                               ],
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  if (puedeQuitar)
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        onPressed: quitando
+                                            ? null
+                                            : () => _confirmarQuitar(v),
+                                        icon: quitando
+                                            ? SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  color: cs.error,
+                                                ),
+                                              )
+                                            : Icon(
+                                                Icons.delete_outline_rounded,
+                                                size: 18,
+                                                color: cs.error,
+                                              ),
+                                        label: Text(
+                                          'Quitar del historial',
+                                          style: TextStyle(
+                                            color: cs.error,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    Expanded(
+                                      child: Text(
+                                        'Disponible para quitar cuando RAI liquide el pago.',
+                                        style: TextStyle(
+                                          color: cs.onSurfaceVariant,
+                                          fontSize: 11,
+                                          height: 1.35,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ],
                           ),
                         ),

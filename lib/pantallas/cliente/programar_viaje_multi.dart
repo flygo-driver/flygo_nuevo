@@ -4,34 +4,33 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
 import 'package:geolocator/geolocator.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
-import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pay_config.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
-import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
+import 'package:flygo_nuevo/widgets/boton_volver_inicio_sin_confirmar.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
-import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/promo_mxk_cliente_panel.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
-import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
+import 'package:flygo_nuevo/widgets/programar_viaje_hoja_moderna.dart';
 import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 
 class _LugarSel {
@@ -61,30 +60,11 @@ enum _RutaCampoVisual { origen, parada, destino }
 class ProgramarViajeMulti extends StatefulWidget {
   const ProgramarViajeMulti({super.key});
 
-  /// Valores estables para Firestore: `ViajePoolTaxistaGate` usa `tipoServicio` + `canalAsignacion`.
-  static String normalizarTipoServicioMulti(String raw) {
-    switch (raw.trim().toLowerCase()) {
-      case 'motor':
-        return 'motor';
-      case 'turismo':
-        return 'turismo';
-      default:
-        return 'normal';
-    }
-  }
+  /// Multiparada: solo servicio normal en pool de vehículos.
+  static String normalizarTipoServicioMulti(String raw) => 'normal';
 
-  /// Motor/normal → pool general (`ViajeDisponible`).
-  ///
-  /// Turismo multiparada: **mismo primer paso que viaje simple** → cola ADM
-  /// (`admin`). Si ADM no asigna, [ViajesRepo.crearViajePendiente] puede pasar el
-  /// viaje a [AsignacionTurismoRepo.canalTurismoPool] (auto-asignación fallida o
-  /// liberación manual desde panel admin).
-  static String canalAsignacionParaMulti(String tipoNorm) {
-    if (tipoNorm == 'turismo') {
-      return 'admin';
-    }
-    return 'pool';
-  }
+  /// Siempre pool general (sin turismo ADM ni motor).
+  static String canalAsignacionParaMulti(String tipoNorm) => 'pool';
 
   @override
   State<ProgramarViajeMulti> createState() => _ProgramarViajeMultiState();
@@ -99,9 +79,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   DateTime _fechaHora = DateTime.now().add(const Duration(minutes: 30));
   bool _esAhora = true;
 
-  String _tipoServicio = 'normal';
   String _tipoVehiculo = 'Carro';
-  String? _tipoVehiculoTurismo = 'carro';
   String _metodoPago = 'Efectivo';
 
   bool _cargando = false;
@@ -126,19 +104,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   /// Evita que un cálculo en curso bloquee el siguiente (varios tramos tardan más que el debounce).
   int _calculoSeq = 0;
 
-  /// Resumen compacto tras cotizar (no aplica a turismo).
+  /// Resumen compacto tras cotizar.
   bool _vistaResumenCotizada = false;
 
-  Color get _colorServicio {
-    switch (_tipoServicio) {
-      case 'motor':
-        return Colors.orange;
-      case 'turismo':
-        return Colors.purple;
-      default:
-        return Colors.greenAccent;
-    }
-  }
+  Color get _colorServicio => Colors.greenAccent;
 
   void _scrollAlResumenCotizado() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -169,23 +138,18 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     unawaited(_precargarOrigenGpsSiListo());
   }
 
-  /// Origen desde GPS: lectura pasiva; «Activar ubicación» abre el teléfono si falta permiso.
+  /// Origen desde GPS: cel / laptop / PC / tablet (producción).
   Future<void> _precargarOrigenGpsSiListo() async {
     if (_origen != null) return;
-    final ready = await LocationPermissionService.ensureLocationReady(
-      requestIfDenied: false,
+    final pos = await LocationPermissionService.posicionParaCotizarProduccion(
+      pedirPermisoSiFalta: false,
     );
-    if (!ready.isUsable) {
+    if (pos == null) {
       unawaited(RaiUbicacionClienteService.instance.refrescar());
       return;
     }
     try {
-      final pos = ready.position ??
-          await GpsService.obtenerUbicacionActual(
-            timeout: const Duration(seconds: 10),
-            maxEdadUltima: const Duration(minutes: 30),
-          );
-      if (pos == null || !mounted) return;
+      if (!mounted) return;
       setState(() {
         _origen = _LugarSel(
           label: 'Mi ubicación actual',
@@ -245,45 +209,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }
 
   Future<_LugarSel?> _buscarLugar(String titulo) async {
-    if (_tipoServicio == 'turismo' && titulo.contains('Destino')) {
-      return showModalBottomSheet<_LugarSel?>(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (bc) => SelectorDestinosTuristicos(
-          latOrigen: _origen?.lat,
-          lonOrigen: _origen?.lon,
-          tipoVehiculoInicial: _tipoVehiculoTurismo,
-          onDestinoSeleccionado: (seleccion) {
-            String vehiculoValido = seleccion.tipoVehiculo;
-            const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
-            if (!vehiculosValidos.contains(vehiculoValido)) {
-              debugPrint(
-                  '⚠️ Valor inválido en multi: "$vehiculoValido", usando "carro"');
-              vehiculoValido = 'carro';
-            }
-
-            Navigator.pop(
-                bc,
-                _lugarNormalizado(
-                  _LugarSel(
-                    label: seleccion.lugar.nombre,
-                    lat: seleccion.lugar.lat,
-                    lon: seleccion.lugar.lon,
-                  ),
-                  fallbackLabel: 'Destino turístico',
-                ));
-            if (mounted) {
-              setState(() {
-                _tipoVehiculoTurismo = vehiculoValido;
-              });
-              _programarCalculoAutomatico();
-            }
-          },
-        ),
-      );
-    }
-
     return showModalBottomSheet<_LugarSel?>(
       context: context,
       backgroundColor: const Color(0xFF0E0E0E),
@@ -373,8 +298,15 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
   }
 
+  /// Peaje solo si la ruta es claramente interurbana (no inventar peaje en ciudad).
+  /// Antes: radio 50 km a casetas → casi todo SD pagaba peaje falso.
   double _estimarPeaje(
       double km, double lat1, double lon1, double lat2, double lon2) {
+    // Viaje urbano / multiparada corta: sin peaje automático (igual que viaje simple).
+    if (km < 55) return 0;
+    final double salto = DistanciaService.calcularDistancia(lat1, lon1, lat2, lon2);
+    if (salto < 40) return 0;
+
     const Map<String, Map<String, double>> peajesRD = {
       'las americas': {'lat': 18.45, 'lon': -69.75, 'costo': 150},
       'duarte': {'lat': 19.0, 'lon': -70.5, 'costo': 200},
@@ -383,17 +315,87 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
     double totalPeaje = 0;
     for (final peaje in peajesRD.values) {
-      final double distAPeaje = DistanciaService.calcularDistancia(
-        lat1,
-        lon1,
-        peaje['lat']!,
-        peaje['lon']!,
+      // El corredor debe pasar cerca del peaje (origen O destino), no "estar en la ciudad".
+      final double d1 = DistanciaService.calcularDistancia(
+        lat1, lon1, peaje['lat']!, peaje['lon']!,
       );
-      if (distAPeaje < 50) {
+      final double d2 = DistanciaService.calcularDistancia(
+        lat2, lon2, peaje['lat']!, peaje['lon']!,
+      );
+      if (d1 < 12 || d2 < 12) {
         totalPeaje += peaje['costo']!;
       }
     }
     return totalPeaje;
+  }
+
+  /// Diámetro máximo entre todos los puntos de la ruta (km en línea recta).
+  double _diametroRutaKm(List<_LugarSel> puntos) {
+    if (puntos.length < 2) return 0;
+    double maxD = 0;
+    for (int i = 0; i < puntos.length; i++) {
+      for (int j = i + 1; j < puntos.length; j++) {
+        final double d = DistanciaService.calcularDistancia(
+          puntos[i].lat,
+          puntos[i].lon,
+          puntos[j].lat,
+          puntos[j].lon,
+        );
+        if (d > maxD) maxD = d;
+      }
+    }
+    return maxD;
+  }
+
+  /// Suma haversine origen→paradas→destino (km).
+  double _sumaHaversineRutaKm(List<_LugarSel> puntos) {
+    if (puntos.length < 2) return 0;
+    double sum = 0;
+    for (int i = 0; i < puntos.length - 1; i++) {
+      sum += DistanciaService.calcularDistancia(
+        puntos[i].lat,
+        puntos[i].lon,
+        puntos[i + 1].lat,
+        puntos[i + 1].lon,
+      );
+    }
+    return sum;
+  }
+
+  /// Si Directions devolvió km absurdos para una ruta compacta en ciudad, usa
+  /// estimación urbana coherente (haversine × factor calle).
+  double _normalizarKmMultiparadaUrbana({
+    required double totalKm,
+    required List<_LugarSel> puntos,
+    required List<Map<String, dynamic>> segmentos,
+  }) {
+    final double diametro = _diametroRutaKm(puntos);
+    final double hv = _sumaHaversineRutaKm(puntos);
+    final bool compacta = diametro > 0 && diametro <= 45;
+    if (!compacta) return totalKm;
+
+    final double techoUrbano = math.max(hv * 2.0, diametro * 2.8).clamp(5.0, 90.0);
+    if (totalKm <= techoUrbano && totalKm > 0) return totalKm;
+
+    final double kmUrbano = (hv * 1.28).clamp(1.0, techoUrbano);
+    if (segmentos.isNotEmpty && hv > 0) {
+      double acc = 0;
+      for (int i = 0; i < segmentos.length; i++) {
+        final _LugarSel a = puntos[i];
+        final _LugarSel b = puntos[i + 1];
+        final double h = DistanciaService.calcularDistancia(
+          a.lat, a.lon, b.lat, b.lon,
+        );
+        final double share = (h / hv) * kmUrbano;
+        segmentos[i] = <String, dynamic>{
+          ...segmentos[i],
+          'km': double.parse(share.toStringAsFixed(2)),
+        };
+        acc += share;
+      }
+      return double.parse(acc.toStringAsFixed(2));
+    }
+    return double.parse(kmUrbano.toStringAsFixed(2));
   }
 
   /// Sin huecos: no puede haber parada vacía entre dos paradas llenas.
@@ -607,6 +609,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
   /// RAI: solo confirmar con cotización cerrada y ruta alineada.
   bool get _puedeConfirmarViajeMulti {
+    if (RaiOfflineCotizacionService.estaOffline) return false;
     if (_cargando || (_calculoDebounce?.isActive ?? false)) return false;
     if (_origen == null || _destino == null) return false;
     if (!_paradasIntermediasCoherentes()) return false;
@@ -791,7 +794,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             '$prevLabel → ${w.label}',
           );
 
-          if (!mounted || runId != _calculoSeq) return;
+          if (!mounted || runId != _calculoSeq) {
+            _finCargaMultiSiCorre(runId);
+            return;
+          }
 
           if (resultado['km']! <= 0) {
             if (!automatico && runId == _calculoSeq) {
@@ -828,7 +834,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           '$prevLabel → ${_destino!.label}',
         );
 
-        if (!mounted || runId != _calculoSeq) return;
+        if (!mounted || runId != _calculoSeq) {
+          _finCargaMultiSiCorre(runId);
+          return;
+        }
 
         if (resultadoFinal['km']! <= 0) {
           if (!automatico && runId == _calculoSeq) {
@@ -860,12 +869,29 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           (double acc, Map<String, dynamic> s) =>
               acc + ((s['km'] as num?)?.toDouble() ?? 0),
         );
+        totalKm = _normalizarKmMultiparadaUrbana(
+          totalKm: totalKm,
+          puntos: ordenParadas,
+          segmentos: segmentos,
+        );
         _normalizarPeajeMultiparada(segmentos, totalKm);
         totalPeaje = _peajeDesdeSegmentos(segmentos);
       }
 
       final TarifaServiceUnificado servicio = TarifaServiceUnificado();
       await servicio.recargar();
+
+      final double maxKm = servicio.distanciaMaximaCotizableKm;
+      if (totalKm <= 0 || DistanciaService.tramoEsImposible(totalKm, maxKm: maxKm)) {
+        if (!automatico && runId == _calculoSeq) {
+          _snack(
+            'No se pudo cotizar esa ruta multiparada '
+            '(máx. ${maxKm.toStringAsFixed(0)} km). Revisá las paradas.',
+          );
+        }
+        _finCargaMultiSiCorre(runId);
+        return;
+      }
 
       final user = FirebaseAuth.instance.currentUser;
       int contadorViajes = 1;
@@ -879,43 +905,33 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           await servicio.construirPromoSnapshot(contadorViajes);
       if (!mounted || runId != _calculoSeq) return;
 
-      double precio;
-      if (_tipoServicio == 'normal') {
-        precio = await servicio.calcularPrecio(
-          tipoServicio: _tipoServicio,
-          tipoVehiculo: _tipoVehiculo,
-          distanciaKm: totalKm,
-          idaVuelta: false,
-          peaje: totalPeaje,
-          contadorViajes: contadorViajes,
-        );
-      } else if (_tipoServicio == 'motor') {
-        precio = await servicio.calcularPrecio(
-          tipoServicio: _tipoServicio,
-          distanciaKm: totalKm,
-          idaVuelta: false,
-          peaje: totalPeaje,
-          contadorViajes: contadorViajes,
-        );
-      } else {
-        String vehiculoValido = _tipoVehiculoTurismo ?? 'carro';
-        const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
-        if (!vehiculosValidos.contains(vehiculoValido)) {
-          vehiculoValido = 'carro';
+      // Ciudad compacta (p. ej. varias paradas en SD): tarifa local continua,
+      // sin bandas interurbanas ni peaje inventado.
+      final bool urbanaLocal = _diametroRutaKm(ordenParadas) <= 45;
+      if (urbanaLocal) {
+        totalPeaje = 0;
+        for (int i = 0; i < segmentos.length; i++) {
+          segmentos[i] = <String, dynamic>{
+            ...segmentos[i],
+            'peaje': 0.0,
+          };
         }
-
-        precio = await servicio.calcularPrecio(
-          tipoServicio: _tipoServicio,
-          tipoVehiculo: vehiculoValido,
-          subtipoTurismo: 'viaje_multi',
-          distanciaKm: totalKm,
-          idaVuelta: false,
-          peaje: totalPeaje,
-          contadorViajes: contadorViajes,
-        );
       }
 
-      if (!mounted || runId != _calculoSeq) return;
+      final double precio = await servicio.calcularPrecio(
+        tipoServicio: 'normal',
+        tipoVehiculo: _tipoVehiculo,
+        distanciaKm: totalKm,
+        idaVuelta: false,
+        peaje: totalPeaje,
+        contadorViajes: contadorViajes,
+        forzarTarifaUrbanaLocal: urbanaLocal,
+      );
+
+      if (!mounted || runId != _calculoSeq) {
+        _finCargaMultiSiCorre(runId);
+        return;
+      }
 
       setState(() {
         _distKm = double.parse(totalKm.toStringAsFixed(2));
@@ -928,12 +944,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 true;
         _cargando = false;
         _mensajeCarga = '';
-        // Igual que [ProgramarViaje]: al terminar la cotización, resumen arriba con precio grande.
-        _vistaResumenCotizada = _tipoServicio != 'turismo';
+        _vistaResumenCotizada = true;
       });
-      if (_tipoServicio != 'turismo') {
-        _scrollAlResumenCotizado();
-      }
+      _scrollAlResumenCotizado();
     } catch (e) {
       if (!automatico && runId == _calculoSeq) {
         _snack('Error calculando rutas: $e');
@@ -943,6 +956,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }
 
   Future<void> _confirmar() async {
+    if (RaiOfflineCotizacionService.estaOffline) {
+      _snack(RaiOfflineCotizacionService.mensajeNoConfirmar);
+      return;
+    }
     if (!_puedeConfirmarViajeMulti) {
       if (_calculoDebounce?.isActive == true || _cargando) {
         _snack('Espera a que termine el cálculo del precio.');
@@ -1117,10 +1134,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         waypoints: waypoints,
       );
 
-      final String tipoSrv =
-          ProgramarViajeMulti.normalizarTipoServicioMulti(_tipoServicio);
-      final String canal =
-          ProgramarViajeMulti.canalAsignacionParaMulti(tipoSrv);
+      const String tipoSrv = 'normal';
+      const String canal = 'pool';
 
       final List<Map<String, dynamic>> segmentosGuardar =
           MultiparadaRutaHelper.alinearSegmentosConPuntos(
@@ -1173,15 +1188,10 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         fechaHora: fechaHoraViaje,
         precio: _precio,
         metodoPago: _metodoPago,
-        tipoVehiculo: tipoSrv == 'turismo'
-            ? _mapTipoVehiculoTurismo(_tipoVehiculoTurismo ?? 'carro')
-            : tipoSrv == 'motor'
-                ? 'Motor'
-                : _tipoVehiculo,
+        tipoVehiculo: _tipoVehiculo,
         idaYVuelta: false,
         categoria: 'multi',
         tipoServicio: tipoSrv,
-        subtipoTurismo: tipoSrv == 'turismo' ? _tipoVehiculoTurismo : null,
         waypoints: waypoints,
         extras: {
           'paradas_count': waypoints.length,
@@ -1233,21 +1243,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
   }
 
-  String _mapTipoVehiculoTurismo(String tipo) {
-    switch (tipo) {
-      case 'carro':
-        return 'Carro Turismo';
-      case 'jeepeta':
-        return 'Jeepeta Turismo';
-      case 'minivan':
-        return 'Minivan Turismo';
-      case 'bus':
-        return 'Bus Turismo';
-      default:
-        return 'Carro Turismo';
-    }
-  }
-
   Future<void> _seleccionarFechaHora() async {
     final DateTime? d = await showDatePicker(
       context: context,
@@ -1256,9 +1251,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       lastDate: DateTime.now().add(const Duration(days: 90)),
     );
     if (!mounted || d == null) return;
-    final TimeOfDay? t = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(_fechaHora),
+    final TimeOfDay? t = await elegirHoraAmPm(
+      context,
+      initial: TimeOfDay.fromDateTime(_fechaHora),
     );
     if (!mounted || t == null) return;
     setState(() {
@@ -1340,84 +1335,11 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
   }
 
-  Future<void> _abrirCatalogoTurismo() async {
-    final seleccion = await showModalBottomSheet<DestinoSeleccionado>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => SelectorDestinosTuristicos(
-        latOrigen: _origen?.lat,
-        lonOrigen: _origen?.lon,
-        tipoVehiculoInicial: _tipoVehiculoTurismo,
-        onDestinoSeleccionado: (seleccion) {
-          Navigator.pop(context, seleccion);
-        },
-      ),
-    );
-
-    if (seleccion != null && mounted) {
-      String vehiculoValido = seleccion.tipoVehiculo;
-      const vehiculosValidos = ['carro', 'jeepeta', 'minivan', 'bus'];
-      if (!vehiculosValidos.contains(vehiculoValido)) {
-        debugPrint(
-            '⚠️ Valor inválido en catálogo multi: "$vehiculoValido", usando "carro"');
-        vehiculoValido = 'carro';
-      }
-
-      setState(() {
-        _destino = _LugarSel(
-          label: seleccion.lugar.nombre,
-          lat: seleccion.lugar.lat,
-          lon: seleccion.lugar.lon,
-        );
-        _tipoVehiculoTurismo = vehiculoValido;
-      });
-      _programarCalculoAutomatico();
-    }
-  }
-
   Widget _buildDestinoSection({
     _EstiloRutaCampo? estiloDestino,
     bool legacyRutaCampos = false,
   }) {
     final bool mockupLayout = !legacyRutaCampos;
-    if (_tipoServicio == 'turismo') {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _btnLugar(
-            label: 'Destino Turístico',
-            value: _destino?.label,
-            estilo: estiloDestino,
-            visual: _RutaCampoVisual.destino,
-            legacyRutaCampos: legacyRutaCampos,
-            mockupLayoutCampo: mockupLayout,
-            onTap: () async {
-              final _LugarSel? sel = await _buscarLugar('Destino Turístico');
-              if (!mounted || sel == null) return;
-              setState(() => _destino = _lugarNormalizado(sel, fallbackLabel: 'Destino final'));
-              _programarCalculoAutomatico();
-            },
-          ),
-          const SizedBox(height: 8),
-          TextButton.icon(
-            onPressed: _abrirCatalogoTurismo,
-            icon: Icon(Icons.explore,
-                size: 18, color: estiloDestino?.acento ?? Colors.purple),
-            label: Text(
-              'Ver catálogo completo de destinos turísticos',
-              style: TextStyle(
-                color: estiloDestino?.acento ?? Colors.purple,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            style: TextButton.styleFrom(
-              foregroundColor: estiloDestino?.acento ?? Colors.purple,
-            ),
-          ),
-        ],
-      );
-    }
 
     return _btnLugar(
       label: 'Destino',
@@ -1436,13 +1358,20 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }
 
   bool get _mostrarResumenMulti =>
-      _vistaResumenCotizada &&
-      _tipoServicio != 'turismo' &&
-      _precio > 0 &&
-      !_cargando;
+      _vistaResumenCotizada && _precio > 0 && !_cargando;
 
   void _abrirFormularioCompletoMulti() {
     setState(() => _vistaResumenCotizada = false);
+  }
+
+  void _volverAlInicioSinConfirmar() {
+    intentarSalirAlGate(context);
+  }
+
+  Widget _botonVolverSinConfirmar() {
+    return BotonVolverInicioSinConfirmar(
+      onPressed: _volverAlInicioSinConfirmar,
+    );
   }
 
   Widget _tarjetaResumenMulti({
@@ -1454,8 +1383,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     required Color metodoPagoChipBorder,
   }) {
     final Color c = _colorServicio;
-    final String tipoLabel =
-        _tipoServicio == 'motor' ? 'Motor' : 'Normal · $_tipoVehiculo';
+    final String tipoLabel = 'Normal · $_tipoVehiculo';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1657,6 +1585,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   ),
                 ),
               ),
+              _botonVolverSinConfirmar(),
             ],
           ),
         ),
@@ -1714,9 +1643,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final bool esTurismo = _tipoServicio == 'turismo';
-    final bool rutaMockup = !esTurismo;
-    final DateFormat f = DateFormat('EEE d MMM • HH:mm', 'es');
+    const bool rutaMockup = true;
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
     final Color textSecondary =
         isDark ? Colors.white70 : const Color(0xFF475467);
@@ -1731,42 +1658,25 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     final Color ddBg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
 
     final _EstiloRutaCampo estiloOrigen = _EstiloRutaCampo(
-      acento: isDark
-          ? (esTurismo ? const Color(0xFFFCD34D) : const Color(0xFFFFE082))
-          : const Color(0xFFD97706),
-      fondo: isDark
-          ? (esTurismo ? const Color(0xFF422006) : const Color(0xFF1A1208))
-          : const Color(0xFFFFFBEB),
-      borde: isDark
-          ? (esTurismo ? const Color(0xFFF59E0B) : const Color(0xFFFF9800))
-          : const Color(0xFFF59E0B),
+      acento: isDark ? const Color(0xFFFFE082) : const Color(0xFFD97706),
+      fondo: isDark ? const Color(0xFF1A1208) : const Color(0xFFFFFBEB),
+      borde: isDark ? const Color(0xFFFF9800) : const Color(0xFFF59E0B),
       icono: Icons.trip_origin_rounded,
     );
     final _EstiloRutaCampo estiloParada = _EstiloRutaCampo(
-      acento: isDark
-          ? (esTurismo ? const Color(0xFFFBBF24) : const Color(0xFFFFE082))
-          : const Color(0xFFC2410C),
-      fondo: isDark
-          ? (esTurismo ? const Color(0xFF3A280A) : const Color(0xFF18120A))
-          : const Color(0xFFFFF7ED),
-      borde: isDark
-          ? (esTurismo ? const Color(0xFFF59E0B) : const Color(0xFFF59E0B))
-          : const Color(0xFFFB923C),
+      acento: isDark ? const Color(0xFFFFE082) : const Color(0xFFC2410C),
+      fondo: isDark ? const Color(0xFF18120A) : const Color(0xFFFFF7ED),
+      borde: isDark ? const Color(0xFFF59E0B) : const Color(0xFFFB923C),
       icono: Icons.add_location_alt_rounded,
     );
     final _EstiloRutaCampo estiloDestino = _EstiloRutaCampo(
-      acento: isDark
-          ? (esTurismo ? const Color(0xFFE9D5FF) : Colors.white)
-          : const Color(0xFF7C3AED),
-      fondo: isDark
-          ? (esTurismo ? const Color(0xFF3B0764) : const Color(0xFF3D0F5C))
-          : const Color(0xFFFAF5FF),
+      acento: isDark ? Colors.white : const Color(0xFF7C3AED),
+      fondo: isDark ? const Color(0xFF3D0F5C) : const Color(0xFFFAF5FF),
       borde: isDark ? const Color(0xFFC084FC) : const Color(0xFFA855F7),
       icono: Icons.flag_rounded,
     );
-    final Color lineaRecorrido = isDark
-        ? (esTurismo ? const Color(0xFFFFD54A) : const Color(0xFFFFB74D))
-        : const Color(0xFFF59E0B);
+    final Color lineaRecorrido =
+        isDark ? const Color(0xFFFFB74D) : const Color(0xFFF59E0B);
 
     final Widget interiorRecorrido = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1774,7 +1684,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _tituloSeccionRuta(
           estilo: estiloOrigen,
           titulo: 'ORIGEN',
-          ayuda: 'Desde dónde sale el viaje',
+          ayuda: 'Punto de salida',
           textoAyuda: textMuted,
         ),
         ParpadeoRutaProgramar(
@@ -1785,7 +1695,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             estilo: estiloOrigen,
             visual:
                 rutaMockup ? _RutaCampoVisual.origen : _RutaCampoVisual.parada,
-            legacyRutaCampos: esTurismo,
+            legacyRutaCampos: false,
             mockupLayoutCampo: rutaMockup,
             onTap: () async {
               final _LugarSel? sel = await _buscarLugar('Elige el origen');
@@ -1802,7 +1712,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _tituloSeccionRuta(
           estilo: estiloParada,
           titulo: 'PARADAS INTERMEDIAS',
-          ayuda: 'Paradas en el camino (hasta $_kMaxParadasIntermedias). Puedes dejar vacías.',
+          ayuda: 'Hasta $_kMaxParadasIntermedias paradas · opcional',
           textoAyuda: textMuted,
         ),
         ..._paradas.asMap().entries.map((MapEntry<int, _LugarSel?> e) {
@@ -1819,7 +1729,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     value: val?.label,
                     estilo: estiloParada,
                     visual: _RutaCampoVisual.parada,
-                    legacyRutaCampos: esTurismo,
+                    legacyRutaCampos: false,
                     mockupLayoutCampo: rutaMockup,
                     onTap: () async {
                       final _LugarSel? sel =
@@ -1892,27 +1802,16 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             ),
           );
         }),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: _paradas.length < _kMaxParadasIntermedias
-                ? () {
-                    setState(() => _paradas.add(null));
-                    _programarCalculoAutomatico();
-                  }
-                : null,
-            icon: Icon(Icons.add_circle_outline_rounded,
-                color: estiloParada.acento),
-            label: Text(
-              'Agregar parada',
-              style: TextStyle(
-                color: estiloParada.acento,
-                fontWeight: rutaMockup ? FontWeight.w800 : FontWeight.w700,
-                fontSize: rutaMockup ? 14 : null,
-              ),
-            ),
-            style: TextButton.styleFrom(foregroundColor: estiloParada.acento),
-          ),
+        BotonAccionDestacadoHoja(
+          onPressed: _paradas.length < _kMaxParadasIntermedias
+              ? () {
+                  setState(() => _paradas.add(null));
+                  _programarCalculoAutomatico();
+                }
+              : null,
+          icon: Icons.add_location_alt_rounded,
+          label: 'Agregar parada',
+          accent: estiloParada.borde,
         ),
         if (rutaMockup)
           const SizedBox(height: 8)
@@ -1921,7 +1820,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _tituloSeccionRuta(
           estilo: estiloDestino,
           titulo: 'DESTINO FINAL',
-          ayuda: 'Última parada del viaje',
+          ayuda: 'Destino final',
           textoAyuda: textMuted,
           colorTitulo: rutaMockup
               ? (isDark ? Colors.white : estiloDestino.acento)
@@ -1942,7 +1841,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               : estiloDestino.acento,
           child: _buildDestinoSection(
             estiloDestino: estiloDestino,
-            legacyRutaCampos: esTurismo,
+            legacyRutaCampos: false,
           ),
         ),
       ],
@@ -1992,15 +1891,92 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               if (!_mostrarResumenMulti) ...<Widget>[
                 ClienteViajeOrientacionBanner(
                   mensaje: ClienteViajeOrientacionCopy.multiParadas(
-                    tipoServicio: _tipoServicio,
+                    tipoServicio: 'normal',
                     esAhora: _esAhora,
                   ),
-                  icon: _tipoServicio == 'turismo'
-                      ? Icons.flight_takeoff_rounded
-                      : _tipoServicio == 'motor'
-                          ? Icons.two_wheeler_rounded
-                          : Icons.alt_route_rounded,
+                  icon: Icons.alt_route_rounded,
                   accentColor: _colorServicio,
+                ),
+                const SizedBox(height: 12),
+                ProgramarViajeEncabezadoPersonaliza(
+                  subtitulo: '',
+                  textPrimary: textPrimary,
+                  textMuted: textMuted,
+                  badges: <Widget>[
+                    ProgramarViajeModoChip(
+                      label: 'Múltiples paradas',
+                      icon: Icons.alt_route_rounded,
+                      accent: _colorServicio,
+                      textColor: textPrimary,
+                    ),
+                    ProgramarViajeModoChip(
+                      label: _esAhora ? 'Viaje ahora' : 'Programado',
+                      icon: _esAhora
+                          ? Icons.bolt_rounded
+                          : Icons.calendar_month_rounded,
+                      accent: _colorServicio,
+                      textColor: textPrimary,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _card(
+                  mockupSurface: rutaMockup,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      ProgramarViajeEtiquetaVehiculo(
+                        textPrimary: textPrimary,
+                        textMuted: textMuted,
+                        mostrarAyuda: false,
+                      ),
+                      const SizedBox(height: 10),
+                      OverflowSafeLabeledDropdown(
+                        leading: Icon(Icons.directions_car,
+                            color: textSecondary, size: 20),
+                        label: 'Vehículo',
+                        labelStyle: TextStyle(color: textSecondary),
+                        gapAfterLeading: 10,
+                        dropdown: DropdownButton<String>(
+                          isExpanded: true,
+                          value: _tipoVehiculo,
+                          dropdownColor: ddBg,
+                          underline: rutaMockup
+                              ? Container(
+                                  height: 1,
+                                  margin: const EdgeInsets.only(top: 2),
+                                  color: isDark
+                                      ? Colors.white54
+                                      : const Color(0xFF98A2B3),
+                                )
+                              : const SizedBox(),
+                          style:
+                              TextStyle(color: textPrimary, fontSize: 16),
+                          items: [
+                            'Carro',
+                            'Jeepeta',
+                            'Minibús',
+                            'Minivan',
+                            'AutobusGuagua'
+                          ]
+                              .map((e) => DropdownMenuItem(
+                                    value: e,
+                                    child: Text(
+                                      e,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(color: textPrimary),
+                                    ),
+                                  ))
+                              .toList(),
+                          onChanged: (v) {
+                            setState(() => _tipoVehiculo = v ?? 'Carro');
+                            _programarCalculoAutomatico();
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 12),
                 _card(
@@ -2009,7 +1985,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        'Tu recorrido',
+                        '¿A dónde vas?',
                         style: TextStyle(
                           color: textPrimary,
                           fontWeight: FontWeight.w900,
@@ -2018,7 +1994,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                         ),
                       ),
                       Text(
-                        'Origen → paradas (opcional) → destino final',
+                        'Origen, paradas y destino',
                         style: TextStyle(
                             color: textMuted, fontSize: 12.5, height: 1.35),
                       ),
@@ -2044,184 +2020,24 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 _card(
                   mockupSurface: rutaMockup,
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: <Widget>[
-                          Expanded(
-                            flex: 4,
-                            child: Text(
-                              'Tipo:',
-                              maxLines: 2,
-                              softWrap: true,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: rutaMockup ? textPrimary : textSecondary,
-                                fontWeight: rutaMockup
-                                    ? FontWeight.w600
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            flex: 6,
-                            child: Align(
-                              alignment: AlignmentDirectional.centerEnd,
-                              child: DropdownButton<String>(
-                                isExpanded: true,
-                                value: _tipoServicio,
-                                dropdownColor: ddBg,
-                                underline: rutaMockup
-                                    ? Container(
-                                        height: 1,
-                                        margin: const EdgeInsets.only(top: 2),
-                                        color: isDark
-                                            ? Colors.white54
-                                            : const Color(0xFF98A2B3),
-                                      )
-                                    : const SizedBox(),
-                                style: TextStyle(
-                                    color: textPrimary, fontSize: 16),
-                                items: <DropdownMenuItem<String>>[
-                                  DropdownMenuItem<String>(
-                                      value: 'normal',
-                                      child: Text('Normal',
-                                          style: TextStyle(
-                                              color: textPrimary))),
-                                  DropdownMenuItem<String>(
-                                      value: 'motor',
-                                      child: Text('Motor',
-                                          style: TextStyle(
-                                              color: textPrimary))),
-                                  DropdownMenuItem<String>(
-                                      value: 'turismo',
-                                      child: Text('Turismo',
-                                          style: TextStyle(
-                                              color: textPrimary))),
-                                ],
-                                onChanged: (String? v) {
-                                  setState(() {
-                                    _tipoServicio = v ?? 'normal';
-                                    _esAhora =
-                                        true; // Múltiples paradas solo en modo ahora.
-                                    if (_tipoServicio == 'normal') {
-                                      _tipoVehiculo = 'Carro';
-                                    } else if (_tipoServicio == 'turismo') {
-                                      _tipoVehiculoTurismo = 'carro';
-                                    }
-                                  });
-                                  _programarCalculoAutomatico();
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
+                      Text(
+                        'Opciones del viaje',
+                        style: TextStyle(
+                          color: textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.4,
+                        ),
                       ),
-                      if (_tipoServicio != 'motor') ...[
-                        const SizedBox(height: 8),
-                        if (_tipoServicio == 'normal')
-                          OverflowSafeLabeledDropdown(
-                            leading: Icon(Icons.directions_car,
-                                color: textSecondary, size: 20),
-                            label: 'Vehículo',
-                            labelStyle: TextStyle(color: textSecondary),
-                            gapAfterLeading: 10,
-                            dropdown: DropdownButton<String>(
-                              isExpanded: true,
-                              value: _tipoVehiculo,
-                              dropdownColor: ddBg,
-                              underline: rutaMockup
-                                  ? Container(
-                                      height: 1,
-                                      margin: const EdgeInsets.only(top: 2),
-                                      color: isDark
-                                          ? Colors.white54
-                                          : const Color(0xFF98A2B3),
-                                    )
-                                  : const SizedBox(),
-                              style: TextStyle(
-                                  color: textPrimary, fontSize: 16),
-                              items: [
-                                'Carro',
-                                'Jeepeta',
-                                'Minibús',
-                                'Minivan',
-                                'AutobusGuagua'
-                              ]
-                                  .map((e) => DropdownMenuItem(
-                                        value: e,
-                                        child: Text(
-                                          e,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(color: textPrimary),
-                                        ),
-                                      ))
-                                  .toList(),
-                              onChanged: (v) {
-                                setState(() => _tipoVehiculo = v ?? 'Carro');
-                                _programarCalculoAutomatico();
-                              },
-                            ),
-                          ),
-                        if (_tipoServicio == 'turismo')
-                          OverflowSafeLabeledDropdown(
-                            leading: Icon(Icons.beach_access,
-                                color: textSecondary, size: 20),
-                            label: 'Vehículo turismo',
-                            labelStyle: TextStyle(color: textSecondary),
-                            gapAfterLeading: 10,
-                            dropdown: DropdownButton<String>(
-                              isExpanded: true,
-                              value: _tipoVehiculoTurismo,
-                              dropdownColor: ddBg,
-                              underline: rutaMockup
-                                  ? Container(
-                                      height: 1,
-                                      margin: const EdgeInsets.only(top: 2),
-                                      color: isDark
-                                          ? Colors.white54
-                                          : const Color(0xFF98A2B3),
-                                    )
-                                  : const SizedBox(),
-                              style: TextStyle(
-                                  color: textPrimary, fontSize: 16),
-                              items: [
-                                DropdownMenuItem(
-                                    value: 'carro',
-                                    child: Text('Carro',
-                                        style:
-                                            TextStyle(color: textPrimary))),
-                                DropdownMenuItem(
-                                    value: 'jeepeta',
-                                    child: Text('Jeepeta',
-                                        style:
-                                            TextStyle(color: textPrimary))),
-                                DropdownMenuItem(
-                                    value: 'minivan',
-                                    child: Text('Minivan',
-                                        style:
-                                            TextStyle(color: textPrimary))),
-                                DropdownMenuItem(
-                                    value: 'bus',
-                                    child: Text('Bus',
-                                        style:
-                                            TextStyle(color: textPrimary))),
-                              ],
-                              onChanged: (v) {
-                                setState(() => _tipoVehiculoTurismo = v);
-                                _programarCalculoAutomatico();
-                              },
-                            ),
-                          ),
-                      ],
                       if (!_esAhora) ...<Widget>[
                         const SizedBox(height: 12),
                         TextButton.icon(
                           onPressed: _seleccionarFechaHora,
                           icon: Icon(Icons.calendar_today, color: payLinkColor),
                           label: Text(
-                            f.format(_fechaHora),
+                            fmtFechaHoraAmPm(_fechaHora, sep: '•'),
                             maxLines: 2,
                             softWrap: true,
                             overflow: TextOverflow.ellipsis,
@@ -2387,6 +2203,8 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                             ),
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        _botonVolverSinConfirmar(),
                       ],
                     ),
                   ),
@@ -2738,18 +2556,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       ),
     );
   }
-}
-
-class DestinoSeleccionado {
-  final TurismoLugar lugar;
-  final String tipoVehiculo;
-  final int pasajeros;
-
-  DestinoSeleccionado({
-    required this.lugar,
-    required this.tipoVehiculo,
-    required this.pasajeros,
-  });
 }
 
 // ---------- BottomSheet de búsqueda (mic + RAI vía CampoLugarAutocomplete) ----------

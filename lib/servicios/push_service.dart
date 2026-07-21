@@ -4,12 +4,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
-import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/servicios/fcm_service.dart';
-import 'package:flygo_nuevo/servicios/navigation_service.dart';
-import 'package:flygo_nuevo/shell/cliente_pool_deep_link_bridge.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/servicios/push_open_router.dart';
 
 class PushService {
   PushService._();
@@ -30,11 +27,13 @@ class PushService {
     return true;
   }
 
-  /// Abre [ViajeEnCursoCliente] al tocar la push de viaje programado en pool.
+  /// Abre destino al tocar la push (remoto).
   static void registerNotificationOpenHandlers() {
     if (!_messagingSupported || _openHandlersBound) return;
     _openHandlersBound = true;
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleOpenedRemoteMessage);
+    FirebaseMessaging.onMessageOpenedApp.listen((m) {
+      PushOpenRouter.handleOpenedPushData(m.data);
+    });
   }
 
   /// Arranque en frío: notificación que abrió la app.
@@ -42,60 +41,8 @@ class PushService {
     if (!_messagingSupported) return;
     final RemoteMessage? initial = await _fm.getInitialMessage();
     if (initial != null) {
-      await _handleOpenedRemoteMessage(initial);
+      await PushOpenRouter.handleOpenedPushData(initial.data);
     }
-  }
-
-  static Future<void> _handleOpenedRemoteMessage(RemoteMessage message) async {
-    final data = message.data;
-    final String type = (data['type'] ?? '').toString();
-    if (type == 'trip_chat_message' || type == 'trip_call_attempt') {
-      debugPrint('[FCM] opened app: trip comms type=$type');
-      await FcmService.handleRemoteOpen(message);
-      return;
-    }
-    if (type.startsWith('gira_cupos_recordatorio_') ||
-        type == 'gira_cupos_actualizada') {
-      final poolId = (data['poolId'] ?? '').toString().trim();
-      if (poolId.isEmpty) return;
-      if (isPasajeroCapableFlavor) {
-        ClientePoolDeepLinkBridge.enqueuePoolId(poolId);
-        ClientePoolDeepLinkBridge.tryOpenPool(poolId);
-      }
-      return;
-    }
-    if (type != 'scheduled_trip_pool_open') return;
-
-    final String viajeId = (data['viajeId'] ?? '').toString().trim();
-    if (viajeId.isEmpty) return;
-
-    final NavigatorState? preNav = NavigationService.navigatorKey.currentState;
-
-    User? u = _auth.currentUser;
-    if (u == null) {
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
-      u = _auth.currentUser;
-    }
-    if (u == null) return;
-
-    final snap = await _db.collection('viajes').doc(viajeId).get();
-    if (!snap.exists) return;
-    final vd = snap.data()!;
-    final String cid =
-        (vd['uidCliente'] ?? vd['clienteId'] ?? '').toString().trim();
-    if (cid != u.uid) return;
-
-    await _db.collection('usuarios').doc(u.uid).set(
-      {
-        'viajeActivoId': viajeId,
-        'siguienteViajeId': '',
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
-
-    await NavigationService.clearAndGoViajeEnCursoCliente(preNav: preNav);
   }
 
   /// Compat con tu código viejo:
@@ -104,7 +51,6 @@ class PushService {
   /// Llamar al arrancar (si hay sesión) y justo después de iniciar sesión.
   static Future<void> initAndRegisterToken() async {
     if (!_messagingSupported) return;
-    // Permisos/presentación (Android/iOS)
     if (!kIsWeb) {
       await _requestPermissionsMobile();
       await _fm.setForegroundNotificationPresentationOptions(
@@ -117,13 +63,11 @@ class PushService {
     final u = _auth.currentUser;
     if (u == null) return;
 
-    // Token actual
     final token = await _fm.getToken();
     if (token != null && token.isNotEmpty) {
       await _saveToken(u.uid, token);
     }
 
-    // Refresh de token
     _fm.onTokenRefresh.listen((t) async {
       final cu = _auth.currentUser;
       if (cu != null && t.isNotEmpty) {
@@ -158,11 +102,10 @@ class PushService {
       provisional: false,
     );
     if (settings.authorizationStatus == AuthorizationStatus.denied) {
-      return; // si niega, no guardamos token
+      return;
     }
   }
 
-  /// Guarda tokens en /push_tokens/{uid}
   static Future<void> _saveToken(String uid, String token) async {
     final ref = _db.collection('push_tokens').doc(uid);
     await ref.set({

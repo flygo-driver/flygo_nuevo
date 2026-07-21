@@ -21,7 +21,7 @@ class AuthService {
 
     final base = <String, dynamic>{
       'uid': uid,
-      'email': user.email ?? '',
+      'email': (user.email ?? '').trim().toLowerCase(),
       'nombre': user.displayName ?? '',
       'lastLogin': FieldValue.serverTimestamp(),
       'authProvider': user.providerData.isNotEmpty
@@ -101,8 +101,11 @@ class AuthService {
     }
   }
 
-  // Google sin fetchSignInMethodsForEmail (sin warning)
+  // Google: siempre limpia sesión previa para mostrar todas las cuentas.
   Future<User> signInWithGoogle({required String rol}) async {
+    try {
+      await GoogleSignIn(scopes: ['email']).signOut();
+    } catch (_) {}
     final gUser = await GoogleSignIn(scopes: ['email']).signIn();
     if (gUser == null) {
       throw FirebaseAuthException(

@@ -1,5 +1,10 @@
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
-import { ledgerComisionViajeEfectivoCf, comisionViajeEfectivoLedgerRef } from "./taxista_prepago_ledger.js";
+import {
+  ledgerComisionViajeEfectivoCf,
+  comisionViajeEfectivoLedgerRef,
+  comisionBolaPuebloLedgerRef,
+  debitarComisionBolaPuebloEnTx,
+} from "./taxista_prepago_ledger.js";
 import type { DocumentSnapshot, Transaction } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
@@ -8,12 +13,13 @@ import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
 import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import { getComisionCorporativoPorcentajeCached } from "./corporativo_tarifa_config.js";
 import {
   aplicarIncentivoComisionEnFinalizar,
   getComisionIncentivosTaxistaConfigCached,
   statsDocRef,
 } from "./comision_incentivos_taxista.js";
-import { assertMultiparadaCompletaParaFinalizar } from "./multiparada.js";
+import { assertMultiparadaCompletaParaFinalizar, esCorporativoModoInformativo } from "./multiparada.js";
 import {
   elegibleLiquidacionSemanalCache,
   esElegibleLiquidacionSemanal,
@@ -299,6 +305,7 @@ async function enviarPushComisionTaxista(
   title: string,
   body: string,
   dataType: string,
+  extraData?: Record<string, string>,
 ): Promise<void> {
   const tokSnap = await db().collection("push_tokens").doc(uid).get();
   const raw = tokSnap.data()?.tokens;
@@ -313,6 +320,7 @@ async function enviarPushComisionTaxista(
     data: {
       type: dataType,
       click_action: "FLUTTER_NOTIFICATION_CLICK",
+      ...(extraData ?? {}),
     },
     android: {
       notification: {
@@ -684,7 +692,19 @@ function normalizeEstadoViajeDoc(raw: unknown): string {
   ) {
     return "a_bordo";
   }
+  if (
+    s === "en_camino_pickup" ||
+    s === "en_camino" ||
+    s === "encaminopickup" ||
+    s === "encamino_pickup" ||
+    s === "encamino" ||
+    s === "encaminopick-up" ||
+    s === "encaminopick_up"
+  ) {
+    return "en_camino_pickup";
+  }
   if (s === "finalizado" || s === "completado") return "completado";
+  if (s === "cancelado" || s === "cancelled") return "cancelado";
   return s;
 }
 
@@ -704,6 +724,8 @@ function patchBolaPuebloTrasViajeEspejoFinalizado(
   viajeData: AnyMap,
   esEfectivo: boolean,
   facturaSaldoPrepagoComisionRd: number | null,
+  /** Solo true si ya se debitó ledger/billetera (o ledger previo existía). */
+  comisionAplicada: boolean,
 ): Record<string, unknown> | null {
   const bolaId = bolaIdDesdeViajeEspejo(viajeData);
   if (!bolaId) return null;
@@ -717,7 +739,7 @@ function patchBolaPuebloTrasViajeEspejoFinalizado(
     estado: "finalizada",
     estadoViajeBola: "finalizada",
     finalizadaEn: FieldValue.serverTimestamp(),
-    comisionAplicada: true,
+    comisionAplicada,
     viajeCompletadoId: viajeId,
     updatedAt: FieldValue.serverTimestamp(),
     metodoPago: esEfectivo ? "efectivo" : "transferencia",
@@ -743,21 +765,65 @@ async function syncBolaPuebloTrasViajeEspejoFinalizado(
   viajeId: string,
   viajeData: AnyMap,
 ): Promise<void> {
+  const bolaId = bolaIdDesdeViajeEspejo(viajeData);
+  if (!bolaId) return;
+
   const metodo = String(viajeData.metodoPago ?? "").toLowerCase().trim();
   const esEfectivo = metodo.length === 0 || metodo.includes("efectivo");
-  const saldoRaw = viajeData.facturaSaldoPrepagoComisionRd;
-  const saldo =
-    typeof saldoRaw === "number" && Number.isFinite(saldoRaw) ? saldoRaw : null;
-  const patch = patchBolaPuebloTrasViajeEspejoFinalizado(
+  const uidTaxista = String(
+    viajeData.uidTaxista ?? viajeData.taxistaId ?? "",
+  ).trim();
+
+  await db().runTransaction(async (tx) => {
+    const bolaRef = db().collection("bolas_pueblo").doc(bolaId);
+    const bolaSnap = await tx.get(bolaRef);
+    if (!bolaSnap.exists) return;
+    const bd = (bolaSnap.data() ?? {}) as AnyMap;
+
+    let comisionOk = bd.comisionAplicada === true;
+    let saldoFactura: number | null =
+      typeof bd.facturaSaldoPrepagoComisionRd === "number" &&
+      Number.isFinite(bd.facturaSaldoPrepagoComisionRd)
+        ? (bd.facturaSaldoPrepagoComisionRd as number)
+        : typeof viajeData.facturaSaldoPrepagoComisionRd === "number" &&
+            Number.isFinite(viajeData.facturaSaldoPrepagoComisionRd)
+          ? (viajeData.facturaSaldoPrepagoComisionRd as number)
+          : null;
+
+    if (!comisionOk && uidTaxista) {
+      const billeRef = db().collection("billeteras_taxista").doc(uidTaxista);
+      const billeSnap = await tx.get(billeRef);
+      const ledgerSnap = await tx.get(
+        comisionBolaPuebloLedgerRef(uidTaxista, bolaId),
+      );
+      const comision = Number(bd.comisionRd ?? 0);
+      const deb = await debitarComisionBolaPuebloEnTx(tx, {
+        uidTaxista,
+        bolaId,
+        comisionRd: comision,
+        fuente: "heal_sync_viaje_espejo_bola_cf",
+        billeData: (billeSnap.data() ?? {}) as Record<string, unknown>,
+        existingMovSnap: ledgerSnap,
+      });
+      comisionOk = deb.appliedNow || deb.alreadyHadLedger;
+      if (comisionOk) {
+        saldoFactura = deb.saldoPrepagoDespues;
+      }
+    }
+
+    const patch = patchBolaPuebloTrasViajeEspejoFinalizado(
+      viajeId,
+      viajeData,
+      esEfectivo,
+      saldoFactura,
+      comisionOk,
+    );
+    if (patch) tx.set(bolaRef, patch, { merge: true });
+  });
+  logger.info("[BOLA_AHORRO] sync bola finalizada desde viaje espejo", {
     viajeId,
-    viajeData,
-    esEfectivo,
-    saldo,
-  );
-  if (!patch) return;
-  const bolaId = bolaIdDesdeViajeEspejo(viajeData);
-  await db().collection("bolas_pueblo").doc(bolaId).set(patch, { merge: true });
-  logger.info("[BOLA_AHORRO] sync bola finalizada desde viaje espejo", { viajeId, bolaId });
+    bolaId,
+  });
 }
 
 async function ensureIdempotencyStart(
@@ -819,6 +885,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
   if (idem.done) return idem.result;
 
   const comisionViajePct = await getComisionViajePorcentajeCached();
+  const comisionCorporativoPct =
+    await getComisionCorporativoPorcentajeCached(comisionViajePct);
   const incentivosCfg = await getComisionIncentivosTaxistaConfigCached();
 
   const viajeRef = db().collection("viajes").doc(viajeId);
@@ -852,7 +920,21 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const usaRecaudoRai =
       String(d.referenciaRecaudo ?? "").trim().length > 0 ||
       String(d.recaudoDestino ?? "").trim().toLowerCase() === "rai";
+    const esCorporativoEmpresa = d.corporativo === true;
+    const corpModoInformativo = esCorporativoModoInformativo(d);
     if (
+      esCorporativoEmpresa &&
+      d.codigoVerificado !== true &&
+      !corpModoInformativo
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Viaje corporativo: debes ingresar el código de verificación para iniciar/cobrar la ruta. "
+          + "Sin código no se cuenta el día (feriado, cancelación o sin laborar).",
+      );
+    }
+    if (
+      !esCorporativoEmpresa &&
       financeCfg.transferenciaExigeVerificadoParaFinalizar &&
       esTransferPre &&
       usaRecaudoRai
@@ -868,7 +950,11 @@ export const finalizarViajeSeguro = onCall(async (request) => {
 
     const esTarjetaPre =
       metodoPre.includes("tarjeta") || metodoPre.includes("card");
-    if (financeCfg.pagosConTarjetaAzulHabilitados && esTarjetaPre) {
+    if (
+      !esCorporativoEmpresa &&
+      financeCfg.pagosConTarjetaAzulHabilitados &&
+      esTarjetaPre
+    ) {
       const paymentObj = (d.payment ?? {}) as AnyMap;
       const payStatus = String(paymentObj.status ?? "").trim().toLowerCase();
       const ep = String(d.estadoPago ?? "").trim().toLowerCase();
@@ -881,6 +967,20 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     }
 
     if (!estadoPermiteFinalizarTaxista(estado)) {
+      const corpOk =
+        corpModoInformativo &&
+        (() => {
+          const pas = d.corporativoPasajeros;
+          if (!Array.isArray(pas) || pas.length === 0) return true;
+          const total = pas.length;
+          const hechas = Array.isArray(d.corporativoParadasHechas)
+            ? (d.corporativoParadasHechas as unknown[]).length
+            : typeof d.multiparadaLegCompletadas === "number"
+              ? Math.trunc(d.multiparadaLegCompletadas as number)
+              : 0;
+          return d.multiparadaCompleta === true || hechas >= total;
+        })();
+      if (!corpOk) {
       const rawEst = String(d.estado ?? "");
       logger.warn("[FINALIZAR_ERROR] finalizarViajeSeguro estado no finalizable", {
         viajeId,
@@ -895,6 +995,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         `No se puede finalizar ahora: el viaje está en estado "${rawEst || estado}". ` +
           "Tenés que tener el cliente a bordo con código verificado e iniciar la ruta al destino, o ya estar en ruta. Si ya lo hiciste, esperá un segundo y reintentá.",
       );
+      }
     }
 
     const precioCentsDb = typeof d.precio_cents === "number" ? Math.trunc(d.precio_cents) : null;
@@ -929,9 +1030,20 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       }
     }
 
-    let comisionPctAplicada = comisionViajePct;
+    const bolaIdFinalize = bolaIdDesdeViajeEspejo(d);
+    let bolaSnapPre: DocumentSnapshot | null = null;
+    let bolaLedgerSnapPre: DocumentSnapshot | null = null;
+    if (bolaIdFinalize) {
+      bolaSnapPre = await tx.get(db().collection("bolas_pueblo").doc(bolaIdFinalize));
+      bolaLedgerSnapPre = await tx.get(
+        comisionBolaPuebloLedgerRef(uidTaxista, bolaIdFinalize),
+      );
+    }
+
+    let comisionPctAplicada =
+      esCorporativoEmpresa ? comisionCorporativoPct : comisionViajePct;
     let incentivoViajePatch: AnyMap = {};
-    if (!pagoRegistrado) {
+    if (!esCorporativoEmpresa && !pagoRegistrado) {
       const inc = aplicarIncentivoComisionEnFinalizar({
         cfg: incentivosCfg,
         globalPct: comisionViajePct,
@@ -1086,6 +1198,44 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       liquidado: d.liquidado === true,
     };
 
+    // Bola Ahorro: debitar comisión ANTES del snapshot de factura en el viaje.
+    let bolaComisionAplicada = false;
+    if (bolaIdFinalize && bolaSnapPre?.exists) {
+      const bd = (bolaSnapPre.data() ?? {}) as AnyMap;
+      if (bd.comisionAplicada === true) {
+        bolaComisionAplicada = true;
+        if (
+          typeof bd.facturaSaldoPrepagoComisionRd === "number" &&
+          Number.isFinite(bd.facturaSaldoPrepagoComisionRd)
+        ) {
+          facturaSaldoPrepagoComisionRd = bd.facturaSaldoPrepagoComisionRd as number;
+        }
+      } else {
+        let billeDataBola = (billeSnapPre.data() ?? {}) as Record<string, unknown>;
+        if (aplicaPrepagoComision && facturaSaldoPrepagoComisionRd != null) {
+          billeDataBola = {
+            ...billeDataBola,
+            saldoPrepagoComisionRd: facturaSaldoPrepagoComisionRd,
+          };
+        }
+        const deb = await debitarComisionBolaPuebloEnTx(tx, {
+          uidTaxista,
+          bolaId: bolaIdFinalize,
+          comisionRd: Number(bd.comisionRd ?? 0),
+          fuente: "finalizar_viaje_espejo_bola_cf",
+          billeData: billeDataBola,
+          existingMovSnap: bolaLedgerSnapPre ?? undefined,
+        });
+        bolaComisionAplicada = deb.appliedNow || deb.alreadyHadLedger;
+        if (bolaComisionAplicada) {
+          facturaSaldoPrepagoComisionRd = deb.saldoPrepagoDespues;
+        }
+      }
+    } else if (!aplicaPrepagoComision && bolaIdFinalize) {
+      // Viaje espejo sin doc bola aún: no fingir comisión aplicada.
+      bolaComisionAplicada = false;
+    }
+
     tx.update(viajeRef, {
       estado: "completado",
       completado: true,
@@ -1114,15 +1264,20 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       facturaSaldoPrepagoComisionRd,
     });
 
-    tx.set(
-      db().collection("usuarios").doc(uidTaxista),
-      {
-        viajeActivoId: "",
-        updatedAt: FieldValue.serverTimestamp(),
-        actualizadoEn: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
+    const taxistaUserPatch: AnyMap = {
+      viajeActivoId: "",
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    };
+    if (String(uData.siguienteViajeId ?? "").trim() === viajeId) {
+      taxistaUserPatch.siguienteViajeId = "";
+    }
+    if (String(uData.viajeEncoladoId ?? "").trim() === viajeId) {
+      taxistaUserPatch.viajeEncoladoId = "";
+    }
+    tx.set(db().collection("usuarios").doc(uidTaxista), taxistaUserPatch, {
+      merge: true,
+    });
     if (uidCliente) {
       tx.set(
         db().collection("usuarios").doc(uidCliente),
@@ -1140,6 +1295,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       d,
       esEfectivo,
       facturaSaldoPrepagoComisionRd,
+      bolaComisionAplicada,
     );
     if (bolaPatch) {
       const bolaId = bolaIdDesdeViajeEspejo(d);
@@ -1170,6 +1326,39 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         uidT,
         viajeId,
         syncErr,
+      });
+    }
+    try {
+      const vPost = await viajeRef.get();
+      const vdPost = (vPost.data() ?? {}) as AnyMap;
+      if (vdPost.corporativo === true) {
+        const { acumularViajeCorporativoEnPeriodo } = await import(
+          "./corporativo_billing.js"
+        );
+        await acumularViajeCorporativoEnPeriodo(viajeId, vdPost);
+        const { notificarViajeCorporativoCompletado } = await import(
+          "./corporativo_abordaje.js"
+        );
+        void notificarViajeCorporativoCompletado(viajeId, vdPost).catch(
+          (e) => logger.warn("notificarViajeCorporativoCompletado", { viajeId, e }),
+        );
+        try {
+          const { refrescarChoferOperacionCorporativa } = await import(
+            "./corporativo_rutas.js"
+          );
+          await refrescarChoferOperacionCorporativa(uidT);
+        } catch (opErr: unknown) {
+          logger.warn("[FINALIZAR_WARN] refrescarChoferOperacionCorporativa falló", {
+            viajeId,
+            uidT,
+            opErr,
+          });
+        }
+      }
+    } catch (corpErr: unknown) {
+      logger.error("[FINALIZAR_WARN] acumularViajeCorporativoEnPeriodo falló", {
+        viajeId,
+        corpErr,
       });
     }
   }
@@ -1603,6 +1792,26 @@ export const aceptarViajeSeguro = onCall(async (request) => {
 
     if (uidTaxistaActual || taxistaIdActual) {
       if (uidTaxistaActual === uidActor || taxistaIdActual === uidActor) {
+        // Reentrada / alreadyTaken: asegurar activo + viajeActivoId (multiparada/claim parcial).
+        tx.set(
+          viajeRef,
+          {
+            activo: true,
+            estado: "aceptado",
+            actualizadoEn: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+        tx.set(
+          userRef,
+          {
+            viajeActivoId: viajeId,
+            actualizadoEn: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
         return { ok: true, viajeId, alreadyTaken: true };
       }
       throw new HttpsError("failed-precondition", "ya-asignado");
@@ -1776,9 +1985,6 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uidActor = request.auth.uid;
   const role = await getRole(uidActor);
-  if (role !== "taxista" && role !== "admin") {
-    throw new HttpsError("permission-denied", "Rol no autorizado");
-  }
 
   const viajeId = typeof request.data?.viajeId === "string" ? request.data.viajeId.trim() : "";
   const idemKey = typeof request.data?.idempotencyKey === "string" ? request.data.idempotencyKey.trim() : "";
@@ -1799,23 +2005,45 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
     const uidTxRaw = String(d.uidTaxista ?? "");
     const taxistaIdRaw = String(d.taxistaId ?? "");
     const uidTx = uidTxRaw.trim() ? uidTxRaw.trim() : taxistaIdRaw.trim();
-    if (role === "taxista" && uidTx !== uidActor) {
-      throw new HttpsError("permission-denied", "No autorizado para este viaje");
+    const esChoferDelViaje = !!uidTx && uidTx === uidActor;
+
+    const uSnap = await tx.get(userRef);
+    const uData = (uSnap.data() ?? {}) as AnyMap;
+    const viajeActivoId = String(uData.viajeActivoId ?? "").trim();
+    const esViajeActivoDelUsuario = viajeActivoId === viajeId;
+
+    // Autoriza: admin, chofer del doc, o taxista con este viajeActivoId
+    // (cubre docs con uidTaxista vacío/desfasado).
+    const autorizado =
+      role === "admin" ||
+      esChoferDelViaje ||
+      ((role === "taxista" || role === "driver") && esViajeActivoDelUsuario);
+
+    if (!autorizado) {
+      throw new HttpsError(
+        "permission-denied",
+        esChoferDelViaje
+          ? "No autorizado para este viaje"
+          : "No autorizado para cancelar este viaje (no eres el conductor asignado).",
+      );
     }
 
-    const estado = String(d.estado ?? "");
-    const cancelable = estado === "aceptado" || estado === "en_camino_pickup" || estado === "enCaminoPickup";
+    const estadoNorm = normalizeEstadoViajeDoc(d.estado);
+    const cancelable =
+      estadoNorm === "aceptado" || estadoNorm === "en_camino_pickup";
     if (!cancelable) {
       throw new HttpsError("failed-precondition", "No se puede cancelar en este estado");
     }
 
+    const uidCliente = String(d.uidCliente ?? d.clienteId ?? d.uid ?? "").trim();
     const esTurismo = String(d.tipoServicio ?? "").trim() === "turismo";
-    const estadoTrasCancel = esTurismo ? "pendiente_admin" : "pendiente";
+    const uidChoferLimpieza = uidTx || uidActor;
 
+    // Cancelación total (antes de abordar): limpia viaje en curso del cliente también.
     const cancelPatch: Record<string, unknown> = {
-      estado: estadoTrasCancel,
+      estado: "cancelado",
       aceptado: false,
-      rechazado: false,
+      rechazado: true,
       activo: false,
       uidTaxista: "",
       taxistaId: "",
@@ -1825,7 +2053,7 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       marca: "",
       modelo: "",
       color: "",
-      republicado: true,
+      republicado: false,
       canceladoPor: "taxista",
       canceladoTaxistaEn: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -1835,7 +2063,7 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       finalizadoEn: FieldValue.delete(),
       reservadoPor: "",
       reservadoHasta: null,
-      ignoradosPor: FieldValue.arrayUnion([uidActor]),
+      ignoradosPor: FieldValue.arrayUnion(uidActor),
     };
     if (esTurismo) {
       cancelPatch.codigoVerificado = false;
@@ -1854,6 +2082,160 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       actualizadoEn: FieldValue.serverTimestamp(),
     }, { merge: true });
 
+    if (uidCliente) {
+      tx.set(db().collection("usuarios").doc(uidCliente), {
+        viajeActivoId: "",
+        siguienteViajeId: "",
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    if (esTurismo && uidChoferLimpieza) {
+      const choferRef = db().collection("choferes_turismo").doc(uidChoferLimpieza);
+      const choferSnap = await tx.get(choferRef);
+      if (choferSnap.exists) {
+        const choferData = (choferSnap.data() ?? {}) as AnyMap;
+        const viajeActual = String(choferData.viajeActualId ?? "").trim();
+        if (viajeActual === viajeId || viajeActual === "") {
+          tx.update(choferRef, {
+            disponible: true,
+            viajeActualId: "",
+            updatedAt: FieldValue.serverTimestamp(),
+            actualizadoEn: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+    }
+
+    return { ok: true, viajeId, uidCliente };
+  });
+
+  const uidClienteNotify = String((result as AnyMap).uidCliente ?? "").trim();
+  if (uidClienteNotify) {
+    try {
+      await enviarPushComisionTaxista(
+        uidClienteNotify,
+        "Viaje cancelado",
+        "El conductor canceló el viaje.",
+        "viaje_cancelado_taxista",
+        { viajeId },
+      );
+    } catch (e) {
+      logger.warn("[cancelarViajeTaxistaSeguro] FCM cliente", e);
+    }
+  }
+
+  await markIdempotencyDone(idem.ref, result as AnyMap);
+  return result;
+});
+
+/**
+ * Cliente cancela antes de abordar (sin código / sin a_bordo|en_curso).
+ * Admin SDK: marca cancelado y limpia viajeActivoId de cliente y taxista.
+ */
+export const cancelarViajeClienteSeguro = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+
+  const viajeId = typeof request.data?.viajeId === "string" ? request.data.viajeId.trim() : "";
+  const motivo =
+    typeof request.data?.motivo === "string" ? request.data.motivo.trim().slice(0, 500) : "";
+  const idemKey =
+    typeof request.data?.idempotencyKey === "string" ? request.data.idempotencyKey.trim() : "";
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+  if (!idemKey) throw new HttpsError("invalid-argument", "Falta idempotencyKey");
+
+  const idem = await ensureIdempotencyStart(idemKey, "cancelar_viaje_cliente_seguro", uidActor);
+  if (idem.done) return idem.result;
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+
+  const result = await db().runTransaction(async (tx) => {
+    const vSnap = await tx.get(viajeRef);
+    if (!vSnap.exists) throw new HttpsError("not-found", "Viaje no existe");
+    const d = (vSnap.data() ?? {}) as AnyMap;
+
+    const uidCliente = String(d.uidCliente ?? d.clienteId ?? d.uid ?? "").trim();
+    if (!uidCliente || uidCliente !== uidActor) {
+      throw new HttpsError("permission-denied", "No autorizado para este viaje");
+    }
+
+    const estadoNorm = normalizeEstadoViajeDoc(d.estado);
+    if (estadoNorm === "completado" || estadoNorm === "cancelado") {
+      throw new HttpsError("failed-precondition", "El viaje ya está cerrado");
+    }
+    if (estadoNorm === "a_bordo" || estadoNorm === "en_curso") {
+      throw new HttpsError(
+        "failed-precondition",
+        "No se puede cancelar después de abordar o con el viaje en curso",
+      );
+    }
+
+    const cancelable =
+      estadoNorm === "pendiente" ||
+      estadoNorm === "pendiente_pago" ||
+      estadoNorm === "pendiente_admin" ||
+      estadoNorm === "buscando" ||
+      estadoNorm === "disponible" ||
+      estadoNorm === "aceptado" ||
+      estadoNorm === "en_camino_pickup";
+    if (!cancelable) {
+      throw new HttpsError("failed-precondition", "No se puede cancelar en este estado");
+    }
+
+    const uidTx = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
+    const esTurismo = String(d.tipoServicio ?? "").trim() === "turismo";
+
+    tx.update(viajeRef, {
+      estado: "cancelado",
+      aceptado: false,
+      rechazado: true,
+      activo: false,
+      uidTaxista: "",
+      taxistaId: "",
+      nombreTaxista: "",
+      telefono: "",
+      placa: "",
+      marca: "",
+      modelo: "",
+      color: "",
+      republicado: false,
+      canceladoPor: "cliente",
+      motivoCancelacion: motivo,
+      canceladoClienteEn: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+      pickupConfirmadoEn: FieldValue.delete(),
+      inicioEnRutaEn: FieldValue.delete(),
+      finalizadoEn: FieldValue.delete(),
+      reservadoPor: "",
+      reservadoHasta: null,
+    });
+
+    tx.set(
+      db().collection("usuarios").doc(uidActor),
+      {
+        viajeActivoId: "",
+        siguienteViajeId: "",
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    if (uidTx) {
+      tx.set(
+        db().collection("usuarios").doc(uidTx),
+        {
+          viajeActivoId: "",
+          updatedAt: FieldValue.serverTimestamp(),
+          actualizadoEn: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
     if (esTurismo && uidTx) {
       const choferRef = db().collection("choferes_turismo").doc(uidTx);
       const choferSnap = await tx.get(choferRef);
@@ -1871,7 +2253,7 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       }
     }
 
-    return { ok: true, viajeId };
+    return { ok: true, viajeId, uidTaxista: uidTx };
   });
 
   await markIdempotencyDone(idem.ref, result as AnyMap);
@@ -2030,6 +2412,183 @@ export const desktopAdminSessionInfo = onCall(async (request) => {
   });
 
   return payload;
+});
+
+/** Limpia viajeActivoId solo si sigue apuntando a este viaje. */
+async function clearViajeActivoSiCoincide(uid: string, viajeId: string): Promise<void> {
+  const u = uid.trim();
+  const vid = viajeId.trim();
+  if (!u || !vid) return;
+  const ref = db().collection("usuarios").doc(u);
+  await db().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const cur = String((snap.data() as AnyMap | undefined)?.viajeActivoId ?? "").trim();
+    if (cur && cur !== vid) return;
+    tx.set(
+      ref,
+      {
+        viajeActivoId: "",
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+}
+
+async function liberarChoferTurismoSiAplica(uidTx: string, viajeId: string): Promise<void> {
+  const u = uidTx.trim();
+  if (!u) return;
+  const choferRef = db().collection("choferes_turismo").doc(u);
+  const snap = await choferRef.get();
+  if (!snap.exists) return;
+  const viajeActual = String((snap.data() as AnyMap | undefined)?.viajeActualId ?? "").trim();
+  if (viajeActual && viajeActual !== viajeId) return;
+  await choferRef.set(
+    {
+      disponible: true,
+      viajeActualId: "",
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+/**
+ * Cliente cancela antes de abordar → mensaje al chofer + limpia viaje en curso en ambos.
+ * Lee uidTaxista del snapshot ANTERIOR (el update del cliente lo vacía).
+ */
+export const onViajeCanceladoPorCliente = onDocumentWritten("viajes/{viajeId}", async (event) => {
+  const viajeId = String(event.params?.viajeId ?? "").trim();
+  if (!viajeId) return;
+
+  const before = (event.data?.before?.data() ?? undefined) as AnyMap | undefined;
+  const after = (event.data?.after?.data() ?? undefined) as AnyMap | undefined;
+
+  // Pedido borrado en los primeros 60s (sin conductor): solo limpia cliente si hace falta.
+  if (!after) {
+    const uidTxDel = String(before?.uidTaxista ?? before?.taxistaId ?? "").trim();
+    const uidCliDel = String(
+      before?.uidCliente ?? before?.clienteId ?? before?.uid ?? "",
+    ).trim();
+    if (uidCliDel) {
+      try {
+        await clearViajeActivoSiCoincide(uidCliDel, viajeId);
+      } catch (e) {
+        logger.warn("[onViajeCanceladoPorCliente] clear cliente delete", e);
+      }
+    }
+    if (uidTxDel) {
+      try {
+        await clearViajeActivoSiCoincide(uidTxDel, viajeId);
+        await enviarPushComisionTaxista(
+          uidTxDel,
+          "Viaje cancelado",
+          "El cliente canceló el viaje.",
+          "viaje_cancelado_cliente",
+          { viajeId },
+        );
+      } catch (e) {
+        logger.warn("[onViajeCanceladoPorCliente] notify delete", e);
+      }
+    }
+    return;
+  }
+
+  const estAfter = normalizeEstadoViajeDoc(after.estado);
+  const estBefore = normalizeEstadoViajeDoc(before?.estado);
+  if (estAfter !== "cancelado") return;
+  if (estBefore === "cancelado") return;
+
+  const canceladoPor = String(after.canceladoPor ?? "").trim().toLowerCase();
+  const porCliente = canceladoPor === "cliente";
+  const porTaxista =
+    canceladoPor === "taxista" || canceladoPor === "taxista_forzado";
+  if (!porCliente && !porTaxista) return;
+
+  // Evita doble push si el trigger reintenta.
+  if (porCliente && after.cancelacionClienteNotificada === true) return;
+  if (porTaxista && after.cancelacionTaxistaNotificada === true) return;
+
+  const uidCliente = String(
+    after.uidCliente ?? after.clienteId ?? before?.uidCliente ?? before?.clienteId ?? "",
+  ).trim();
+  const uidTx = String(
+    before?.uidTaxista ??
+      before?.taxistaId ??
+      after.uidTaxista ??
+      after.taxistaId ??
+      "",
+  ).trim();
+  const esTurismo = String(after.tipoServicio ?? before?.tipoServicio ?? "").trim() === "turismo";
+
+  try {
+    if (uidCliente) await clearViajeActivoSiCoincide(uidCliente, viajeId);
+  } catch (e) {
+    logger.warn("[onViajeCanceladoPorCliente] clear cliente", e);
+  }
+
+  if (uidTx) {
+    try {
+      await clearViajeActivoSiCoincide(uidTx, viajeId);
+    } catch (e) {
+      logger.warn("[onViajeCanceladoPorCliente] clear taxista", e);
+    }
+    if (esTurismo) {
+      try {
+        await liberarChoferTurismoSiAplica(uidTx, viajeId);
+      } catch (e) {
+        logger.warn("[onViajeCanceladoPorCliente] liberar turismo", e);
+      }
+    }
+  }
+
+  if (porCliente && uidTx) {
+    try {
+      await enviarPushComisionTaxista(
+        uidTx,
+        "Viaje cancelado",
+        "El cliente canceló el viaje antes de abordar.",
+        "viaje_cancelado_cliente",
+        { viajeId },
+      );
+    } catch (e) {
+      logger.warn("[onViajeCanceladoPorCliente] FCM taxista", e);
+    }
+  }
+
+  if (porTaxista && uidCliente) {
+    try {
+      await enviarPushComisionTaxista(
+        uidCliente,
+        "Viaje cancelado",
+        "El conductor canceló el viaje.",
+        "viaje_cancelado_taxista",
+        { viajeId },
+      );
+    } catch (e) {
+      logger.warn("[onViajeCanceladoPorCliente] FCM cliente", e);
+    }
+  }
+
+  try {
+    const mark: Record<string, unknown> = {
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (porCliente) {
+      mark.cancelacionClienteNotificada = true;
+      mark.cancelacionClienteNotificadaEn = FieldValue.serverTimestamp();
+    }
+    if (porTaxista) {
+      mark.cancelacionTaxistaNotificada = true;
+      mark.cancelacionTaxistaNotificadaEn = FieldValue.serverTimestamp();
+    }
+    await event.data?.after?.ref.set(mark, { merge: true });
+  } catch (e) {
+    logger.warn("[onViajeCanceladoPorCliente] mark notified", e);
+  }
 });
 
 /** Alias HTTPS: misma implementación que `finalizarViajeSeguro` (callable `completarViajePorTaxista` en cliente). */

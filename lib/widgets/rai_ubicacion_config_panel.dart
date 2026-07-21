@@ -82,7 +82,9 @@ class _RaiUbicacionConfigPanelState extends State<RaiUbicacionConfigPanel>
       : RaiUbicacionTaxistaService.instance.tituloBanner;
 
   Future<void> _abrirAjustesManual() async {
-    await LocationPermissionService.abrirAjustesUbicacionManualmente();
+    await LocationPermissionService.abrirAjustesUbicacionManualmente(
+      context: context,
+    );
     await _refrescar();
   }
 
@@ -152,7 +154,7 @@ class _RaiUbicacionConfigPanelState extends State<RaiUbicacionConfigPanel>
               OutlinedButton.icon(
                 onPressed: () => unawaited(_abrirAjustesManual()),
                 icon: const Icon(Icons.settings_outlined, size: 18),
-                label: Text(RaiUbicacionUiConstants.accionAjustesManual),
+                label: Text(RaiUbicacionUiConstants.accionAjustesManualPlataforma),
               ),
             ],
           ],

@@ -72,7 +72,10 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
     if (resolvedLeading == null &&
         (backWhenCanPop ||
             (showBackWhenCanPop && Navigator.canPop(context)))) {
-      resolvedLeading = RaiBackButton(color: fg);
+      // Contraste WCAG sobre el fondo real (no confiar en appBarTheme.foreground).
+      resolvedLeading = RaiBackButton(
+        color: RaiBackButton.resolveColor(context, superficie: bg),
+      );
     }
     resolvedLeading ??= const SizedBox(
       width: kToolbarHeight,

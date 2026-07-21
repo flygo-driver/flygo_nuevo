@@ -23,8 +23,8 @@ class PoolReservasService {
         throw 'El viaje no existe.';
       }
       final data = poolSnap.data()!;
-      final cap = (data['capacidad'] ?? 0) as int;
-      final occ = (data['asientosReservados'] ?? 0) as int;
+      final cap = ((data['capacidad'] ?? 0) as num?)?.toInt() ?? 0;
+      final occ = ((data['asientosReservados'] ?? 0) as num?)?.toInt() ?? 0;
 
       if (seats <= 0) throw 'Asientos inválidos.';
       if (occ + seats > cap) throw 'No hay cupos suficientes.';

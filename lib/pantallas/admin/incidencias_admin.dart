@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'admin_ui_theme.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 
 class IncidenciasAdminPage extends StatefulWidget {
@@ -158,6 +159,7 @@ class _IncidenciasAdminPageState extends State<IncidenciasAdminPage> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.incidencias,
         title: 'Incidencias (soporte)',
         actions: [
           IconButton(

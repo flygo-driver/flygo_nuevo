@@ -16,6 +16,7 @@ import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
@@ -214,46 +215,51 @@ class ViajesRepo {
     required String uidCliente,
     required DocumentReference<Map<String, dynamic>> userRef,
     required bool nuevoEsAhora,
+    bool vincularUsuarioCliente = true,
   }) async {
     await _db.runTransaction((tx) async {
-      final userSnap = await tx.get(userRef);
-      final Map<String, dynamic> userData =
-          userSnap.data() ?? <String, dynamic>{};
-      final vid =
-          (userData['viajeActivoId'] ?? '').toString().trim();
-      Map<String, dynamic>? viajeActivoDoc;
-      if (vid.isNotEmpty) {
-        final vSnap = await tx.get(_col.doc(vid));
-        if (vSnap.exists) {
-          viajeActivoDoc = vSnap.data() ?? <String, dynamic>{};
-          if (ViajePoolTaxistaGate.clienteViajeExistenteBloqueaNuevoPedido(
-            viajeActivoDoc,
-            uidCliente,
-            nuevoEsAhora: nuevoEsAhora,
-          )) {
-            throw StateError(kMsgClienteYaTieneViajeActivo);
+      if (vincularUsuarioCliente) {
+        final userSnap = await tx.get(userRef);
+        final Map<String, dynamic> userData =
+            userSnap.data() ?? <String, dynamic>{};
+        final vid =
+            (userData['viajeActivoId'] ?? '').toString().trim();
+        Map<String, dynamic>? viajeActivoDoc;
+        if (vid.isNotEmpty) {
+          final vSnap = await tx.get(_col.doc(vid));
+          if (vSnap.exists) {
+            viajeActivoDoc = vSnap.data() ?? <String, dynamic>{};
+            if (ViajePoolTaxistaGate.clienteViajeExistenteBloqueaNuevoPedido(
+              viajeActivoDoc,
+              uidCliente,
+              nuevoEsAhora: nuevoEsAhora,
+            )) {
+              throw StateError(kMsgClienteYaTieneViajeActivo);
+            }
           }
         }
+        tx.set(doc, data);
+        final Map<String, String> userPatch =
+            ViajePoolTaxistaGate.patchUsuarioTrasCrearViajeCliente(
+          uidCliente: uidCliente,
+          nuevoViajeId: doc.id,
+          nuevoEsAhora: nuevoEsAhora,
+          userData: userData,
+          viajeActivoDoc: viajeActivoDoc,
+        );
+        tx.set(
+          userRef,
+          {
+            'viajeActivoId': userPatch['viajeActivoId'],
+            'siguienteViajeId': userPatch['siguienteViajeId'],
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      } else {
+        tx.set(doc, data);
       }
-      tx.set(doc, data);
-      final Map<String, String> userPatch =
-          ViajePoolTaxistaGate.patchUsuarioTrasCrearViajeCliente(
-        uidCliente: uidCliente,
-        nuevoViajeId: doc.id,
-        nuevoEsAhora: nuevoEsAhora,
-        userData: userData,
-        viajeActivoDoc: viajeActivoDoc,
-      );
-      tx.set(
-        userRef,
-        {
-          'viajeActivoId': userPatch['viajeActivoId'],
-          'siguienteViajeId': userPatch['siguienteViajeId'],
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
     });
   }
 
@@ -322,6 +328,9 @@ class ViajesRepo {
 
     /// % comisión RAI (0–100) alineado con [PlataformaEconomia] para espejo Bola / cierre efectivo.
     double? comisionPorcentajeViaje,
+
+    /// Corporativo / servicios internos: no hijackear viajeActivoId del encargado.
+    bool vincularUsuarioCliente = true,
   }) async {
     ClienteCuentaRealPolicy.exigirParaPedirViaje();
     await ClienteVerificacionIdentidadService.exigirParaPedirViaje();
@@ -506,8 +515,9 @@ class ViajesRepo {
     final userRef = _db.collection('usuarios').doc(uidCliente);
     final String authUid =
         (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
-    final bool usarCallableCliente =
-        isPasajeroCapableFlavor && authUid == uidCliente.trim();
+    final bool usarCallableCliente = vincularUsuarioCliente &&
+        isPasajeroCapableFlavor &&
+        authUid == uidCliente.trim();
 
     try {
       if (usarCallableCliente) {
@@ -524,6 +534,7 @@ class ViajesRepo {
               uidCliente: uidCliente,
               userRef: userRef,
               nuevoEsAhora: esAhora,
+              vincularUsuarioCliente: vincularUsuarioCliente,
             );
           } else {
             rethrow;
@@ -536,6 +547,7 @@ class ViajesRepo {
           uidCliente: uidCliente,
           userRef: userRef,
           nuevoEsAhora: esAhora,
+          vincularUsuarioCliente: vincularUsuarioCliente,
         );
       }
     } on FirebaseFunctionsException catch (e) {
@@ -565,13 +577,9 @@ class ViajesRepo {
                 viajeId: doc.id);
         if (uidChofer != null && uidChofer.isNotEmpty) {
           await _limpiarOtrosActivosDelTaxista(uidChofer, exceptoId: doc.id);
-          await _db.collection('usuarios').doc(uidChofer).set(
-            {
-              'siguienteViajeId': '',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
+          await _limpiarSiguienteSiEsElClaimed(
+            uidTaxista: uidChofer,
+            viajeIdClaimed: doc.id,
           );
           await _ensureChatForTrip(doc.id);
         }
@@ -633,15 +641,38 @@ class ViajesRepo {
         return;
       }
 
+      // Corporativo informativo no usa «viajeActivoId» del shell pool.
+      if (CorporativoTaxistaService.esViajeCorporativoAsignado(
+            d,
+            uidTaxista,
+          ) &&
+          CorporativoTaxistaService.esModoInformativo(d)) {
+        await _limpiarViajeActivoIdTaxista(uidTaxista);
+        _viajesRepoDebugLog(
+          '✅ ensureTaxistaLibre - limpiado (corp informativo → Mis rutas)',
+        );
+        return;
+      }
+
+      if (!viajeVisibleEnCursoTaxista(d, uidTaxista)) {
+        await _limpiarViajeActivoIdTaxista(uidTaxista);
+        _viajesRepoDebugLog(
+          '✅ ensureTaxistaLibre - limpiado (no visible en viaje en curso pool)',
+        );
+        return;
+      }
+
       final bool activo = d['activo'] == true;
       final String estado =
           EstadosViaje.normalizar((d['estado'] ?? '').toString());
       final bool terminal =
           d['completado'] == true || EstadosViaje.esTerminal(estado);
 
-      if (!activo || terminal) {
+      if (!activo || terminal || estado == EstadosViaje.pendiente) {
         await _limpiarViajeActivoIdTaxista(uidTaxista);
-        _viajesRepoDebugLog('✅ ensureTaxistaLibre - limpiado (viaje inactivo/terminal)');
+        _viajesRepoDebugLog(
+          '✅ ensureTaxistaLibre - limpiado (inactivo/terminal/pendiente)',
+        );
         return;
       }
 
@@ -727,21 +758,51 @@ class ViajesRepo {
     if (!v.exists) return;
     final d = v.data()!;
     final String uidCli = (d['uidCliente'] ?? d['clienteId'] ?? '').toString();
-    final String uidTx = (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
-    if (uidCli.isEmpty || uidTx.isEmpty) return;
+    final String uidTx = (d['uidTaxista'] ??
+            d['taxistaId'] ??
+            d['corporativoChoferAsignadoUid'] ??
+            d['corporativoChoferPreferidoUid'] ??
+            '')
+        .toString();
+    if (uidCli.isEmpty && uidTx.isEmpty) return;
+
+    final String uidActual =
+        (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
+    final Set<String> participantes = <String>{
+      if (uidCli.isNotEmpty) uidCli,
+      if (uidTx.isNotEmpty) uidTx,
+      if (uidActual.isNotEmpty) uidActual,
+    };
+    if (participantes.length < 2) return;
 
     final cRef = _db.collection('chats').doc(viajeId);
     final c = await cRef.get();
-    final payload = {
-      'participantes': [uidCli, uidTx],
-      'viajeId': viajeId,
-      'lastMessage': '',
-      'lastAt': FieldValue.serverTimestamp(),
-      'creadoAt': FieldValue.serverTimestamp(),
-    };
     if (!c.exists) {
-      await cRef.set(payload);
+      await cRef.set({
+        'participantes': participantes.toList(),
+        'viajeId': viajeId,
+        'lastMessage': '',
+        'lastAt': FieldValue.serverTimestamp(),
+        'creadoAt': FieldValue.serverTimestamp(),
+      });
+      return;
     }
+
+    final raw = c.data()?['participantes'];
+    final existentes = raw is List
+        ? raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toSet()
+        : <String>{};
+    final merged = <String>{...existentes, ...participantes};
+    if (merged.length == existentes.length) return;
+
+    await cRef.set(
+      {
+        'participantes': merged.toList(),
+        'viajeId': viajeId,
+        'lastAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
   }
 
   /// Asegura `chats/{viajeId}` (participantes cliente/taxista). Usado por la pantalla de chat en viaje.
@@ -884,18 +945,48 @@ class ViajesRepo {
 
     if (ok) {
       await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
-      await _db.collection('usuarios').doc(uidTaxista).set(
-        {
-          'siguienteViajeId': '',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp()
-        },
-        SetOptions(merge: true),
+      await _limpiarSiguienteSiEsElClaimed(
+        uidTaxista: uidTaxista,
+        viajeIdClaimed: viajeId,
       );
       await _ensureChatForTrip(viajeId);
       unawaited(BolaPuebloFirestoreSync.postClaimViajeEspejo(viajeId));
     }
     return ok;
+  }
+
+  /// No borra una ruta corporativa (u otra) encolada en `siguienteViajeId`.
+  static Future<void> limpiarSiguienteSiEsElClaimed({
+    required String uidTaxista,
+    required String viajeIdClaimed,
+  }) =>
+      _limpiarSiguienteSiEsElClaimed(
+        uidTaxista: uidTaxista,
+        viajeIdClaimed: viajeIdClaimed,
+      );
+
+  static Future<void> _limpiarSiguienteSiEsElClaimed({
+    required String uidTaxista,
+    required String viajeIdClaimed,
+  }) async {
+    final uRef = _db.collection('usuarios').doc(uidTaxista);
+    await _db.runTransaction((tx) async {
+      final snap = await tx.get(uRef);
+      final sig =
+          (snap.data()?['siguienteViajeId'] ?? '').toString().trim();
+      if (sig.isNotEmpty && sig != viajeIdClaimed) {
+        return;
+      }
+      tx.set(
+        uRef,
+        {
+          'siguienteViajeId': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    });
   }
 
   static Future<String?> _claimViajePorCallable({
@@ -925,16 +1016,18 @@ class ViajesRepo {
       if (data['ok'] == true) {
         _viajesRepoDebugLog('✅ aceptarViajeSeguro fallback OK');
         unawaited(AnalyticsRai.logTripAccepted());
-        await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
-        await _db.collection('usuarios').doc(uidTaxista).set(
-          {
-            'siguienteViajeId': '',
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-        await _ensureChatForTrip(viajeId);
+        try {
+          await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+          await _limpiarSiguienteSiEsElClaimed(
+            uidTaxista: uidTaxista,
+            viajeIdClaimed: viajeId,
+          );
+          await _ensureChatForTrip(viajeId);
+        } catch (e) {
+          // El claim en CF ya quedó OK; no convertir en taxista-ocupado por cleanup.
+          _viajesRepoDebugLog(
+              '⚠️ post-claim cleanup (no bloquea ok): $e');
+        }
         unawaited(BolaPuebloFirestoreSync.postClaimViajeEspejo(viajeId));
         return 'ok';
       }
@@ -1009,6 +1102,11 @@ class ViajesRepo {
           _viajesRepoDebugLog(
               '❌ Ya tiene taxista: uidTaxista=${d['uidTaxista']}, taxistaId=${d['taxistaId']}');
           throw 'ya-asignado';
+        }
+
+        final canalCorp = (d['canalAsignacion'] ?? '').toString();
+        if (canalCorp == 'corporativo_fijo') {
+          throw 'corporativo-fijo';
         }
 
         final now = DateTime.now();
@@ -1179,13 +1277,9 @@ class ViajesRepo {
 
       _viajesRepoDebugLog('✅ Transacción completada');
       await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
-      await _db.collection('usuarios').doc(uidTaxista).set(
-        {
-          'siguienteViajeId': '',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp()
-        },
-        SetOptions(merge: true),
+      await _limpiarSiguienteSiEsElClaimed(
+        uidTaxista: uidTaxista,
+        viajeIdClaimed: viajeId,
       );
       await _ensureChatForTrip(viajeId);
       _viajesRepoDebugLog('✅ Post-proceso completado');
@@ -1465,12 +1559,29 @@ class ViajesRepo {
     required String viajeId,
     required String uidTaxista,
   }) async {
-    final ref = _col.doc(viajeId);
+    final id = viajeId.trim();
+    if (id.isEmpty) throw Exception('El viaje no existe');
+
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('marcarEnCaminoPickupSeguro');
+      await callable.call(<String, dynamic>{'viajeId': id});
+      return;
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      final cfMissing = msg.contains('not-found') ||
+          msg.contains('not_found') ||
+          msg.contains('unimplemented');
+      if (!cfMissing) rethrow;
+    }
+
+    final ref = _col.doc(id);
     await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe');
       final d = snap.data()!;
-      if ((d['uidTaxista'] ?? '') != uidTaxista) {
+      final String uidDoc = (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
+      if (uidDoc != uidTaxista) {
         throw Exception('No autorizado');
       }
       final String estado = (d['estado'] ?? '').toString();
@@ -1491,12 +1602,42 @@ class ViajesRepo {
     required String viajeId,
     required String uidTaxista,
   }) async {
-    final ref = _col.doc(viajeId);
+    final id = viajeId.trim();
+    if (id.isEmpty) throw Exception('El viaje no existe');
+
+    // Preferir Admin SDK (laptop/web): evita permission-denied de reglas cliente.
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('marcarClienteAbordoSeguro');
+      await callable.call(<String, dynamic>{'viajeId': id});
+      try {
+        final post = await _col.doc(id).get();
+        final tipo = (post.data()?['tipoServicio'] ?? '').toString().trim();
+        if (tipo == 'bola_ahorro') {
+          unawaited(
+              BolaPuebloFirestoreSync.syncBolaPickupConfirmadaDesdeViaje(id));
+        }
+      } catch (_) {}
+      return;
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      // Si la CF no existe aún en un entorno, caer al write local.
+      final cfMissing = msg.contains('not-found') ||
+          msg.contains('not_found') ||
+          msg.contains('unimplemented');
+      if (!cfMissing) {
+        // failed-precondition / permission-denied de la CF: no enmascarar.
+        rethrow;
+      }
+    }
+
+    final ref = _col.doc(id);
     await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe');
       final d = snap.data()!;
-      if ((d['uidTaxista'] ?? '') != uidTaxista) {
+      final String uidDoc = (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
+      if (uidDoc != uidTaxista) {
         throw Exception('No autorizado');
       }
       final String estado = (d['estado'] ?? '').toString();
@@ -1507,6 +1648,8 @@ class ViajesRepo {
       tx.update(ref, {
         'estado': EstadosViaje.aBordo,
         'activo': true,
+        'clienteAbordo': true,
+        'clienteAbordoEn': FieldValue.serverTimestamp(),
         'codigoVerificacion': codigoVerificacion,
         'codigoVerificado': false,
         'pickupConfirmadoEn': FieldValue.serverTimestamp(),
@@ -1519,11 +1662,15 @@ class ViajesRepo {
       final post = await ref.get();
       final tipo = (post.data()?['tipoServicio'] ?? '').toString().trim();
       if (tipo == 'bola_ahorro') {
-        unawaited(BolaPuebloFirestoreSync.syncBolaPickupConfirmadaDesdeViaje(viajeId));
+        unawaited(BolaPuebloFirestoreSync.syncBolaPickupConfirmadaDesdeViaje(id));
       }
     } catch (_) {}
 
-    await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+    try {
+      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: id);
+    } catch (_) {
+      /* no bloquear abordaje */
+    }
   }
 
   /// Tras acordar tarifa Bola (viaje espejo): activa el viaje y enlaza `viajeActivoId`
@@ -1685,7 +1832,11 @@ class ViajesRepo {
     });
 
     unawaited(AnalyticsRai.logTripStarted());
-    await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+    try {
+      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+    } catch (_) {
+      /* no bloquear inicio de viaje */
+    }
   }
 
   /// Conductor: registra llegada a la parada/destino actual (viaje multiparada).
@@ -1891,7 +2042,16 @@ class ViajesRepo {
       if (analytics) {
         unawaited(AnalyticsRai.logTripCompleted());
       }
-      await _limpiarOtrosActivosDelTaxista(uid);
+      // Best-effort: no bloquear factura/post-viaje si reglas niegan el batch.
+      try {
+        await _limpiarOtrosActivosDelTaxista(uid);
+      } catch (e, st) {
+        await ErrorReporting.reportError(
+          e,
+          stack: st,
+          context: 'limpiarOtrosActivos tras completar (ignorado)',
+        );
+      }
 
       final String tipoServicioCf =
           ((await _col.doc(viajeId).get()).data()?['tipoServicio'] ?? '')
@@ -2073,136 +2233,173 @@ class ViajesRepo {
     required String uidTaxista,
     bool forzar = false,
   }) async {
-    final ref = _col.doc(viajeId);
-    final uRef = _db.collection('usuarios').doc(uidTaxista);
-
-    final String tipoServicioPre =
-        ((await ref.get()).data()?['tipoServicio'] ?? '').toString();
-
+    // Siempre vía Functions: cancela el viaje, limpia viaje en curso del
+    // cliente y del taxista, y notifica al cliente.
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('cancelarViajeTaxistaSeguro');
+    final String idemKey =
+        'cancel_${viajeId}_${uidTaxista}_${DateTime.now().millisecondsSinceEpoch}_'
+        '${forzar ? 'f' : 'n'}';
     try {
-      await _db.runTransaction((tx) async {
-        final snap = await tx.get(ref);
-        if (!snap.exists) throw Exception('El viaje no existe');
-
-        final d = snap.data()!;
-        final String uidTxDoc =
-            ((d['uidTaxista'] ?? '').toString().trim().isNotEmpty)
-                ? (d['uidTaxista'] ?? '').toString().trim()
-                : (d['taxistaId'] ?? '').toString().trim();
-        if (uidTxDoc != uidTaxista) throw Exception('No autorizado');
-        final String estado = (d['estado'] ?? '').toString();
-        final estNorm = EstadosViaje.normalizar(estado);
-        if (!forzar) {
-          if (!(estNorm == EstadosViaje.aceptado ||
-              estNorm == EstadosViaje.enCaminoPickup)) {
-            throw Exception('No se puede cancelar en este estado.');
-          }
-        }
-
-        DateTime fh;
-        final ts = d['fechaHora'];
-        if (ts is Timestamp) {
-          fh = ts.toDate();
-        } else if (ts is DateTime) {
-          fh = ts;
-        } else if (ts is String) {
-          fh = DateTime.tryParse(ts) ?? DateTime.now();
-        } else {
-          fh = DateTime.now();
-        }
-        final bool esAhora =
-            TripPublishWindows.esAhoraPorFechaPickup(fh, DateTime.now());
-
-        final bool esTurismo =
-            (d['tipoServicio'] ?? '').toString() == 'turismo';
-        final String estadoTrasCancel = forzar
-            ? EstadosViaje.cancelado
-            : (esTurismo ? 'pendiente_admin' : EstadosViaje.pendiente);
-
-        final Map<String, dynamic> cancelPatch = <String, dynamic>{
-          'estado': estadoTrasCancel,
-          'aceptado': false,
-          'rechazado': false,
-          'activo': false,
-          'uidTaxista': '',
-          'taxistaId': '',
-          'nombreTaxista': '',
-          'telefono': '',
-          'placa': '',
-          'marca': '',
-          'modelo': '',
-          'color': '',
-          'republicado': !forzar,
-          'canceladoPor': forzar ? 'taxista_forzado' : 'taxista',
-          'canceladoTaxistaEn': FieldValue.serverTimestamp(),
-          'esAhora': esAhora,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-          'pickupConfirmadoEn': FieldValue.delete(),
-          'inicioEnRutaEn': FieldValue.delete(),
-          'finalizadoEn': FieldValue.delete(),
-          'ignoradosPor': FieldValue.arrayUnion([uidTaxista]),
-          'reservadoPor': '',
-          'reservadoHasta': null,
-        };
-        if (esTurismo && !forzar) {
-          cancelPatch['codigoVerificado'] = false;
-          cancelPatch['codigoVerificadoEn'] = FieldValue.delete();
-          cancelPatch['asignacionAutomatica'] = FieldValue.delete();
-          cancelPatch['asignadoPor'] = FieldValue.delete();
-          cancelPatch['asignadoEn'] = FieldValue.delete();
-          cancelPatch['aceptadoEn'] = FieldValue.delete();
-        }
-        tx.update(ref, cancelPatch);
-
-        tx.set(
-            uRef,
-            {
-              'viajeActivoId': '',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true));
+      await callable.call(<String, dynamic>{
+        'viajeId': viajeId,
+        'idempotencyKey': idemKey,
       });
-    } on FirebaseException catch (e) {
-      if (e.code == 'permission-denied') {
-        final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
-            .httpsCallable('cancelarViajeTaxistaSeguro');
-        final idemKey =
-            'cancel_${viajeId}_${uidTaxista}_${DateTime.now().millisecondsSinceEpoch}';
-        await callable.call(<String, dynamic>{
-          'viajeId': viajeId,
-          'idempotencyKey': idemKey,
-        });
+    } on FirebaseFunctionsException catch (e) {
+      // Fallback local solo si Functions no responde (no en permission-denied).
+      if (e.code == 'unavailable' ||
+          e.code == 'deadline-exceeded' ||
+          e.code == 'internal' ||
+          e.code == 'not-found') {
+        await _cancelarPorTaxistaLocalFallback(
+          viajeId: viajeId,
+          uidTaxista: uidTaxista,
+          forzar: forzar,
+        );
       } else {
         rethrow;
       }
     }
 
-    await _limpiarOtrosActivosDelTaxista(uidTaxista);
+    // Limpieza extra best-effort: no debe tumbar una cancelación ya OK.
+    try {
+      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+    } catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'cancelarPorTaxista: limpiarOtrosActivos (ignorado)',
+      );
+    }
 
-    if (tipoServicioPre == 'turismo') {
-      try {
-        await AsignacionTurismoRepo.liberarChofer(uidTaxista);
-      } catch (e, st) {
-        await ErrorReporting.reportError(
-          e,
-          stack: st,
-          context: 'liberarChofer(turismo) tras cancelar (taxista)',
-        );
-      }
-      try {
-        await AsignacionTurismoRepo.intentarAsignacionAutomatica(
-          viajeId: viajeId,
-          radioKm: 55,
-        );
-      } catch (_) {
-        // Otro chofer o pool turístico / ADM pueden tomar el viaje.
-      }
+    try {
+      await AsignacionTurismoRepo.liberarChofer(uidTaxista);
+    } catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'liberarChofer(turismo) tras cancelar (taxista)',
+      );
     }
   }
 
+  static Future<void> _cancelarPorTaxistaLocalFallback({
+    required String viajeId,
+    required String uidTaxista,
+    required bool forzar,
+  }) async {
+    final ref = _col.doc(viajeId);
+    final uRef = _db.collection('usuarios').doc(uidTaxista);
+
+    await _db.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      if (!snap.exists) throw Exception('El viaje no existe');
+
+      final d = snap.data()!;
+      final String uidTxDoc =
+          ((d['uidTaxista'] ?? '').toString().trim().isNotEmpty)
+              ? (d['uidTaxista'] ?? '').toString().trim()
+              : (d['taxistaId'] ?? '').toString().trim();
+      if (uidTxDoc != uidTaxista) throw Exception('No autorizado');
+      final String estado = (d['estado'] ?? '').toString();
+      final estNorm = EstadosViaje.normalizar(estado);
+      if (!forzar) {
+        if (!(estNorm == EstadosViaje.aceptado ||
+            estNorm == EstadosViaje.enCaminoPickup)) {
+          throw Exception('No se puede cancelar en este estado.');
+        }
+      }
+
+      DateTime fh;
+      final ts = d['fechaHora'];
+      if (ts is Timestamp) {
+        fh = ts.toDate();
+      } else if (ts is DateTime) {
+        fh = ts;
+      } else if (ts is String) {
+        fh = DateTime.tryParse(ts) ?? DateTime.now();
+      } else {
+        fh = DateTime.now();
+      }
+      final bool esAhora =
+          TripPublishWindows.esAhoraPorFechaPickup(fh, DateTime.now());
+
+      tx.update(ref, <String, dynamic>{
+        'estado': EstadosViaje.cancelado,
+        'aceptado': false,
+        'rechazado': true,
+        'activo': false,
+        'uidTaxista': '',
+        'taxistaId': '',
+        'nombreTaxista': '',
+        'telefono': '',
+        'placa': '',
+        'marca': '',
+        'modelo': '',
+        'color': '',
+        'republicado': false,
+        'canceladoPor': forzar ? 'taxista_forzado' : 'taxista',
+        'canceladoTaxistaEn': FieldValue.serverTimestamp(),
+        'esAhora': esAhora,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+        'pickupConfirmadoEn': FieldValue.delete(),
+        'inicioEnRutaEn': FieldValue.delete(),
+        'finalizadoEn': FieldValue.delete(),
+        'ignoradosPor': FieldValue.arrayUnion(<String>[uidTaxista]),
+        'reservadoPor': '',
+        'reservadoHasta': null,
+      });
+
+      tx.set(
+        uRef,
+        {
+          'viajeActivoId': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      // No escribir usuarios/{cliente} desde el taxista (permission-denied).
+      // Lo limpia onViajeCanceladoPorCliente (Admin SDK).
+    });
+  }
+
   static Future<void> cancelarPorCliente({
+    required String viajeId,
+    required String uidCliente,
+    String? motivo,
+  }) async {
+    // Siempre vía Functions: cancela, limpia viajeActivoId cliente+taxista
+    // (evita permission-denied al limpiar el doc del conductor desde la app).
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('cancelarViajeClienteSeguro');
+    final String idemKey =
+        'cancel_cli_${viajeId}_${uidCliente}_${DateTime.now().millisecondsSinceEpoch}';
+    try {
+      await callable.call(<String, dynamic>{
+        'viajeId': viajeId,
+        'motivo': (motivo ?? '').trim(),
+        'idempotencyKey': idemKey,
+      });
+      return;
+    } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'unavailable' ||
+          e.code == 'deadline-exceeded' ||
+          e.code == 'internal' ||
+          e.code == 'not-found') {
+        await _cancelarPorClienteLocalFallback(
+          viajeId: viajeId,
+          uidCliente: uidCliente,
+          motivo: motivo,
+        );
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  static Future<void> _cancelarPorClienteLocalFallback({
     required String viajeId,
     required String uidCliente,
     String? motivo,
@@ -2280,25 +2477,8 @@ class ViajesRepo {
       );
     }
 
-    if (uidTaxistaAfter.isNotEmpty) {
-      try {
-        await _db.collection('usuarios').doc(uidTaxistaAfter).set({
-          'viajeActivoId': '',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      } catch (e, st) {
-        await ErrorReporting.reportError(
-          e,
-          stack: st,
-          context: 'cancelarPorCliente: limpiar viajeActivoId del taxista',
-        );
-      }
-
-      // Misma limpieza defensiva que cancelarPorTaxista:
-      // evitamos inconsistencias si existieran múltiples `activo:true` legacy.
-      await _limpiarOtrosActivosDelTaxista(uidTaxistaAfter);
-    }
+    // El trigger onViajeCanceladoPorCliente limpia al taxista (Admin SDK).
+    // No escribir usuarios/{taxista} desde el cliente (permission-denied).
 
     if (tipoServicioPre == 'turismo' && uidTaxistaAfter.isNotEmpty) {
       try {
@@ -2461,14 +2641,90 @@ class ViajesRepo {
     return controller.stream;
   }
 
+  /// Misma regla que [streamViajeEnCursoPorTaxista]: solo pool/taxi activo (no corporativo).
+  static bool viajeVisibleEnCursoTaxista(
+    Map<String, dynamic> data,
+    String uidTaxista,
+  ) {
+    final String uid = uidTaxista.trim();
+    if (uid.isEmpty) return false;
+    final String uidTxDoc =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
+    final String estado =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    final bool esCorpAsignado =
+        CorporativoTaxistaService.esViajeCorporativoAsignado(data, uid);
+    // Corporativo piloto: no usar overlay «Mi viaje en curso» (pantalla informativa).
+    if (esCorpAsignado) return false;
+    final bool estadoActivo = estado == EstadosViaje.aceptado ||
+        estado == EstadosViaje.enCaminoPickup ||
+        estado == EstadosViaje.aBordo ||
+        estado == EstadosViaje.enCurso;
+    return uidTxDoc == uid && estadoActivo;
+  }
+
+  /// Viaje que realmente ocupa al taxista (activo + en operación). No cuenta
+  /// corporativo en cola ni `viajeActivoId` huérfano con estado pendiente.
+  static bool viajeOperativoBloqueanteParaTaxista(
+    Map<String, dynamic> data,
+    String uidTaxista,
+  ) {
+    final String uid = uidTaxista.trim();
+    if (uid.isEmpty) return false;
+    // Corporativo informativo: pantalla «Elige tu destino», no bloquea el shell.
+    if (CorporativoTaxistaService.esViajeCorporativoAsignado(data, uid) &&
+        CorporativoTaxistaService.esModoInformativo(data)) {
+      return false;
+    }
+    if (data['activo'] != true || data['completado'] == true) return false;
+    final String uidTxDoc =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
+    if (uidTxDoc != uid) return false;
+    final String estado =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    if (estado == EstadosViaje.pendiente ||
+        EstadosViaje.esTerminal(estado)) {
+      return false;
+    }
+    return estado == EstadosViaje.aceptado ||
+        estado == EstadosViaje.enCaminoPickup ||
+        estado == EstadosViaje.aBordo ||
+        estado == EstadosViaje.enCurso;
+  }
+
+  /// Limpia `viajeActivoId` si el doc no bloquea operación real.
+  static Future<void> limpiarViajeActivoSiNoOperativo(String uidTaxista) async {
+    await ensureTaxistaLibre(uidTaxista);
+    final uid = uidTaxista.trim();
+    if (uid.isEmpty) return;
+    try {
+      final uSnap = await _db.collection('usuarios').doc(uid).get();
+      final activo =
+          (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (activo.isEmpty) return;
+      final vSnap = await _col.doc(activo).get();
+      if (!vSnap.exists ||
+          !viajeOperativoBloqueanteParaTaxista(
+            vSnap.data() ?? <String, dynamic>{},
+            uid,
+          )) {
+        await _limpiarViajeActivoIdTaxista(uid);
+      }
+    } catch (_) {}
+  }
+
   /// Tras el claim, `viajeActivoId` puede actualizarse antes que `uidTaxista` en el doc.
+  /// Nunca emitir `null` al fallar el retry si el taxista sigue con ese viajeActivoId
+  /// (multiparada: docs grandes / `activo` tarde → antes te sacaba a "sin viaje").
   static Future<void> _reintentarEmitViajeTaxistaEnCurso({
     required StreamController<Viaje?> controller,
     required String viajeId,
     required String uidTaxista,
   }) async {
-    for (int i = 0; i < 12; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+    // No vaciar la UI por un hueco transitorio mientras Firestore reconcilia el doc.
+    for (int i = 0; i < 16; i++) {
+      await Future<void>.delayed(Duration(milliseconds: 250 + (i * 50)));
+      if (controller.isClosed) return;
       try {
         final DocumentSnapshot<Map<String, dynamic>> snap = await _db
             .collection('viajes')
@@ -2476,23 +2732,45 @@ class ViajesRepo {
             .get(const GetOptions(source: Source.server));
         if (!snap.exists) continue;
         final Map<String, dynamic> data = snap.data() ?? <String, dynamic>{};
-        final String uidTxDoc =
-            (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
-        final String estado =
-            EstadosViaje.normalizar((data['estado'] ?? '').toString());
-        final bool activo = data['activo'] == true;
-        final bool estadoActivo = estado == EstadosViaje.aceptado ||
-            estado == EstadosViaje.enCaminoPickup ||
-            estado == EstadosViaje.aBordo ||
-            estado == EstadosViaje.enCurso;
-        if (uidTxDoc == uidTaxista && activo && estadoActivo) {
+        if (viajeVisibleEnCursoTaxista(data, uidTaxista)) {
           if (!controller.isClosed) {
-            controller.add(Viaje.fromMap(snap.id, data));
+            try {
+              controller.add(Viaje.fromMap(snap.id, data));
+            } catch (e) {
+              _diag('taxista retry fromMap error viaje=$viajeId: $e');
+            }
           }
           return;
         }
       } catch (_) {}
     }
+    if (controller.isClosed) return;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> uSnap =
+          await _db.collection('usuarios').doc(uidTaxista).get();
+      final String activoId =
+          (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (activoId == viajeId) {
+        _diag(
+            'taxista retry timeout con viajeActivoId=$viajeId → último intento');
+        try {
+          final DocumentSnapshot<Map<String, dynamic>> snap = await _db
+              .collection('viajes')
+              .doc(viajeId)
+              .get(const GetOptions(source: Source.server));
+          if (snap.exists && !controller.isClosed) {
+            final Map<String, dynamic> data =
+                snap.data() ?? <String, dynamic>{};
+            if (viajeVisibleEnCursoTaxista(data, uidTaxista)) {
+              controller.add(Viaje.fromMap(snap.id, data));
+            }
+          }
+        } catch (e) {
+          _diag('taxista retry último intento error viaje=$viajeId: $e');
+        }
+        return;
+      }
+    } catch (_) {}
     if (!controller.isClosed) {
       controller.add(null);
     }
@@ -2515,6 +2793,7 @@ class ViajesRepo {
 
     String? lastViajeId;
     bool usingDoc = false;
+    Viaje? lastEmitted;
 
     Future<void> cancelAll() async {
       await viajeDocSub?.cancel();
@@ -2526,14 +2805,24 @@ class ViajesRepo {
 
     late final StreamController<Viaje?> controller;
     controller = StreamController<Viaje?>.broadcast(
+      onListen: () {
+        if (!controller.isClosed) {
+          controller.add(lastEmitted);
+        }
+      },
       onCancel: () async {
         await userSub?.cancel();
         await cancelAll();
         await controller.close();
       },
     );
-    // Emisión inicial para evitar estados de "loading" infinito en la UI.
-    controller.add(null);
+
+    void emitViaje(Viaje? v) {
+      lastEmitted = v;
+      if (!controller.isClosed) {
+        controller.add(v);
+      }
+    }
 
     Future<void> setFromViajeActivoId(String? viajeActivoId) async {
       final id = (viajeActivoId ?? '').toString().trim();
@@ -2550,12 +2839,17 @@ class ViajesRepo {
             .listen(
           (q) {
             if (q.docs.isEmpty) {
-              controller.add(null);
+              emitViaje(null);
               return;
             }
-            final doc = q.docs.first;
-            final v = Viaje.fromMap(doc.id, doc.data());
-            controller.add(v);
+            for (final doc in q.docs) {
+              final data = doc.data();
+              if (viajeVisibleEnCursoTaxista(data, uidTaxista)) {
+                emitViaje(Viaje.fromMap(doc.id, data));
+                return;
+              }
+            }
+            emitViaje(null);
           },
           onError: controller.addError,
         );
@@ -2578,31 +2872,35 @@ class ViajesRepo {
               },
               SetOptions(merge: true),
             ));
-            controller.add(null);
+            emitViaje(null);
             return;
           }
           final data = vSnap.data();
           if (data == null) {
-            controller.add(null);
+            emitViaje(null);
             return;
           }
-          final String uidTxDoc =
-              (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
-          final String estado =
-              EstadosViaje.normalizar((data['estado'] ?? '').toString());
-          final bool activo = data['activo'] == true;
-          final bool estadoActivo = estado == EstadosViaje.aceptado ||
-              estado == EstadosViaje.enCaminoPickup ||
-              estado == EstadosViaje.aBordo ||
-              estado == EstadosViaje.enCurso;
-          if (uidTxDoc != uidTaxista || !activo || !estadoActivo) {
+          if (!viajeVisibleEnCursoTaxista(data, uidTaxista)) {
+            final String uidTxDoc =
+                (data['uidTaxista'] ?? data['taxistaId'] ?? '')
+                    .toString()
+                    .trim();
+            final String estado =
+                EstadosViaje.normalizar((data['estado'] ?? '').toString());
             _diag(
-                'taxista stream hide doc=$id uidDoc=$uidTxDoc activo=$activo estadoActivo=$estadoActivo → retry');
+                'taxista stream hide doc=$id uidDoc=$uidTxDoc estado=$estado → retry');
+            if (CorporativoTaxistaService.esViajeCorporativoAsignado(
+              data,
+              uidTaxista,
+            )) {
+              unawaited(_limpiarViajeActivoIdTaxista(uidTaxista));
+            }
             unawaited(_liberarEspejoBolaHuerfano(
               uid: uidTaxista,
               viajeId: id,
               data: data,
             ));
+            emitViaje(null);
             unawaited(_reintentarEmitViajeTaxistaEnCurso(
               controller: controller,
               viajeId: id,
@@ -2611,7 +2909,16 @@ class ViajesRepo {
             return;
           }
           _diag('taxista stream emit doc=$id');
-          controller.add(Viaje.fromMap(vSnap.id, data));
+          try {
+            emitViaje(Viaje.fromMap(vSnap.id, data));
+          } catch (e) {
+            _diag('taxista stream fromMap error doc=$id: $e');
+            unawaited(_reintentarEmitViajeTaxistaEnCurso(
+              controller: controller,
+              viajeId: id,
+              uidTaxista: uidTaxista,
+            ));
+          }
         },
         onError: controller.addError,
       );
@@ -2622,9 +2929,11 @@ class ViajesRepo {
         final u = uSnap.data() ?? <String, dynamic>{};
         await setFromViajeActivoId(u['viajeActivoId']);
       },
-      onError: (_, __) {
-        // Error transitorio de red/índice: degradar a "sin viaje" para UX estable.
-        controller.add(null);
+      onError: (_) {
+        // Error transitorio de red: mantener último viaje emitido (evita parpadeo).
+        if (lastEmitted == null && !controller.isClosed) {
+          controller.add(null);
+        }
       },
     );
 
@@ -2760,6 +3069,7 @@ class ViajesRepo {
     await batch.commit();
   }
 
+  /// Otros docs “activo” del taxista: se cancelan (no republicar a pendiente).
   static Future<void> _limpiarOtrosActivosDelTaxista(
     String uidTaxista, {
     String? exceptoId,
@@ -2774,9 +3084,9 @@ class ViajesRepo {
     for (final d in qs.docs) {
       if (exceptoId != null && d.id == exceptoId) continue;
       batch.update(d.reference, {
-        'estado': EstadosViaje.pendiente,
+        'estado': EstadosViaje.cancelado,
         'aceptado': false,
-        'rechazado': false,
+        'rechazado': true,
         'activo': false,
         'uidTaxista': '',
         'taxistaId': '',
@@ -2786,7 +3096,7 @@ class ViajesRepo {
         'marca': '',
         'modelo': '',
         'color': '',
-        'republicado': true,
+        'republicado': false,
         'canceladoPor': 'taxista',
         'canceladoTaxistaEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),

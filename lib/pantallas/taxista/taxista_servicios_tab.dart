@@ -2,15 +2,20 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/pantallas/taxista/login_chofer_corporativo.dart';
 import 'package:flygo_nuevo/pantallas/taxista/login_chofer_turismo.dart';
+import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_crear.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viajes_turismo_asignados.dart';
+import 'package:flygo_nuevo/servicios/solicitud_corporativo_repo.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
 /// Turismo, cupos y Bola (misma oferta que el antiguo menú lateral).
 class TaxistaServiciosTab extends StatelessWidget {
@@ -21,11 +26,10 @@ class TaxistaServiciosTab extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final user = FirebaseAuth.instance.currentUser;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Servicios'),
-        centerTitle: true,
-      ),
+    return RaiShellTabScaffold(
+      title: 'Servicios',
+      backTooltip: 'Recibir',
+      onBack: ShellTabController.taxistaIrARecibir,
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
         children: [
@@ -157,6 +161,145 @@ class TaxistaServiciosTab extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
             child: Text(
+              'Corporativo',
+              style: TextStyle(
+                color: cs.secondary,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: ListTile(
+              leading: Icon(Icons.business_center_outlined, color: cs.secondary),
+              title: const Text(
+                'Ser chofer corporativo',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: const Text(
+                'Rutas fijas de empresas · RAI te asigna manualmente',
+              ),
+              trailing: Icon(Icons.chevron_right, color: cs.outline),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const LoginChoferCorporativo(),
+                  ),
+                );
+              },
+            ),
+          ),
+          if (user != null)
+            StreamBuilder<EstadoRegistroCorporativo>(
+              stream: SolicitudCorporativoRepo.streamEstadoRegistro(user.uid),
+              builder: (context, estadoSnap) {
+                final reg = estadoSnap.data;
+                if (reg?.fase == 'pendiente_adm') {
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    color: cs.secondaryContainer.withValues(alpha: 0.35),
+                    child: ListTile(
+                      leading: Icon(Icons.hourglass_top, color: cs.secondary),
+                      title: const Text('Solicitud corporativo en revisión'),
+                      subtitle: const Text(
+                        'RAI revisará tu perfil de taxista.',
+                      ),
+                    ),
+                  );
+                }
+                if (reg?.fase == 'aprobado') {
+                  return Column(
+                    children: [
+                      Card(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        color: cs.primaryContainer.withValues(alpha: 0.35),
+                        child: const ListTile(
+                          leading: Icon(Icons.verified_outlined),
+                          title: Text('Pool corporativo activo'),
+                          subtitle: Text(
+                            'RAI te asignará rutas fijas de empresas.',
+                          ),
+                        ),
+                      ),
+                      Card(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        child: StreamBuilder<Map<String, dynamic>?>(
+                          stream:
+                              CorporativoTaxistaService.streamOperacionChofer(
+                            user.uid,
+                          ),
+                          builder: (context, opSnap) {
+                            final rutasOp =
+                                CorporativoTaxistaService.rutasDesdeOperacion(
+                              opSnap.data,
+                            );
+                            return StreamBuilder<
+                                List<DocumentSnapshot<Map<String, dynamic>>>>(
+                              stream: CorporativoTaxistaService
+                                  .streamViajesAsignados(user.uid),
+                              builder: (context, rutasSnap) {
+                                final nDocs = rutasSnap.data?.length ?? 0;
+                                final n =
+                                    nDocs > 0 ? nDocs : rutasOp.length;
+                                String? viajeListoId;
+                                for (final r in rutasOp) {
+                                  if (r['listoParaAbrir'] != true) continue;
+                                  final id =
+                                      (r['viajeHoyId'] ?? '').toString().trim();
+                                  if (id.isNotEmpty) {
+                                    viajeListoId = id;
+                                    break;
+                                  }
+                                }
+                                final listo = viajeListoId != null;
+                                return ListTile(
+                                  leading: Badge(
+                                    isLabelVisible: n > 0,
+                                    label: Text('$n'),
+                                    child: Icon(
+                                      Icons.alt_route,
+                                      color: cs.secondary,
+                                    ),
+                                  ),
+                                  title: const Text(
+                                    'Agenda corporativa',
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.w600),
+                                  ),
+                                  subtitle: Text(
+                                    listo
+                                        ? 'Ruta lista · abrila desde Mi trabajo'
+                                        : (n > 0
+                                            ? 'Rutas fijas · horarios y estado'
+                                            : 'Sin rutas asignadas aún'),
+                                  ),
+                                  trailing: const Icon(Icons.chevron_right),
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const MisRutasCorporativasPage(),
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+            child: Text(
               'Salidas por cupos',
               style: TextStyle(
                 color: cs.onSurfaceVariant,
@@ -174,7 +317,7 @@ class TaxistaServiciosTab extends StatelessWidget {
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
               subtitle: const Text(
-                'Giras, excursiones y grupos · cupos y reservas',
+                'Tus giras publicadas · editar, cupos y reservas',
               ),
               trailing: Icon(Icons.chevron_right, color: cs.outline),
               onTap: () {

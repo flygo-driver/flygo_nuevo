@@ -17,12 +17,15 @@ class RaiUbicacionMapAlert extends StatefulWidget {
     this.mapFloating = false,
     this.obteniendoGps = false,
     this.permisoBloqueadoEnPantalla = false,
+    /// En viaje en curso el shell oculta el banner; este aviso debe mostrarse igual.
+    this.enViajeEnCurso = false,
   });
 
   final RaiUbicacionRol rol;
   final bool mapFloating;
   final bool obteniendoGps;
   final bool permisoBloqueadoEnPantalla;
+  final bool enViajeEnCurso;
 
   @override
   State<RaiUbicacionMapAlert> createState() => _RaiUbicacionMapAlertState();
@@ -88,7 +91,9 @@ class _RaiUbicacionMapAlertState extends State<RaiUbicacionMapAlert> {
     final bool necesitaPermiso = !_listo || widget.permisoBloqueadoEnPantalla;
 
     // El shell ya muestra [RaiUbicacionClienteBanner] / taxista: no duplicar en mapa.
-    if (_svc.bannerActivo && !widget.obteniendoGps) {
+    if (_svc.bannerActivo &&
+        !widget.obteniendoGps &&
+        !widget.enViajeEnCurso) {
       return const SizedBox.shrink();
     }
 
@@ -154,47 +159,92 @@ class _RaiUbicacionMapAlertState extends State<RaiUbicacionMapAlert> {
               ]
             : null,
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icono, color: alerta ? cs.error : accent, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: widget.mapFloating && mostrarBoton
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  titulo,
-                  style: TextStyle(
-                    color: textColor,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 13,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(icono, color: alerta ? cs.error : accent, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            titulo,
+                            style: TextStyle(
+                              color: textColor,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            mensaje,
+                            style: TextStyle(
+                              color: textColor.withValues(alpha: 0.92),
+                              fontSize: 12,
+                              height: 1.35,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  mensaje,
-                  style: TextStyle(
-                    color: textColor.withValues(alpha: 0.92),
-                    fontSize: 12,
-                    height: 1.35,
-                    fontWeight: FontWeight.w600,
-                  ),
+                const SizedBox(height: 10),
+                RaiUbicacionActivarButton(
+                  rol: widget.rol,
+                  alerta: alerta,
+                  mapStyle: true,
+                  minimumSize: const Size(double.infinity, 46),
                 ),
               ],
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icono, color: alerta ? cs.error : accent, size: 22),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        titulo,
+                        style: TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        mensaje,
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.92),
+                          fontSize: 12,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (mostrarBoton) ...[
+                  const SizedBox(width: 8),
+                  RaiUbicacionActivarButton(
+                    rol: widget.rol,
+                    alerta: alerta,
+                    mapStyle: true,
+                    minimumSize: const Size(72, 40),
+                  ),
+                ],
+              ],
             ),
-          ),
-          if (mostrarBoton) ...[
-            const SizedBox(width: 8),
-            RaiUbicacionActivarButton(
-              rol: widget.rol,
-              alerta: alerta,
-              mapStyle: true,
-              minimumSize: const Size(72, 40),
-            ),
-          ],
-        ],
-      ),
     );
   }
 }

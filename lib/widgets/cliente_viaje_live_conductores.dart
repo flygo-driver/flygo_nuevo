@@ -78,7 +78,7 @@ class ClienteConductoresCercaStrip extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Text(
-              '${docsOrdenados.length} conductor${docsOrdenados.length == 1 ? '' : 'es'} en línea cerca',
+              '${docsOrdenados.length} conductor${docsOrdenados.length == 1 ? '' : 'es'} cerca de ti',
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w800,

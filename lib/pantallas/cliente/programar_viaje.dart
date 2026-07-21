@@ -6,23 +6,25 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
 import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_map/flutter_map.dart' as fm;
+import 'package:latlong2/latlong.dart' as ll;
 
 // 🔰 IMPORT para ir al viaje en curso
 
 // ✅ Confirmación de viaje programado (no confundir con “en curso”)
 
-import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart'
-    hide DestinoSeleccionado;
+import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 
 // Tus servicios/componentes
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
@@ -34,15 +36,18 @@ import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
+import 'package:flygo_nuevo/widgets/boton_volver_inicio_sin_confirmar.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_desglose_panel.dart';
 import 'package:flygo_nuevo/widgets/promo_mxk_cliente_panel.dart';
 import 'package:flygo_nuevo/widgets/programar_viaje_futuro_animation.dart';
+import 'package:flygo_nuevo/widgets/programar_viaje_hoja_moderna.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
+import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/widgets/rai_cotizacion_offline_hint.dart';
@@ -209,6 +214,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   // ===== Mapa
   GoogleMapController? _map;
+  final fm.MapController _fmCtrl = fm.MapController();
+  bool _fmReady = false;
   LatLng? _origenMap;
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
@@ -241,7 +248,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   void _expandProgramarSheetTrasMapaInteract() {
     if (!_sheetCtrl.isAttached) return;
     final double target = (_vistaResumenCotizada && _mostrarResumenCotizacion)
-        ? 0.72
+        ? (widget.modoAhora ? 0.52 : 0.72)
         : (widget.modoAhora ? 0.86 : 0.88);
     try {
       _sheetCtrl.animateTo(
@@ -272,6 +279,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   Future<void> _programarMapAnimate(
       Future<void> Function(GoogleMapController c) op) async {
+    if (kIsWeb) return;
     final GoogleMapController? c = _map;
     if (c == null) return;
     _mapProgrammaticCameraDepth++;
@@ -280,6 +288,57 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     } catch (_) {
       if (_mapProgrammaticCameraDepth > 0) _mapProgrammaticCameraDepth--;
     }
+  }
+
+  /// Encuadra origen/ruta en Google (cel) o OSM (laptop/PC/tablet web).
+  Future<void> _encuadrarMapaPuntos(List<LatLng> pts) async {
+    if (pts.isEmpty) return;
+    if (kIsWeb) {
+      if (!_fmReady) return;
+      try {
+        if (pts.length == 1) {
+          _fmCtrl.move(
+            ll.LatLng(pts.first.latitude, pts.first.longitude),
+            15,
+          );
+        } else {
+          double minLat = pts.first.latitude;
+          double maxLat = pts.first.latitude;
+          double minLon = pts.first.longitude;
+          double maxLon = pts.first.longitude;
+          for (final p in pts) {
+            minLat = math.min(minLat, p.latitude);
+            maxLat = math.max(maxLat, p.latitude);
+            minLon = math.min(minLon, p.longitude);
+            maxLon = math.max(maxLon, p.longitude);
+          }
+          _fmCtrl.fitCamera(
+            fm.CameraFit.bounds(
+              bounds: fm.LatLngBounds(
+                ll.LatLng(minLat, minLon),
+                ll.LatLng(maxLat, maxLon),
+              ),
+              padding: const EdgeInsets.all(48),
+            ),
+          );
+        }
+      } catch (_) {}
+      return;
+    }
+    if (_map == null) return;
+    if (pts.length == 1) {
+      await _programarMapAnimate(
+        (c) => c.animateCamera(
+          CameraUpdate.newLatLngZoom(pts.first, 15),
+        ),
+      );
+      return;
+    }
+    await _programarMapAnimate(
+      (c) => c.animateCamera(
+        CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
+      ),
+    );
   }
 
   // Flecha “nudge”
@@ -293,6 +352,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   // ✅ VARIABLES PARA TURISMO
   TurismoLugar? _destinoTurismoSeleccionado;
+  final GlobalKey<CampoLugarAutocompleteState> _turismoDestinoCampoKey =
+      GlobalKey<CampoLugarAutocompleteState>();
+  final GlobalKey<CampoLugarAutocompleteState> _origenCampoKey =
+      GlobalKey<CampoLugarAutocompleteState>();
+  final GlobalKey<CampoLugarAutocompleteState> _destinoCampoKey =
+      GlobalKey<CampoLugarAutocompleteState>();
   String _tipoVehiculoTurismo = 'carro';
   int? _pasajerosTurismo;
 
@@ -369,9 +434,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       fechaHora = DateTime.now();
     } else {
       fechaHora = DateTime.now().add(const Duration(minutes: 20));
-      if (kUsePlacesAutocomplete) {
-        _origenBuscarDireccion = true;
-      }
+      // Programar: mismo origen GPS/mapa que tab Ahora; búsqueda manual es opt-in.
     }
 
     // 🔥 Si viene con destino precargado (desde catálogo turismo)
@@ -513,17 +576,16 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   }
 
   bool _tieneOrigenParaCalculo() {
-    if (widget.modoAhora) {
-      if (_origenMap != null) return true;
-      if (latCliente != null && lonCliente != null) return true;
-      return false;
-    }
     if (_origenBuscarDireccion) {
-      // Con Places: solo cotizar cuando el usuario eligió un lugar (coords fijas).
-      if (kUsePlacesAutocomplete) return _origenDetManual != null;
-      return origenManual.trim().isNotEmpty;
+      if (kUsePlacesAutocomplete && _origenDetManual != null) return true;
+      if (!kUsePlacesAutocomplete && origenManual.trim().isNotEmpty) {
+        return true;
+      }
     }
-    return _origenMap != null;
+    // GPS / mapa (Ahora y Programar, coherente con viaje normal).
+    if (_origenMap != null) return true;
+    if (latCliente != null && lonCliente != null) return true;
+    return false;
   }
 
   void _intentarCalculoTrasOrigenListo() {
@@ -572,8 +634,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       try {
+        // Deja el mapa visible arriba (viaje ahora en laptop/PC/cel).
         _sheetCtrl.animateTo(
-          0.72,
+          widget.modoAhora ? 0.52 : 0.72,
           duration: const Duration(milliseconds: 360),
           curve: Curves.easeOutCubic,
         );
@@ -584,6 +647,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   void _abrirFormularioCompletoDesdeResumen() {
     setState(() => _vistaResumenCotizada = false);
     _expandToMax();
+  }
+
+  /// Sale sin crear viaje (vuelve a la pantalla anterior / inicio del cliente).
+  void _volverAlInicioSinConfirmar() {
+    intentarSalirAlGate(context);
+  }
+
+  Widget _botonVolverSinConfirmar({bool? mapFloating}) {
+    return BotonVolverInicioSinConfirmar(
+      onPressed: _volverAlInicioSinConfirmar,
+      mapFloating: mapFloating ?? CustomThemeService.mapFloatingChrome.value,
+    );
   }
 
   String _lineaOrigenResumen() {
@@ -649,9 +724,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     LocationPermissionService.stopGentleRetry();
 
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
+      // Web (PC/laptop): GpsService pide permiso del navegador y obtiene posición.
+      // Móvil: Geolocator nativo.
+      final Position? pos = await GpsService.obtenerUbicacionMapaProduccion(
+        timeout: const Duration(seconds: 14),
       );
+      if (pos == null) {
+        if (mounted) setState(() => _cargandoUbicacion = false);
+        return;
+      }
       final here = LatLng(pos.latitude, pos.longitude);
       _origenMap = here;
       _updateOrigenMarker(here);
@@ -686,11 +767,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           ));
         }
         if (mounted) setState(() {});
-        // Viaje ahora: si el destino se eligió antes que el GPS, recalcular al mover origen
-        if (widget.modoAhora &&
-            mounted &&
+        // Si el destino se eligió antes que el GPS, recalcular al mover origen.
+        if (mounted &&
             _tieneDestinoParaCalculo() &&
-            !ubicacionObtenida) {
+            (!ubicacionObtenida || precioCalculado <= 0)) {
           _intentarCalculoTrasOrigenListo();
         }
       });
@@ -744,8 +824,117 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (_origenMap == null) return;
     }
     _didCenterOnce = true;
-    await _programarMapAnimate(
-      (c) => c.animateCamera(CameraUpdate.newLatLng(_origenMap!)),
+    await _encuadrarMapaPuntos(<LatLng>[_origenMap!]);
+  }
+
+  /// Cel: Google Maps. Laptop/PC/tablet web: OSM (evita mapa en blanco).
+  Widget _mapaProgramarPlataforma() {
+    if (kIsWeb) {
+      final LatLng center = _origenMap ??
+          (latDestino != null && lonDestino != null
+              ? LatLng(latDestino!, lonDestino!)
+              : const LatLng(18.4861, -69.9312));
+      final osmMarkers = <fm.Marker>[
+        for (final m in _markers)
+          fm.Marker(
+            point: ll.LatLng(m.position.latitude, m.position.longitude),
+            width: 40,
+            height: 40,
+            child: Icon(
+              Icons.location_on,
+              color: m.markerId.value == 'origen'
+                  ? const Color(0xFFFBBF24)
+                  : const Color(0xFFA78BFA),
+              size: 40,
+            ),
+          ),
+      ];
+      final osmPolys = <fm.Polyline>[
+        for (final pl in _polylines)
+          if (pl.points.length >= 2)
+            fm.Polyline(
+              points: pl.points
+                  .map((p) => ll.LatLng(p.latitude, p.longitude))
+                  .toList(),
+              color: pl.color,
+              strokeWidth: pl.width.toDouble().clamp(3, 10),
+            ),
+      ];
+      return fm.FlutterMap(
+        mapController: _fmCtrl,
+        options: fm.MapOptions(
+          initialCenter: ll.LatLng(center.latitude, center.longitude),
+          initialZoom: 13,
+          onMapReady: () {
+            _fmReady = true;
+            if (_origenMap != null ||
+                (latDestino != null && lonDestino != null)) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                final pts = <LatLng>[
+                  if (_origenMap != null) _origenMap!,
+                  if (latDestino != null && lonDestino != null)
+                    LatLng(latDestino!, lonDestino!),
+                ];
+                unawaited(_encuadrarMapaPuntos(pts));
+              });
+            }
+          },
+          onTap: (_, __) {
+            _onProgramarMapUserGesture();
+            _programarMapGestureEndDebounce?.cancel();
+            _programarMapGestureEndDebounce = Timer(
+              const Duration(milliseconds: 420),
+              () {
+                if (mounted) _expandProgramarSheetTrasMapaInteract();
+              },
+            );
+          },
+          onLongPress: (_, p) {
+            _onLongPressMap(LatLng(p.latitude, p.longitude));
+          },
+          onPositionChanged: (pos, hasGesture) {
+            if (hasGesture) _onProgramarMapUserGesture();
+          },
+        ),
+        children: [
+          fm.TileLayer(
+            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName: 'com.flygo.rd2',
+          ),
+          fm.PolylineLayer(polylines: osmPolys),
+          fm.MarkerLayer(markers: osmMarkers),
+        ],
+      );
+    }
+
+    return GoogleMap(
+      initialCameraPosition: const CameraPosition(
+        target: LatLng(18.4861, -69.9312),
+        zoom: 12,
+      ),
+      myLocationEnabled: _mapMyLocationEnabled && !_cargandoUbicacion,
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: false,
+      markers: _markers,
+      polylines: _polylines,
+      onMapCreated: (c) => _map = c,
+      onLongPress: _onLongPressMap,
+      onTap: (_) {
+        if (_mapProgrammaticCameraDepth > 0) return;
+        _onProgramarMapUserGesture();
+        _programarMapGestureEndDebounce?.cancel();
+        _programarMapGestureEndDebounce = Timer(
+          const Duration(milliseconds: 420),
+          () {
+            if (mounted) _expandProgramarSheetTrasMapaInteract();
+          },
+        );
+      },
+      onCameraMoveStarted: _onProgramarMapUserGesture,
+      onCameraIdle: _onProgramarMapCameraIdle,
+      compassEnabled: true,
+      mapToolbarEnabled: false,
     );
   }
 
@@ -795,9 +984,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
     if (mounted) setState(() {});
 
-    if (_origenMap != null) {
-      _intentarCalculoTrasOrigenListo();
-    }
+    // Cel / laptop / PC / tablet: cotizar aunque el GPS aún esté llegando.
+    _intentarCalculoTrasOrigenListo();
   }
 
   // ====== HELPERS GEOCODING ======
@@ -1075,7 +1263,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   void _programarCalculoAutomatico() {
     _calculoDebounce?.cancel();
-    _calculoDebounce = Timer(const Duration(milliseconds: 800), () {
+    // Tras elegir destino (Places/reciente) cotizar pronto; 250ms evita dobles taps.
+    _calculoDebounce = Timer(const Duration(milliseconds: 250), () {
       _obtenerUbicacionYCalcularPrecio(automatico: true);
     });
   }
@@ -1087,14 +1276,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       return;
     }
     if (_cargando && !automatico) return;
-    if (_cargando && automatico) {
-      _cotizacionSeq++;
-    }
 
     if (!widget.modoAhora &&
         _origenBuscarDireccion &&
         origenManual.trim().isEmpty &&
-        _origenDetManual == null) {
+        _origenDetManual == null &&
+        _origenMap == null &&
+        latCliente == null) {
       return;
     }
 
@@ -1109,15 +1297,26 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     destino = destino.trim();
     if (_origenBuscarDireccion) origenManual = origenManual.trim();
 
+    final int runId = ++_cotizacionSeq;
     setState(() => _cargando = true);
-    final int runId = _cotizacionSeq;
     try {
-      if (widget.modoAhora) {
-        final ready = await LocationPermissionService.ensureLocationReady(
+      final bool usarOrigenManual = _origenBuscarDireccion &&
+          ((kUsePlacesAutocomplete && _origenDetManual != null) ||
+              (!kUsePlacesAutocomplete && origenManual.trim().isNotEmpty));
+
+      if (!usarOrigenManual) {
+        final Position? pos =
+            await LocationPermissionService.posicionParaCotizarProduccion(
           context: context,
-          requestIfDenied: false,
+          pedirPermisoSiFalta: true,
         );
-        if (!ready.isUsable) {
+        if (pos != null) {
+          final ll = LatLng(pos.latitude, pos.longitude);
+          _origenMap = ll;
+          _updateOrigenMarker(ll);
+          if (mounted) setState(() {});
+        }
+        if (_origenMap == null) {
           if (!automatico &&
               !RaiUbicacionClienteService.instance.bannerActivo) {
             _snack(LocationReadiness.kMsgEsperandoUbicacion);
@@ -1128,15 +1327,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           }
           return;
         }
-        if (ready.position != null) {
-          final ll = LatLng(
-            ready.position!.latitude,
-            ready.position!.longitude,
-          );
-          _origenMap = ll;
-          _updateOrigenMarker(ll);
-          if (mounted) setState(() {});
-        }
         unawaited(RaiUbicacionClienteService.instance.refrescar());
       }
 
@@ -1145,8 +1335,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       String destinoLegible = '';
       double dLat = 0, dLon = 0;
 
-      // ORIGEN: búsqueda (solo programar) o mapa / GPS
-      if (!widget.modoAhora && _origenBuscarDireccion) {
+      // ORIGEN: búsqueda manual (opt-in programar) o mapa / GPS
+      if (_origenBuscarDireccion &&
+          ((kUsePlacesAutocomplete && _origenDetManual != null) ||
+              (!kUsePlacesAutocomplete && origenManual.trim().isNotEmpty))) {
         if (kUsePlacesAutocomplete) {
           if (_origenDetManual == null) {
             _setCargaFalseSiCorre(runId);
@@ -1177,11 +1369,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             : "Ubicación actual";
       } else {
         if (!mounted) return;
-        final ready = await LocationPermissionService.ensureLocationReady(
+        final Position? pos =
+            await LocationPermissionService.posicionParaCotizarProduccion(
           context: context,
-          requestIfDenied: false,
+          pedirPermisoSiFalta: true,
         );
-        if (!ready.isUsable) {
+        if (pos == null) {
           if (!automatico &&
               !RaiUbicacionClienteService.instance.bannerActivo) {
             _snack(LocationReadiness.kMsgEsperandoUbicacion);
@@ -1192,9 +1385,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           }
           return;
         }
-        final posicion = ready.position!;
-        origenLat = posicion.latitude;
-        origenLon = posicion.longitude;
+        origenLat = pos.latitude;
+        origenLon = pos.longitude;
         final placemarks = await _safePlacemark(origenLat, origenLon);
         origenLegible = placemarks.isNotEmpty
             ? _direccionBonitaRD(placemarks.first)
@@ -1235,7 +1427,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       double dist = 0;
       DirectionsResult? dir;
       final servicio = TarifaServiceUnificado();
-      await servicio.recargar();
+      await servicio.recargar().timeout(const Duration(seconds: 10));
       final maxKm = servicio.distanciaMaximaCotizableKm;
       final RaiDistanciaCotizacion? distRes =
           await RaiOfflineCotizacionService.resolverDistancia(
@@ -1245,6 +1437,22 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         destLon: dLon,
         useDirections: kUseDirectionsForDistance,
         maxKmCotizable: maxKm,
+      ).timeout(
+        const Duration(seconds: 16),
+        onTimeout: () {
+          final double hv = DistanciaService.calcularDistancia(
+            origenLat,
+            origenLon,
+            dLat,
+            dLon,
+          );
+          if (hv <= 0) return null;
+          return RaiDistanciaCotizacion(
+            km: hv,
+            estimadoOffline: false,
+            fuente: 'haversine',
+          );
+        },
       );
       if (distRes == null || distRes.km <= 0) {
         if (!automatico) {
@@ -1335,28 +1543,30 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       _animarSheetParaResumenCotizado();
 
-      if (_map != null && runId == _cotizacionSeq) {
-        if (routeLatLng.length >= 2) {
-          await _programarMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
-            ),
-          );
-        } else {
-          await _programarMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(
-                _boundsFrom(LatLng(origenLat, origenLon), LatLng(dLat, dLon)),
-                80,
-              ),
-            ),
-          );
-        }
+      if (runId == _cotizacionSeq) {
+        final List<LatLng> pts = routeLatLng.length >= 2
+            ? routeLatLng
+            : <LatLng>[
+                LatLng(origenLat, origenLon),
+                LatLng(dLat, dLon),
+              ];
+        unawaited(_encuadrarMapaPuntos(pts));
       }
+    } on TimeoutException {
+      if (!automatico && runId == _cotizacionSeq) {
+        _snack(
+          'El cálculo del precio tardó demasiado. '
+          'Tocá calcular de nuevo.',
+        );
+      }
+      _setCargaFalseSiCorre(runId);
     } catch (e) {
       if (!automatico && runId == _cotizacionSeq) {
         _snack("❌ Error al calcular distancia: $e");
       }
+      _setCargaFalseSiCorre(runId);
+    } finally {
+      // Defensa: nunca dejar "Calculando precio…" colgado (motor/normal).
       _setCargaFalseSiCorre(runId);
     }
   }
@@ -1475,10 +1685,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     );
     if (!mounted || fecha == null) return;
 
-    final hora = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (context, child) {
+    final hora = await elegirHoraAmPm(
+      context,
+      initial: TimeOfDay.now(),
+      wrapChild: (context, child) {
         final theme = Theme.of(context);
         final cs = theme.colorScheme;
         return Theme(
@@ -1489,7 +1699,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   : const Color(0xFF0F9D58),
             ),
           ),
-          child: child!,
+          child: child,
         );
       },
     );
@@ -1675,16 +1885,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     } catch (_) {}
 
     try {
-      final ({bool serviceEnabled, LocationPermission permission}) snap =
-          await LocationPermissionService.checkServiceThenRequestIfNeeded();
-      if (snap.serviceEnabled && GpsService.permissionUsable(snap.permission)) {
-        final Position? pos = await GpsService.obtenerUbicacionActual(
-          timeout: const Duration(seconds: 12),
-          maxEdadUltima: const Duration(hours: 24),
-        );
-        if (pos != null) {
-          return (lat: pos.latitude, lon: pos.longitude);
-        }
+      // Web (PC/laptop/tablet): pide permiso del navegador y obtiene GPS.
+      // Móvil: flujo nativo con LocationPermissionService.
+      final Position? pos = await GpsService.obtenerUbicacionMapaProduccion(
+        timeout: const Duration(seconds: 12),
+      );
+      if (pos != null) {
+        return (lat: pos.latitude, lon: pos.longitude);
       }
     } catch (_) {}
 
@@ -1705,9 +1912,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     if (dest == null || latDestino == null || lonDestino == null) return;
     if (_cargando && !forzar) return;
     _calculoDebounce?.cancel();
-    if (_cargando && forzar) _cotizacionSeq++;
 
-    final int runId = _cotizacionSeq;
+    final int runId = ++_cotizacionSeq;
     if (!mounted) return;
     setState(() => _cargando = true);
 
@@ -1836,6 +2042,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       latDestino = det.lat;
       lonDestino = det.lon;
     });
+    _turismoDestinoCampoKey.currentState?.sincronizarTexto(det.displayLabel);
 
     _markers
       ..removeWhere((m) => m.markerId.value == 'destino')
@@ -1915,6 +2122,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       );
       return;
     }
+    if (precioCalculado <= 0) {
+      messenger.showSnackBar(const SnackBar(content: Text(kMsgCalcFirst)));
+      return;
+    }
     if (!ubicacionObtenida || latCliente == null || latDestino == null) {
       if (!ubicacionObtenida &&
           RaiUbicacionClienteService.instance.bannerActivo) {
@@ -1953,18 +2164,36 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         if (!mounted) return;
         final ready = await LocationPermissionService.ensureLocationReady(
           context: context,
-          requestIfDenied: false,
+          // En web pedimos permiso del navegador; si falla, usamos el origen del mapa.
+          requestIfDenied: kIsWeb,
         );
         if (!ready.isUsable) {
-          if (!RaiUbicacionClienteService.instance.bannerActivo) {
-            messenger.showSnackBar(
-              SnackBar(content: Text(LocationReadiness.kMsgEsperandoUbicacion)),
+          // Laptop/PC/tablet: si ya hay origen cotizado (GPS o búsqueda), no bloquear.
+          final bool origenListo =
+              latCliente != null && lonCliente != null && ubicacionObtenida;
+          if (kIsWeb && origenListo) {
+            debugPrint(
+              '[ViajeAhora] web sin GPS fresco; se usa origen cotizado '
+              'lat=$latCliente lon=$lonCliente',
             );
+          } else {
+            if (!RaiUbicacionClienteService.instance.bannerActivo) {
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text(
+                    kIsWeb
+                        ? 'Activa la ubicación del navegador (candado → Permitir) '
+                            'o escribe tu dirección de recogida y vuelve a calcular.'
+                        : LocationReadiness.kMsgEsperandoUbicacion,
+                  ),
+                ),
+              );
+            }
+            if (mounted) setState(() => _cargando = false);
+            return;
           }
-          if (mounted) setState(() => _cargando = false);
-          return;
         }
-        if (ready.position != null) {
+        if (ready.isUsable && ready.position != null) {
           final double cotLat = latCliente!;
           final double cotLon = lonCliente!;
           final double freshLat = ready.position!.latitude;
@@ -2905,7 +3134,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
-                            DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora),
+                            '${fechaHora.day.toString().padLeft(2, '0')}/${fechaHora.month.toString().padLeft(2, '0')}/${fechaHora.year} - ${fmtHoraDeDateTimeAmPm(fechaHora)}',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 color: textSecondary,
@@ -2988,6 +3217,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     ),
                   ),
                 ),
+                _botonVolverSinConfirmar(mapFloating: mapFloating),
               ],
             ),
           ),
@@ -3260,6 +3490,390 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     );
   }
 
+  String _subtituloPersonalizaViaje() {
+    if (widget.tipoServicio == 'turismo' || tipoServicio == 'turismo') {
+      return '';
+    }
+    if (widget.tipoServicio == 'motor' || tipoServicio == 'motor') {
+      return 'Destino y opciones del viaje';
+    }
+    if (!widget.modoAhora) {
+      return 'Ruta, fecha y opciones';
+    }
+    return 'Destino, vehículo y opciones';
+  }
+
+  List<Widget> _badgesModoViaje({
+    required Color textPrimary,
+    required Color accent,
+  }) {
+    final List<Widget> chips = <Widget>[];
+    if (widget.tipoServicio == 'turismo' || tipoServicio == 'turismo') {
+      chips.add(ProgramarViajeModoChip(
+        label: 'Turismo',
+        icon: Icons.beach_access_rounded,
+        accent: accent,
+        textColor: textPrimary,
+      ));
+    } else if (widget.tipoServicio == 'motor' || tipoServicio == 'motor') {
+      chips.add(ProgramarViajeModoChip(
+        label: 'Motor',
+        icon: Icons.two_wheeler_rounded,
+        accent: accent,
+        textColor: textPrimary,
+      ));
+    } else {
+      chips.add(ProgramarViajeModoChip(
+        label: widget.modoAhora ? 'Viaje ahora' : 'Programado',
+        icon: widget.modoAhora
+            ? Icons.bolt_rounded
+            : Icons.calendar_month_rounded,
+        accent: accent,
+        textColor: textPrimary,
+      ));
+    }
+    return chips;
+  }
+
+  Widget _selectorVehiculoProminente({
+    required bool mapFloating,
+    required Color chromeToneRef,
+    required bool sheetStrongChrome,
+    required Color textPrimary,
+    required Color textSecondary,
+    required Color textMuted,
+    required List<Shadow>? freeTextHaloShadows,
+  }) {
+    if (tipoServicio == 'motor') return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        ProgramarViajeEtiquetaVehiculo(
+          textPrimary: textPrimary,
+          textMuted: textMuted,
+          shadows: freeTextHaloShadows,
+          mostrarAyuda: tipoServicio != 'turismo',
+        ),
+        const SizedBox(height: 8),
+        if (tipoServicio == 'normal')
+          _Caja(
+            mapFloating: mapFloating,
+            strongChrome: sheetStrongChrome,
+            child: OverflowSafeLabeledDropdown(
+              leading: Icon(
+                Icons.directions_car_filled_outlined,
+                color: textSecondary,
+              ),
+              label: 'Tipo de vehículo',
+              labelStyle: TextStyle(
+                color: textSecondary,
+                fontWeight:
+                    mapFloating ? FontWeight.w700 : FontWeight.w500,
+              ),
+              dropdown: DropdownButton<String>(
+                isExpanded: true,
+                value: tipoVehiculo,
+                dropdownColor: mapFloating
+                    ? const Color(0xFF0F172A)
+                    : CustomThemeService.cardOn(chromeToneRef),
+                underline: const SizedBox(),
+                iconEnabledColor: textPrimary,
+                style: TextStyle(
+                  color: textPrimary,
+                  fontSize: 16,
+                  fontWeight:
+                      mapFloating ? FontWeight.w800 : FontWeight.w600,
+                ),
+                items: <String>[
+                  'Carro',
+                  'Jeepeta',
+                  'Minibús',
+                  'Minivan',
+                  'AutobusGuagua'
+                ]
+                    .map(
+                      (e) => DropdownMenuItem<String>(
+                        value: e,
+                        child: Text(
+                          e,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: textPrimary,
+                            fontWeight: mapFloating
+                                ? FontWeight.w800
+                                : FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  setState(() {
+                    tipoVehiculo = v ?? 'Carro';
+                  });
+                  _intentarCalculoTrasOrigenListo();
+                },
+              ),
+            ),
+          ),
+        if (tipoServicio == 'turismo')
+          _buildTurismoVehiculoSelector(
+            mapFloating: mapFloating,
+            chromeToneRef: chromeToneRef,
+            strongChrome: sheetStrongChrome,
+          ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  Widget _seccionSalidaGpsCompacta({
+    required bool mapFloating,
+    required bool uiRutaMockup,
+    required ({
+      Color origenAccent,
+      Color origenFill,
+      Color destinoAccent,
+      Color destinoFill,
+      Color origenBorde,
+      Color destinoBorde,
+    }) pRuta,
+    required Color freeTextColor,
+    required Color freeTextMutedColor,
+    required List<Shadow>? freeTextHaloShadows,
+  }) {
+    if (!widget.modoAhora || !uiRutaMockup) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: mapFloating
+                    ? const Color(0xFF000000).withValues(alpha: 0.92)
+                    : pRuta.origenBorde.withValues(alpha: 0.65),
+                width: mapFloating ? 1.4 : 1.0,
+              ),
+              color: mapFloating
+                  ? Colors.white.withValues(alpha: 0.95)
+                  : pRuta.origenAccent.withValues(alpha: 0.12),
+              boxShadow: mapFloating
+                  ? <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.18),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Icon(
+              Icons.gps_fixed_rounded,
+              color: mapFloating
+                  ? const Color(0xFFD97706)
+                  : pRuta.origenAccent,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Salida',
+                  style: TextStyle(
+                    color: mapFloating
+                        ? const Color(0xFF000000)
+                        : pRuta.origenAccent,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                    shadows: freeTextHaloShadows,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Tu ubicación en el mapa. Mové el pin si hace falta.',
+                  style: TextStyle(
+                    color: freeTextMutedColor,
+                    fontSize: 12,
+                    height: 1.3,
+                    fontWeight:
+                        mapFloating ? FontWeight.w700 : FontWeight.w400,
+                    shadows: freeTextHaloShadows,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _seccionDestinoNoTurismo({
+    required bool uiRutaMockup,
+    required bool isDark,
+    required bool mapFloating,
+    required ({
+      Color origenAccent,
+      Color origenFill,
+      Color destinoAccent,
+      Color destinoFill,
+      Color origenBorde,
+      Color destinoBorde,
+    }) pRuta,
+    required Color textPrimary,
+    required Color textSecondary,
+    required Color textMuted,
+    required Color payLinkColor,
+  }) {
+    if (widget.tipoServicio == 'turismo' || !kUsePlacesAutocomplete) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        if (!_tieneDestinoParaCalculo()) ...<Widget>[
+          _bannerAntesDeElegirDestino(
+            destinoAccent: pRuta.destinoAccent,
+            destinoFill: pRuta.destinoFill,
+            textPrimary: textPrimary,
+            textSecondary: textSecondary,
+            mapFloating: mapFloating,
+          ),
+          const SizedBox(height: 12),
+        ],
+        ParpadeoRutaProgramar(
+          pulseColor: uiRutaMockup && isDark
+              ? const Color(0xFFC084FC)
+              : pRuta.destinoAccent,
+          child: _seccionRutaCard(
+            titulo: uiRutaMockup ? 'DESTINO' : 'Destino',
+            icono: Icons.search_rounded,
+            accent: pRuta.destinoAccent,
+            fill: pRuta.destinoFill,
+            tituloColor:
+                uiRutaMockup && isDark ? Colors.white : textPrimary,
+            mockupRuta: uiRutaMockup,
+            isDark: isDark,
+            mapFloating: mapFloating,
+            ayudaHeader: uiRutaMockup ? 'Llegada' : null,
+            ayudaColor: textMuted,
+            lineaTimeline:
+                uiRutaMockup ? const Color(0xFFC084FC) : null,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Stack(
+                  children: <Widget>[
+                    CampoLugarAutocomplete(
+                      key: _destinoCampoKey,
+                      label: 'Buscar destino',
+                      asistenteDireccionHabilitado: true,
+                      initialText: _destinoDet?.displayLabel ??
+                          (destinoTexto.isNotEmpty ? destinoTexto : null),
+                      biasLat: _origenMap?.latitude,
+                      biasLon: _origenMap?.longitude,
+                      hint: uiRutaMockup
+                          ? 'Dirección, barrio, hotel o lugar en RD…'
+                          : '¿A dónde vas?',
+                      fieldAccent: mapFloating
+                          ? const Color(0xFFD8B4FE)
+                          : (uiRutaMockup && isDark
+                              ? const Color(0xFFD8B4FE)
+                              : pRuta.destinoAccent),
+                      fieldFill: mapFloating
+                          ? const Color(0xFF111827).withValues(alpha: 0.92)
+                          : (isDark
+                              ? (uiRutaMockup
+                                  ? const Color(0xFF1E0B36)
+                                  : const Color(0xFF1A0F2E))
+                              : Colors.white),
+                      onPlaceSelected: (det) async {
+                        _destinoDet = det;
+                        destino = det.displayLabel;
+                        destinoTexto = det.displayLabel;
+                        latDestino = det.lat;
+                        lonDestino = det.lon;
+
+                        final destLL = LatLng(det.lat, det.lon);
+                        _markers.removeWhere(
+                            (m) => m.markerId.value == 'destino');
+                        _markers.add(
+                          Marker(
+                            markerId: const MarkerId('destino'),
+                            position: destLL,
+                            icon: BitmapDescriptor.defaultMarkerWithHue(
+                                BitmapDescriptor.hueViolet),
+                            infoWindow:
+                                const InfoWindow(title: 'Destino'),
+                            zIndexInt: 1,
+                          ),
+                        );
+                        _invalidarPrecioCalculado();
+                        if (mounted) setState(() {});
+                        _destinoCampoKey.currentState
+                            ?.sincronizarTexto(det.displayLabel);
+                        _intentarCalculoTrasOrigenListo();
+                        if (_origenMap != null) {
+                          unawaited(
+                            _dibujarRutaReal(
+                              oLat: _origenMap!.latitude,
+                              oLon: _origenMap!.longitude,
+                              dLat: det.lat,
+                              dLon: det.lon,
+                              previewOnly: true,
+                            ),
+                          );
+                        }
+                      },
+                      onTextChanged: (t) {
+                        _markers.removeWhere(
+                            (m) => m.markerId.value == 'destino');
+                        _polylines.clear();
+                        setState(() {
+                          destino = t;
+                          _destinoDet = null;
+                          latDestino = null;
+                          lonDestino = null;
+                          destinoTexto = '';
+                          _invalidarCotizacion();
+                        });
+                        _intentarCalculoTrasOrigenListo();
+                      },
+                    ),
+                  ],
+                ),
+                if (destinoTexto.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      'Destino seleccionado: $destinoTexto',
+                      style: TextStyle(
+                        color: pRuta.destinoAccent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
@@ -3351,6 +3965,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                 : (isDark ? Colors.white24 : const Color(0xFFE4E7EC));
         final pRuta = _paletasOrigenDestino(isDark, tipoServicio);
         final bool uiRutaMockup = tipoServicio != 'turismo';
+        final bool destinoPrimero =
+            widget.modoAhora && uiRutaMockup && tipoServicio != 'turismo';
 
         return FlygoSalidaSegura(
       child: Scaffold(
@@ -3369,34 +3985,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           Positioned.fill(
             child: AbsorbPointer(
               absorbing: _cargandoUbicacion,
-              child: GoogleMap(
-                initialCameraPosition: const CameraPosition(
-                  target: LatLng(18.4861, -69.9312),
-                  zoom: 12,
-                ),
-                myLocationEnabled: _mapMyLocationEnabled && !_cargandoUbicacion,
-                myLocationButtonEnabled: false,
-                zoomControlsEnabled: false,
-                markers: _markers,
-                polylines: _polylines,
-                onMapCreated: (c) => _map = c,
-                onLongPress: _onLongPressMap,
-                onTap: (_) {
-                  if (_mapProgrammaticCameraDepth > 0) return;
-                  _onProgramarMapUserGesture();
-                  _programarMapGestureEndDebounce?.cancel();
-                  _programarMapGestureEndDebounce = Timer(
-                    const Duration(milliseconds: 420),
-                    () {
-                      if (mounted) _expandProgramarSheetTrasMapaInteract();
-                    },
-                  );
-                },
-                onCameraMoveStarted: _onProgramarMapUserGesture,
-                onCameraIdle: _onProgramarMapCameraIdle,
-                compassEnabled: true,
-                mapToolbarEnabled: false,
-              ),
+              child: _mapaProgramarPlataforma(),
             ),
           ),
           if (_cargandoUbicacion)
@@ -3609,34 +4198,52 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                     const SizedBox(height: 6),
                                     SlideTransition(
                                       position: _nudgeOffset,
-                                      child: Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Icon(Icons.keyboard_double_arrow_up,
-                                              size: 18,
-                                              color: mapFloating
-                                                  ? const Color(0xFF000000)
-                                                  : textMuted,
-                                              shadows: freeTextHaloShadows),
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            tipoServicio == 'turismo'
-                                                ? (_destinoTurismoSeleccionado !=
-                                                        null
-                                                    ? 'Desliza para ver precio y confirmar'
-                                                    : 'Busca un destino o abre el catálogo abajo')
-                                                : (_mostrarResumenCotizacion
-                                                    ? 'Toca “Cambiar ruta” abajo para el buscador y opciones'
-                                                    : 'Desliza o toca para ver todo'),
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                                color: freeTextMutedColor,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w800,
-                                                shadows: freeTextHaloShadows),
-                                          ),
-                                        ],
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 4,
+                                        ),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                top: 2,
+                                              ),
+                                              child: Icon(
+                                                Icons.keyboard_double_arrow_up,
+                                                size: 18,
+                                                color: mapFloating
+                                                    ? const Color(0xFF000000)
+                                                    : textMuted,
+                                                shadows: freeTextHaloShadows,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Flexible(
+                                              child: Text(
+                                                tipoServicio == 'turismo'
+                                                    ? (_destinoTurismoSeleccionado !=
+                                                            null
+                                                        ? 'Desliza para ver precio y confirmar'
+                                                        : 'Busca un destino o abre el catálogo abajo')
+                                                    : (_mostrarResumenCotizacion
+                                                        ? 'Toca “Cambiar ruta” abajo para el buscador y opciones'
+                                                        : 'Desliza o toca para ver todo'),
+                                                textAlign: TextAlign.center,
+                                                softWrap: true,
+                                                style: TextStyle(
+                                                  color: freeTextMutedColor,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w800,
+                                                  shadows: freeTextHaloShadows,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -3666,10 +4273,30 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     const SizedBox(height: 12),
+                                    ProgramarViajeEncabezadoPersonaliza(
+                                      subtitulo: _subtituloPersonalizaViaje(),
+                                      textPrimary: freeTextColor,
+                                      textMuted: freeTextMutedColor,
+                                      shadows: freeTextHaloShadows,
+                                      badges: _badgesModoViaje(
+                                        textPrimary: freeTextColor,
+                                        accent: _colorServicio,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
                                     _selectorTipoServicio(),
-                                    const SizedBox(height: 12),
-                                    const SizedBox(height: 14),
-                                    Padding(
+                                    _selectorVehiculoProminente(
+                                      mapFloating: mapFloating,
+                                      chromeToneRef: chromeToneRef,
+                                      sheetStrongChrome: sheetStrongChrome,
+                                      textPrimary: textPrimary,
+                                      textSecondary: textSecondary,
+                                      textMuted: textMuted,
+                                      freeTextHaloShadows: freeTextHaloShadows,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    if (tipoServicio != 'turismo')
+                                      Padding(
                                       padding: const EdgeInsets.only(
                                           top: 4, bottom: 2),
                                       child: uiRutaMockup
@@ -3678,7 +4305,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                   CrossAxisAlignment.start,
                                               children: [
                                                 Text(
-                                                  'Tu recorrido',
+                                                  destinoPrimero
+                                                      ? '¿A dónde vas?'
+                                                      : 'Tu recorrido',
                                                   style: TextStyle(
                                                     color: freeTextColor,
                                                     fontWeight: FontWeight.w900,
@@ -3689,9 +4318,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                   ),
                                                 ),
                                                 Text(
-                                                  widget.modoAhora
-                                                      ? 'Salida: tu ubicación (GPS) · llegada: escribila abajo'
-                                                      : 'Completá salida y llegada',
+                                                  destinoPrimero
+                                                      ? 'Escribí el destino primero; después confirmá la salida'
+                                                      : widget.modoAhora
+                                                          ? 'Salida: tu ubicación (GPS) · llegada: escribila abajo'
+                                                          : 'Completá salida y llegada',
                                                   style: TextStyle(
                                                     color: freeTextMutedColor,
                                                     fontSize: 12.5,
@@ -3715,99 +4346,27 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               ),
                                             ),
                                     ),
-                                    const SizedBox(height: 8),
-                                    if (widget.modoAhora && uiRutaMockup)
-                                      Padding(
-                                        padding:
-                                            const EdgeInsets.only(bottom: 10),
-                                        child: Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.all(8),
-                                              decoration: BoxDecoration(
-                                                borderRadius:
-                                                    BorderRadius.circular(10),
-                                                border: Border.all(
-                                                  color: mapFloating
-                                                      ? const Color(0xFF000000)
-                                                          .withValues(
-                                                              alpha: 0.92)
-                                                      : pRuta.origenBorde
-                                                          .withValues(
-                                                              alpha: 0.65),
-                                                  width:
-                                                      mapFloating ? 1.4 : 1.0,
-                                                ),
-                                                color: mapFloating
-                                                    ? Colors.white.withValues(
-                                                        alpha: 0.95)
-                                                    : pRuta.origenAccent
-                                                        .withValues(
-                                                            alpha: 0.12),
-                                                boxShadow: mapFloating
-                                                    ? <BoxShadow>[
-                                                        BoxShadow(
-                                                          color: Colors.black
-                                                              .withValues(
-                                                                  alpha: 0.18),
-                                                          blurRadius: 6,
-                                                          offset: const Offset(
-                                                              0, 2),
-                                                        ),
-                                                      ]
-                                                    : null,
-                                              ),
-                                              child: Icon(
-                                                Icons.gps_fixed_rounded,
-                                                color: mapFloating
-                                                    ? const Color(0xFFD97706)
-                                                    : pRuta.origenAccent,
-                                                size: 20,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    'Salida',
-                                                    style: TextStyle(
-                                                      color: mapFloating
-                                                          ? const Color(
-                                                              0xFF000000)
-                                                          : pRuta
-                                                              .origenAccent,
-                                                      fontWeight:
-                                                          FontWeight.w900,
-                                                      fontSize: 13,
-                                                      shadows:
-                                                          freeTextHaloShadows,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 2),
-                                                  Text(
-                                                    'Tu ubicación en el mapa. Mové el pin si hace falta.',
-                                                    style: TextStyle(
-                                                      color:
-                                                          freeTextMutedColor,
-                                                      fontSize: 12,
-                                                      height: 1.3,
-                                                      fontWeight: mapFloating
-                                                          ? FontWeight.w700
-                                                          : FontWeight.w400,
-                                                      shadows:
-                                                          freeTextHaloShadows,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                                    if (tipoServicio != 'turismo')
+                                      const SizedBox(height: 8),
+                                    if (destinoPrimero)
+                                      _seccionDestinoNoTurismo(
+                                        uiRutaMockup: uiRutaMockup,
+                                        isDark: isDark,
+                                        mapFloating: mapFloating,
+                                        pRuta: pRuta,
+                                        textPrimary: textPrimary,
+                                        textSecondary: textSecondary,
+                                        textMuted: textMuted,
+                                        payLinkColor: payLinkColor,
+                                      ),
+                                    if (!destinoPrimero)
+                                      _seccionSalidaGpsCompacta(
+                                        mapFloating: mapFloating,
+                                        uiRutaMockup: uiRutaMockup,
+                                        pRuta: pRuta,
+                                        freeTextColor: freeTextColor,
+                                        freeTextMutedColor: freeTextMutedColor,
+                                        freeTextHaloShadows: freeTextHaloShadows,
                                       ),
                                     if (!widget.modoAhora || !uiRutaMockup)
                                       ParpadeoRutaProgramar(
@@ -3982,12 +4541,24 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                               height: 12),
                                                         ],
                                                         CampoLugarAutocomplete(
+                                                          key: _origenCampoKey,
                                                           label: uiRutaMockup
                                                               ? 'Buscar origen'
                                                               : 'Dirección de salida',
                                                           hint: uiRutaMockup
                                                               ? 'Dirección, barrio, hotel o lugar en RD…'
                                                               : 'Ej. SDQ, hotel, sector…',
+                                                          initialText: _origenDetManual
+                                                                  ?.displayLabel ??
+                                                              (origenTexto
+                                                                      .isNotEmpty
+                                                                  ? origenTexto
+                                                                  : (origenManual
+                                                                          .trim()
+                                                                          .isNotEmpty
+                                                                      ? origenManual
+                                                                          .trim()
+                                                                      : null)),
                                                           biasLat: latCliente ??
                                                               _origenMap
                                                                   ?.latitude,
@@ -4035,6 +4606,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                             _updateOrigenMarker(
                                                                 _origenMap!);
                                                             setState(() {});
+                                                            _origenCampoKey
+                                                                .currentState
+                                                                ?.sincronizarTexto(
+                                                                    det.displayLabel);
                                                             await _dibujarRutaSiHayDestino();
                                                             _intentarCalculoTrasOrigenListo();
                                                           },
@@ -4313,171 +4888,25 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                     ),
                                         ),
                                       ),
-                                    if (!_tieneDestinoParaCalculo() &&
-                                        widget.tipoServicio != 'turismo') ...[
-                                      _bannerAntesDeElegirDestino(
-                                        destinoAccent: pRuta.destinoAccent,
-                                        destinoFill: pRuta.destinoFill,
+                                    if (!destinoPrimero)
+                                      _seccionDestinoNoTurismo(
+                                        uiRutaMockup: uiRutaMockup,
+                                        isDark: isDark,
+                                        mapFloating: mapFloating,
+                                        pRuta: pRuta,
                                         textPrimary: textPrimary,
                                         textSecondary: textSecondary,
-                                        mapFloating: mapFloating,
+                                        textMuted: textMuted,
+                                        payLinkColor: payLinkColor,
                                       ),
-                                      const SizedBox(height: 12),
-                                    ],
-                                    if (widget.tipoServicio != 'turismo' &&
-                                        kUsePlacesAutocomplete)
-                                      ParpadeoRutaProgramar(
-                                        pulseColor: uiRutaMockup && isDark
-                                            ? const Color(0xFFC084FC)
-                                            : pRuta.destinoAccent,
-                                        child: _seccionRutaCard(
-                                          titulo: uiRutaMockup
-                                              ? 'DESTINO'
-                                              : 'Destino',
-                                          icono: Icons.search_rounded,
-                                          accent: pRuta.destinoAccent,
-                                          fill: pRuta.destinoFill,
-                                          tituloColor: uiRutaMockup && isDark
-                                              ? Colors.white
-                                              : textPrimary,
-                                          mockupRuta: uiRutaMockup,
-                                          isDark: isDark,
-                                          mapFloating: mapFloating,
-                                          ayudaHeader:
-                                              uiRutaMockup ? 'Llegada' : null,
-                                          ayudaColor: textMuted,
-                                          lineaTimeline: uiRutaMockup
-                                              ? const Color(0xFFC084FC)
-                                              : null,
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Stack(
-                                                children: [
-                                                  CampoLugarAutocomplete(
-                                                    label: 'Buscar destino',
-                                                    asistenteDireccionHabilitado:
-                                                        true,
-                                                    biasLat:
-                                                        _origenMap?.latitude,
-                                                    biasLon:
-                                                        _origenMap?.longitude,
-                                                    hint: uiRutaMockup
-                                                        ? 'Dirección, barrio, hotel o lugar en RD…'
-                                                        : '¿A dónde vas?',
-                                                    fieldAccent: mapFloating
-                                                        ? const Color(
-                                                            0xFFD8B4FE)
-                                                        : (uiRutaMockup &&
-                                                                isDark
-                                                            ? const Color(
-                                                                0xFFD8B4FE)
-                                                            : pRuta
-                                                                .destinoAccent),
-                                                    fieldFill: mapFloating
-                                                        ? const Color(
-                                                                0xFF111827)
-                                                            .withValues(
-                                                                alpha: 0.92)
-                                                        : (isDark
-                                                            ? (uiRutaMockup
-                                                                ? const Color(
-                                                                    0xFF1E0B36)
-                                                                : const Color(
-                                                                    0xFF1A0F2E))
-                                                            : Colors.white),
-                                                    onPlaceSelected:
-                                                        (det) async {
-                                                      _destinoDet = det;
-                                                      destino =
-                                                          det.displayLabel;
-                                                      destinoTexto =
-                                                          det.displayLabel;
-                                                      latDestino = det.lat;
-                                                      lonDestino = det.lon;
-
-                                                      final destLL = LatLng(
-                                                          det.lat, det.lon);
-                                                      _markers.removeWhere(
-                                                          (m) =>
-                                                              m.markerId
-                                                                  .value ==
-                                                              'destino');
-                                                      _markers.add(
-                                                        Marker(
-                                                          markerId:
-                                                              const MarkerId(
-                                                                  'destino'),
-                                                          position: destLL,
-                                                          icon: BitmapDescriptor
-                                                              .defaultMarkerWithHue(
-                                                                  BitmapDescriptor
-                                                                      .hueViolet),
-                                                          infoWindow:
-                                                              const InfoWindow(
-                                                                  title:
-                                                                      'Destino'),
-                                                          zIndexInt: 1,
-                                                        ),
-                                                      );
-                                                      setState(() {});
-
-                                                      if (_origenMap != null) {
-                                                        await _dibujarRutaReal(
-                                                          oLat: _origenMap!
-                                                              .latitude,
-                                                          oLon: _origenMap!
-                                                              .longitude,
-                                                          dLat: det.lat,
-                                                          dLon: det.lon,
-                                                          previewOnly: true,
-                                                        );
-                                                      }
-
-                                                      _invalidarPrecioCalculado();
-                                                      if (mounted) setState(() {});
-                                                      _intentarCalculoTrasOrigenListo();
-                                                    },
-                                                    onTextChanged: (t) {
-                                                      _markers.removeWhere(
-                                                          (m) =>
-                                                              m.markerId
-                                                                  .value ==
-                                                              'destino');
-                                                      _polylines.clear();
-                                                      setState(() {
-                                                        destino = t;
-                                                        _destinoDet = null;
-                                                        latDestino = null;
-                                                        lonDestino = null;
-                                                        destinoTexto = '';
-                                                        _invalidarCotizacion();
-                                                      });
-                                                      _intentarCalculoTrasOrigenListo();
-                                                    },
-                                                  ),
-                                                ],
-                                              ),
-                                              if (destinoTexto.isNotEmpty)
-                                                Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                          top: 6),
-                                                  child: Text(
-                                                    'Destino seleccionado: $destinoTexto',
-                                                    style: TextStyle(
-                                                      color:
-                                                          pRuta.destinoAccent,
-                                                      fontSize: 12,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
+                                    if (destinoPrimero)
+                                      _seccionSalidaGpsCompacta(
+                                        mapFloating: mapFloating,
+                                        uiRutaMockup: uiRutaMockup,
+                                        pRuta: pRuta,
+                                        freeTextColor: freeTextColor,
+                                        freeTextMutedColor: freeTextMutedColor,
+                                        freeTextHaloShadows: freeTextHaloShadows,
                                       ),
                                     if (widget.tipoServicio == 'turismo') ...[
                                       ParpadeoRutaProgramar(
@@ -4494,6 +4923,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 CrossAxisAlignment.stretch,
                                             children: [
                                               CampoLugarAutocomplete(
+                                                key: _turismoDestinoCampoKey,
                                                 label: 'Buscar destino',
                                                 asistenteDireccionHabilitado:
                                                     true,
@@ -4546,38 +4976,24 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                               ),
                                               const SizedBox(height: 12),
                                               if (_destinoTurismoSeleccionado ==
-                                                  null) ...[
-                                                OutlinedButton.icon(
+                                                  null)
+                                                BotonAccionDestacadoHoja(
                                                   onPressed:
                                                       _mostrarSelectorDestinosTuristicos,
-                                                  icon: Icon(
-                                                    Icons.travel_explore_rounded,
-                                                    color: pRuta.destinoAccent,
-                                                  ),
-                                                  label: const Text(
-                                                    'Explorar catálogo turístico',
-                                                  ),
-                                                  style: OutlinedButton.styleFrom(
-                                                    foregroundColor:
-                                                        pRuta.destinoAccent,
-                                                    side: BorderSide(
-                                                      color: pRuta.destinoAccent
-                                                          .withValues(
-                                                              alpha: 0.65),
-                                                    ),
-                                                    minimumSize: const Size(
-                                                      double.infinity,
-                                                      48,
-                                                    ),
-                                                    shape:
-                                                        RoundedRectangleBorder(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              12),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ] else
+                                                  icon: Icons
+                                                      .travel_explore_rounded,
+                                                  label:
+                                                      'Explorar catálogo turístico',
+                                                  accent: mapFloating
+                                                      ? const Color(0xFFA855F7)
+                                                      : (isDark
+                                                          ? const Color(
+                                                              0xFFA855F7)
+                                                          : const Color(
+                                                              0xFF7C3AED)),
+                                                  mapFloating: mapFloating,
+                                                )
+                                              else
                                                 Container(
                                                   padding:
                                                       const EdgeInsets.all(12),
@@ -4738,6 +5154,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                             _peaje = 0.0;
                                                             _peajeCtrl.clear();
                                                           });
+                                                          _turismoDestinoCampoKey
+                                                              .currentState
+                                                              ?.sincronizarTexto(
+                                                                  '');
                                                         },
                                                         icon: const Icon(
                                                             Icons.refresh,
@@ -4779,7 +5199,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                             sheetStrongChrome: sheetStrongChrome),
                                       ),
                                       Text(
-                                        'Programado para: ${DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora)}',
+                                        'Programado para: ${fechaHora.day.toString().padLeft(2, '0')}/${fechaHora.month.toString().padLeft(2, '0')}/${fechaHora.year} - ${fmtHoraDeDateTimeAmPm(fechaHora)}',
                                         style: TextStyle(
                                           color: sheetStrongChrome
                                               ? const Color(0xFF065F46)
@@ -4866,83 +5286,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                         ],
                                       ),
                                     ),
-                                    const SizedBox(height: 10),
-                                    if (tipoServicio != 'motor') ...[
-                                      if (tipoServicio == 'normal')
-                                        _Caja(
-                                          mapFloating: mapFloating,
-                                          strongChrome: sheetStrongChrome,
-                                          child: OverflowSafeLabeledDropdown(
-                                            leading: Icon(
-                                              Icons
-                                                  .directions_car_filled_outlined,
-                                              color: textSecondary,
-                                            ),
-                                            label: 'Tipo de Vehículo',
-                                            labelStyle: TextStyle(
-                                              color: textSecondary,
-                                              fontWeight: mapFloating
-                                                  ? FontWeight.w700
-                                                  : FontWeight.w500,
-                                            ),
-                                            dropdown: DropdownButton<String>(
-                                              isExpanded: true,
-                                              value: tipoVehiculo,
-                                              dropdownColor: mapFloating
-                                                  ? const Color(0xFF0F172A)
-                                                  : CustomThemeService.cardOn(
-                                                      chromeToneRef),
-                                              underline: const SizedBox(),
-                                              iconEnabledColor: textPrimary,
-                                              style: TextStyle(
-                                                color: textPrimary,
-                                                fontSize: 16,
-                                                fontWeight: mapFloating
-                                                    ? FontWeight.w800
-                                                    : FontWeight.w600,
-                                              ),
-                                              items: [
-                                                'Carro',
-                                                'Jeepeta',
-                                                'Minibús',
-                                                'Minivan',
-                                                'AutobusGuagua'
-                                              ]
-                                                  .map(
-                                                    (e) => DropdownMenuItem(
-                                                      value: e,
-                                                      child: Text(
-                                                        e,
-                                                        maxLines: 1,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        style: TextStyle(
-                                                          color: textPrimary,
-                                                          fontWeight: mapFloating
-                                                              ? FontWeight.w800
-                                                              : FontWeight.w600,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  )
-                                                  .toList(),
-                                              onChanged: (v) {
-                                                setState(() {
-                                                  tipoVehiculo = v ?? 'Carro';
-                                                });
-                                                _intentarCalculoTrasOrigenListo();
-                                              },
-                                            ),
-                                          ),
-                                        ),
-                                      if (tipoServicio == 'turismo')
-                                        _buildTurismoVehiculoSelector(
-                                          mapFloating: mapFloating,
-                                          chromeToneRef: chromeToneRef,
-                                          strongChrome: sheetStrongChrome,
-                                        ),
-                                      const SizedBox(height: 10),
-                                    ],
                                     _Caja(
                                       mapFloating: mapFloating,
                                       strongChrome: sheetStrongChrome,
@@ -5279,6 +5622,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                   ),
                                                 );
                                               },
+                                            ),
+                                            const SizedBox(height: 8),
+                                            _botonVolverSinConfirmar(
+                                              mapFloating: mapFloating,
                                             ),
                                           ],
                                         ),

@@ -51,6 +51,15 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
     } catch (_) {}
   }
 
+  void _volverAtrasDesdeTablero() {
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.maybePop();
+      return;
+    }
+    unawaited(NavigationService.salirModoViajeBola(context));
+  }
+
   Future<void> _restoreBolaBoardSheetToMid() async {
     if (!_bolaBoardSheetCtrl.isAttached) return;
     try {
@@ -221,7 +230,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
               leading: IconButton(
                 icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                 tooltip: 'Volver',
-                onPressed: () => Navigator.maybePop(context),
+                onPressed: _volverAtrasDesdeTablero,
               ),
               actions: [
                 if (_rutaPolyline != null)
@@ -230,6 +239,17 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                     icon: const Icon(Icons.layers_clear_rounded),
                     onPressed: _limpiarRutaMapa,
                   ),
+                IconButton(
+                  tooltip: esTaxista
+                      ? 'Volver a recibir viajes'
+                      : 'Volver al inicio',
+                  icon: Icon(Icons.home_rounded, color: col.onSurface),
+                  onPressed: () => unawaited(
+                    esTaxista
+                        ? NavigationService.salirVistaBolaTaxista(context)
+                        : NavigationService.salirVistaBolaCliente(context),
+                  ),
+                ),
               ],
               title: appBarTitleRow(),
             ),
@@ -278,7 +298,8 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                           ),
                         ],
                       ),
-                      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      child: StreamBuilder<
+                              QuerySnapshot<Map<String, dynamic>>>(
                         stream: BolaPuebloRepo.streamTablero(),
                         builder: (context, snap) {
                           final bottomPad = BolaPuebloUi.safeBottomInset(context);
@@ -291,13 +312,28 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                       snap.data!,
                                       user.uid,
                                     );
+                          final Map<String, String>? bolaActivaTaxista =
+                              !esTaxista || snap.data == null
+                                  ? null
+                                  : BolaPuebloRepo
+                                      .bolaActivaTaxistaDesdeTablero(
+                                      snap.data!,
+                                      user.uid,
+                                    );
                           final docs = docsAll.where((d) {
-                            return BolaPuebloRepo.visibleEnTablero(
+                            return BolaPuebloRepo.visibleEnTableroParaUsuario(
                               d.data(),
                               user.uid,
                               bolaId: d.id,
                             );
                           }).toList();
+                          final bool taxistaPubAbierta = esTaxista &&
+                              docsAll.any((d) {
+                                final m = d.data();
+                                return (m['createdByUid'] ?? '').toString() ==
+                                        user.uid &&
+                                    (m['estado'] ?? '').toString() == 'abierta';
+                              });
 
                           final List<Widget> head = [
                             const SizedBox(height: 8),
@@ -316,7 +352,9 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                               child: BolaPuebloUi.boardHeader(
                                 context,
                                 subtitle: esTaxista
-                                    ? 'Publicá tu ruta o respondé pedidos.'
+                                    ? (bolaActivaTaxista != null
+                                        ? 'Tenés un viaje activo.'
+                                        : 'Publicá tu ruta o respondé pedidos.')
                                     : bolaActivaCliente != null
                                         ? 'Tenés un viaje activo.'
                                         : 'Elegí conductor o pedí el tuyo.',
@@ -378,6 +416,45 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                             onBusy: (b) =>
                                                 setState(() => _guardando = b),
                                           ),
+                                ),
+                              ),
+                            if (taxistaPubAbierta)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        BolaPuebloUi.statusChip(
+                                          context,
+                                          label: 'Tu ruta en el tablero',
+                                          color: BolaPuebloTheme.accent,
+                                        ),
+                                      ],
+                                    ),
+                                    const BolaBoardVolverInicioButton(
+                                      esTaxista: true,
+                                      compact: true,
+                                      faseViaje: 'abierta',
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            if (esTaxista && bolaActivaTaxista != null)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                                child: BolaClientePedirPedidoPanel(
+                                  bolaActiva: bolaActivaTaxista,
+                                  uid: user.uid,
+                                  rol: rol,
+                                  nombre: nombre,
+                                  guardando: _guardando,
+                                  onBusy: (b) =>
+                                      setState(() => _guardando = b),
+                                  onContinuarBola: _abrirModoViajeBola,
                                 ),
                               ),
                             Padding(
@@ -545,7 +622,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
               leading: IconButton(
                 icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                 tooltip: 'Volver',
-                onPressed: () => Navigator.maybePop(context),
+                onPressed: _volverAtrasDesdeTablero,
               ),
               title: appBarTitleRow(),
             ),
@@ -595,7 +672,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                     leading: IconButton(
                       icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                       tooltip: 'Volver',
-                      onPressed: () => Navigator.maybePop(context),
+                      onPressed: _volverAtrasDesdeTablero,
                     ),
                     title: appBarTitleRow(),
                   ),

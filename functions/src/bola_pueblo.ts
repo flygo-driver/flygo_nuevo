@@ -3,7 +3,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore";
 
 import { syncTaxistaComisionTrasBola } from "./finance.js";
-import { ledgerComisionBolaPuebloCf } from "./taxista_prepago_ledger.js";
+import { debitarComisionBolaPuebloEnTx } from "./taxista_prepago_ledger.js";
 import {
   comisionCentsDesdePrecioCents,
   getComisionViajePorcentajeCached,
@@ -48,6 +48,58 @@ async function rolUsuario(db: Firestore, uid: string): Promise<string> {
   const snap = await db.collection("usuarios").doc(uid).get();
   const r = snap.data()?.rol;
   return typeof r === "string" ? r.trim().toLowerCase() : "";
+}
+
+/** Borra bola + ofertas + viaje espejo (pruebas / publicación retirada por el dueño). */
+async function borrarBolaPuebloCompleta(
+  db: Firestore,
+  bolaId: string,
+  opts: {
+    viajeEspejoId?: string;
+    uidsLimpiarViajeActivo?: string[];
+  } = {},
+): Promise<void> {
+  const ref = db.collection("bolas_pueblo").doc(bolaId);
+  const ofertasSnap = await ref.collection("ofertas").get();
+  let batch = db.batch();
+  let ops = 0;
+  for (const doc of ofertasSnap.docs) {
+    batch.delete(doc.ref);
+    ops++;
+    if (ops >= 450) {
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    }
+  }
+  batch.delete(ref);
+  await batch.commit();
+
+  const viajeEspejoId = String(opts.viajeEspejoId ?? "").trim();
+  if (viajeEspejoId) {
+    try {
+      await db.collection("viajes").doc(viajeEspejoId).delete();
+    } catch (e) {
+      console.error("[borrarBolaPuebloCompleta] viaje", viajeEspejoId, e);
+    }
+  }
+
+  const uids = [
+    ...new Set((opts.uidsLimpiarViajeActivo ?? []).filter((x) => x.length > 0)),
+  ];
+  await Promise.all(
+    uids.map((u) =>
+      db.collection("usuarios").doc(u).set(
+        {
+          viajeActivoId: "",
+          siguienteViajeId: "",
+          updatedAt: FieldValue.serverTimestamp(),
+          actualizadoEn: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      ),
+    ),
+  );
 }
 
 /**
@@ -977,95 +1029,23 @@ export const finalizarBolaPueblo = onCall(async (request) => {
       updates.estado = "finalizada";
       updates.estadoViajeBola = "finalizada";
       updates.finalizadaEn = FieldValue.serverTimestamp();
-      if (d.comisionAplicada !== true && !mirrorViajeYaFacturadoEnApp) {
+      if (d.comisionAplicada !== true) {
         const bRef = db.collection("billeteras_taxista").doc(uidTx);
         const bSnap = await tx.get(bRef);
-        const b0 = (bSnap.data() ?? {}) as Record<string, unknown>;
-        const rawPend = b0.comisionPendiente;
-        const pend =
-          typeof rawPend === "number" && Number.isFinite(rawPend)
-            ? rawPend
-            : typeof rawPend === "string"
-              ? Number.parseFloat(rawPend) || 0
-              : 0;
-        const rawSaldo = b0.saldoPrepagoComisionRd;
-        let saldo =
-          typeof rawSaldo === "number" && Number.isFinite(rawSaldo)
-            ? rawSaldo
-            : typeof rawSaldo === "string"
-              ? Number.parseFloat(rawSaldo) || 0
-              : 0;
-        const flag = b0.primerViajeComisionGratisConsumido === true;
-        const pendAntes = pend;
-        const saldoIni = saldo;
-        const baseUpd = {
-          updatedAt: FieldValue.serverTimestamp(),
-          ultimaBolaFinalizadaId: bolaId,
-          ultimaComisionBolaRd: comision,
-        };
-        if (!flag && pend < 1e-6) {
-          await ledgerComisionBolaPuebloCf(tx, {
-            uidTaxista: uidTx,
-            bolaId,
-            fuente: "finalizar_bola_pueblo_cf",
-            comisionTotalRd: comision,
-            pendienteAntes: pendAntes,
-            saldoPrepagoAntes: saldoIni,
-            pendienteDespues: pendAntes,
-            saldoPrepagoDespues: saldoIni,
-            primerEfectivoSinDescuento: true,
-          });
-          tx.set(
-            bRef,
-            { ...baseUpd, primerViajeComisionGratisConsumido: true },
-            { merge: true },
-          );
-        } else {
-          let p = pend;
-          const fromPend = Math.min(p, comision);
-          p = Number.parseFloat((p - fromPend).toFixed(2));
-          const rem = Number.parseFloat((comision - fromPend).toFixed(2));
-          const rawRes = b0.saldoReservadoParaGiras;
-          const reserv =
-            typeof rawRes === "number" && Number.isFinite(rawRes)
-              ? Math.max(0, rawRes)
-              : typeof rawRes === "string"
-                ? Math.max(0, Number.parseFloat(rawRes) || 0)
-                : 0;
-          const prepagoLibreIni = Math.max(0, Number.parseFloat((saldoIni - reserv).toFixed(2)));
-          const cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
-          const faltantePrepago = Number.parseFloat(
-            (rem - cubiertoPrepago).toFixed(2),
-          );
-          saldo = Number.parseFloat((saldo - cubiertoPrepago).toFixed(2));
-          p = Number.parseFloat((p + faltantePrepago).toFixed(2));
-          await ledgerComisionBolaPuebloCf(tx, {
-            uidTaxista: uidTx,
-            bolaId,
-            fuente: "finalizar_bola_pueblo_cf",
-            comisionTotalRd: comision,
-            pendienteAntes: pendAntes,
-            saldoPrepagoAntes: saldoIni,
-            pendienteDespues: p,
-            saldoPrepagoDespues: saldo,
-            primerEfectivoSinDescuento: false,
-          });
-          tx.set(
-            bRef,
-            {
-              ...baseUpd,
-              comisionPendiente: p,
-              saldoPrepagoComisionRd: saldo,
-              primerViajeComisionGratisConsumido: true,
-            },
-            { merge: true },
-          );
+        const deb = await debitarComisionBolaPuebloEnTx(tx, {
+          uidTaxista: uidTx,
+          bolaId,
+          comisionRd: comision,
+          fuente: mirrorViajeYaFacturadoEnApp
+            ? "finalizar_bola_pueblo_cf_post_espejo"
+            : "finalizar_bola_pueblo_cf",
+          billeData: (bSnap.data() ?? {}) as Record<string, unknown>,
+        });
+        if (deb.appliedNow || deb.alreadyHadLedger) {
+          updates.comisionAplicada = true;
+          updates.estadoPago = esEfectivo ? "pagado" : "pendiente";
+          updates.facturaSaldoPrepagoComisionRd = deb.saldoPrepagoDespues;
         }
-        updates.comisionAplicada = true;
-        updates.estadoPago = esEfectivo ? "pagado" : "pendiente";
-        updates.facturaSaldoPrepagoComisionRd = saldo;
-      } else if (d.comisionAplicada !== true && mirrorViajeYaFacturadoEnApp) {
-        updates.comisionAplicada = true;
       }
     }
 
@@ -1142,75 +1122,95 @@ export const cancelarAcuerdoBolaPueblo = onCall(async (request) => {
 
     viajeEspejoId = String(d.viajeEspejoId ?? "").trim();
 
-    tx.set(
-      ref,
-      {
-        estado: "cancelada",
-        estadoViajeBola: "cancelada",
-        canceladaEn: FieldValue.serverTimestamp(),
-        canceladaPor: uid,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
+    // Validación en transacción; el borrado físico va después.
+    tx.update(ref, { updatedAt: FieldValue.serverTimestamp() });
   });
 
-  if (viajeEspejoId) {
-    try {
-      const vRef = db.collection("viajes").doc(viajeEspejoId);
-      const vSnap = await vRef.get();
-      if (vSnap.exists) {
-        const vd = (vSnap.data() ?? {}) as Record<string, unknown>;
-        const est = String(vd.estado ?? "").trim().toLowerCase();
-        const cancelable =
-          est === "aceptado" ||
-          est === "en_camino_pickup" ||
-          est === "encaminopickup" ||
-          est === "pendiente";
-        if (cancelable) {
-          const actorEsTaxista = uid === uidTaxista;
-          await vRef.set(
-            {
-              estado: actorEsTaxista ? "pendiente" : "cancelado",
-              aceptado: false,
-              rechazado: actorEsTaxista ? false : true,
-              activo: false,
-              uidTaxista: "",
-              taxistaId: "",
-              nombreTaxista: "",
-              telefono: "",
-              placa: "",
-              republicado: actorEsTaxista,
-              canceladoPor: actorEsTaxista ? "taxista" : "cliente",
-              canceladoTaxistaEn: actorEsTaxista ? FieldValue.serverTimestamp() : FieldValue.delete(),
-              canceladoClienteEn: actorEsTaxista ? FieldValue.delete() : FieldValue.serverTimestamp(),
-              updatedAt: FieldValue.serverTimestamp(),
-              actualizadoEn: FieldValue.serverTimestamp(),
-            },
-            { merge: true },
-          );
-        }
-      }
-    } catch (e) {
-      console.error("[cancelarAcuerdoBolaPueblo] espejo", viajeEspejoId, e);
-    }
+  await borrarBolaPuebloCompleta(db, bolaId, {
+    viajeEspejoId,
+    uidsLimpiarViajeActivo: [uidTaxista, uidCliente, uid],
+  });
+
+  return { ok: true, bolaId, eliminada: true };
+});
+
+/**
+ * Dueño elimina su publicación (abierta, cancelada o finalizada de prueba).
+ */
+export const retirarPublicacionBolaPueblo = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  }
+  const bolaId = String(request.data?.bolaId ?? "").trim();
+  if (!bolaId) {
+    throw new HttpsError("invalid-argument", "Falta bolaId.");
   }
 
-  const limpiar = [uidTaxista, uidCliente].filter((x) => x.length > 0);
-  await Promise.all(
-    limpiar.map((u) =>
-      db.collection("usuarios").doc(u).set(
-        {
-          viajeActivoId: "",
-          updatedAt: FieldValue.serverTimestamp(),
-          actualizadoEn: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      ),
-    ),
-  );
+  const db = getFirestore();
+  const ref = db.collection("bolas_pueblo").doc(bolaId);
+  let viajeEspejoId = "";
+  let createdByUid = "";
 
-  return { ok: true, bolaId };
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Publicación no encontrada.");
+    }
+    const d = snap.data()!;
+    createdByUid = String(d.createdByUid ?? "").trim();
+    const estado = String(d.estado ?? "").trim();
+    if (uid !== createdByUid) {
+      throw new HttpsError(
+        "permission-denied",
+        "Solo quien publicó puede eliminar la publicación.",
+      );
+    }
+    if (estado === "en_curso") {
+      throw new HttpsError(
+        "failed-precondition",
+        "El traslado ya está en curso. Completalo o contactá soporte.",
+      );
+    }
+    if (estado === "acordada") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Ya hay un acuerdo. Usá «Cancelar acuerdo» si aún no subiste al vehículo.",
+      );
+    }
+    if (estado === "abierta") {
+      const uidTx = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
+      const uidCli = String(d.uidCliente ?? "").trim();
+      if (uidTx || uidCli) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Hay un acuerdo en curso. No se puede eliminar la publicación.",
+        );
+      }
+    }
+    if (
+      estado !== "abierta" &&
+      estado !== "cancelada" &&
+      estado !== "finalizada"
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Esta publicación no se puede eliminar desde aquí.",
+      );
+    }
+
+    viajeEspejoId = String(d.viajeEspejoId ?? "").trim();
+    createdByUid = String(d.createdByUid ?? "").trim();
+
+    tx.update(ref, { updatedAt: FieldValue.serverTimestamp() });
+  });
+
+  await borrarBolaPuebloCompleta(db, bolaId, {
+    viajeEspejoId,
+    uidsLimpiarViajeActivo: [createdByUid],
+  });
+
+  return { ok: true, bolaId, eliminada: true };
 });
 
 /** Cliente reporta comprobante de transferencia (mismo modelo que viajes). */

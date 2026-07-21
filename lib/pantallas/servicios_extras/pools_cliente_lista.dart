@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
 import 'package:flygo_nuevo/servicios/giras_cupos_cliente_alerts.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
@@ -198,7 +198,7 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
     final owner = agencia.isNotEmpty
         ? agencia
         : (taxista.isNotEmpty ? taxista : 'RAI Driver');
-    final fechaTxt = DateFormat('EEE d MMM • HH:mm', 'es').format(fecha);
+    final fechaTxt = fmtFechaHoraAmPm(fecha, sep: '•');
     final paradasTxt =
         paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ');
     final base = '''
@@ -276,7 +276,6 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 
   @override
   Widget build(BuildContext context) {
-    final f = DateFormat('EEE d MMM • HH:mm', 'es');
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
     final Color textSecondary =
@@ -460,8 +459,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     final d = docs[i].data();
                     final id = docs[i].id;
 
-                    final cap = (d['capacidad'] ?? 0) as int;
-                    final occ = (d['asientosReservados'] ?? 0) as int;
+                    final cap = ((d['capacidad'] ?? 0) as num?)?.toInt() ?? 0;
+                    final occ = ((d['asientosReservados'] ?? 0) as num?)?.toInt() ?? 0;
                     final estado = (d['estado'] ?? '').toString();
                     final precioCliente =
                         PoolRecaudoCentral.precioPorPersona(d);
@@ -548,8 +547,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                 softFill: softFill,
                                 routeLabel: '$origen → $destino',
                                 priceLabel: precioTxt,
-                                dateLabel: DateFormat('d MMM · HH:mm', 'es')
-                                    .format(fecha),
+                                dateLabel: fmtDiaMesHoraAmPm(fecha),
                                 publisherLabel: agenciaNombre.isNotEmpty
                                     ? agenciaNombre
                                     : taxistaNombre,
@@ -674,7 +672,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                 ),
                               ],
                             ),
-                            Text(f.format(fecha),
+                            Text(fmtFechaHoraAmPm(fecha, sep: '•'),
                                 style: TextStyle(color: textSecondary)),
                             if (paradas.isNotEmpty) ...[
                               const SizedBox(height: 6),

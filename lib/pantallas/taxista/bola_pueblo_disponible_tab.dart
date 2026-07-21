@@ -82,13 +82,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                BolaPuebloUi.boardHeader(
-                  context,
-                  subtitle:
-                      'Deslizá todo el panel: arriba ayuda, abajo el tablero en vivo.',
-                ),
                 if (!disponibilidadCargando && !disponible) ...[
-                  const SizedBox(height: 10),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
@@ -110,8 +104,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'En «No disponible» no podés enviar ni aceptar ofertas en Bola. '
-                            'Activá disponibilidad en tu cuenta para operar aquí.',
+                            'Activá disponibilidad en tu cuenta para publicar y aceptar ofertas.',
                             style: BolaPuebloUi.panelBody(context).copyWith(
                               fontSize: 13,
                               height: 1.35,
@@ -121,29 +114,44 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 10),
                 ],
-                const SizedBox(height: 10),
-                BolaPuebloUi.actionPanel(
-                  context,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: const EdgeInsets.only(bottom: 8),
+                    title: Text(
+                      'Cómo funciona',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
                     children: [
-                      BolaPuebloUi.sectionLabel(
-                          context, 'Cómo negociar (conductor)'),
-                      _paso(
+                      BolaPuebloUi.actionPanel(
                         context,
-                        '1',
-                        'Publicá «Voy para» (ruta y monto) o abrí el mapa completo. Los pasajeros ven primero a los conductores con ruta.',
-                      ),
-                      _paso(
-                        context,
-                        '2',
-                        'En cada bola abierta mandá tu propuesta. Chat y teléfono aparecen al acordar.',
-                      ),
-                      _paso(
-                        context,
-                        '3',
-                        'Cuando aceptan tu oferta, usá chat, llamada o WhatsApp en la tarjeta.',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _paso(
+                              context,
+                              '1',
+                              'Publicá «Voy para» o abrí el mapa completo.',
+                            ),
+                            _paso(
+                              context,
+                              '2',
+                              'En cada publicación abierta mandá tu propuesta.',
+                            ),
+                            _paso(
+                              context,
+                              '3',
+                              'Al acordar, usá chat, llamada o WhatsApp.',
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -195,8 +203,8 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
         ];
 
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: BolaPuebloRepo.streamTablero(),
-          builder: (context, snap) {
+              stream: BolaPuebloRepo.streamTablero(),
+              builder: (context, snap) {
             final bottomPad = BolaPuebloUi.safeBottomInset(context, base: 24);
             final scrollPrimary = !nestedScrollChild;
             final scrollPhysics = nestedScrollChild
@@ -226,7 +234,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
             }
             final docsAll = snap.data?.docs ?? const [];
             final docs = docsAll.where((d) {
-              return BolaPuebloRepo.visibleEnTablero(
+              return BolaPuebloRepo.visibleEnTableroParaUsuario(
                 d.data(),
                 user.uid,
                 bolaId: d.id,
@@ -279,8 +287,8 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
                 );
               },
             );
-          },
-        );
+              },
+            );
       },
     );
   }

@@ -8,6 +8,7 @@ import '../../config/plataforma_economia.dart';
 import '../../servicios/comision_viaje_pct_service.dart';
 import '../../servicios/comisiones_diarias_repo.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import '../../utils/formatos_moneda.dart';
 import 'admin_ui_theme.dart';
@@ -106,6 +107,7 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.resumenComisiones,
         title: 'Resumen de Comisiones',
         actions: const [
           Padding(
@@ -379,32 +381,46 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
               border: Border.all(color: Colors.green),
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: <Widget>[
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      'COMISIÓN ${_fmtPct(pctVigente)}%',
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'COMISIÓN ${_fmtPct(pctVigente)}%',
+                        style: const TextStyle(
+                          color: Colors.green,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      Text(
+                        'Promedio hoy: $pctEfectivo% · Plataforma RAI',
+                        style: TextStyle(
+                          color: AdminUi.secondary(context),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      FormatosMoneda.rd(
+                          _toDouble(resumenHoy['totalComisiones'])),
+                      textAlign: TextAlign.end,
+                      maxLines: 1,
                       style: const TextStyle(
                         color: Colors.green,
+                        fontSize: 22,
                         fontWeight: FontWeight.bold,
-                        fontSize: 14,
                       ),
                     ),
-                    Text(
-                      'Promedio hoy: $pctEfectivo% · Plataforma RAI',
-                      style: TextStyle(
-                          color: AdminUi.secondary(context), fontSize: 12),
-                    ),
-                  ],
-                ),
-                Text(
-                  FormatosMoneda.rd(_toDouble(resumenHoy['totalComisiones'])),
-                  style: const TextStyle(
-                    color: Colors.green,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
@@ -421,17 +437,28 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: <Widget>[
-                Text(
-                  'Taxistas ganaron (${_fmtPct(pctChofer)}%)',
-                  style: TextStyle(color: AdminUi.secondary(context)),
+                Expanded(
+                  child: Text(
+                    'Taxistas ganaron (${_fmtPct(pctChofer)}%)',
+                    style: TextStyle(color: AdminUi.secondary(context)),
+                  ),
                 ),
-                Text(
-                  FormatosMoneda.rd(_toDouble(resumenHoy['totalGanancias'])),
-                  style: const TextStyle(
-                    color: Colors.blue,
-                    fontWeight: FontWeight.bold,
+                const SizedBox(width: 8),
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      FormatosMoneda.rd(
+                          _toDouble(resumenHoy['totalGanancias'])),
+                      textAlign: TextAlign.end,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: Colors.blue,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -458,20 +485,29 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
               children: <Widget>[
                 Icon(icon, color: color, size: 16),
                 const SizedBox(width: 4),
-                Text(
-                  label,
-                  style: TextStyle(
-                      color: AdminUi.secondary(context), fontSize: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: AdminUi.secondary(context), fontSize: 12),
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                color: color,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                maxLines: 1,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -887,21 +923,31 @@ class _ResumenComisionesAdminState extends State<ResumenComisionesAdmin>
   Widget _buildFilaResumen(String label, String valor, Color color,
       {bool bold = false}) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: <Widget>[
-        Text(
-          label,
-          style: TextStyle(
-            color: AdminUi.secondary(context),
-            fontSize: 14,
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: AdminUi.secondary(context),
+              fontSize: 14,
+            ),
           ),
         ),
-        Text(
-          valor,
-          style: TextStyle(
-            color: color,
-            fontSize: 16,
-            fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        const SizedBox(width: 8),
+        Flexible(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerRight,
+            child: Text(
+              valor,
+              textAlign: TextAlign.end,
+              maxLines: 1,
+              style: TextStyle(
+                color: color,
+                fontSize: 16,
+                fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
           ),
         ),
       ],

@@ -1,13 +1,16 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/pantallas/cliente/historial_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/reservas_programadas_cliente.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
-/// Punto de entrada «Mis viajes»: enlaza a las mismas pantallas que el menú lateral
-/// sin anidar varios `AppBar`.
+/// Punto de entrada Mis viajes: enlaza a las mismas pantallas que el menu lateral
+/// sin anidar varios AppBar.
 class ClienteMisViajesHub extends StatelessWidget {
   const ClienteMisViajesHub({super.key});
 
@@ -16,11 +19,10 @@ class ClienteMisViajesHub extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mis viajes'),
-        centerTitle: true,
-      ),
+    return RaiShellTabScaffold(
+      title: 'Mis viajes',
+      backTooltip: 'Inicio',
+      onBack: ShellTabController.clienteIrAInicio,
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         children: [
@@ -57,10 +59,9 @@ class ClienteMisViajesHub extends StatelessWidget {
                         )
                       : null,
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const ViajeEnCursoCliente(),
+                    unawaited(
+                      NavigationService.clearAndGoViajeEnCursoCliente(
+                        preNav: Navigator.of(context, rootNavigator: true),
                       ),
                     );
                   },

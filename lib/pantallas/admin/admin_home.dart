@@ -10,6 +10,7 @@ import '../../servicios/admin_service.dart';
 import '../../widgets/comision_global_chip.dart';
 import '../../widgets/admin_drawer.dart'; // ⬅️ NUEVO
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import 'panel_finanzas.dart';
 
 String _liquidacionesErrorMsg(Object? err) {
@@ -54,6 +55,7 @@ class _AdminHomeState extends State<AdminHome>
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(), // ⬅️ Drawer con “Cerrar sesión”
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.liquidaciones,
         title: 'Admin — Liquidaciones',
         bottom: TabBar(
           controller: _tab,

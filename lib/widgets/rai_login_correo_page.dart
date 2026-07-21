@@ -1,25 +1,34 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/auth/cliente_entrada_rapida.dart';
 import 'package:flygo_nuevo/servicios/auth_service.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/servicios/phone_auth_error_es.dart';
+import 'package:flygo_nuevo/servicios/post_auth_navigation.dart';
 import 'package:flygo_nuevo/widgets/rai_entrada_hero.dart';
 
 /// Login con correo + contraseña (cuentas legacy Play).
 class RaiLoginCorreoPage extends StatefulWidget {
-  const RaiLoginCorreoPage({super.key, this.entradaRol = 'cliente'});
+  const RaiLoginCorreoPage({
+    super.key,
+    this.entradaRol = 'cliente',
+    this.postLoginRoute,
+  });
 
   final String entradaRol;
+  final String? postLoginRoute;
 
   static Future<void> abrir(
     BuildContext context, {
     String entradaRol = 'cliente',
+    String? postLoginRoute,
   }) {
     return Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => RaiLoginCorreoPage(entradaRol: entradaRol),
+        builder: (_) => RaiLoginCorreoPage(
+          entradaRol: entradaRol,
+          postLoginRoute: postLoginRoute,
+        ),
       ),
     );
   }
@@ -60,7 +69,10 @@ class _RaiLoginCorreoPageState extends State<RaiLoginCorreoPage> {
       );
       if (!mounted) return;
       Navigator.of(context).pop();
-      ClienteEntradaRapida.irTrasLogin(context);
+      if ((widget.postLoginRoute ?? '').trim().isNotEmpty) {
+        await PostAuthNavigation.saveRoute(widget.postLoginRoute!.trim());
+      }
+      await PostAuthNavigation.goAfterStoredRoute(context);
     } on FirebaseAuthException catch (e) {
       if (e.code == 'role-mismatch') {
         _snack(phoneAuthErrorEs(e, entradaRol: widget.entradaRol));

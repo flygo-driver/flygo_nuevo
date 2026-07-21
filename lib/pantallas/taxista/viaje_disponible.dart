@@ -18,6 +18,7 @@ import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/disponibilidad_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -31,6 +32,7 @@ import 'package:flygo_nuevo/pantallas/taxista/bola_pueblo_disponible_tab.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/pantallas/taxista/detalle_viaje.dart';
 import 'package:flygo_nuevo/widgets/cliente_perfil_conductor_chip.dart';
+import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
 import 'package:flygo_nuevo/widgets/empty_trips_widget.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
 import 'package:flygo_nuevo/widgets/rai_linear_loading_body.dart';
@@ -213,12 +215,22 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   bool _ubicacionActualizacionIniciada = false;
   DateTime? _ultimaPersistenciaUbicacion;
 
+  void _onTaxistaPoolSubTabRequest() {
+    final int? destino = ShellTabController.taxistaPoolSubTab.value;
+    if (destino == null || !mounted) return;
+    ShellTabController.taxistaPoolSubTab.value = null;
+    if (_tabPool.index != destino) {
+      _tabPool.animateTo(destino);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _tabPool = TabController(length: 3, vsync: this);
     _tabPool.addListener(_onPoolTabChanged);
+    ShellTabController.taxistaPoolSubTab.addListener(_onTaxistaPoolSubTabRequest);
 
     FirebaseAuth.instance.currentUser?.getIdToken(true);
 
@@ -413,6 +425,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   void dispose() {
     _activeUserListener?.cancel();
     _activeTripListener?.cancel();
+    ShellTabController.taxistaPoolSubTab
+        .removeListener(_onTaxistaPoolSubTabRequest);
     _tabPool.removeListener(_onPoolTabChanged);
     _tabPool.dispose();
     WidgetsBinding.instance.removeObserver(this);
@@ -1195,17 +1209,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
       if (res == 'ok') {
         await NotificationService.I.stopTimbre();
-        await fs.FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(taxista.uid)
-            .set(
-          {
-            'siguienteViajeId': '',
-            'updatedAt': fs.FieldValue.serverTimestamp(),
-            'actualizadoEn': fs.FieldValue.serverTimestamp(),
-          },
-          fs.SetOptions(merge: true),
-        );
+        // No borrar `siguienteViajeId` aquí: claim ya preserva cola corporativa.
 
         if (mounted) {
           messenger.showSnackBar(
@@ -2759,7 +2763,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             unselectedLabelColor: pal.textMuted,
             dividerColor: cs.outlineVariant.withValues(alpha: 0.45),
             tabs: const [
-              Tab(text: 'AHORRA'),
+              Tab(text: 'COMPARTIDOS'),
               Tab(text: 'AHORA'),
               Tab(text: 'PROGRAMADOS'),
             ],
@@ -2833,6 +2837,21 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                               _usarFallbackSinIndiceAhora ||
                                   _usarFallbackSinIndiceProg,
                             ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                              child: AnimatedBuilder(
+                                animation: _tabPool,
+                                builder: (context, _) {
+                                  if (_tabPool.index == 0) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return ColaSiguienteViajeBannerTaxista(
+                                    uidTaxista: u.uid,
+                                    compact: true,
+                                  );
+                                },
+                              ),
+                            ),
                             Expanded(
                               child: _panelBloqueoConOpcionesPago(
                                 deudaSemanal: deudaSemanal,
@@ -2856,6 +2875,21 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                 disponibilidadCargando,
                           ),
                           _bannerFallback(usarFallbackIndice),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                            child: AnimatedBuilder(
+                              animation: _tabPool,
+                              builder: (context, _) {
+                                if (_tabPool.index == 0) {
+                                  return const SizedBox.shrink();
+                                }
+                                return ColaSiguienteViajeBannerTaxista(
+                                  uidTaxista: u.uid,
+                                  compact: true,
+                                );
+                              },
+                            ),
+                          ),
                           Expanded(
                             child: TabBarView(
                               controller: _tabPool,

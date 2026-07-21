@@ -15,6 +15,22 @@ class AppFlavorRolGuard {
   static const String playStorePasajeroPackage = 'com.flygo.rd2';
   static const String playStoreConductorPackage = 'com.flygo.rd2.conductor';
 
+  /// Motivo del último rechazo (login se remonta al cerrar sesión).
+  static String? _motivoRechazoPendiente;
+
+  static void guardarMotivoRechazo(String msg) {
+    final t = msg.trim();
+    if (t.isEmpty) return;
+    _motivoRechazoPendiente = t;
+  }
+
+  /// Consume y limpia el mensaje pendiente (una sola vez).
+  static String? consumirMotivoRechazo() {
+    final m = _motivoRechazoPendiente;
+    _motivoRechazoPendiente = null;
+    return m;
+  }
+
   /// Rol que exige la app instalada; `null` en flavor `all` (debug).
   static String? rolEsperadoPorFlavor() {
     if (isClienteFlavor) return 'cliente';
@@ -29,6 +45,39 @@ class AppFlavorRolGuard {
     if (r == 'user') return 'cliente';
     if (r == 'admin' || r == 'taxista' || r == 'cliente') return r;
     return '';
+  }
+
+  /// Cuentas operativas fijas (como en Play Store):
+  /// - open07service → pasajero
+  /// - ventasopenask → conductor
+  static String? rolFijoPorEmail(String? email) {
+    final e = (email ?? '').trim().toLowerCase();
+    if (e == 'open07service@gmail.com') return 'cliente';
+    if (e == 'ventasopenask@gmail.com') return 'taxista';
+    return null;
+  }
+
+  /// Si el correo tiene rol fijo y la pestaña no coincide, lanza mismatch claro.
+  static void assertEntradaRespetaEmailFijo({
+    required String? email,
+    required String entradaRol,
+  }) {
+    final fijo = rolFijoPorEmail(email);
+    if (fijo == null) return;
+    final entrada = _canon(entradaRol);
+    if (entrada.isEmpty || fijo == entrada) return;
+
+    final mail = (email ?? '').trim();
+    final msg = fijo == 'taxista'
+        ? 'No puedes entrar como pasajero.\n\n'
+            'Motivo: $mail es cuenta de CONDUCTOR (como en Play).\n\n'
+            'Qué hacer: en inicio tocá la pestaña «Conductor» y volvé a entrar.'
+        : 'No puedes entrar como conductor.\n\n'
+            'Motivo: $mail es cuenta de PASAJERO (como en Play).\n\n'
+            'Qué hacer: en inicio tocá la pestaña «Pasajero» y volvé a entrar.';
+
+    guardarMotivoRechazo(msg);
+    throw FirebaseAuthException(code: 'role-mismatch', message: msg);
   }
 
   /// Lee rol desde mapas de Firestore (usuarios primero, luego roles).
@@ -75,12 +124,17 @@ class AppFlavorRolGuard {
     final sufijo = _sufijoContacto(email: email, telefono: telefono);
 
     if (isConductorFlavor && rol == 'cliente') {
-      return 'Esta cuenta es de pasajero. Abrí RAI Pasajero (Google Play) '
-          'o iniciá sesión con el correo de conductor.$sufijo';
+      return 'No puedes entrar en RAI Conductor con esta cuenta.\n\n'
+          'Motivo: $email es una cuenta de PASAJERO, no de conductor.\n\n'
+          'Qué hacer:\n'
+          '• Abrí la app RAI Pasajero (o Play «RAI» unificada → pestaña Pasajero), o\n'
+          '• Entrá aquí con un correo de conductor '
+          '(p. ej. pablo148145 o ianalonso).$sufijo';
     }
     if (isClienteFlavor && rol == 'taxista') {
-      return 'Esta cuenta es de conductor. Abrí RAI Conductor o usá '
-          'otro correo de pasajero.$sufijo';
+      return 'No puedes entrar en RAI Pasajero con esta cuenta.\n\n'
+          'Motivo: es una cuenta de CONDUCTOR.\n\n'
+          'Qué hacer: abrí RAI Conductor o elegí la pestaña Conductor.$sufijo';
     }
     return 'Esta cuenta no corresponde a esta aplicación.$sufijo';
   }
@@ -94,15 +148,18 @@ class AppFlavorRolGuard {
   }) {
     final actual = _canon(rolFirestore);
     final entrada = _canon(entradaRol);
-    final sufijo = _sufijoContacto(email: email, telefono: telefono);
+    final mail = (email ?? '').trim();
+    final quien = mail.isNotEmpty ? mail : 'Esta cuenta';
 
     if (entrada == 'cliente' && actual == 'taxista') {
-      return 'Esta cuenta es de conductor. En la pantalla de inicio elegí '
-          'la pestaña «Conductor» y entrá con el mismo correo, teléfono o Google.$sufijo';
+      return 'No entró como pasajero.\n\n'
+          'Motivo: $quien es cuenta de CONDUCTOR.\n\n'
+          'Qué hacer: en inicio tocá la pestaña «Conductor» y volvé a entrar.';
     }
     if (entrada == 'taxista' && actual == 'cliente') {
-      return 'Esta cuenta es de pasajero. En la pantalla de inicio elegí '
-          'la pestaña «Pasajero» y entrá con el mismo correo, teléfono o Google.$sufijo';
+      return 'No entró como conductor.\n\n'
+          'Motivo: $quien es cuenta de PASAJERO (ventasopenask es pasajero).\n\n'
+          'Qué hacer: en inicio tocá la pestaña «Pasajero» y volvé a entrar.';
     }
 
     return mensajeMismatch(
@@ -115,10 +172,10 @@ class AppFlavorRolGuard {
   static String tituloMismatch(String rolFirestore) {
     final rol = _canon(rolFirestore);
     if (isConductorFlavor && rol == 'cliente') {
-      return 'Cuenta de pasajero';
+      return 'No puedes entrar aquí';
     }
     if (isClienteFlavor && rol == 'taxista') {
-      return 'Cuenta de conductor';
+      return 'No puedes entrar aquí';
     }
     return 'Cuenta no compatible';
   }
@@ -150,6 +207,7 @@ class AppFlavorRolGuard {
             telefono: telefono,
           );
 
+    guardarMotivoRechazo(mensaje);
     throw FirebaseAuthException(
       code: 'role-mismatch',
       message: mensaje,

@@ -331,17 +331,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
             uidChofer: user.uid,
             viajeId: viajeId,
           );
-          await FirebaseFirestore.instance
-              .collection('usuarios')
-              .doc(user.uid)
-              .set(
-            {
-              'siguienteViajeId': '',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          );
+          // No borrar siguienteViajeId: claim ya preserva cola corporativa.
           await UbicacionTaxista.marcarNoDisponible();
           await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
             viajeId: viajeId,
@@ -397,15 +387,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
       if (!mounted) return;
 
       if (res == 'ok') {
-        await FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(user.uid)
-            .set({
-          'siguienteViajeId': '',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-
+        // No borrar siguienteViajeId: claim ya preserva cola corporativa.
         await UbicacionTaxista.marcarNoDisponible();
 
         if (!mounted) return;

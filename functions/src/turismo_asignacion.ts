@@ -10,6 +10,8 @@ import type { Transaction } from "firebase-admin/firestore";
 
 import { getComisionPrepagoConfig } from "./finance.js";
 import { taxistaSinBloqueoPrepagoOperativo } from "./taxista_cola_promote_logic.js";
+import { prepagoInsuficienteParaViajeEfectivo } from "./prepago_comision_viaje.js";
+import { getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
 import {
   CANAL_TURISMO_POOL,
   type AnyMap,
@@ -95,6 +97,8 @@ async function transaccionAsignarTurismoAutomatico(args: {
   vehiculo: AnyMap;
   subtipoTurismo: string;
   minimoPrepagoRd: number;
+  /** Misma regla que claim pool / aceptarViajeSeguro. */
+  globalComisionPct: number;
 }): Promise<boolean> {
   const vRef = db().collection("viajes").doc(args.viajeId);
   const cRef = db().collection("choferes_turismo").doc(args.uidChofer);
@@ -138,7 +142,18 @@ async function transaccionAsignarTurismoAutomatico(args: {
       if (String(uData.viajeActivoId ?? "").trim()) return;
 
       const bSnap = await tx.get(db().collection("billeteras_taxista").doc(args.uidChofer));
-      if (!taxistaSinBloqueoPrepagoOperativo(uData, bSnap.data() as AnyMap | undefined, args.minimoPrepagoRd)) {
+      const billeData = bSnap.data() as AnyMap | undefined;
+      if (!taxistaSinBloqueoPrepagoOperativo(uData, billeData, args.minimoPrepagoRd)) {
+        return;
+      }
+      // Paridad claim: no asignar si el prepago libre no cubre la comisión de ESTE viaje.
+      if (
+        prepagoInsuficienteParaViajeEfectivo({
+          billeData,
+          viajeData: d,
+          globalComisionPct: args.globalComisionPct,
+        })
+      ) {
         return;
       }
 
@@ -282,6 +297,7 @@ export async function intentarAsignacionTurismoInterno(args: {
   const subtipo = subtipoTurismoRequeridoDesdeViaje(v0);
   const pax = pasajerosRequeridos(v0);
   const prepagoCfg = await getComisionPrepagoConfig();
+  const globalComisionPct = await getComisionViajePorcentajeCached();
 
   const q = await db()
     .collection("choferes_turismo")
@@ -319,6 +335,7 @@ export async function intentarAsignacionTurismoInterno(args: {
       vehiculo: filtro.vehiculo,
       subtipoTurismo: subtipo,
       minimoPrepagoRd: prepagoCfg.minimoOperativoRd,
+      globalComisionPct,
     });
     if (ok) {
       return {

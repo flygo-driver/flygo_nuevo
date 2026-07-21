@@ -56,7 +56,7 @@ class _RegistroClienteState extends State<RegistroCliente> {
       if (!snap.exists) {
         await ref.set({
           'uid': uid,
-          'email': _email.text.trim(),
+          'email': _email.text.trim().toLowerCase(),
           'nombre': _nombre.text.trim(),
           'telefono': _telefono.text.trim(),
           'rol': 'cliente', // solo en CREATE está permitido sin restricción

@@ -3,22 +3,31 @@
 
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui show ImageByteFormat, PictureRecorder;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, debugPrint, defaultTargetPlatform, kDebugMode, kIsWeb;
+    show
+        TargetPlatform,
+        debugPrint,
+        defaultTargetPlatform,
+        kDebugMode,
+        kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/painting.dart' as painting;
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flygo_nuevo/modelos/corporativo_models.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
-import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
+import 'package:flygo_nuevo/widgets/viaje_overlay_error_shield.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
+import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
@@ -29,13 +38,14 @@ import 'package:flygo_nuevo/navegacion/post_viaje_taxista_nav.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_fase_a_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart'; // 🔥 ESTA LÍNEA
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/corporativo_espera_codigo_constants.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/release_build_flags.dart';
-import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/ux_log.dart';
 import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
@@ -44,7 +54,14 @@ import 'package:flygo_nuevo/widgets/cliente_perfil_conductor_chip.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
 import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_viaje_gps_tracker.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
+import 'package:flygo_nuevo/widgets/corporativo_abordaje_chofer_panel.dart';
+import 'package:flygo_nuevo/widgets/corporativo_pasajeros_chofer_card.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_map_alert.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
@@ -110,11 +127,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   bool _permitePruebaSinRecorrido(Viaje v) =>
       _flygoSimCasa || v.tipoServicio == 'bola_ahorro';
 
+  /// Atajo QA corporativo (solo debug / SIM CASA): mapa → código sin km reales.
+  bool _permiteAtajoPruebaCorp(Viaje v) =>
+      _permitePruebaSinRecorrido(v) &&
+      CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+
   /// Copy del sheet: Bola solo en viajes bola; SIM CASA en debug sin mezclar productos.
   String _hintPruebaSinRecorrido(
     Viaje v, {
     required bool trasIniciarRuta,
   }) {
+    if (CorporativoPasajerosChoferCard.esViajeCorporativo(v)) {
+      return trasIniciarRuta
+          ? 'Prueba corporativo: no hace falta recorrer km. '
+              'Confirmá cada parada o finalizá directo.'
+          : 'Prueba corporativo: abrí Waze/Maps y al volver aparece el código. '
+              'Si manejás, el GPS graba la ruta igual.';
+    }
     if (v.tipoServicio == 'bola_ahorro') {
       return trasIniciarRuta
           ? 'Bola Ahorro: no hace falta recorrer km. '
@@ -131,7 +160,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   /// GPS en vivo para el doc del viaje; abrir Waze/Maps no lo exige en prueba/Bola.
   Future<bool> _gpsListoParaAbrirNavegacionExterna(Viaje v) async {
-    if (_permitePruebaSinRecorrido(v)) return true;
+    if (_permitePruebaSinRecorrido(v) || kIsWeb) return true;
     return _asegurarGps(v.id);
   }
 
@@ -170,9 +199,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   // ===== Controlador para código de verificación =====
   final TextEditingController _codigoCtrl = TextEditingController();
+  final FocusNode _corpPinFocusNode = FocusNode();
 
   // ===== Polylines para rutas =====
   final Set<Polyline> _polylines = <Polyline>{};
+  /// Recorrido real GPS (corporativo en curso) — se dibuja encima del plan.
+  final List<LatLng> _gpsTrailPoints = <LatLng>[];
+  static const int _kMaxGpsTrailPoints = 600;
+  static const double _kGpsAccuracyMaxMetros = 75;
+  int _drawRoutesGeneration = 0;
+  /// Solo corporativo: pins de cada parada en el mapa RAI (no afecta Waze/Maps).
+  Set<Marker> _corpMapMarkers = <Marker>{};
+  final Map<String, BitmapDescriptor> _corpPinIconCache = <String, BitmapDescriptor>{};
   Timer? _routeDebounce;
 
   // ===== Viajes cercanos / cola: aislado en [ViajesCercanosTaxistaLayer] (no setState aquí) =====
@@ -188,18 +226,43 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   bool _clienteCerca = false;
   bool _navegacionIniciada = false;
   bool _navegacionDestinoIniciada = false;
+  /// Índice de leg multiparada para el que ya se abrió Waze/Maps (antes de «Llegué»).
+  int? _multiLegNavAbiertaIdx;
   bool _selectorNavegacionAbierto = false;
   /// Evita ver la tarjeta del viaje y el modal Waze/Maps apilados a la vez.
   bool _viajeSheetOcultoPorModalNav = false;
   final DraggableScrollableController _viajeSheetCtrl =
       DraggableScrollableController();
-  static const double _kViajeSheetMin = 0.14;
+  static const double _kViajeSheetMin = 0.22;
   static const double _kViajeSheetInitial = 0.48;
+  static const double _kViajeSheetPin = 0.74;
+  String? _viajeSheetAseguradoParaId;
   static const double DISTANCIA_CERCANIA_KM = 0.1;
 
   // Cache del viaje actual
   Viaje? _cachedViaje;
   bool _isUpdatingLocation = false;
+
+  /// Evita spinner infinito si el stream no emite el viaje (p. ej. corporativo).
+  Timer? _cargaViajeTimer;
+  Timer? _cargaViajeRescueTimer;
+  Timer? _cargaViajeTickTimer;
+  bool _cargaViajeExpirada = false;
+  String? _corporativoAunNoHoraMsg;
+  String? _chatAseguradoParaViajeId;
+
+  /// Corporativo: cuenta regresiva en origen e intentos de PIN.
+  Timer? _corpCodigoTimeoutTicker;
+  Duration _corpTiempoRestanteCodigo =
+      CorporativoEsperaCodigoConstants.timeout;
+  int _corpIntentosFallidos = 0;
+  /// Tras «Cliente a bordo» corporativo: mostrar PIN aunque Firestore tarde.
+  bool _corpPinUiActivo = false;
+  bool _corpPinSheetExpandido = false;
+  ScrollController? _viajeSheetScrollCtrl;
+
+  final RaiUbicacionTaxistaService _ubicacionTaxistaSvc =
+      RaiUbicacionTaxistaService.instance;
 
   /// Distancia al pin de destino (último waypoint o destino); solo en `en_curso`.
   double? _distanciaMetrosAlDestino;
@@ -215,12 +278,78 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         (_) => DateTime.now(),
       ).asBroadcastStream();
 
-  // ===== Stream principal (deduplicado: el taxista escribe GPS en el mismo doc → sin esto, cada ping reconstruye toda la pantalla) =====
-  Stream<Viaje?> _stream() {
-    final u = FirebaseAuth.instance.currentUser;
-    if (u == null) return const Stream<Viaje?>.empty();
-    return ViajesRepo.streamViajeEnCursoPorTaxista(u.uid)
-        .distinct(_mismoViajeParaUiTaxista);
+  // ===== Stream principal (una sola suscripción; recrearlo en build parpadea toda la pantalla) =====
+  Stream<Viaje?>? _viajeEnCursoStream;
+  Timer? _viajeNullConfirmTimer;
+  static const Duration _kViajeNullConfirmDelay = Duration(seconds: 2);
+
+  void _initViajeEnCursoStream() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      _viajeEnCursoStream = const Stream<Viaje?>.empty();
+      return;
+    }
+    _viajeEnCursoStream ??=
+        ViajesRepo.streamViajeEnCursoPorTaxista(uid)
+            .distinct(_mismoViajeParaUiTaxista);
+  }
+
+  void _scheduleSyncEsperaCargaViaje(bool esperando) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncEsperaCargaViaje(esperando);
+    });
+  }
+
+  void _cancelarDebounceViajeNull() {
+    _viajeNullConfirmTimer?.cancel();
+    _viajeNullConfirmTimer = null;
+  }
+
+  void _programarConfirmacionViajeNull() {
+    if (_viajeNullConfirmTimer != null) return;
+    _viajeNullConfirmTimer = Timer(_kViajeNullConfirmDelay, () {
+      _viajeNullConfirmTimer = null;
+      if (!mounted) return;
+      unawaited(_verificarYLimpiarViajeCacheSiAusente());
+    });
+  }
+
+  /// El stream puede emitir `null` un instante (reconciliación / red). No vaciar la UI
+  /// hasta confirmar en servidor que el viaje ya no existe.
+  Future<void> _verificarYLimpiarViajeCacheSiAusente() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final Viaje? cached = _cachedViaje;
+    if (uid == null || cached == null || !mounted) return;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> us =
+          await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
+      final Map<String, dynamic> u = us.data() ?? <String, dynamic>{};
+      for (final raw in <dynamic>[u['viajeActivoId'], u['siguienteViajeId']]) {
+        final String vid = (raw ?? '').toString().trim();
+        if (vid.isEmpty || vid != cached.id) continue;
+        final DocumentSnapshot<Map<String, dynamic>> vs =
+            await FirebaseFirestore.instance.collection('viajes').doc(vid).get();
+        if (!vs.exists) continue;
+        final Map<String, dynamic> d = vs.data() ?? <String, dynamic>{};
+        if (ViajesRepo.viajeVisibleEnCursoTaxista(d, uid)) {
+          if (!mounted) return;
+          setState(() => _cachedViaje = Viaje.fromMap(vs.id, d));
+          return;
+        }
+      }
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _cachedViaje = null;
+      _navPickupPrefsLoadedForId = null;
+      _navDestinoPrefsLoadedForId = null;
+      _distanciaMetrosAlDestino = null;
+    });
+    _stopGps();
+    _syncEsperaCargaViaje(false);
   }
 
   static bool _mismoViajeParaUiTaxista(Viaje? a, Viaje? b) =>
@@ -242,7 +371,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     // _cachedViaje vía copyWith en el listener GPS.
     // Cliente/destino con 6 decimales para ver movimiento en tiempo real en el mapa.
     return '${v.id}|$est|${r6(v.latCliente)}|${r6(v.lonCliente)}|${r6(v.latDestino)}|${r6(v.lonDestino)}|'
-        '${v.codigoVerificado}|${v.uidTaxista}|${v.completado}|$wp|${v.multiparadaLegCompletadas}|${v.multiparadaCompleta}';
+        '${v.codigoVerificado}|${v.uidTaxista}|${v.completado}|$wp|${v.multiparadaLegCompletadas}|${v.multiparadaCompleta}|'
+        '${_firmaPasajerosCorpTaxista(v)}|${(v.extras?['corporativoPasajerosActualizadosEn'] ?? '').toString()}';
+  }
+
+  /// Cambios en pasajeros/paradas corp deben refrescar UI (lista, mapa, multiparada).
+  static String _firmaPasajerosCorpTaxista(Viaje v) {
+    if (!CorporativoPasajerosChoferCard.esViajeCorporativo(v)) return '';
+    final pas = CorporativoPasajerosChoferCard.pasajerosDesdeViaje(v);
+    if (pas.isEmpty) return 'corp0';
+    final buf = StringBuffer('corp${pas.length}|');
+    for (final p in pas) {
+      buf.write('${p.orden}:${p.id}:');
+      buf.write('${p.lat.toStringAsFixed(5)},${p.lon.toStringAsFixed(5)}:');
+      buf.write('${p.nombre.trim()}|${p.destinoLabel.trim()};');
+    }
+    return buf.toString();
   }
 
   /// Solo campos que afectan polilíneas hacia el cliente o destino.
@@ -256,7 +400,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
     return '$est|${r6(v.latCliente)}|${r6(v.lonCliente)}|${r6(v.latDestino)}|${r6(v.lonDestino)}|'
-        '${v.codigoVerificado}|${v.multiparadaLegCompletadas}|${v.multiparadaCompleta}';
+        '${v.codigoVerificado}|${v.multiparadaLegCompletadas}|${v.multiparadaCompleta}|'
+        '${_firmaPasajerosCorpTaxista(v)}';
   }
 
   // ===== Utilidades =====
@@ -308,6 +453,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   bool _esMultiparada(Viaje v) {
+    if (v.multiparadaLegsTotal > 1) return true;
     final List<Map<String, dynamic>>? wps = v.waypoints;
     if (wps != null && wps.isNotEmpty) return true;
     final dynamic rp = v.extras?['rutaPuntos'];
@@ -346,7 +492,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       for (final dynamic item in rp) {
         if (item is! Map) continue;
         final String rol = (item['rol'] ?? '').toString().toLowerCase();
-        if (rol == 'origen' || rol == 'destino') continue;
+        if (rol == 'origen' || rol == 'destino' || rol == 'destino_final') {
+          continue;
+        }
         final double? lat = _waypointLat(Map<String, dynamic>.from(item));
         final double? lon = _waypointLon(Map<String, dynamic>.from(item));
         if (lat == null || lon == null || !_coordsValid(lat, lon)) continue;
@@ -358,8 +506,75 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         ));
       }
     }
+    if (out.isEmpty && CorporativoPasajerosChoferCard.esViajeCorporativo(v)) {
+      final pas = CorporativoPasajerosChoferCard.pasajerosDesdeViaje(v)
+        ..sort((a, b) {
+          final oa = a.orden > 0 ? a.orden : 999;
+          final ob = b.orden > 0 ? b.orden : 999;
+          return oa.compareTo(ob);
+        });
+      for (var i = 0; i < pas.length - 1; i++) {
+        final p = pas[i];
+        if (!_coordsValid(p.lat, p.lon)) continue;
+        final label = [
+          if (p.nombre.trim().isNotEmpty) p.nombre.trim(),
+          if (p.destinoLabel.trim().isNotEmpty) p.destinoLabel.trim(),
+        ].join(' · ');
+        out.add((
+          lat: p.lat,
+          lon: p.lon,
+          label: label.isEmpty ? 'Parada ${out.length + 1}' : label,
+        ));
+      }
+    }
     return out;
   }
+
+  List<({double lat, double lon, String label, bool esFinal})>
+      _destinosOrdenadosCorporativo(Viaje v) {
+    final pas = CorporativoPasajerosChoferCard.pasajerosDesdeViaje(v);
+    if (pas.isEmpty) return _destinosOrdenadosMultiparada(v);
+
+    final sorted = List<CorporativoPasajero>.from(pas)
+      ..sort((a, b) {
+        final oa = a.orden > 0 ? a.orden : 999;
+        final ob = b.orden > 0 ? b.orden : 999;
+        return oa.compareTo(ob);
+      });
+
+    final out = <({double lat, double lon, String label, bool esFinal})>[];
+    for (var i = 0; i < sorted.length; i++) {
+      final p = sorted[i];
+      if (!_coordsValid(p.lat, p.lon)) continue;
+      final parts = <String>[
+        if (p.nombre.trim().isNotEmpty) p.nombre.trim(),
+        if (p.destinoLabel.trim().isNotEmpty)
+          p.destinoLabel.trim()
+        else if (p.sector.trim().isNotEmpty)
+          p.sector.trim(),
+      ];
+      out.add((
+        lat: p.lat,
+        lon: p.lon,
+        label: parts.isEmpty ? 'Pasajero ${out.length + 1}' : parts.join(' · '),
+        esFinal: i == sorted.length - 1,
+      ));
+    }
+    return out;
+  }
+
+  /// Paradas ordenadas: corporativo usa pasajeros; resto multiparada estándar.
+  List<({double lat, double lon, String label, bool esFinal})>
+      _destinosOrdenadosParaMapa(Viaje v) {
+    if (CorporativoPasajerosChoferCard.esViajeCorporativo(v)) {
+      return _destinosOrdenadosCorporativo(v);
+    }
+    return _destinosOrdenadosMultiparada(v);
+  }
+
+  /// Legs para navegación, progreso multiparada y UI de paradas (corp incluido).
+  List<({double lat, double lon, String label, bool esFinal})>
+      _legsNavegacionMultiparada(Viaje v) => _destinosOrdenadosParaMapa(v);
 
   List<({double lat, double lon, String label, bool esFinal})>
       _destinosOrdenadosMultiparada(Viaje v) {
@@ -405,7 +620,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   ({double lat, double lon, String label, bool esFinal})? _destinoMultiActual(
       Viaje v) {
     final List<({double lat, double lon, String label, bool esFinal})> legs =
-        _destinosOrdenadosMultiparada(v);
+        _legsNavegacionMultiparada(v);
     if (_multiLegCompletadas >= legs.length) return null;
     return legs[_multiLegCompletadas];
   }
@@ -413,7 +628,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   bool _multiparadaRutaCompleta(Viaje v) {
     if (!_esMultiparada(v)) return true;
     if (v.multiparadaCompleta) return true;
-    final int total = _destinosOrdenadosMultiparada(v).length;
+    final int total = _legsNavegacionMultiparada(v).length;
     if (total <= 0) return true;
     return v.multiparadaLegCompletadas >= total ||
         _multiLegCompletadas >= total;
@@ -427,7 +642,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
       return;
     }
-    final int total = _destinosOrdenadosMultiparada(v).length;
+    final int total = _legsNavegacionMultiparada(v).length;
     final int fromServer = v.multiparadaLegCompletadas.clamp(0, total);
     if (_multiNavViajeId != v.id || _multiLegCompletadas != fromServer) {
       _multiLegCompletadas = fromServer;
@@ -437,6 +652,182 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   bool _puedeFinalizarViajeMultiparada(Viaje v) =>
       !_esMultiparada(v) || _multiparadaRutaCompleta(v);
+
+  bool _esViajeCorporativo(Viaje v) =>
+      CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+
+  Map<String, dynamic> _mapViajeParaCorp(Viaje v) {
+    final data = Map<String, dynamic>.from(v.toMap());
+    data['id'] = v.id;
+    final ex = v.extras;
+    if (ex != null) {
+      data['extras'] = Map<String, dynamic>.from(ex);
+      if (ex['corporativoModoInformativo'] != null) {
+        data['corporativoModoInformativo'] = ex['corporativoModoInformativo'];
+      }
+    }
+    return data;
+  }
+
+  /// Ruta corporativa informativa (piloto): nunca en «Mi viaje en curso».
+  bool _esCorpInformativoExcluido(Viaje v) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    return CorporativoTaxistaService.corpDebeUsarPantallaDestinosChofer(
+      _mapViajeParaCorp(v),
+      uidTaxista: uid,
+    );
+  }
+
+  Future<void> _salirSiSoloCorpInformativo() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    if (await ActiveTripService.usuarioTieneViajeEnSeguimiento(uid)) return;
+    final corpId =
+        await CorporativoTaxistaService.idViajeCorporativoOperativoParaChofer(
+      uid,
+    );
+    if (corpId == null || corpId.isEmpty) return;
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    ActiveTripService.cancelarBloqueoShellTaxista();
+    ActiveTripService.notificarRebuildShell();
+    if (!mounted) return;
+    setState(() {
+      _cachedViaje = null;
+      _cargaViajeExpirada = false;
+      _corporativoAunNoHoraMsg = null;
+    });
+  }
+
+  /// Corporativo: finalizar solo tras navegar y confirmar destino(s).
+  bool _mostrarBotonFinalizarViaje(Viaje v, {String? estadoBase}) {
+    if (_esViajeCorporativo(v)) {
+      final String st = estadoBase ?? EstadosViaje.normalizar(v.estado);
+      return _corpMostrarBotonFinalizar(v, st);
+    }
+    return _navegacionDestinoIniciada ||
+        !_permitePruebaSinRecorrido(v) ||
+        _esMultiparada(v);
+  }
+
+  bool _puedePulsarFinalizarViaje(Viaje v) {
+    if (_actionBusy) return false;
+    if (_esViajeCorporativo(v)) return _corpFinalizarHabilitado(v);
+    return _puedeFinalizarViajeMultiparada(v);
+  }
+
+  /// Corporativo: Maps/Waze a la empresa solo en fase de recogida.
+  bool _corpMapsWazeHabilitados(Viaje v, String estadoBase) =>
+      _corpEnFasePickup(v, estadoBase);
+
+  bool _corpMostrarNavPickup(Viaje v, String estadoBase) =>
+      _corpMapsWazeHabilitados(v, estadoBase);
+
+  bool _corpSinPin(Viaje v) {
+    if (!_esViajeCorporativo(v) &&
+        !CorporativoPasajerosChoferCard.esViajeCorporativo(v)) {
+      return false;
+    }
+    final data = Map<String, dynamic>.from(v.toMap());
+    data['id'] = v.id;
+    return CorporativoTaxistaService.corpSinPinVerificacionChofer(
+      data,
+      uidTaxista: FirebaseAuth.instance.currentUser?.uid,
+    );
+  }
+
+  Future<void> _limpiarCorpDeViajeEnCursoAlEntrar() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    await ViajesRepo.limpiarViajeActivoSiNoOperativo(uid);
+    await _salirSiSoloCorpInformativo();
+    if (!mounted) return;
+    if (_cachedViaje != null && _esCorpInformativoExcluido(_cachedViaje!)) {
+      setState(() => _cachedViaje = null);
+    }
+  }
+
+  bool _corpRutaOperativa(Viaje v) =>
+      v.codigoVerificado || _corpSinPin(v);
+
+  bool _corpFasePostPin(Viaje v) =>
+      _esViajeCorporativo(v) && _corpRutaOperativa(v);
+
+  /// Corporativo: Maps/Waze al destino solo en «en ruta» (no multiparada: usa su bloque).
+  bool _corpMostrarNavDestino(Viaje v, String estadoBase) {
+    if (!_corpFasePostPin(v)) return false;
+    if (_corpDebeMostrarPanelPin(v, estadoBase)) return false;
+    if (_corpEnFasePickup(v, estadoBase)) return false;
+    return true;
+  }
+
+  /// Corporativo: paradas multiparada tras código verificado y ruta iniciada.
+  bool _corpMultiparadaHabilitada(Viaje v, String estadoBase) {
+    if (!_corpFasePostPin(v) || !_esMultiparada(v)) return false;
+    if (_corpDebeMostrarPanelPin(v, estadoBase)) return false;
+    return true;
+  }
+
+  /// Corporativo: finalizar solo con código OK, navegación al destino y paradas hechas.
+  bool _corpFinalizarHabilitado(Viaje v) {
+    if (!_corpRutaOperativa(v)) return false;
+    if (!_puedeFinalizarViajeMultiparada(v)) return false;
+    if (_permitePruebaSinRecorrido(v)) return true;
+    if (_esMultiparada(v)) return _multiparadaRutaCompleta(v);
+    return _navegacionDestinoIniciada;
+  }
+
+  bool _corpMostrarBotonFinalizar(Viaje v, String estadoBase) {
+    if (!_corpRutaOperativa(v)) return false;
+    if (_permitePruebaSinRecorrido(v)) {
+      return EstadosViaje.esEnCurso(estadoBase) || _navegacionDestinoIniciada;
+    }
+    if (_esMultiparada(v)) return _multiparadaRutaCompleta(v);
+    return _navegacionDestinoIniciada;
+  }
+
+  /// Pruebas corporativas (SIM CASA): registra paradas pendientes antes de finalizar.
+  Future<Viaje> _completarParadasCorporativoPendientes(Viaje v) async {
+    if (!_permitePruebaSinRecorrido(v)) return v;
+    if (!_esViajeCorporativo(v) || !_esMultiparada(v)) return v;
+    Viaje actual = v;
+    for (int guard = 0; guard < 24; guard++) {
+      _aplicarProgresoMultiparadaDesdeViaje(actual);
+      if (_multiparadaRutaCompleta(actual)) return actual;
+      if (!actual.codigoVerificado) return actual;
+      final int total = _legsNavegacionMultiparada(actual).length;
+      if (total <= 0) return actual;
+      if (_multiLegCompletadas >= total) return actual;
+
+      final String st = EstadosViaje.normalizar(actual.estado);
+      if (st != EstadosViaje.enCurso) {
+        final String? uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid == null || uid.isEmpty) return actual;
+        if (st == EstadosViaje.aBordo && actual.codigoVerificado) {
+          await ViajesRepo.iniciarViaje(viajeId: actual.id, uidTaxista: uid);
+        } else {
+          break;
+        }
+      }
+
+      final (double, double)? ping = _taxistaPosCola.value;
+      await ViajesRepo.registrarLegMultiparadaCompletada(
+        viajeId: actual.id,
+        latConfirmacion: ping?.$1,
+        lonConfirmacion: ping?.$2,
+      );
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance.collection('viajes').doc(actual.id).get();
+      if (!snap.exists) break;
+      actual = Viaje.fromMap(actual.id, snap.data() ?? <String, dynamic>{});
+      if (mounted) {
+        setState(() {
+          _aplicarProgresoMultiparadaDesdeViaje(actual);
+          _cachedViaje = actual;
+        });
+      }
+    }
+    return actual;
+  }
 
   ({double lat, double lon})? _coordsLegMultiActual(Viaje v) {
     final leg = _destinoMultiActual(v);
@@ -460,7 +851,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     final DocumentSnapshot<Map<String, dynamic>> snap =
         await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
     if (!snap.exists) throw Exception('Viaje no encontrado');
-    return Viaje.fromMap(v.id, snap.data() ?? <String, dynamic>{});
+    final iniciado = Viaje.fromMap(v.id, snap.data() ?? <String, dynamic>{});
+    await _corpGpsOnEnCurso(iniciado);
+    return iniciado;
   }
 
   Future<void> _abrirMapsLegMultiparada(
@@ -475,26 +868,145 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
-  Future<void> _navegarDestinoMultiparadaActual(Viaje v) async {
+  Future<bool> _navegarDestinoMultiparadaActual(Viaje v) async {
     final leg = _destinoMultiActual(v);
-    if (leg == null) return;
-    final int total = _destinosOrdenadosMultiparada(v).length;
+    if (leg == null) {
+      if (mounted) {
+        _tripFlowSnack(
+          'No hay parada con coordenadas para navegar. '
+          'Revisá los destinos de los pasajeros.',
+          backgroundColor: Colors.orange,
+        );
+      }
+      return false;
+    }
+    final int total = _legsNavegacionMultiparada(v).length;
     final int paso = _multiLegCompletadas + 1;
     final String tipo = leg.esFinal ? 'destino final' : 'parada $paso';
-    await _selectorNavegacionDestino(
+    final int legIdx = _multiLegCompletadas;
+    final opened = await _selectorNavegacionDestino(
       leg.lat,
       leg.lon,
       titulo: leg.esFinal ? 'Navegar al destino final' : 'Navegar a la parada',
       addressLine: '${leg.label}\n($paso de $total · $tipo)',
       footerHint:
           'Waze o Maps abren este punto exacto (lat/lon). Al salir, confirma «Llegué — siguiente destino».',
+      viajeParaPersistirDestino: v,
+    );
+    if (opened && mounted) {
+      setState(() => _multiLegNavAbiertaIdx = legIdx);
+    }
+    return opened;
+  }
+
+  ({double lat, double lon, String label})? _corpCoordsDestinoSimple(Viaje v) {
+    if (_coordsValid(v.latDestino, v.lonDestino)) {
+      final String label = v.destino.trim();
+      return (
+        lat: v.latDestino,
+        lon: v.lonDestino,
+        label: label.isEmpty ? 'Destino' : label,
+      );
+    }
+    for (final p in CorporativoPasajerosChoferCard.pasajerosDesdeViaje(v)) {
+      if (!_coordsValid(p.lat, p.lon)) continue;
+      final parts = <String>[
+        if (p.nombre.trim().isNotEmpty) p.nombre.trim(),
+        if (p.destinoLabel.trim().isNotEmpty) p.destinoLabel.trim(),
+      ];
+      return (
+        lat: p.lat,
+        lon: p.lon,
+        label: parts.isEmpty ? 'Destino' : parts.join(' · '),
+      );
+    }
+    return null;
+  }
+
+  Future<Viaje?> _corpRefrescarViajeDesdeFirestore(String viajeId) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get();
+      if (!snap.exists || !mounted) return null;
+      final actualizado =
+          Viaje.fromMap(viajeId, snap.data() ?? <String, dynamic>{});
+      setState(() {
+        _cachedViaje = actualizado;
+        _aplicarProgresoMultiparadaDesdeViaje(actualizado);
+      });
+      return actualizado;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _corpAsegurarViajeEnCurso(Viaje v) async {
+    final String st = EstadosViaje.normalizar(v.estado);
+    if (EstadosViaje.esEnCurso(st)) return;
+    if (!v.codigoVerificado) return;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      await ViajesRepo.iniciarViaje(viajeId: v.id, uidTaxista: uid);
+    } catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'viaje_en_curso_taxista: corp asegurar en curso',
+      );
+    }
+  }
+
+  /// Punto único para abrir Waze/Maps al destino o parada actual (corp).
+  Future<bool> _corpAbrirNavegacionDestinoActual(Viaje v) async {
+    if (!mounted || _selectorNavegacionAbierto) return false;
+    final okGps = await _gpsListoParaAbrirNavegacionExterna(v);
+    if (!okGps) {
+      if (mounted) {
+        _tripFlowSnack(
+          'Activa el GPS para abrir Waze o Maps.',
+          backgroundColor: Colors.orange,
+        );
+      }
+      return false;
+    }
+    if (!mounted) return false;
+    if (_esMultiparada(v)) {
+      return _navegarDestinoMultiparadaActual(v);
+    }
+    final dest = _corpCoordsDestinoSimple(v);
+    if (dest == null) {
+      if (mounted) {
+        _tripFlowSnack(
+          'Sin coordenadas de destino. Revisá los pasajeros de la ruta.',
+          backgroundColor: Colors.orange,
+        );
+      }
+      return false;
+    }
+    return _selectorNavegacionDestino(
+      dest.lat,
+      dest.lon,
+      titulo: 'Navegar al destino',
+      addressLine: dest.label,
+      viajeParaPersistirDestino: v,
     );
   }
 
   Future<void> _confirmarLlegadaDestinoMulti(Viaje v) async {
     if (_actionBusy) return;
-    final int total = _destinosOrdenadosMultiparada(v).length;
+    final int total = _legsNavegacionMultiparada(v).length;
     if (_multiLegCompletadas >= total || v.multiparadaCompleta) return;
+    if (!_permitePruebaSinRecorrido(v) &&
+        _multiLegNavAbiertaIdx != _multiLegCompletadas) {
+      _tripFlowSnack(
+        'Abrí Waze o Maps a esta parada antes de confirmar la llegada.',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
     _actionBusy = true;
     try {
       Viaje operativo = await _asegurarEnCursoParaMultiparada(v);
@@ -506,7 +1018,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         });
       }
       final int totalOperativo =
-          _destinosOrdenadosMultiparada(operativo).length;
+          _legsNavegacionMultiparada(operativo).length;
       if (_multiLegCompletadas >= totalOperativo ||
           operativo.multiparadaCompleta) {
         return;
@@ -517,6 +1029,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         latConfirmacion: ping?.$1,
         lonConfirmacion: ping?.$2,
       );
+      if (_esViajeCorporativo(operativo)) {
+        await _corpGpsCheckpoint(
+          operativo,
+          'parada',
+          lat: ping?.$1,
+          lon: ping?.$2,
+        );
+        _marcarNavegacionDestinoLista(operativo);
+      }
       if (!mounted) return;
       final snap = await FirebaseFirestore.instance
           .collection('viajes')
@@ -529,6 +1050,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         setState(() {
           _aplicarProgresoMultiparadaDesdeViaje(actualizado);
           _cachedViaje = actualizado;
+          _multiLegNavAbiertaIdx = null;
         });
         _sincronizarReferenciaOrdenCola(actualizado);
         _recalcDistanciaDestino();
@@ -570,7 +1092,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   Future<void> _abrirGoogleMapsRutaMultiRestante(Viaje v) async {
     final List<({double lat, double lon, String label, bool esFinal})> legs =
-        _destinosOrdenadosMultiparada(v);
+        _legsNavegacionMultiparada(v);
     if (legs.isEmpty) return;
     final int from = _multiLegCompletadas.clamp(0, legs.length);
     if (from >= legs.length) return;
@@ -628,15 +1150,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
-  List<Widget> _bloqueNavegacionMultiparada(Viaje v) {
+  List<Widget> _bloqueNavegacionMultiparada(Viaje v, {bool habilitado = true}) {
     final List<({double lat, double lon, String label, bool esFinal})> legs =
-        _destinosOrdenadosMultiparada(v);
+        _legsNavegacionMultiparada(v);
     if (legs.isEmpty) return const <Widget>[];
 
     final int total = legs.length;
     final int hechos = _multiLegCompletadas.clamp(0, total);
     final bool completa = hechos >= total;
     final leg = _destinoMultiActual(v);
+    final bool puedeConfirmarLeg = _permitePruebaSinRecorrido(v) ||
+        _multiLegNavAbiertaIdx == hechos;
 
     return <Widget>[
       Container(
@@ -711,13 +1235,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
           ),
-          onPressed: (_actionBusy || _selectorNavegacionAbierto)
+          onPressed: (!habilitado || _actionBusy || _selectorNavegacionAbierto)
               ? null
               : () async {
                   if (_actionBusy || _selectorNavegacionAbierto) return;
                   _actionBusy = true;
                   try {
-                    await _navegarDestinoMultiparadaActual(v);
+                    if (_esViajeCorporativo(v)) {
+                      await _corpAbrirNavegacionDestinoActual(v);
+                    } else {
+                      await _navegarDestinoMultiparadaActual(v);
+                    }
                   } finally {
                     if (mounted) _actionBusy = false;
                   }
@@ -741,13 +1269,26 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
           ),
           backgroundColor: Colors.deepOrange,
-          onPressed: _actionBusy
+          onPressed: (!habilitado || _actionBusy || !puedeConfirmarLeg)
               ? null
               : () => unawaited(_confirmarLlegadaDestinoMulti(v)),
         ),
+        if (!puedeConfirmarLeg && !_permitePruebaSinRecorrido(v)) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Abrí Waze o Maps a esta parada para habilitar «Llegué».',
+            style: TextStyle(
+              color: Colors.orangeAccent.withValues(alpha: 0.95),
+              fontSize: 12.5,
+              height: 1.35,
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         ElevatedButton.icon(
-          onPressed: () => unawaited(_abrirGoogleMapsRutaMultiRestante(v)),
+          onPressed: habilitado
+              ? () => unawaited(_abrirGoogleMapsRutaMultiRestante(v))
+              : null,
           icon: const Icon(Icons.alt_route, size: 24),
           label: const Text(
             'VER RUTA COMPLETA RESTANTE (GOOGLE MAPS)',
@@ -1094,6 +1635,19 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     return b;
   }
 
+  String _labelVerOtro(Viaje v) =>
+      _esViajeCorporativo(v) ? 'Ver encargado' : 'Ver cliente';
+
+  String _labelContactar(Viaje v) =>
+      _esViajeCorporativo(v) ? 'Chat encargado' : 'Contactar';
+
+  void _asegurarChatCorporativo(Viaje v) {
+    if (!_esViajeCorporativo(v)) return;
+    if (_chatAseguradoParaViajeId == v.id) return;
+    _chatAseguradoParaViajeId = v.id;
+    unawaited(ViajesRepo.ensureChatDocForViaje(v.id));
+  }
+
   void _verificarCercaniaCliente(double latTaxista, double lonTaxista,
       double latCliente, double lonCliente) {
     if (!_coordsValid(latTaxista, lonTaxista) ||
@@ -1122,16 +1676,21 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           _isUpdatingLocation = false;
 
           if (ahoraCerca) {
+            final bool corpLlegada = _cachedViaje != null &&
+                CorporativoPasajerosChoferCard.esViajeCorporativo(
+                    _cachedViaje!);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: const Row(
+                content: Row(
                   children: [
-                    Icon(Icons.location_on, color: Colors.white),
-                    SizedBox(width: 12),
+                    const Icon(Icons.location_on, color: Colors.white),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        '🚕 ¡Has llegado! El cliente está cerca. Presiona "Cliente a bordo" para continuar.',
-                        style: TextStyle(fontWeight: FontWeight.w500),
+                        corpLlegada
+                            ? '🚕 ¡Llegaste a la empresa! Toca «Cliente a bordo».'
+                            : '🚕 ¡Has llegado! El cliente está cerca. Toca «Cliente a bordo».',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
                       ),
                     ),
                   ],
@@ -1166,6 +1725,33 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             sin(dLon / 2);
     final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
     return R * c;
+  }
+
+  Future<void> _corpGpsCheckpoint(
+    Viaje v,
+    String tipo, {
+    double? lat,
+    double? lon,
+    double? accuracy,
+  }) async {
+    if (!_esViajeCorporativo(v)) return;
+    final ping = _taxistaPosCola.value;
+    final la = lat ?? ping?.$1;
+    final lo = lon ?? ping?.$2;
+    if (la == null || lo == null) return;
+    await CorporativoViajeGpsTracker.instance.recordCheckpoint(
+      viajeId: v.id,
+      tipo: tipo,
+      lat: la,
+      lon: lo,
+      accuracy: accuracy,
+    );
+  }
+
+  Future<void> _corpGpsOnEnCurso(Viaje v) async {
+    if (!_esViajeCorporativo(v)) return;
+    await CorporativoViajeGpsTracker.instance.start(v.id);
+    await _corpGpsCheckpoint(v, 'inicio');
   }
 
   // ===== GPS control =====
@@ -1253,6 +1839,25 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           _taxistaPosCola.value = (p.latitude, p.longitude);
           _sincronizarReferenciaOrdenCola(_cachedViaje);
 
+          final Viaje? cv = _cachedViaje;
+          if (cv != null &&
+              cv.id == viajeId &&
+              _esViajeCorporativo(cv) &&
+              EstadosViaje.esEnCurso(EstadosViaje.normalizar(cv.estado))) {
+            if (_gpsPrecisionAceptable(p.accuracy)) {
+              _appendGpsTrailPoint(p.latitude, p.longitude);
+              _syncGpsTrailEnMapa();
+              unawaited(
+                CorporativoViajeGpsTracker.instance.onPosition(
+                  viajeId: viajeId,
+                  lat: p.latitude,
+                  lon: p.longitude,
+                  accuracy: p.accuracy,
+                ),
+              );
+            }
+          }
+
           if (mounted && _cachedViaje != null && _cachedViaje!.id == viajeId) {
             _cachedViaje = _cachedViaje!
                 .copyWith(latTaxista: p.latitude, lonTaxista: p.longitude);
@@ -1283,6 +1888,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _gpsSub = null;
     _gpsActivo = false;
     _gpsParaViajeId = null;
+    unawaited(CorporativoViajeGpsTracker.instance.stop());
     logDbg('🛑 GPS detenido');
   }
 
@@ -1290,6 +1896,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     String viajeId, {
     bool allowPermissionDialog = true,
   }) async {
+    if (kIsWeb) {
+      // Laptop/web: no spamear diálogo del navegador; el mapa usa posición del doc del viaje.
+      allowPermissionDialog = false;
+    }
     logDbg(
       '_asegurarGps($viajeId) allowPermissionDialog=$allowPermissionDialog '
       '_gpsActivo: $_gpsActivo',
@@ -1308,19 +1918,21 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             : await GpsService.readServiceAndPermissionStabilizedNoRequest();
     if (!snap.serviceEnabled) {
       if (!mounted) return false;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Activa la ubicación del teléfono (GPS).'),
-              action: SnackBarAction(
-                label: 'Ubicación',
-                onPressed: () => unawaited(GpsService.openLocationSettings()),
+      if (!kIsWeb) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Activa la ubicación del teléfono (GPS).'),
+                action: SnackBarAction(
+                  label: 'Ubicación',
+                  onPressed: () => unawaited(GpsService.openLocationSettings()),
+                ),
               ),
-            ),
-          );
-        }
-      });
+            );
+          }
+        });
+      }
       logDbg('❌ GPS apagado');
       return false;
     }
@@ -1329,25 +1941,128 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (perm == LocationPermission.denied ||
         perm == LocationPermission.deniedForever) {
       if (!mounted) return false;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Permiso de ubicación requerido para navegar')),
-          );
+      if (!kIsWeb) {
+        if (allowPermissionDialog) {
+          await _ubicacionTaxistaSvc.activarUbicacionDesdeApp(context: context);
+          final ({bool serviceEnabled, LocationPermission permission}) snap2 =
+              await GpsService.readServiceAndPermissionStabilizedNoRequest();
+          if (snap2.serviceEnabled &&
+              GpsService.permissionUsable(snap2.permission)) {
+            await _startGpsFor(viajeId);
+            _gpsActivo = true;
+            final Viaje? cv = _cachedViaje;
+            if (cv != null &&
+                cv.id == viajeId &&
+                _esViajeCorporativo(cv) &&
+                EstadosViaje.esEnCurso(
+                    EstadosViaje.normalizar(cv.estado))) {
+              unawaited(CorporativoViajeGpsTracker.instance.start(viajeId));
+              unawaited(
+                  CorporativoViajeGpsTracker.instance.flushPending(viajeId));
+            }
+            logDbg('✅ GPS activado tras permiso desde viaje en curso');
+            return true;
+          }
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text(
+                    'Activa la ubicación para registrar la ruta del viaje.',
+                  ),
+                  action: SnackBarAction(
+                    label: 'Activar',
+                    onPressed: () => unawaited(
+                      _ubicacionTaxistaSvc.activarUbicacionDesdeApp(
+                        context: context,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+          });
         }
-      });
+      }
       logDbg('❌ Permiso denegado');
+      return false;
+    }
+
+    if (kIsWeb) {
+      // En web el stream GPS del navegador no es fiable; no reescribir Firestore en bucle.
+      logDbg('web: viaje $viajeId sin stream GPS local (mapa usa doc del viaje)');
       return false;
     }
 
     await _startGpsFor(viajeId);
     _gpsActivo = true;
+    final Viaje? cv = _cachedViaje;
+    if (cv != null &&
+        cv.id == viajeId &&
+        _esViajeCorporativo(cv) &&
+        EstadosViaje.esEnCurso(EstadosViaje.normalizar(cv.estado))) {
+      unawaited(CorporativoViajeGpsTracker.instance.start(viajeId));
+      unawaited(CorporativoViajeGpsTracker.instance.flushPending(viajeId));
+    }
     logDbg('✅ GPS activado correctamente');
     return true;
   }
 
   // ===== RUTAS =====
+  bool _gpsPrecisionAceptable(double? accuracy) {
+    if (accuracy == null || !accuracy.isFinite) return true;
+    return accuracy <= _kGpsAccuracyMaxMetros;
+  }
+
+  void _appendGpsTrailPoint(double lat, double lon) {
+    if (!_coordsValid(lat, lon)) return;
+    final pt = LatLng(lat, lon);
+    if (_gpsTrailPoints.isNotEmpty) {
+      final last = _gpsTrailPoints.last;
+      if ((last.latitude - lat).abs() < 0.00003 &&
+          (last.longitude - lon).abs() < 0.00003) {
+        return;
+      }
+    }
+    _gpsTrailPoints.add(pt);
+    while (_gpsTrailPoints.length > _kMaxGpsTrailPoints) {
+      _gpsTrailPoints.removeAt(0);
+    }
+  }
+
+  void _aplicarPolilineaRecorridoGps(Set<Polyline> target) {
+    target.removeWhere((p) => p.polylineId.value == 'gps_recorrido');
+    if (_gpsTrailPoints.length < 2) return;
+    target.add(
+      Polyline(
+        polylineId: const PolylineId('gps_recorrido'),
+        points: List<LatLng>.from(_gpsTrailPoints),
+        width: 7,
+        color: const Color(0xFF2DD4BF),
+        geodesic: true,
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+        zIndex: 3,
+      ),
+    );
+  }
+
+  void _syncGpsTrailEnMapa() {
+    if (!mounted) return;
+    final next = Set<Polyline>.from(_polylines);
+    _aplicarPolilineaRecorridoGps(next);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _polylines
+          ..clear()
+          ..addAll(next);
+      });
+    });
+  }
+
   void _scheduleDrawRoute() {
     _routeDebounce?.cancel();
     _routeDebounce =
@@ -1357,6 +2072,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   Future<void> _drawRoutes() async {
     if (!mounted || _cachedViaje == null) return;
 
+    final gen = ++_drawRoutesGeneration;
     final v = _cachedViaje!;
 
     final estadoBase = EstadosViaje.normalizar(
@@ -1367,25 +2083,71 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               : (v.aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
     );
 
-    final oldPolylines = Set<Polyline>.from(_polylines);
-    _polylines.clear();
+    final nextPolylines = <Polyline>{};
+    Set<Marker> nextCorpMarkers = <Marker>{};
 
-    if ((EstadosViaje.esAceptado(estadoBase) ||
-            EstadosViaje.esEnCaminoPickup(estadoBase)) &&
+    final bool corp = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+    final bool rutaAlDestino = EstadosViaje.esEnCurso(estadoBase) ||
+        (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
+    final bool fasePickup = !rutaAlDestino &&
+        (EstadosViaje.esAceptado(estadoBase) ||
+            EstadosViaje.esEnCaminoPickup(estadoBase) ||
+            _corpEnFasePickup(v, estadoBase));
+
+    if (fasePickup &&
         _coordsValid(v.latTaxista, v.lonTaxista) &&
         _coordsValid(v.latCliente, v.lonCliente)) {
       await _drawRoute(
+        nextPolylines,
         LatLng(v.latTaxista, v.lonTaxista),
         LatLng(v.latCliente, v.lonCliente),
         id: 'to_cliente',
-        color: const Color(0xFF00E5FF),
-        width: 6,
+        color: const Color(0xFF0A0A0A),
+        width: 18,
+        estiloCintaNegra: true,
       );
+      if (gen != _drawRoutesGeneration || !mounted) return;
     }
 
-    final bool rutaAlDestino = EstadosViaje.esEnCurso(estadoBase) ||
-        (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
-    if (rutaAlDestino) {
+    if (corp) {
+      nextCorpMarkers = await _buildCorpParadaMarkers(v);
+    } else {
+      nextCorpMarkers = _buildTripPointMarkers(v);
+    }
+    if (gen != _drawRoutesGeneration || !mounted) return;
+
+    if (corp && rutaAlDestino) {
+      final legs = _destinosOrdenadosParaMapa(v);
+      if (legs.isNotEmpty && _coordsValid(v.latCliente, v.lonCliente)) {
+        final ultimo = legs.last;
+        final vias = <({double lat, double lon})>[];
+        for (var i = 0; i < legs.length - 1; i++) {
+          vias.add((lat: legs[i].lat, lon: legs[i].lon));
+        }
+        await _drawRoute(
+          nextPolylines,
+          LatLng(v.latCliente, v.lonCliente),
+          LatLng(ultimo.lat, ultimo.lon),
+          id: 'corp_ruta',
+          color: const Color(0xFF0A0A0A),
+          width: 18,
+          viaIntermediate: vias.isEmpty ? null : vias,
+          estiloCintaNegra: true,
+        );
+      } else if (_coordsValid(v.latCliente, v.lonCliente) &&
+          _coordsValid(v.latDestino, v.lonDestino)) {
+        await _drawRoute(
+          nextPolylines,
+          LatLng(v.latCliente, v.lonCliente),
+          LatLng(v.latDestino, v.lonDestino),
+          id: 'corp_ruta',
+          color: const Color(0xFF0A0A0A),
+          width: 18,
+          estiloCintaNegra: true,
+        );
+      }
+      if (gen != _drawRoutesGeneration || !mounted) return;
+    } else if (!corp && rutaAlDestino) {
       if (_esMultiparada(v) && !_multiparadaRutaCompleta(v)) {
         final leg = _destinoMultiActual(v);
         final origen = _origenRutaEnCursoTaxista(v);
@@ -1393,10 +2155,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             origen != null &&
             _coordsValid(leg.lat, leg.lon)) {
           await _drawRoute(
+            nextPolylines,
             LatLng(origen.lat, origen.lon),
             LatLng(leg.lat, leg.lon),
             id: 'to_leg_actual',
-            color: const Color(0xFF49F18B),
+            color: const Color(0xFF0A0A0A),
+            width: 18,
+            estiloCintaNegra: true,
           );
         }
       } else if (_coordsValid(v.latCliente, v.lonCliente) &&
@@ -1404,7 +2169,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         List<({double lat, double lon})>? vias;
         if (_esMultiparada(v)) {
           vias = <({double lat, double lon})>[];
-          for (final leg in _destinosOrdenadosMultiparada(v)) {
+          for (final leg in _legsNavegacionMultiparada(v)) {
             if (!leg.esFinal) {
               vias.add((lat: leg.lat, lon: leg.lon));
             }
@@ -1414,36 +2179,228 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         final origen = _origenRutaEnCursoTaxista(v) ??
             (lat: v.latCliente, lon: v.lonCliente);
         await _drawRoute(
+          nextPolylines,
           LatLng(origen.lat, origen.lon),
           LatLng(v.latDestino, v.lonDestino),
           id: 'to_destino',
-          color: const Color(0xFF49F18B),
+          color: const Color(0xFF0A0A0A),
+          width: 18,
           viaIntermediate: vias,
+          estiloCintaNegra: true,
         );
       }
+      if (gen != _drawRoutesGeneration || !mounted) return;
     }
 
-    if (mounted && !_polylinesEquals(oldPolylines, _polylines)) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() {});
+    _aplicarPolilineaRecorridoGps(nextPolylines);
+
+    if (gen != _drawRoutesGeneration || !mounted) return;
+
+    final polylinesCopy = Set<Polyline>.from(nextPolylines);
+    final markersCopy = Set<Marker>.from(nextCorpMarkers);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || gen != _drawRoutesGeneration) return;
+      setState(() {
+        _polylines
+          ..clear()
+          ..addAll(polylinesCopy);
+        _corpMapMarkers = markersCopy;
       });
+    });
+  }
+
+  Set<Marker> _buildTripPointMarkers(Viaje v) {
+    final out = <Marker>{};
+    if (_coordsValid(v.latCliente, v.lonCliente)) {
+      out.add(
+        Marker(
+          markerId: const MarkerId('trip_origen'),
+          position: LatLng(v.latCliente, v.lonCliente),
+          infoWindow: InfoWindow(
+            title: 'ORIGEN · Recoger',
+            snippet: v.origen.trim().isEmpty ? 'Punto de recogida' : v.origen,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          zIndexInt: 5,
+        ),
+      );
     }
+    final legs = _legsNavegacionMultiparada(v);
+    if (legs.isEmpty) {
+      if (_coordsValid(v.latDestino, v.lonDestino)) {
+        out.add(
+          Marker(
+            markerId: const MarkerId('trip_destino'),
+            position: LatLng(v.latDestino, v.lonDestino),
+            infoWindow: InfoWindow(
+              title: 'DESTINO',
+              snippet:
+                  v.destino.trim().isEmpty ? 'Punto de llegada' : v.destino,
+            ),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueGreen),
+            zIndexInt: 6,
+          ),
+        );
+      }
+      return out;
+    }
+    for (var i = 0; i < legs.length; i++) {
+      final leg = legs[i];
+      if (!_coordsValid(leg.lat, leg.lon)) continue;
+      final n = i + 1;
+      final esFinal = leg.esFinal;
+      out.add(
+        Marker(
+          markerId: MarkerId('trip_parada_$n'),
+          position: LatLng(leg.lat, leg.lon),
+          infoWindow: InfoWindow(
+            title: esFinal ? 'DESTINO $n' : 'PARADA $n',
+            snippet: leg.label,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            esFinal ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueOrange,
+          ),
+          zIndexInt: esFinal ? 6 : 4,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// Pins rojos grandes por pasajero (mapa RAI del chofer, solo corporativo).
+  Future<Set<Marker>> _buildCorpParadaMarkers(Viaje v) async {
+    final out = <Marker>{};
+    if (_coordsValid(v.latCliente, v.lonCliente)) {
+      out.add(
+        Marker(
+          markerId: const MarkerId('corp_origen'),
+          position: LatLng(v.latCliente, v.lonCliente),
+          infoWindow: InfoWindow(
+            title: 'EMPRESA · Recoger',
+            snippet: v.origen.trim().isEmpty ? 'Punto de recogida' : v.origen,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          zIndexInt: 5,
+        ),
+      );
+    }
+    final legs = _destinosOrdenadosParaMapa(v);
+    for (var i = 0; i < legs.length; i++) {
+      final leg = legs[i];
+      if (!_coordsValid(leg.lat, leg.lon)) continue;
+      final n = i + 1;
+      final icon = await _iconoParadaRojaGrande(n);
+      out.add(
+        Marker(
+          markerId: MarkerId('corp_parada_$n'),
+          position: LatLng(leg.lat, leg.lon),
+          infoWindow: InfoWindow(
+            title: leg.esFinal ? 'DESTINO $n' : 'PARADA $n',
+            snippet: leg.label,
+          ),
+          icon: icon,
+          anchor: const Offset(0.5, 0.5),
+          zIndexInt: leg.esFinal ? 8 : 7,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// Mientras cargan los iconos grandes, pins rojos estándar con cada pasajero.
+  Set<Marker> _buildCorpParadaMarkersSync(Viaje v) {
+    final out = <Marker>{};
+    if (_coordsValid(v.latCliente, v.lonCliente)) {
+      out.add(
+        Marker(
+          markerId: const MarkerId('corp_origen'),
+          position: LatLng(v.latCliente, v.lonCliente),
+          infoWindow: InfoWindow(
+            title: 'EMPRESA · Recoger',
+            snippet: v.origen.trim().isEmpty ? 'Punto de recogida' : v.origen,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          zIndexInt: 5,
+        ),
+      );
+    }
+    final legs = _destinosOrdenadosParaMapa(v);
+    for (var i = 0; i < legs.length; i++) {
+      final leg = legs[i];
+      if (!_coordsValid(leg.lat, leg.lon)) continue;
+      final n = i + 1;
+      out.add(
+        Marker(
+          markerId: MarkerId('corp_parada_$n'),
+          position: LatLng(leg.lat, leg.lon),
+          infoWindow: InfoWindow(
+            title: leg.esFinal ? 'DESTINO $n' : 'PARADA $n',
+            snippet: leg.label,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          zIndexInt: leg.esFinal ? 8 : 7,
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<BitmapDescriptor> _iconoParadaRojaGrande(int numero) async {
+    final key = 'r$numero';
+    final cached = _corpPinIconCache[key];
+    if (cached != null) return cached;
+
+    const double size = 64;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final center = Offset(size / 2, size / 2);
+    const double outerR = 28;
+    const double innerR = 22;
+
+    canvas.drawCircle(center, outerR, Paint()..color = Colors.white);
+    canvas.drawCircle(center, innerR, Paint()..color = const Color(0xFFD32F2F));
+
+    final tp = TextPainter(
+      text: TextSpan(
+        text: '$numero',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 22,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      textDirection: painting.TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+
+    final img =
+        await recorder.endRecording().toImage(size.toInt(), size.toInt());
+    final bd = await img.toByteData(format: ui.ImageByteFormat.png);
+    final icon = BitmapDescriptor.bytes(bd!.buffer.asUint8List());
+    _corpPinIconCache[key] = icon;
+    return icon;
   }
 
   bool _polylinesEquals(Set<Polyline> a, Set<Polyline> b) {
     if (a.length != b.length) return false;
+    int puntos(Set<Polyline> s) =>
+        s.fold<int>(0, (n, p) => n + p.points.length);
+    if (puntos(a) != puntos(b)) return false;
     final aIds = a.map((p) => p.polylineId.value).toSet();
     final bIds = b.map((p) => p.polylineId.value).toSet();
     return aIds.containsAll(bIds) && bIds.containsAll(aIds);
   }
 
   Future<void> _drawRoute(
+    Set<Polyline> out,
     LatLng a,
     LatLng b, {
     required String id,
     required Color color,
     int width = 5,
     List<({double lat, double lon})>? viaIntermediate,
+    bool estiloCintaNegra = false,
   }) async {
     try {
       final result = await DirectionsService.drivingDistanceKm(
@@ -1462,24 +2419,83 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       if (result != null && result.path != null && result.path!.isNotEmpty) {
         points = result.path!;
       }
+      final pts = points.isNotEmpty ? points : [a, b];
 
-      _polylines.add(
+      if (estiloCintaNegra) {
+        out.add(
+          Polyline(
+            polylineId: PolylineId('${id}_glow'),
+            points: pts,
+            width: 32,
+            color: const Color(0xB3000000),
+            geodesic: true,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+          ),
+        );
+        out.add(
+          Polyline(
+            polylineId: PolylineId(id),
+            points: pts,
+            width: 18,
+            color: const Color(0xFF0A0A0A),
+            geodesic: true,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+          ),
+        );
+      } else {
+        out.add(
+          Polyline(
+            polylineId: PolylineId('${id}_glow'),
+            points: pts,
+            width: 32,
+            color: const Color(0xB3000000),
+            geodesic: true,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+          ),
+        );
+        out.add(
+          Polyline(
+            polylineId: PolylineId(id),
+            points: pts,
+            width: 18,
+            color: const Color(0xFF0A0A0A),
+            geodesic: true,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+          ),
+        );
+      }
+    } catch (e) {
+      final pts = [a, b];
+      out.add(
         Polyline(
-          polylineId: PolylineId(id),
-          points: points.isNotEmpty ? points : [a, b],
-          width: width,
-          color: color,
+          polylineId: PolylineId('${id}_glow'),
+          points: pts,
+          width: 32,
+          color: const Color(0xB3000000),
           geodesic: true,
+          jointType: JointType.round,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
         ),
       );
-    } catch (e) {
-      _polylines.add(
+      out.add(
         Polyline(
           polylineId: PolylineId(id),
-          points: [a, b],
-          width: width,
-          color: color,
+          points: pts,
+          width: 18,
+          color: const Color(0xFF0A0A0A),
           geodesic: true,
+          jointType: JointType.round,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
         ),
       );
     }
@@ -1642,14 +2658,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
 
     _lastNavResumeSnackAt = now;
-    _expandirViajeSheetTrasMapa();
+    if (!_viajeSheetOcultoPorModalNav && !_selectorNavegacionAbierto) {
+      _expandirViajeSheetTrasMapa();
+    }
 
     if (enPickup) {
       if (!_navegacionIniciada) return;
       _tripFlowSnack(
-        _permitePruebaSinRecorrido(v)
-            ? 'Volviste a RAI Driver. Siguiente: «Cliente a bordo (paso 2)».'
-            : 'Volviste a RAI Driver. Continúa: Cliente a bordo → código → destino.',
+        _permiteAtajoPruebaCorp(v)
+            ? 'Volviste a RAI Driver. Tocá «Cliente a bordo (paso 2)».'
+            : (_permitePruebaSinRecorrido(v)
+                ? 'Volviste a RAI Driver. Siguiente: «Cliente a bordo (paso 2)».'
+                : 'Volviste a RAI Driver. Continúa: Cliente a bordo → código → destino.'),
         backgroundColor: Colors.blueGrey.shade800,
       );
       return;
@@ -1677,13 +2697,264 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
+  /// Mapa: montar tras el 1.er frame. Si Google/OSM tira, UI sin mapa.
+  bool _mapaPermitido = false;
+  bool _mapaDesactivadoPorError = false;
+  final ValueNotifier<int> _cargaViajeSegundosN = ValueNotifier<int>(0);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_ubicacionTaxistaSvc.ensureStarted());
+    _ubicacionTaxistaSvc.modo.addListener(_onUbicacionTaxistaModoChanged);
     unawaited(BolaPuebloRepo.reconciliarSesionBolaAtascada());
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => unawaited(_verificarViajeTerminadoAlEntrarTaxista()));
+    _initViajeEnCursoStream();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ViajeSinMapaScope.of(context) || _mapaDesactivadoPorError) {
+        setState(() {
+          _mapaDesactivadoPorError = true;
+          _mapaPermitido = false;
+        });
+      } else {
+        setState(() => _mapaPermitido = true);
+      }
+      unawaited(_verificarViajeTerminadoAlEntrarTaxista());
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_limpiarCorpDeViajeEnCursoAlEntrar());
+    });
+    _scheduleSyncEsperaCargaViaje(true);
+  }
+
+  void _onUbicacionTaxistaModoChanged() {
+    if (!mounted) return;
+    if (_ubicacionTaxistaSvc.modo.value == RaiUbicacionTaxistaModo.listo) {
+      final Viaje? v = _cachedViaje;
+      if (v != null && !_gpsActivo) {
+        unawaited(_asegurarGps(v.id, allowPermissionDialog: false));
+      }
+    }
+    setState(() {});
+  }
+
+  bool get _mostrarAlertaUbicacionEnViaje =>
+      !kIsWeb &&
+      (_ubicacionTaxistaSvc.bannerActivo || !_gpsActivo);
+
+  Widget _buildAlertaUbicacionViaje({bool mapFloating = false}) {
+    if (!_mostrarAlertaUbicacionEnViaje) {
+      return const SizedBox.shrink();
+    }
+    return RaiUbicacionMapAlert(
+      rol: RaiUbicacionRol.taxista,
+      mapFloating: mapFloating,
+      enViajeEnCurso: true,
+      obteniendoGps: _ubicacionTaxistaSvc.ubicacionLista && !_gpsActivo,
+    );
+  }
+
+  Widget _buildUbicacionEnSheetViaje() {
+    if (!_mostrarAlertaUbicacionEnViaje) {
+      return const SizedBox.shrink();
+    }
+    return RaiUbicacionMapAlert(
+      rol: RaiUbicacionRol.taxista,
+      enViajeEnCurso: true,
+      mapFloating: true,
+      obteniendoGps: _ubicacionTaxistaSvc.ubicacionLista && !_gpsActivo,
+    );
+  }
+
+  Widget _viajeSheetHandle() {
+    return Column(
+      children: [
+        const SizedBox(height: 6),
+        Center(
+          child: Container(
+            width: 72,
+            height: 32,
+            alignment: Alignment.center,
+            child: Container(
+              width: 44,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.white38,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+      ],
+    );
+  }
+
+  Widget _buildViajeDraggableSheet({
+    required BuildContext context,
+    required Viaje viaje,
+    required String estadoBase,
+    required bool esCorpMapa,
+    required bool mostrarPinCorp,
+    required String? uid,
+  }) {
+    return DraggableScrollableSheet(
+      key: ValueKey<String>('viaje-sheet-${viaje.id}'),
+      controller: _viajeSheetCtrl,
+      minChildSize: _kViajeSheetMin,
+      maxChildSize: 1.0,
+      initialChildSize: _kViajeSheetInitial,
+      snap: true,
+      snapAnimationDuration: const Duration(milliseconds: 220),
+      snapSizes: const <double>[
+        _kViajeSheetMin,
+        _kViajeSheetInitial,
+        _kViajeSheetPin,
+        1.0,
+      ],
+      builder: (sheetCtx, scrollController) {
+        _viajeSheetScrollCtrl = scrollController;
+        final double bottomInset = MediaQuery.viewPaddingOf(sheetCtx).bottom;
+        final double keyboardInset = MediaQuery.viewInsetsOf(sheetCtx).bottom;
+        return DecoratedBox(
+          decoration: const BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            border: Border(top: BorderSide(color: Color(0x22FFFFFF))),
+            boxShadow: [
+              BoxShadow(
+                color: Color(0x66000000),
+                blurRadius: 16,
+                offset: Offset(0, -4),
+              ),
+            ],
+          ),
+          child: ListView(
+            controller: scrollController,
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: ClampingScrollPhysics(),
+            ),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              4,
+              16,
+              12 + bottomInset + keyboardInset,
+            ),
+            children: [
+              _viajeSheetHandle(),
+              _buildViajeSheetResumenMinimo(viaje, estadoBase),
+              const SizedBox(height: 10),
+              if (!esCorpMapa) ...[
+                _buildUbicacionEnSheetViaje(),
+                if (_mostrarAlertaUbicacionEnViaje) const SizedBox(height: 10),
+              ],
+              if (esCorpMapa && !mostrarPinCorp) ...[
+                CorporativoPasajerosChoferCard(
+                  key: ValueKey<String>(
+                    'corp-acc-${viaje.id}-${_firmaPasajerosCorpTaxista(viaje)}',
+                  ),
+                  viaje: viaje,
+                  estilo: CorporativoCardEstilo.acciones,
+                  navegacionPickupHabilitada:
+                      _corpMostrarNavPickup(viaje, estadoBase),
+                  navegacionDestinoHabilitada:
+                      _corpMostrarNavDestino(viaje, estadoBase),
+                  onChatTap: viaje.uidCliente.isNotEmpty
+                      ? () => _contactarCliente(
+                            uidCliente: viaje.uidCliente,
+                            viajeId: viaje.id,
+                            viaje: viaje,
+                          )
+                      : null,
+                  onNavegacionExternaTap: () =>
+                      _onNavegacionExternaDesdeCardCorp(viaje),
+                  onWazeTap: _corpMostrarNavDestino(viaje, estadoBase)
+                      ? () => _corpAbrirNavegacionDestinoActual(viaje)
+                      : null,
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (mostrarPinCorp)
+                _buildCorporativoPinIngresoPanel(viaje)
+              else
+                _actionBar(viaje, estadoBase),
+              if (esCorpMapa && !mostrarPinCorp) ...[
+                const SizedBox(height: 10),
+                CorporativoPasajerosChoferCard(
+                  key: ValueKey<String>(
+                    'corp-lista-${viaje.id}-${_firmaPasajerosCorpTaxista(viaje)}',
+                  ),
+                  viaje: viaje,
+                  estilo: CorporativoCardEstilo.lista,
+                ),
+                if (viaje.codigoVerificado &&
+                    EstadosViaje.esEnCurso(estadoBase)) ...[
+                  CorporativoAbordajeChoferPanel(
+                    key: ValueKey<String>(
+                      'corp-abord-${viaje.id}-${_firmaPasajerosCorpTaxista(viaje)}',
+                    ),
+                    viaje: viaje,
+                  ),
+                ],
+              ],
+              if (!mostrarPinCorp && !esCorpMapa &&
+                  viaje.uidCliente.isNotEmpty &&
+                  uid != null) ...[
+                const SizedBox(height: 10),
+                ViajeChatMensajesEnVivo(
+                  viajeId: viaje.id,
+                  miUid: uid,
+                  otroUid: viaje.uidCliente,
+                  otroNombre: 'Cliente',
+                  esCorporativo: false,
+                ),
+              ],
+              if (!mostrarPinCorp) ...[
+                _viajeSheetDivider(),
+                if (uid != null) const _ColaSiguienteViajeBannerSeguro(),
+                if (uid != null) const SizedBox(height: 12),
+                _buildDetallesViajePanel(viaje, estadoBase),
+                const SizedBox(height: 12),
+                _tarjetaVehiculoVisibleAlCliente(viaje),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildViajeSheetResumenMinimo(Viaje v, String estadoBase) {
+    final bool corp = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+    final String? empresa = CorporativoPasajerosChoferCard.empresaNombreDe(v);
+    String estadoLabel = _labelEstado(estadoBase, viaje: v);
+    if (corp && v.codigoVerificado && !EstadosViaje.esEnCurso(estadoBase)) {
+      estadoLabel = 'Código OK · listo para ruta';
+    }
+    final String titulo = corp
+        ? '${empresa ?? 'Ruta corporativa'} · $estadoLabel'
+        : '${v.origen} → $estadoLabel';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111827),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(
+        titulo,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 14,
+        ),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
   }
 
   Future<void> _verificarViajeTerminadoAlEntrarTaxista() async {
@@ -1758,20 +3029,107 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   void _colapsarViajeSheetPorMapa() {
     if (!_viajeSheetCtrl.isAttached) return;
-    _viajeSheetCtrl.animateTo(
-      _kViajeSheetMin,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
+    final double actual = _viajeSheetCtrl.size;
+    if (actual <= _kViajeSheetMin + 0.02) return;
+    unawaited(
+      _viajeSheetCtrl.animateTo(
+        _kViajeSheetMin,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      ),
     );
   }
 
   void _expandirViajeSheetTrasMapa() {
-    if (!_viajeSheetCtrl.isAttached) return;
-    _viajeSheetCtrl.animateTo(
-      _kViajeSheetInitial,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-    );
+    _asegurarSheetExpandido();
+  }
+
+  void _asegurarSheetExpandido({bool forzar = false}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Future<void>.delayed(const Duration(milliseconds: 80), () {
+        if (!mounted || !_viajeSheetCtrl.isAttached) return;
+        final double actual = _viajeSheetCtrl.size;
+        if (!forzar && actual >= _kViajeSheetInitial - 0.04) return;
+        unawaited(
+          _viajeSheetCtrl.animateTo(
+            _kViajeSheetInitial,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+          ),
+        );
+      });
+    });
+  }
+
+  void _restablecerSheetTrasPinCorp() {
+    _corpPinSheetExpandido = false;
+    _resetViajeSheetScroll();
+    _asegurarSheetExpandido(forzar: true);
+  }
+
+  void _resetViajeSheetScroll() {
+    final scroll = _viajeSheetScrollCtrl;
+    if (scroll == null || !scroll.hasClients) return;
+    try {
+      scroll.jumpTo(0);
+    } catch (_) {}
+  }
+
+  void _expandirSheetParaPinCorp() {
+    if (_corpPinSheetExpandido) {
+      _resetViajeSheetScroll();
+      return;
+    }
+    _corpPinSheetExpandido = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _resetViajeSheetScroll();
+      if (!_viajeSheetCtrl.isAttached) return;
+      unawaited(
+        _viajeSheetCtrl.animateTo(
+          _kViajeSheetPin,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+      Future<void>.delayed(const Duration(milliseconds: 380), () {
+        if (!mounted) return;
+        _corpPinFocusNode.requestFocus();
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _resetViajeSheetScroll();
+      });
+    });
+  }
+
+  bool _corpClienteAbordoConfirmado(Viaje v) =>
+      v.extras?['clienteAbordo'] == true;
+
+  /// Corporativo: estado de código en Firestore sin abordo real → tratar como pickup.
+  bool _corpEnFasePickup(Viaje v, String estadoBase) {
+    if (!CorporativoPasajerosChoferCard.esViajeCorporativo(v)) return false;
+    if (v.codigoVerificado) return false;
+    if (_corpClienteAbordoConfirmado(v) || _corpPinUiActivo) return false;
+    if (EstadosViaje.esAceptado(estadoBase) ||
+        EstadosViaje.esEnCaminoPickup(estadoBase)) {
+      return true;
+    }
+    return estadoBase == EstadosViaje.enOrigenEsperandoCodigo ||
+        estadoBase == EstadosViaje.pendienteCodigo ||
+        estadoBase == EstadosViaje.esperandoCodigoEncargado;
+  }
+
+  bool _corpDebeMostrarPanelPin(Viaje v, String estadoBase) {
+    if (_corpSinPin(v)) return false;
+    if (!CorporativoPasajerosChoferCard.esViajeCorporativo(v)) return false;
+    if (v.codigoVerificado) return false;
+    if (_corpEnFasePickup(v, estadoBase)) return false;
+    if (_corpPinUiActivo) return true;
+    if (!_corpClienteAbordoConfirmado(v)) return false;
+    return estadoBase == EstadosViaje.enOrigenEsperandoCodigo ||
+        estadoBase == EstadosViaje.pendienteCodigo ||
+        (EstadosViaje.esAbordo(estadoBase) && !v.codigoVerificado);
   }
 
   Widget _viajeSheetDivider([String label = 'Detalles del viaje']) {
@@ -1805,8 +3163,394 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
+  void _syncEsperaCargaViaje(bool esperando) {
+    if (!esperando) {
+      _cargaViajeTimer?.cancel();
+      _cargaViajeTimer = null;
+      _cargaViajeRescueTimer?.cancel();
+      _cargaViajeRescueTimer = null;
+      _cargaViajeTickTimer?.cancel();
+      _cargaViajeTickTimer = null;
+      if (_cargaViajeSegundosN.value != 0) {
+        _cargaViajeSegundosN.value = 0;
+      }
+      if (_cargaViajeExpirada && mounted) {
+        setState(() => _cargaViajeExpirada = false);
+      }
+      return;
+    }
+    if (_cargaViajeTimer != null) return;
+    _cargaViajeTickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _cargaViajeSegundosN.value++;
+    });
+    _cargaViajeRescueTimer = Timer(const Duration(seconds: 3), () {
+      unawaited(_intentarRescateViajeAtascado());
+    });
+    _cargaViajeTimer = Timer(const Duration(seconds: 8), () {
+      unawaited(_manejarTimeoutCargaViaje());
+    });
+  }
+
+  Future<void> _manejarTimeoutCargaViaje() async {
+    if (!mounted) return;
+    if (_cachedViaje != null) return;
+    final msg = await _detectarMensajeCorporativoAunNoEsHora();
+    if (!mounted) return;
+    setState(() {
+      _cargaViajeExpirada = true;
+      _corporativoAunNoHoraMsg = msg;
+    });
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && msg != null) {
+      try {
+        final us = await FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(uid)
+            .get(const GetOptions(source: Source.server));
+        final u = us.data() ?? <String, dynamic>{};
+        final vid = (u['viajeActivoId'] ?? '').toString().trim();
+        if (vid.isNotEmpty) {
+          final vs = await FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(vid)
+              .get(const GetOptions(source: Source.server));
+          final d = vs.data() ?? <String, dynamic>{};
+          final yaPromovido = d['activo'] == true && d['aceptado'] == true;
+          if (!yaPromovido) {
+            await CorporativoTaxistaService.revertirPromocionCorporativaTemprana(
+              uidTaxista: uid,
+            );
+          }
+        }
+      } catch (_) {
+        await CorporativoTaxistaService.revertirPromocionCorporativaTemprana(
+          uidTaxista: uid,
+        );
+      }
+    }
+  }
+
+  Future<String?> _detectarMensajeCorporativoAunNoEsHora() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return null;
+    try {
+      final us = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get(const GetOptions(source: Source.server));
+      final u = us.data() ?? <String, dynamic>{};
+      for (final raw in <dynamic>[
+        u['viajeActivoId'],
+        u['siguienteViajeId'],
+      ]) {
+        final vid = (raw ?? '').toString().trim();
+        if (vid.isEmpty) continue;
+        final vs = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(vid)
+            .get(const GetOptions(source: Source.server));
+        if (!vs.exists) continue;
+        final d = vs.data() ?? <String, dynamic>{};
+        if (!CorporativoTaxistaService.esViajeCorporativoAsignado(d, uid)) {
+          continue;
+        }
+        final opListo =
+            await CorporativoTaxistaService.choferOperacionMarcaListo(uid, vid);
+        if (!CorporativoTaxistaService.corporativoListoParaAbrirEnCurso(
+          d,
+          listoSegunOperacion: opListo,
+        )) {
+          return CorporativoTaxistaService.mensajeCorporativoAunNoEsHora(d);
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _intentarRescateViajeAtascado() async {
+    if (!mounted || _cachedViaje != null) return;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final us = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get(const GetOptions(source: Source.server));
+      final u = us.data() ?? <String, dynamic>{};
+      for (final raw in <dynamic>[
+        u['viajeActivoId'],
+        u['siguienteViajeId'],
+      ]) {
+        final vid = (raw ?? '').toString().trim();
+        if (vid.isEmpty) continue;
+        final vs = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(vid)
+            .get(const GetOptions(source: Source.server));
+        if (!vs.exists) continue;
+        final d = vs.data() ?? <String, dynamic>{};
+        if (!ViajesRepo.viajeVisibleEnCursoTaxista(d, uid)) continue;
+        final opListo =
+            await CorporativoTaxistaService.choferOperacionMarcaListo(uid, vid);
+        if (!CorporativoTaxistaService.corporativoListoParaAbrirEnCurso(
+              d,
+              listoSegunOperacion: opListo,
+            ) &&
+            CorporativoTaxistaService.esViajeCorporativoAsignado(d, uid)) {
+          final bool yaPromovido = d['activo'] == true &&
+              (d['aceptado'] == true ||
+                  EstadosViaje.normalizar((d['estado'] ?? '').toString()) ==
+                      EstadosViaje.aceptado);
+          if (yaPromovido || opListo) {
+            final viaje = Viaje.fromMap(vs.id, d);
+            if (!mounted) return;
+            setState(() {
+              _cachedViaje = viaje;
+              _cargaViajeExpirada = false;
+              _corporativoAunNoHoraMsg = null;
+            });
+            _syncEsperaCargaViaje(false);
+            return;
+          }
+          if (!mounted) return;
+          setState(() {
+            _corporativoAunNoHoraMsg =
+                CorporativoTaxistaService.mensajeCorporativoAunNoEsHora(d);
+            _cargaViajeExpirada = true;
+          });
+          ActiveTripService.cancelarMantenimientoOverlayViaje();
+          await CorporativoTaxistaService.revertirPromocionCorporativaTemprana(
+            uidTaxista: uid,
+            viajeId: vid,
+          );
+          return;
+        }
+        final viaje = Viaje.fromMap(vs.id, d);
+        if (!mounted) return;
+        setState(() {
+          _cachedViaje = viaje;
+          _cargaViajeExpirada = false;
+        });
+        _syncEsperaCargaViaje(false);
+        return;
+      }
+    } catch (e) {
+      debugPrint('[VIAJE_ACTIVO] rescate viaje atascado: $e');
+    }
+  }
+
+  Widget _widgetEntrandoViaje() {
+    return ValueListenableBuilder<int>(
+      valueListenable: _cargaViajeSegundosN,
+      builder: (context, seg, _) {
+        return ColoredBox(
+          color: const Color(0xFF0A0A0A),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Colors.greenAccent,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Cargando tu viaje…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    seg > 0
+                        ? 'Esperando datos ($seg s)…'
+                        : 'Viaje recién aceptado…',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      height: 1.35,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCargandoViajeOError() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_salirSiSoloCorpInformativo());
+    });
+    if (_cargaViajeExpirada) {
+      return _panelNoPudoCargarViaje();
+    }
+    return _widgetEntrandoViaje();
+  }
+
+  Widget _panelCorporativoAunNoEsHora(String mensaje) {
+    return ColoredBox(
+      color: const Color(0xFF0A0A0A),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.schedule_outlined,
+                color: Color(0xFF5EEAD4),
+                size: 52,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Aún no es hora',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                mensaje,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  height: 1.45,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 22),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    ActiveTripService.cancelarMantenimientoOverlayViaje();
+                    unawaited(
+                      NavigationService.clearAndGo(
+                        const MisRutasCorporativasPage(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.route),
+                  label: const Text('Mis rutas corporativas'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () {
+                    ActiveTripService.cancelarMantenimientoOverlayViaje();
+                    unawaited(NavigationService.irAlInicioTaxista());
+                  },
+                  child: const Text('Volver al pool'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _panelNoPudoCargarViaje() {
+    return ColoredBox(
+      color: const Color(0xFF0A0A0A),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.business_center_outlined,
+                color: Color(0xFF5EEAD4),
+                size: 48,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'No pudimos cargar el viaje',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Si es una ruta corporativa, abrila desde Mis rutas '
+                '(Waze y Maps).\n\n'
+                'Si tenés otro viaje en curso, terminálo primero — '
+                'la ruta corporativa queda en cola.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white70,
+                  height: 1.4,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 22),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    ActiveTripService.cancelarMantenimientoOverlayViaje();
+                    unawaited(
+                      NavigationService.clearAndGo(
+                        const MisRutasCorporativasPage(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.route),
+                  label: const Text('Mis rutas corporativas'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () {
+                    ActiveTripService.cancelarMantenimientoOverlayViaje();
+                    Navigator.of(context, rootNavigator: true).maybePop();
+                  },
+                  child: const Text('Volver a Servicios'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    _cargaViajeTimer?.cancel();
+    _cargaViajeTimer = null;
+    _cargaViajeRescueTimer?.cancel();
+    _cargaViajeRescueTimer = null;
+    _cargaViajeTickTimer?.cancel();
+    _cargaViajeTickTimer = null;
+    _cancelarDebounceViajeNull();
+    _cargaViajeSegundosN.dispose();
+    _ubicacionTaxistaSvc.modo.removeListener(_onUbicacionTaxistaModoChanged);
     WidgetsBinding.instance.removeObserver(this);
     _cancelSub?.cancel();
     _bolaCancelSub?.cancel();
@@ -1816,7 +3560,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _gpsStreamRecoveryTimer = null;
     _stopGps();
     _codigoCtrl.dispose();
+    _corpPinFocusNode.dispose();
     _routeDebounce?.cancel();
+    _corpCodigoTimeoutTicker?.cancel();
+    _corpCodigoTimeoutTicker = null;
     _viajesCercanosEscucha.dispose();
     _viajesCercanosCtl.dispose();
     _taxistaPosCola.dispose();
@@ -1824,11 +3571,62 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     super.dispose();
   }
 
+  Widget _mapaOPlaceholder({required Widget mapa}) {
+    if (!_mapaPermitido || _mapaDesactivadoPorError) {
+      return ColoredBox(
+        color: const Color(0xFF0A0A0A),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _mapaDesactivadoPorError
+                      ? 'Mapa no disponible ahora.\nAbajo tienes las acciones del viaje.'
+                      : 'Cargando mapa…',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    height: 1.35,
+                  ),
+                ),
+                if (_mapaDesactivadoPorError) ...[
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _mapaDesactivadoPorError = false;
+                        _mapaPermitido = true;
+                      });
+                    },
+                    icon: const Icon(Icons.map),
+                    label: const Text('Reintentar mapa'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return mapa;
+  }
+
   // ===================== Acciones Principales =====================
 
   Future<void> _iniciarNavegacionPickup(Viaje v) async {
     if (_actionBusy) return;
     _actionBusy = true;
+
+    final bool corpPickup =
+        CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+    final Map<String, dynamic> corpData = corpPickup
+        ? CorporativoTaxistaService.mapaNavegacionDesdeViaje(v.toMap())
+        : const <String, dynamic>{};
+    final int paradasCorp = corpPickup
+        ? CorporativoTaxistaService.contarParadasRuta(corpData)
+        : 0;
 
     try {
       // Si el backend ya está en `en_camino_pickup`, el botón no debe fallar.
@@ -1861,13 +3659,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           } catch (e) {
             // Robustez: si el backend ya está en `en_camino_pickup`,
             // `marcarEnCaminoPickup` puede lanzar "Estado inválido".
-            // No bloqueamos la navegación por esto.
+            // Tampoco bloqueamos por permission-denied residual (GPS/Maps igual se abren).
             final msg = e.toString().toLowerCase();
+            final isFirebaseDenied = e is FirebaseException &&
+                e.code == 'permission-denied';
             if (msg.contains('estado inválido') ||
                 msg.contains('estado invalido') ||
                 msg.contains('estado inválido para en_camino_pickup') ||
-                msg.contains('estado invalido para en_camino_pickup')) {
-              // Continuar: la navegación puede abrirse igual.
+                msg.contains('estado invalido para en_camino_pickup') ||
+                isFirebaseDenied ||
+                msg.contains('permission-denied') ||
+                msg.contains('permiso denegado')) {
+              logDbg(
+                'marcarEnCaminoPickup no bloquea navegación: $e',
+              );
             } else {
               rethrow;
             }
@@ -1903,11 +3708,18 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 ? 'GPS: ${NavegacionExternaLauncher.fmtCoord(v.latCliente)}, ${NavegacionExternaLauncher.fmtCoord(v.lonCliente)}'
                 : null,
             showSinGpsBanner: !tieneCoords,
-            footerHint:
-                'Elige Waze o Maps; al llegar, vuelve a RAI para marcar abordo y el código.',
+            footerHint: corpPickup
+                ? (paradasCorp > 0
+                    ? 'Waze → recogida en la empresa. '
+                        'Maps → ruta completa: empresa + $paradasCorp parada(s) en orden.'
+                    : 'Waze → recogida en la empresa. Maps → empresa y destino.')
+                : 'Elige Waze o Maps; al llegar, vuelve a RAI para marcar abordo y el código.',
             onWaze: () {
               eligioAppExterna = true;
-              if (tieneCoords) {
+              if (corpPickup) {
+                unawaited(
+                    CorporativoTaxistaService.abrirWazeDesdeViaje(corpData));
+              } else if (tieneCoords) {
                 unawaited(NavegacionExternaLauncher.abrirWazeDestino(
                     v.latCliente, v.lonCliente));
               } else {
@@ -1917,7 +3729,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             },
             onMaps: () {
               eligioAppExterna = true;
-              if (tieneCoords) {
+              if (corpPickup) {
+                unawaited(
+                    CorporativoTaxistaService.abrirMapsDesdeViaje(corpData));
+              } else if (tieneCoords) {
                 unawaited(NavegacionExternaLauncher.abrirGoogleMapsDestino(
                     v.latCliente, v.lonCliente));
               } else {
@@ -2008,51 +3823,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         throw Exception('Usuario no autenticado');
       }
 
-      // Micro-harden: al usar el repo garantizamos la transición válida + limpieza
-      // defensiva (evita estados "fantasma" en cola/activos del taxista),
-      // manteniendo luego los campos extra que la UI depende (`clienteAbordo*`).
       final estadoN = EstadosViaje.normalizar(v.estado);
-      final bool yaEnAboard = estadoN == EstadosViaje.aBordo;
+      final bool yaEnAboard = estadoN == EstadosViaje.aBordo ||
+          estadoN == EstadosViaje.enCurso;
       if (!yaEnAboard) {
-        try {
-          await ViajesRepo.marcarClienteAbordo(viajeId: v.id, uidTaxista: uid);
-        } catch (e, st) {
-          // Si hubo carrera de estado (backend ya cambió a `a_bordo`),
-          // igual dejamos consistentes los campos de UI abajo.
-          await ErrorReporting.reportError(
-            e,
-            stack: st,
-            context: '_marcarClienteAbordo: repo.marcarClienteAbordo',
-          );
-        }
+        await ViajesRepo.marcarClienteAbordo(viajeId: v.id, uidTaxista: uid);
       }
-
-      final refViaje = FirebaseFirestore.instance.collection('viajes').doc(v.id);
-      final snapAbordo = await refViaje.get();
-      final dAbordo = snapAbordo.data() ?? <String, dynamic>{};
-      final String codRaw = (dAbordo['codigoVerificacion'] ??
-              dAbordo['codigo_verificacion'] ??
-              '')
-          .toString()
-          .replaceAll(RegExp(r'\D'), '');
-      final Map<String, dynamic> patchAbordo = {
-        'estado': EstadosViaje.aBordo,
-        'clienteAbordo': true,
-        'clienteAbordoEn': FieldValue.serverTimestamp(),
-        // Importante: el flujo de UI para "Viaje en curso" depende del flag `activo==true`.
-        // Al alternar cuentas (un solo teléfono) la pantalla se recarga y usa el stream del repo.
-        // Si no se activa aquí, el viaje puede aparecer como "no tienes viaje en curso".
-        'activo': true,
-        'pickupConfirmadoEn': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      };
-      if (codRaw.length != 6) {
-        patchAbordo['codigoVerificacion'] =
-            ViajesRepo.codigoVerificacionSeisDigitosDesdeDoc(dAbordo);
-        patchAbordo['codigoVerificado'] = false;
-      }
-      await refViaje.update(patchAbordo);
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -2076,18 +3852,31 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         }
       });
 
-      // Recargar viaje
       final snapshot =
           await FirebaseFirestore.instance.collection('viajes').doc(v.id).get();
       unawaited(_persistNavPickupFlag(v.id, false));
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && snapshot.exists) {
           final viajeActualizado = Viaje.fromMap(v.id, snapshot.data()!);
+          final bool corpPin =
+              CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+          if (corpPin) {
+            unawaited(_limpiarCorpDeViajeEnCursoAlEntrar());
+            return;
+          }
           setState(() {
             _cachedViaje = viajeActualizado;
             _navegacionIniciada = false;
             _clienteCerca = false;
+            if (corpPin && !viajeActualizado.codigoVerificado) {
+              _corpPinUiActivo = true;
+              _corpPinSheetExpandido = false;
+            }
           });
+          if (corpPin && !viajeActualizado.codigoVerificado) {
+            _expandirSheetParaPinCorp();
+            unawaited(_corpGpsCheckpoint(viajeActualizado, 'abordo'));
+          }
         }
       });
     } catch (e) {
@@ -2105,13 +3894,180 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
   }
 
+  Future<void> _salirTrasLiberacionCorpCodigo({String? mensaje}) async {
+    _corpCodigoTimeoutTicker?.cancel();
+    _stopGps();
+    if (!mounted) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final messenger = ScaffoldMessenger.of(context);
+    if (mensaje != null && mensaje.isNotEmpty) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(mensaje), duration: const Duration(seconds: 6)),
+      );
+    }
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const TaxistaShell()),
+      (route) => false,
+    );
+  }
+
+  Future<void> _syncCorpCodigoLive(String viajeId) async {
+    if (viajeId.isEmpty) return;
+    try {
+      final vs = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(viajeId)
+          .get();
+      if (!mounted || !vs.exists) return;
+      final d = vs.data() ?? <String, dynamic>{};
+      if (!CorporativoPasajerosChoferCard.esViajeCorporativo(
+          Viaje.fromMap(viajeId, d))) {
+        return;
+      }
+      if (CorporativoTaxistaService.corpSinPinVerificacionChofer(
+        d,
+        uidTaxista: FirebaseAuth.instance.currentUser?.uid,
+      )) {
+        return;
+      }
+      _iniciarTickerCorpCodigoDesdeViaje(d);
+      final est = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      final bool abordo = d['clienteAbordo'] == true;
+      if (d['codigoVerificado'] != true &&
+          abordo &&
+          (est == EstadosViaje.enOrigenEsperandoCodigo ||
+              est == EstadosViaje.pendienteCodigo ||
+              EstadosViaje.esAbordo(est))) {
+        if (mounted) {
+          setState(() => _corpPinUiActivo = true);
+        }
+        _expandirSheetParaPinCorp();
+      } else if (!abordo && mounted && _corpPinUiActivo) {
+        setState(() => _corpPinUiActivo = false);
+      }
+      final intentos = d['intentosCodigo'];
+      if (intentos is num && mounted) {
+        setState(() => _corpIntentosFallidos = intentos.toInt().clamp(0, 3));
+      }
+      if (est == EstadosViaje.codigoBloqueado) {
+        await _salirTrasLiberacionCorpCodigo(
+          mensaje:
+              'Viaje bloqueado por intentos fallidos. El encargado fue notificado.',
+        );
+      } else if (est == EstadosViaje.canceladoPorTiempo) {
+        await _salirTrasLiberacionCorpCodigo(
+          mensaje: 'Viaje cancelado: tiempo de espera del código agotado.',
+        );
+      }
+    } catch (_) {
+      /* no bloquear UI */
+    }
+  }
+
+  Future<void> _solicitarCodigoCorpEncargado(Viaje v) async {
+    if (_actionBusy) return;
+    final confirmar = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Colors.black,
+            title: const Text('No tengo código',
+                style: TextStyle(color: Colors.white)),
+            content: const Text(
+              'Se avisará al encargado por chat y notificación. '
+              'Podrás seguir disponible para otros viajes mientras te envían el código.',
+              style: TextStyle(color: Colors.white70, height: 1.35),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancelar'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Solicitar código'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmar || !mounted) return;
+    _actionBusy = true;
+    try {
+      await CorporativoFaseAService.taxistaSolicitarCodigo(v.id);
+      await _salirTrasLiberacionCorpCodigo(
+        mensaje: 'Solicitud enviada al encargado. Revisá Mis rutas corporativas cuando te envíen el código.',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorAuthEs(e)), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      _actionBusy = false;
+    }
+  }
+
+  void _iniciarTickerCorpCodigoDesdeViaje(Map<String, dynamic> data) {
+    final v = _cachedViaje;
+    if (v == null || !_esViajeCorporativo(v)) return;
+    if (data['codigoVerificado'] == true) {
+      _corpCodigoTimeoutTicker?.cancel();
+      return;
+    }
+    DateTime? llegada;
+    final raw = data['tiempoLlegadaOrigen'];
+    if (raw is Timestamp) llegada = raw.toDate();
+    DateTime? fechaHora;
+    final fh = data['fechaHora'];
+    if (fh is Timestamp) {
+      fechaHora = fh.toDate();
+    } else if (_cachedViaje != null) {
+      fechaHora = _cachedViaje!.fechaHora;
+    }
+
+    final limite = CorporativoEsperaCodigoConstants.limiteEsperaCodigo(
+      tiempoLlegadaOrigen: llegada,
+      fechaHoraRecogida: fechaHora,
+    );
+    if (limite == null) return;
+    void tick() {
+      if (!mounted) return;
+      final rest = limite.difference(DateTime.now());
+      if (rest.isNegative) {
+        _corpCodigoTimeoutTicker?.cancel();
+        final est = EstadosViaje.normalizar((data['estado'] ?? '').toString());
+        if (est == EstadosViaje.canceladoPorTiempo) {
+          unawaited(_salirTrasLiberacionCorpCodigo(
+            mensaje: 'Viaje cancelado: tiempo de espera del código agotado.',
+          ));
+        }
+        return;
+      }
+      setState(() => _corpTiempoRestanteCodigo = rest);
+    }
+
+    tick();
+    _corpCodigoTimeoutTicker?.cancel();
+    _corpCodigoTimeoutTicker =
+        Timer.periodic(const Duration(seconds: 1), (_) => tick());
+  }
+
+  String _formatoTiempoRestante(Duration d) {
+    final m = d.inMinutes.remainder(60);
+    final s = d.inSeconds.remainder(60);
+    return '${m.toString().padLeft(1, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _verificarCodigo(String viajeId, String codigoCorrecto) async {
     if (_actionBusy) return;
     FocusManager.instance.primaryFocus?.unfocus();
 
     final esperado = _digitsOnlyCode(codigoCorrecto);
     final ingresado = _digitsOnlyCode(_codigoCtrl.text);
-    if (esperado.length != 6) {
+    final corp = _cachedViaje != null &&
+        CorporativoPasajerosChoferCard.esViajeCorporativo(_cachedViaje!);
+    if (!corp && esperado.length != 6) {
       _tripFlowSnack(
         'Este viaje no tiene código de 6 dígitos en el sistema. '
         'Pide al cliente que abra su viaje y confirme el PIN; si sigue igual, contacta soporte.',
@@ -2119,14 +4075,24 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return;
     }
     if (ingresado.length != 6) {
-      _tripFlowSnack('Ingresa los 6 dígitos que te dicta el cliente.',
-          backgroundColor: Colors.redAccent);
+      _tripFlowSnack(
+        corp
+            ? 'Ingresa el código del período (mismo toda la quincena). '
+                'Pídeselo al encargado de la empresa.'
+            : 'Ingresa los 6 dígitos que te dicta el cliente.',
+        backgroundColor: Colors.redAccent,
+      );
       return;
     }
-    if (ingresado != esperado) {
-      _tripFlowSnack('Código incorrecto. Vuelve a pedírselo al cliente.',
-          backgroundColor: Colors.redAccent);
-      return;
+
+    if (!corp) {
+      if (ingresado != esperado) {
+        _tripFlowSnack(
+          'Código incorrecto. Vuelve a pedírselo al cliente.',
+          backgroundColor: Colors.redAccent,
+        );
+        return;
+      }
     }
 
     _actionBusy = true;
@@ -2146,12 +4112,37 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           pinVerificacion: ingresado,
         );
       } catch (eInicio) {
+        if (corp && eInicio is FirebaseFunctionsException) {
+          final details = eInicio.details;
+          Map<String, dynamic>? detMap;
+          if (details is Map) {
+            detMap = Map<String, dynamic>.from(details);
+          }
+          final bloqueado = detMap?['codigoBloqueado'] == true;
+          final restantes = detMap?['intentosRestantes'];
+          if (restantes is num) {
+            setState(() {
+              _corpIntentosFallidos = (3 - restantes.toInt()).clamp(0, 3);
+            });
+          } else {
+            setState(() => _corpIntentosFallidos = 3);
+          }
+          final msg = (eInicio.message ?? '').trim().isNotEmpty
+              ? eInicio.message!.trim()
+              : errorAuthEs(eInicio);
+          if (bloqueado) {
+            await _salirTrasLiberacionCorpCodigo(mensaje: msg);
+            return;
+          }
+          _tripFlowSnack(msg, backgroundColor: Colors.redAccent);
+          return;
+        }
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Código verificado. ${errorAuthEs(eInicio)}'),
-                backgroundColor: Colors.orange,
+                content: Text(errorAuthEs(eInicio)),
+                backgroundColor: Colors.redAccent,
                 duration: const Duration(seconds: 6),
               ),
             );
@@ -2181,24 +4172,44 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         }
         final viajeActualizado = Viaje.fromMap(viajeId, data);
         _aplicarProgresoMultiparadaDesdeViaje(viajeActualizado);
-        if (mounted && _cachedViaje?.id == viajeId) {
-          setState(() => _cachedViaje = viajeActualizado);
-          _scheduleDrawRoute();
+        if (mounted) {
+          _corpPinFocusNode.unfocus();
+          FocusManager.instance.primaryFocus?.unfocus();
+          setState(() {
+            _cachedViaje = viajeActualizado;
+            _corpPinUiActivo = false;
+            _corpPinSheetExpandido = false;
+          });
+          _restablecerSheetTrasPinCorp();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _scheduleDrawRoute();
+            if (corp) {
+              unawaited(_corpGpsOnEnCurso(viajeActualizado));
+            }
+          });
         }
 
-        if (_esMultiparada(viajeActualizado)) {
+        if (corp) {
+          _tripFlowSnack(
+            'Código correcto. Abriendo navegación a la primera parada…',
+            backgroundColor: Colors.green,
+          );
+          if (mounted) {
+            await _corpAbrirNavegacionDestinoActual(viajeActualizado);
+          }
+          if (mounted) _restablecerSheetTrasPinCorp();
+        } else if (_esMultiparada(viajeActualizado)) {
           _tripFlowSnack(
             'Código correcto. Ruta multiparada: seguí parada a parada.',
             backgroundColor: Colors.green,
           );
           final leg = _destinoMultiActual(viajeActualizado);
-          if (leg != null) {
-            if (mounted) {
-              _tripFlowSnack(
-                'Primera parada: ${leg.label}',
-                backgroundColor: Colors.blueGrey,
-              );
-            }
+          if (leg != null && mounted) {
+            _tripFlowSnack(
+              'Primera parada: ${leg.label}',
+              backgroundColor: Colors.blueGrey,
+            );
             await _navegarDestinoMultiparadaActual(viajeActualizado);
           } else if (mounted) {
             _tripFlowSnack(
@@ -2207,12 +4218,19 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             );
           }
         } else {
-          _tripFlowSnack(
-            'Código correcto. Podés abrir «Navegar al destino» o «Finalizar viaje» '
-            'cuando corresponda (no hace falta recorrer en prueba).',
-            backgroundColor: Colors.green,
-          );
-          if (mounted) _expandirViajeSheetTrasMapa();
+          if (_permitePruebaSinRecorrido(viajeActualizado)) {
+            _tripFlowSnack(
+              'Código correcto. Abrí «Iniciar ruta» o Maps/Waze al destino '
+              '(en prueba podés finalizar sin recorrer).',
+              backgroundColor: Colors.green,
+            );
+          } else {
+            _tripFlowSnack(
+              'Código correcto. Tocá «Iniciar ruta al destino» o abrí Maps/Waze.',
+              backgroundColor: Colors.green,
+            );
+          }
+          if (mounted) _restablecerSheetTrasPinCorp();
         }
       }
     } catch (e) {
@@ -2242,11 +4260,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
     print('[FINALIZAR] _finalizarViaje start viajeId=${v.id} uid=$uid');
     final messenger = ScaffoldMessenger.of(context);
-    final String estadoLocal = EstadosViaje.normalizar(v.estado);
 
-    if (!_puedeFinalizarViajeMultiparada(v)) {
-      final int total = _destinosOrdenadosMultiparada(v).length;
-      final int hechos = v.multiparadaLegCompletadas.clamp(0, total);
+    var viajeOperativo = v;
+    if (_esViajeCorporativo(v) &&
+        v.codigoVerificado &&
+        _esMultiparada(v) &&
+        !_multiparadaRutaCompleta(v) &&
+        _permitePruebaSinRecorrido(v)) {
+      viajeOperativo = await _completarParadasCorporativoPendientes(v);
+      if (mounted) {
+        setState(() => _cachedViaje = viajeOperativo);
+      }
+    }
+
+    if (!_puedeFinalizarViajeMultiparada(viajeOperativo)) {
+      final int total = _legsNavegacionMultiparada(viajeOperativo).length;
+      final int hechos =
+          viajeOperativo.multiparadaLegCompletadas.clamp(0, total);
       if (mounted) {
         messenger.showSnackBar(
           SnackBar(
@@ -2263,19 +4293,48 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return;
     }
 
+    if (_esViajeCorporativo(viajeOperativo) &&
+        !_permitePruebaSinRecorrido(viajeOperativo) &&
+        !_esMultiparada(viajeOperativo) &&
+        !_navegacionDestinoIniciada) {
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Abrí Waze o Maps al destino antes de finalizar el viaje.',
+            ),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      _actionBusy = false;
+      return;
+    }
+
     // Callable acepta `en_curso` o `a_bordo` (PIN verificado sin transición).
-    if (!EstadosViaje.taxistaPuedeInvocarFinalizar(estadoLocal)) {
+    var estadoParaFinalizar = EstadosViaje.normalizar(viajeOperativo.estado);
+    if (!EstadosViaje.taxistaPuedeInvocarFinalizar(estadoParaFinalizar)) {
       try {
         final snap = await FirebaseFirestore.instance
             .collection('viajes')
-            .doc(v.id)
+            .doc(viajeOperativo.id)
             .get();
         final data = snap.data() ?? const <String, dynamic>{};
         final String estadoRemoto =
             EstadosViaje.normalizar((data['estado'] ?? '').toString());
         if (!EstadosViaje.taxistaPuedeInvocarFinalizar(estadoRemoto)) {
+          if (_esViajeCorporativo(viajeOperativo) &&
+              viajeOperativo.codigoVerificado &&
+              estadoRemoto == EstadosViaje.aBordo) {
+            await ViajesRepo.iniciarViaje(
+              viajeId: viajeOperativo.id,
+              uidTaxista: uid,
+            );
+            estadoParaFinalizar = EstadosViaje.enCurso;
+          } else {
           print(
-              '[FINALIZAR_ERROR] estado remoto no finalizable: $estadoRemoto viajeId=${v.id}');
+              '[FINALIZAR_ERROR] estado remoto no finalizable: $estadoRemoto viajeId=${viajeOperativo.id}');
           if (mounted) {
             messenger.showSnackBar(
               const SnackBar(
@@ -2289,9 +4348,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           }
           _actionBusy = false;
           return;
+          }
+        } else {
+          estadoParaFinalizar = estadoRemoto;
         }
       } catch (_) {
-        print('[FINALIZAR_ERROR] error validando estado remoto viajeId=${v.id}');
+        print('[FINALIZAR_ERROR] error validando estado remoto viajeId=${viajeOperativo.id}');
         if (mounted) {
           messenger.showSnackBar(
             const SnackBar(
@@ -2307,22 +4369,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
     }
 
-    if (_permitePruebaSinRecorrido(v)) {
+    if (_permitePruebaSinRecorrido(viajeOperativo)) {
       print(
-        '[FLYGO_SIM_CASA] finalizar sin GPS/diálogo/medición viaje=${v.id} '
-        'tipo=${v.tipoServicio}',
+        '[FLYGO_SIM_CASA] finalizar sin GPS/diálogo/medición viaje=${viajeOperativo.id} '
+        'tipo=${viajeOperativo.tipoServicio} corp=${_esViajeCorporativo(viajeOperativo)}',
       );
     } else {
       // Intento de GPS en vivo sin abrir diálogo de permisos (permiso ya concedido).
-      await _asegurarGps(v.id, allowPermissionDialog: false);
+      await _asegurarGps(viajeOperativo.id, allowPermissionDialog: false);
 
       // Diálogo informativo; no bloqueamos por distancia.
       final ({double lat, double lon})? pinDestino =
-          _coordsDestinoParaFinalizar(v);
+          _coordsDestinoParaFinalizar(viajeOperativo);
       double? distMinM;
       if (pinDestino != null) {
         distMinM = await _menorDistanciaMetrosAlDestinoParaFinalizar(
-          v,
+          viajeOperativo,
           pinDestino,
           pingStreamLatLon: _taxistaPosCola.value,
         );
@@ -2351,6 +4413,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       // Evita que TaxistaShell quite ViajeEnCurso antes de factura/post-viaje.
       ActiveTripService.mantenerOverlayViajeEnShell(const Duration(minutes: 3));
 
+      if (_esViajeCorporativo(viajeOperativo)) {
+        await _corpGpsCheckpoint(viajeOperativo, 'fin');
+      }
+
       print('[FINALIZAR] invocando ViajesRepo.completarViajePorTaxista');
       try {
         try {
@@ -2372,7 +4438,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               '[FINALIZAR_ERROR] pre-callable lectura Firestore falló viajeId=${v.id}: $e $st');
         }
 
-        final outcome = await ViajesRepo.completarViajePorTaxista(v.id);
+        final outcome = await ViajesRepo.completarViajePorTaxista(viajeOperativo.id);
         if (outcome == CompletarViajeTaxistaOutcome.alreadyCompleted &&
             mounted) {
           messenger.showSnackBar(
@@ -2382,15 +4448,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           );
         }
-        if (v.tipoServicio == 'bola_ahorro') {
+        if (viajeOperativo.tipoServicio == 'bola_ahorro') {
           if (kDebugMode) {
-            print('[BOLA_AHORRO] finalizar callable OK → sync bola viaje=${v.id}');
+            print('[BOLA_AHORRO] finalizar callable OK → sync bola viaje=${viajeOperativo.id}');
           }
-          unawaited(BolaPuebloFirestoreSync.postCompletarViajeEspejo(v.id));
+          unawaited(BolaPuebloFirestoreSync.postCompletarViajeEspejo(viajeOperativo.id));
         }
       } on FirebaseFunctionsException catch (e, st) {
         print(
-            '[FINALIZAR_ERROR] FirebaseFunctionsException viajeId=${v.id} '
+            '[FINALIZAR_ERROR] FirebaseFunctionsException viajeId=${viajeOperativo.id} '
             '${e.code} ${e.message} $st');
         if (mounted) {
           messenger.showSnackBar(
@@ -2406,7 +4472,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         _actionBusy = false;
         return;
       } catch (e, st) {
-        print('[FINALIZAR_ERROR] completarViaje viajeId=${v.id} $e $st');
+        print('[FINALIZAR_ERROR] completarViaje viajeId=${viajeOperativo.id} $e $st');
         if (mounted) {
           messenger.showSnackBar(
             SnackBar(
@@ -2420,140 +4486,45 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         return;
       }
 
-      print('[FINALIZAR] callable OK → post-proceso pago/factura');
+      print('[FINALIZAR] callable OK → factura (comisión/prepago ya en CF)');
 
-      // ────────────────────────────────────────────────────────────────
-      // Pagos / facturación:
-      // No silenciamos errores. Si falla registrar el pago, el viaje ya
-      // está completado, pero mostramos mensaje + reintento.
-      // ────────────────────────────────────────────────────────────────
-      double total = v.precio;
-      double comision = v.precio * PlataformaEconomia.factorComision;
-      double ganancia = v.precio - comision;
-      String metodo = v.metodoPago.toString().toLowerCase().trim();
-      final String uidTxDefault = v.uidTaxista.isNotEmpty ? v.uidTaxista : uid;
-
-      bool retryingPago = false;
-      Future<void> retryPago() async {
-        final uidTx = uidTxDefault;
-        if (uidTx.isEmpty) throw Exception('uidTaxista vacío (pago)');
-
-        if (MetodoPagoViaje.esEfectivo(metodo)) {
-          await PagoData.registrarComisionCash(
-            viajeId: v.id,
-            taxistaId: uidTx,
-            comision: comision,
-          );
-        } else {
-          await PagoData.registrarTransferenciaCliente(
-            viajeId: v.id,
-            uidTaxista: uidTx,
-            montoFinalDop: total,
-            comision: comision,
-            gananciaTaxista: ganancia,
-          );
-        }
-      }
-
+      // Comisión + descuento prepago + asiento + bloqueo operativo los hace
+      // completarViajePorTaxista (Admin SDK). NO reintentar PagoData en cliente:
+      // billetera/movimientos_prepago están bloqueados por reglas → permission-denied.
       try {
         final doc = await FirebaseFirestore.instance
             .collection('viajes')
-            .doc(v.id)
+            .doc(viajeOperativo.id)
             .get();
         final data = doc.data() ?? {};
-        double toDoubleLocal(dynamic x) =>
-            x is num ? x.toDouble() : (double.tryParse('$x') ?? 0.0);
-
-        total = totalRdDesdeDocViaje(data);
-        if (total <= 1e-6) {
-          total = v.precio > 0 ? v.precio : v.precioFinal;
-        }
-
-        final cc = data['comision_cents'];
-        if (cc is num && cc > 0) {
-          comision = cc.toDouble() / 100.0;
+        final asentado = data['pagoRegistrado'] == true ||
+            _pagoYaAsentadoPorServidor(data);
+        if (!asentado) {
+          print(
+            '[FINALIZAR] aviso: viaje completado sin marca de pago en doc '
+            '(CF debió asentar; no se usa PagoData legacy)',
+          );
+          if (mounted) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Viaje finalizado. La comisión se asienta en servidor; '
+                  'si el saldo no baja, contacta soporte.',
+                ),
+                backgroundColor: Colors.orangeAccent,
+                duration: Duration(seconds: 5),
+              ),
+            );
+          }
         } else {
-          final comisionCampo =
-              toDoubleLocal(data['comision'] ?? data['comisionFlyGo']);
-          comision = comisionCampo > 0
-              ? comisionCampo
-              : (total * PlataformaEconomia.factorComision);
-        }
-
-        final gc = data['ganancia_cents'];
-        if (gc is num && gc > 0) {
-          ganancia = gc.toDouble() / 100.0;
-        } else {
-          final gananciaCampo = toDoubleLocal(data['gananciaTaxista']);
-          ganancia = gananciaCampo > 0 ? gananciaCampo : (total - comision);
-        }
-
-        metodo = (data['metodoPago'] ?? v.metodoPago ?? 'Efectivo')
-            .toString()
-            .toLowerCase()
-            .trim();
-
-        if (data['pagoRegistrado'] == true) {
-          print('[FINALIZAR] pagoRegistrado=true → omitir PagoData legacy');
-        } else if (_pagoYaAsentadoPorServidor(data)) {
-          print('[FINALIZAR] comisión ya en servidor → omitir PagoData legacy');
-        } else {
-          await retryPago();
+          print('[FINALIZAR] pago/comisión asentados por servidor OK');
         }
       } catch (e, st) {
         await ErrorReporting.reportError(
           e,
           stack: st,
-          context: '_finalizarViaje: registrar pago',
+          context: '_finalizarViaje: verificar asiento post-CF',
         );
-
-        if (mounted) {
-          messenger.showSnackBar(
-            SnackBar(
-              content: const Text(
-                'Viaje completado, pero no se pudo registrar el pago. Reintenta',
-              ),
-              backgroundColor: Colors.orangeAccent,
-              duration: const Duration(seconds: 6),
-              action: SnackBarAction(
-                label: 'Reintentar',
-                onPressed: () {
-                  if (retryingPago || !context.mounted) return;
-                  retryingPago = true;
-                  () async {
-                    try {
-                      await retryPago();
-                      if (!context.mounted) return;
-                      messenger.showSnackBar(
-                        const SnackBar(
-                          content: Text('✅ Pago registrado correctamente'),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                    } catch (e2, st2) {
-                      await ErrorReporting.reportError(
-                        e2,
-                        stack: st2,
-                        context: '_finalizarViaje: reintento pago',
-                      );
-                      if (!context.mounted) return;
-                      messenger.showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'No se pudo registrar el pago. Intenta más tarde.',
-                          ),
-                          backgroundColor: Colors.redAccent,
-                        ),
-                      );
-                    } finally {
-                      retryingPago = false;
-                    }
-                  }();
-                },
-              ),
-            ),
-          );
-        }
       }
 
       _stopGps();
@@ -2565,10 +4536,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               .get()
               .then((DocumentSnapshot<Map<String, dynamic>> s) => s.data());
 
-      print('[FINALIZAR] abriendo factura + post-viaje taxista viajeId=${v.id}');
+      print('[FINALIZAR] abriendo factura + post-viaje taxista viajeId=${viajeOperativo.id}');
       await PostViajeTaxistaNav.abrirFacturaYFlujo(
         context: mounted ? context : null,
-        viajeId: v.id,
+        viajeId: viajeOperativo.id,
         uidTaxista: uid,
         viajeDataSemilla: semillaViaje,
       );
@@ -2623,7 +4594,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 style: TextStyle(color: Colors.white)),
             content: const Text(
               'Solo puedes cancelar antes de que el cliente esté a bordo o el viaje esté en ruta. '
-              'Si cancelas ahora, el pedido vuelve al pool y el cliente es notificado.\n\n'
+              'Si cancelas ahora, el viaje se cancela y el cliente sale de viaje en curso.\n\n'
               'Las cancelaciones frecuentes o sin causa pueden revisarse. '
               '¿Confirmas que deseas cancelar en este punto del servicio?',
               style: TextStyle(color: Colors.white70, height: 1.35),
@@ -2674,8 +4645,21 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     } catch (e) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          messenger
-              .showSnackBar(SnackBar(content: Text('❌ ${errorAuthEs(e)}')));
+          String msg = errorAuthEs(e);
+          if (e is FirebaseFunctionsException) {
+            final m = (e.message ?? '').trim();
+            if (m.isNotEmpty) msg = m;
+            if (e.code == 'permission-denied') {
+              msg = m.isNotEmpty
+                  ? m
+                  : 'No se pudo cancelar: permiso denegado.';
+            } else if (e.code == 'failed-precondition') {
+              msg = m.isNotEmpty
+                  ? m
+                  : 'No se puede cancelar en este estado del viaje.';
+            }
+          }
+          messenger.showSnackBar(SnackBar(content: Text('❌ $msg')));
         }
       });
     } finally {
@@ -2806,10 +4790,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
-  // ===== Contactar cliente =====
-  Future<void> _contactarCliente(
-      {required String uidCliente, required String viajeId}) async {
+  // ===== Contactar encargado / cliente =====
+  Future<void> _contactarCliente({
+    required String uidCliente,
+    required String viajeId,
+    Viaje? viaje,
+  }) async {
     if (!mounted) return;
+    final bool corp = viaje != null
+        ? CorporativoPasajerosChoferCard.esViajeCorporativo(viaje)
+        : (_cachedViaje != null &&
+            CorporativoPasajerosChoferCard.esViajeCorporativo(_cachedViaje!));
     final ColorScheme sheetScheme = Theme.of(context).colorScheme;
     await showModalBottomSheet(
       context: context,
@@ -2868,7 +4859,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        'Contactar cliente',
+                        corp ? 'Contactar encargado' : 'Contactar cliente',
                         style: TextStyle(
                             color: cs.onSurface,
                             fontSize: 18,
@@ -2876,7 +4867,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        nombre.isEmpty ? 'Cliente' : nombre,
+                        corp
+                            ? (nombre.isEmpty
+                                ? 'Encargado de la empresa'
+                                : nombre)
+                            : (nombre.isEmpty ? 'Cliente' : nombre),
                         style:
                             TextStyle(color: cs.onSurfaceVariant, fontSize: 15),
                       ),
@@ -2887,7 +4882,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                           viajeId: viajeId,
                           miUid: FirebaseAuth.instance.currentUser!.uid,
                           otroUid: uidCliente,
-                          otroNombre: nombre.isEmpty ? 'Cliente' : nombre,
+                          otroNombre: corp
+                              ? (nombre.isEmpty ? 'Encargado' : nombre)
+                              : (nombre.isEmpty ? 'Cliente' : nombre),
+                          esCorporativo: corp,
                         ),
                       ],
                       const SizedBox(height: 16),
@@ -3291,12 +5289,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
-  String _labelEstado(String e) {
+  String _labelEstado(String e, {Viaje? viaje}) {
     final s = EstadosViaje.normalizar(e);
     if (s == EstadosViaje.pendiente) return 'Pendiente';
     if (s == EstadosViaje.aceptado) return 'Aceptado';
     if (s == EstadosViaje.enCaminoPickup) return 'Ir a buscar cliente';
     if (s == EstadosViaje.aBordo) return 'Cliente a bordo';
+    if (s == EstadosViaje.enOrigenEsperandoCodigo) {
+      if (viaje != null &&
+          (_corpClienteAbordoConfirmado(viaje) || _corpPinUiActivo)) {
+        return 'En empresa — pedir PIN';
+      }
+      return 'Ir a la empresa';
+    }
+    if (s == EstadosViaje.pendienteCodigo) return 'Esperando PIN';
     if (s == EstadosViaje.enCurso) return 'En curso';
     if (s == EstadosViaje.completado) return 'Completado';
     if (s == EstadosViaje.cancelado) return 'Cancelado';
@@ -3479,16 +5485,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     try {
       final fecha = _safeFechaViaje(v.fechaHora);
       final total = _safeMoneyViaje(v.precio);
-      return Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.grey[900],
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      final bool corp =
+          CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+
+      final Widget contenido = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (!corp)
             Row(
               children: [
                 Expanded(
@@ -3504,32 +5507,45 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 _servicioBadge(v),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              '🕓 Fecha: $fecha',
-              style: const TextStyle(fontSize: 16, color: Colors.white70),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '💰 Total: $total',
-              style: const TextStyle(fontSize: 18, color: Colors.greenAccent),
-            ),
-            _DesgloseComisionNeto(precio: v.precio),
-            const SizedBox(height: 8),
-            Text(
-              '📍 Estado: ${_labelEstado(estadoBase)}',
-              style: const TextStyle(fontSize: 16, color: Colors.white70),
-            ),
-            const SizedBox(height: 10),
-            _progresoOperativoViaje(estadoBase),
-            _buildDuracionEnRuta(v, estadoBase),
+          if (!corp) const SizedBox(height: 8),
+          Text(
+            '🕓 Fecha: $fecha',
+            style: const TextStyle(fontSize: 16, color: Colors.white70),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '💰 Total: $total',
+            style: const TextStyle(fontSize: 18, color: Colors.greenAccent),
+          ),
+          _DesgloseComisionNeto(
+            precio: v.precio,
+            esCorporativo: corp,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '📍 Estado: ${_labelEstado(estadoBase)}',
+            style: const TextStyle(fontSize: 16, color: Colors.white70),
+          ),
+          const SizedBox(height: 10),
+          _progresoOperativoViaje(estadoBase),
+          _buildDuracionEnRuta(v, estadoBase),
+          if (!corp)
             _buildWaypoints(
               v,
               enRuta: EstadosViaje.esEnCurso(estadoBase),
             ),
-            _buildExtras(v),
-          ],
+          _buildExtras(v),
+        ],
+      );
+
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.grey[900],
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white12),
         ),
+        child: contenido,
       );
     } catch (e, st) {
       unawaited(ErrorReporting.reportError(
@@ -3629,7 +5645,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _cancelListenerIniciadoEn = DateTime.now();
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
-    final navigator = Navigator.of(context, rootNavigator: true);
     final messenger = ScaffoldMessenger.of(context);
 
     _cancelSub = FirebaseFirestore.instance
@@ -3654,10 +5669,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           _stopGps();
           messenger.showSnackBar(
               const SnackBar(content: Text('El viaje ya no está disponible.')));
-          navigator.pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const TaxistaShell()),
-            (route) => false,
-          );
+          await NavigationService.irAlInicioTaxista(context: context);
           return;
         }
 
@@ -3723,10 +5735,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   : 'El cliente canceló el viaje.'),
             ),
           );
-          navigator.pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const TaxistaShell()),
-            (route) => false,
-          );
+          await NavigationService.irAlInicioTaxista(context: context);
         }
         // Posición del viaje: ya la cubre StreamBuilder + stream deduplicado; evitar setState duplicado aquí.
       });
@@ -3823,6 +5832,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
     return Scaffold(
       backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
@@ -3865,17 +5875,40 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         children: [
           Positioned.fill(
             child: StreamBuilder<Viaje?>(
-              stream: _stream(),
+              stream: _viajeEnCursoStream ?? const Stream<Viaje?>.empty(),
               builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                      child:
-                          CircularProgressIndicator(color: Colors.greenAccent));
+                if (snap.connectionState == ConnectionState.waiting &&
+                    _cachedViaje == null) {
+                  _scheduleSyncEsperaCargaViaje(true);
+                  return _buildCargandoViajeOError();
+                }
+
+                Viaje? v = snap.hasData ? snap.data : null;
+                if (v != null && _esCorpInformativoExcluido(v)) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) unawaited(_limpiarCorpDeViajeEnCursoAlEntrar());
+                  });
+                  v = null;
+                }
+                if (v == null &&
+                    (snap.connectionState == ConnectionState.waiting ||
+                        ActiveTripService.debeBloquearShellSinViajeTaxista ||
+                        ActiveTripService.debeMantenerOverlayViajeEnShell ||
+                        _cachedViaje != null)) {
+                  final Viaje? cache = _cachedViaje;
+                  if (cache != null && !_esCorpInformativoExcluido(cache)) {
+                    v = cache;
+                  }
+                  if (snap.hasData &&
+                      snap.data == null &&
+                      _cachedViaje != null &&
+                      v == null) {
+                    _programarConfirmacionViajeNull();
+                  }
                 }
 
                 if (snap.hasError) {
-                  if (_cachedViaje != null) {
-                    final v = _cachedViaje!;
+                  if (v != null) {
                     final fecha = _safeFechaViaje(v.fechaHora);
                     final total = _safeMoneyViaje(v.precio);
                     final estadoBase = EstadosViaje.normalizar(
@@ -3889,13 +5922,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                     );
                     return Column(
                       children: [
-                        const Expanded(
+                        Expanded(
                           flex: 3,
                           child: RepaintBoundary(
-                            child: MapaTiempoReal(
-                              key: ValueKey<String>('mapa-cache-viaje'),
-                              esTaxista: true,
-                              esCliente: false,
+                            child: _mapaOPlaceholder(
+                              mapa: const MapaTiempoReal(
+                                key: ValueKey<String>('mapa-cache-viaje'),
+                                esTaxista: true,
+                                esCliente: false,
+                              ),
                             ),
                           ),
                         ),
@@ -3922,7 +5957,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                                         color: Colors.greenAccent)),
                                 // Desglose informativo (solo lectura, no
                                 // modifica el cálculo): comisión RAI y neto.
-                                _DesgloseComisionNeto(precio: v.precio),
+                                _DesgloseComisionNeto(
+              precio: v.precio,
+              esCorporativo:
+                  CorporativoPasajerosChoferCard.esViajeCorporativo(v),
+            ),
                                 const SizedBox(height: 8),
                                 Text('📍 Estado: ${_labelEstado(estadoBase)}',
                                     style: const TextStyle(
@@ -3939,52 +5978,41 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       ],
                     );
                   }
-                  return const Center(
-                      child:
-                          CircularProgressIndicator(color: Colors.greenAccent));
+                  _scheduleSyncEsperaCargaViaje(true);
+                  return _buildCargandoViajeOError();
                 }
 
-                final v = snap.data;
-
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  final bool escucharPendientes = v != null &&
-                      (() {
-                        final String est = EstadosViaje.normalizar(
-                          v.estado.isNotEmpty
-                              ? v.estado
-                              : (v.completado
-                                  ? EstadosViaje.completado
-                                  : (v.aceptado
-                                      ? EstadosViaje.aceptado
-                                      : EstadosViaje.pendiente)),
-                        );
-                        // Desde aceptado / en camino al pickup hasta a bordo / en curso: puede reservar el siguiente.
-                        return EstadosViaje.esActivo(est);
-                      })();
-                  if (_viajesCercanosEscucha.value != escucharPendientes) {
-                    _viajesCercanosEscucha.value = escucharPendientes;
-                    if (!escucharPendientes) {
-                      _viajesCercanosCtl.resetListeningUi();
-                    }
-                  }
-                  _sincronizarReferenciaOrdenCola(v);
-                });
-
                 if (v == null) {
-                  _cachedViaje = null;
+                  _cancelarDebounceViajeNull();
                   _navPickupPrefsLoadedForId = null;
                   _distanciaMetrosAlDestino = null;
                   _stopGps();
+                  if (ActiveTripService.debeBloquearShellSinViajeTaxista ||
+                      ActiveTripService.debeMantenerOverlayViajeEnShell) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) unawaited(_salirSiSoloCorpInformativo());
+                    });
+                    _scheduleSyncEsperaCargaViaje(true);
+                    return _buildCargandoViajeOError();
+                  }
+                  _cachedViaje = null;
+                  _scheduleSyncEsperaCargaViaje(false);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    ActiveTripService.cancelarMantenimientoOverlayViaje();
+                    ActiveTripService.cancelarBloqueoShellTaxista();
+                    ActiveTripService.notificarRebuildShell();
+                  });
                   return Column(
                     children: [
-                      const Expanded(
+                      Expanded(
                         flex: 3,
                         child: RepaintBoundary(
-                          child: MapaTiempoReal(
-                            key: ValueKey<String>('mapa-sin-viaje'),
-                            esTaxista: true,
-                            esCliente: false,
+                          child: _mapaOPlaceholder(
+                            mapa: const MapaTiempoReal(
+                              key: ValueKey<String>('mapa-sin-viaje'),
+                              esTaxista: true,
+                              esCliente: false,
+                            ),
                           ),
                         ),
                       ),
@@ -4044,8 +6072,44 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   );
                 }
 
+                _cancelarDebounceViajeNull();
+                _scheduleSyncEsperaCargaViaje(false);
+
+                if (_esCorpInformativoExcluido(v)) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) unawaited(_limpiarCorpDeViajeEnCursoAlEntrar());
+                  });
+                  _scheduleSyncEsperaCargaViaje(false);
+                  return _buildCargandoViajeOError();
+                }
+
+                final viaje = v;
+
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  final bool escucharPendientes = (() {
+                    final String est = EstadosViaje.normalizar(
+                      viaje.estado.isNotEmpty
+                          ? viaje.estado
+                          : (viaje.completado
+                              ? EstadosViaje.completado
+                              : (viaje.aceptado
+                                  ? EstadosViaje.aceptado
+                                  : EstadosViaje.pendiente)),
+                    );
+                    return EstadosViaje.esActivo(est);
+                  })();
+                  if (_viajesCercanosEscucha.value != escucharPendientes) {
+                    _viajesCercanosEscucha.value = escucharPendientes;
+                    if (!escucharPendientes) {
+                      _viajesCercanosCtl.resetListeningUi();
+                    }
+                  }
+                  _sincronizarReferenciaOrdenCola(viaje);
+                });
+
                 // Actualizar cache
-                if (_cachedViaje?.id != v.id) {
+                if (_cachedViaje?.id != viaje.id) {
                   _navPickupPrefsLoadedForId = null;
                   _navDestinoPrefsLoadedForId = null;
                   _navegacionIniciada = false;
@@ -4053,25 +6117,35 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   _distanciaMetrosAlDestino = null;
                   _multiLegCompletadas = 0;
                   _multiNavViajeId = null;
-                  _cachedViaje = v;
-                  _aplicarProgresoMultiparadaDesdeViaje(v);
-                  _escucharCancelacionRemota(v.id);
-                  unawaited(_watchBolaCancelEnViaje(v.id));
+                  _corpPinUiActivo = false;
+                  _corpPinSheetExpandido = false;
+                  final Viaje? prevCache = _cachedViaje;
+                  _cachedViaje = viaje;
+                  _notificarCambioPasajerosCorpSiCorresponde(prevCache, viaje);
+                  _aplicarProgresoMultiparadaDesdeViaje(viaje);
+                  _asegurarChatCorporativo(viaje);
+                  _escucharCancelacionRemota(viaje.id);
+                  unawaited(_watchBolaCancelEnViaje(viaje.id));
+                  unawaited(_syncCorpCodigoLive(viaje.id));
 
                   WidgetsBinding.instance.addPostFrameCallback((_) {
-                    _asegurarGps(v.id).then((_) {
+                    _asegurarGps(viaje.id).then((_) {
                       if (mounted) {
                         _scheduleDrawRoute();
                       }
                     });
                   });
                 } else {
-                  final String prevSig = _cachedViaje != null
-                      ? _firmaRutaMapaTaxista(_cachedViaje!)
+                  final Viaje? prevCache = _cachedViaje;
+                  final String prevSig = prevCache != null
+                      ? _firmaRutaMapaTaxista(prevCache)
                       : '';
-                  _cachedViaje = v;
-                  _aplicarProgresoMultiparadaDesdeViaje(v);
-                  final String newSig = _firmaRutaMapaTaxista(v);
+                  _cachedViaje = viaje;
+                  _notificarCambioPasajerosCorpSiCorresponde(prevCache, viaje);
+                  _aplicarProgresoMultiparadaDesdeViaje(viaje);
+                  _asegurarChatCorporativo(viaje);
+                  unawaited(_syncCorpCodigoLive(viaje.id));
+                  final String newSig = _firmaRutaMapaTaxista(viaje);
                   if (prevSig != newSig && mounted) {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (mounted) _scheduleDrawRoute();
@@ -4081,29 +6155,26 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) {
-                    unawaited(_loadNavPickupPrefs(v));
-                    unawaited(_loadNavDestinoPrefs(v));
+                    unawaited(_loadNavPickupPrefs(viaje));
+                    unawaited(_loadNavDestinoPrefs(viaje));
                   }
                   _recalcDistanciaDestino();
-                  _sincronizarReferenciaOrdenCola(v);
+                  _sincronizarReferenciaOrdenCola(viaje);
                 });
 
                 final estadoBase = EstadosViaje.normalizar(
-                  v.estado.isNotEmpty
-                      ? v.estado
-                      : (v.completado
+                  viaje.estado.isNotEmpty
+                      ? viaje.estado
+                      : (viaje.completado
                           ? EstadosViaje.completado
-                          : (v.aceptado
+                          : (viaje.aceptado
                               ? EstadosViaje.aceptado
                               : EstadosViaje.pendiente)),
                 );
 
                 if (estadoBase == EstadosViaje.cancelado) {
-                  final cancelNavigator =
-                      Navigator.of(context, rootNavigator: true);
-
                   WidgetsBinding.instance.addPostFrameCallback((_) async {
-                    unawaited(_persistNavPickupFlag(v.id, false));
+                    unawaited(_persistNavPickupFlag(viaje.id, false));
                     _stopGps();
                     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
                     if (uid.isNotEmpty) {
@@ -4125,167 +6196,125 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                         );
                       }
                     }
-                    if (mounted) {
-                      cancelNavigator.pushAndRemoveUntil(
-                        MaterialPageRoute(builder: (_) => const TaxistaShell()),
-                        (route) => false,
-                      );
-                    }
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('El cliente canceló el viaje.'),
+                        duration: Duration(seconds: 4),
+                      ),
+                    );
+                    await NavigationService.irAlInicioTaxista(context: context);
                   });
                   return const SizedBox.shrink();
                 }
 
-                final mostrarOrigen = EstadosViaje.esAceptado(estadoBase) ||
-                    EstadosViaje.esEnCaminoPickup(estadoBase) ||
-                    EstadosViaje.esAbordo(estadoBase);
-
-                final mostrarDestino = EstadosViaje.esEnCurso(estadoBase) ||
-                    (EstadosViaje.esAbordo(estadoBase) && v.codigoVerificado);
-
+                // Pins origen/destino siempre (aunque la ruta Directions aún no llegó).
                 final LatLng? puntoOrigen =
-                    _coordsValid(v.latCliente, v.lonCliente)
-                        ? LatLng(v.latCliente, v.lonCliente)
+                    _coordsValid(viaje.latCliente, viaje.lonCliente)
+                        ? LatLng(viaje.latCliente, viaje.lonCliente)
                         : null;
 
                 final LatLng? puntoDestino =
-                    _coordsValid(v.latDestino, v.lonDestino)
-                        ? LatLng(v.latDestino, v.lonDestino)
+                    _coordsValid(viaje.latDestino, viaje.lonDestino)
+                        ? LatLng(viaje.latDestino, viaje.lonDestino)
                         : null;
 
-                if (_viajeSheetOcultoPorModalNav) {
-                  return RepaintBoundary(
-                    child: MapaTiempoReal(
-                      key: ValueKey<String>('mapa-${v.id}'),
-                      origen: puntoOrigen,
-                      origenNombre: v.origen,
-                      destino: puntoDestino,
-                      destinoNombre: v.destino,
-                      mostrarOrigen: mostrarOrigen,
-                      mostrarDestino: mostrarDestino,
-                      esTaxista: true,
-                      esCliente: false,
-                      mostrarTaxista: false,
-                      ubicacionTaxista:
-                          _coordsValid(v.latTaxista, v.lonTaxista)
-                              ? LatLng(v.latTaxista, v.lonTaxista)
-                              : null,
-                      overlayPolylines: _polylines,
-                    ),
-                  );
+                final bool esCorpMapa =
+                    CorporativoPasajerosChoferCard.esViajeCorporativo(viaje);
+                if (esCorpMapa) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) unawaited(_limpiarCorpDeViajeEnCursoAlEntrar());
+                  });
+                  return const SizedBox.shrink();
                 }
+                final bool mostrarPinCorp =
+                    _corpDebeMostrarPanelPin(viaje, estadoBase);
+                if (_viajeSheetAseguradoParaId != viaje.id) {
+                  _viajeSheetAseguradoParaId = viaje.id;
+                  _asegurarSheetExpandido(forzar: true);
+                } else if (mostrarPinCorp && !_corpPinSheetExpandido) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _expandirSheetParaPinCorp();
+                  });
+                }
+                if (viaje.codigoVerificado && _corpPinUiActivo) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() {
+                        _corpPinUiActivo = false;
+                        _corpPinSheetExpandido = false;
+                      });
+                    }
+                  });
+                }
+                final Set<Marker> pinsViaje = _corpMapMarkers.isNotEmpty
+                    ? _corpMapMarkers
+                    : (esCorpMapa
+                        ? _buildCorpParadaMarkersSync(viaje)
+                        : _buildTripPointMarkers(viaje));
+                final String? orientacionMapa = esCorpMapa
+                    ? null
+                    : _mensajeOrientacionFlujo(viaje, estadoBase);
 
                 return Stack(
                   fit: StackFit.expand,
                   children: [
                     Positioned.fill(
                       child: RepaintBoundary(
-                        child: MapaTiempoReal(
-                          key: ValueKey<String>('mapa-${v.id}'),
+                        child: _mapaOPlaceholder(
+                          mapa: MapaTiempoReal(
+                          key: ValueKey<String>('mapa-${viaje.id}'),
                           origen: puntoOrigen,
-                          origenNombre: v.origen,
+                          origenNombre: viaje.origen,
                           destino: puntoDestino,
-                          destinoNombre: v.destino,
-                          mostrarOrigen: mostrarOrigen,
-                          mostrarDestino: mostrarDestino,
+                          destinoNombre: viaje.destino,
+                          mostrarOrigen: false,
+                          mostrarDestino: false,
                           esTaxista: true,
                           esCliente: false,
                           mostrarTaxista: false,
                           ubicacionTaxista:
-                              _coordsValid(v.latTaxista, v.lonTaxista)
-                                  ? LatLng(v.latTaxista, v.lonTaxista)
+                              _coordsValid(viaje.latTaxista, viaje.lonTaxista)
+                                  ? LatLng(viaje.latTaxista, viaje.lonTaxista)
                                   : null,
                           overlayPolylines: _polylines,
+                          overlayMarkers: pinsViaje,
                           onUserInteractWithMap: _colapsarViajeSheetPorMapa,
                           onUserMapGestureEnd: _expandirViajeSheetTrasMapa,
+                          suprimirBannerUbicacionLocal: true,
+                        ),
                         ),
                       ),
                     ),
-                    if (_mensajeOrientacionFlujo(v, estadoBase)
-                        case final String orientacionMapa?)
+                    if (orientacionMapa != null || _mostrarAlertaUbicacionEnViaje)
                       Positioned(
                         top: MediaQuery.paddingOf(context).top + 8,
                         left: 12,
                         right: 12,
-                        child: ViajeFlujoOrientacionBanner(
-                          mensaje: orientacionMapa,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (orientacionMapa != null)
+                              ViajeFlujoOrientacionBanner(
+                                mensaje: orientacionMapa,
+                              ),
+                            if (orientacionMapa != null &&
+                                _mostrarAlertaUbicacionEnViaje)
+                              const SizedBox(height: 8),
+                            if (_mostrarAlertaUbicacionEnViaje)
+                              _buildAlertaUbicacionViaje(mapFloating: true),
+                          ],
                         ),
                       ),
-                    DraggableScrollableSheet(
-                      controller: _viajeSheetCtrl,
-                      minChildSize: _kViajeSheetMin,
-                      maxChildSize: 1.0,
-                      initialChildSize: _kViajeSheetInitial,
-                      snap: true,
-                      snapSizes: const <double>[
-                        _kViajeSheetMin,
-                        0.35,
-                        _kViajeSheetInitial,
-                        0.72,
-                        1.0,
-                      ],
-                      builder: (sheetCtx, scrollController) {
-                        final double bottomInset =
-                            MediaQuery.viewPaddingOf(sheetCtx).bottom;
-                        final String? uid =
-                            FirebaseAuth.instance.currentUser?.uid;
-                        return DecoratedBox(
-                          decoration: const BoxDecoration(
-                            color: Colors.black,
-                            borderRadius: BorderRadius.vertical(
-                                top: Radius.circular(16)),
-                            border: Border(
-                                top: BorderSide(color: Color(0x22FFFFFF))),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Color(0x66000000),
-                                blurRadius: 16,
-                                offset: Offset(0, -4),
-                              ),
-                            ],
-                          ),
-                          child: ListView(
-                            controller: scrollController,
-                            padding: EdgeInsets.fromLTRB(
-                              16,
-                              8,
-                              16,
-                              12 + bottomInset,
-                            ),
-                            children: [
-                              const SizedBox(height: 8),
-                              Center(
-                                child: Container(
-                                  width: 40,
-                                  height: 5,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white24,
-                                    borderRadius: BorderRadius.circular(3),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              _actionBar(v, estadoBase),
-                              if (v.uidCliente.isNotEmpty && uid != null) ...[
-                                const SizedBox(height: 10),
-                                ViajeChatMensajesEnVivo(
-                                  viajeId: v.id,
-                                  miUid: uid,
-                                  otroUid: v.uidCliente,
-                                  otroNombre: 'Cliente',
-                                ),
-                              ],
-                              _viajeSheetDivider(),
-                              if (uid != null)
-                                const _ColaSiguienteViajeBannerSeguro(),
-                              if (uid != null) const SizedBox(height: 12),
-                              _buildDetallesViajePanel(v, estadoBase),
-                              const SizedBox(height: 12),
-                              _tarjetaVehiculoVisibleAlCliente(v),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+                    if (!_viajeSheetOcultoPorModalNav)
+                      _buildViajeDraggableSheet(
+                        context: context,
+                        viaje: viaje,
+                        estadoBase: estadoBase,
+                        esCorpMapa: esCorpMapa,
+                        mostrarPinCorp: mostrarPinCorp,
+                        uid: FirebaseAuth.instance.currentUser?.uid,
+                      ),
                   ],
                 );
               },
@@ -4309,14 +6338,52 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         codigoVerificado: v.codigoVerificado,
         esMultiparada: _esMultiparada(v),
         multiparadaRutaCompleta: _multiparadaRutaCompleta(v),
+        esCorporativo: CorporativoPasajerosChoferCard.esViajeCorporativo(v),
       );
+
+  void _notificarCambioPasajerosCorpSiCorresponde(Viaje? prev, Viaje next) {
+    if (!mounted || prev == null) return;
+    if (!CorporativoPasajerosChoferCard.esViajeCorporativo(next)) return;
+    final String firmaPrev = _firmaPasajerosCorpTaxista(prev);
+    final String firmaNext = _firmaPasajerosCorpTaxista(next);
+    if (firmaPrev == firmaNext) return;
+    final int prevN =
+        CorporativoPasajerosChoferCard.pasajerosDesdeViaje(prev).length;
+    final int nextN =
+        CorporativoPasajerosChoferCard.pasajerosDesdeViaje(next).length;
+    final String msg = nextN > prevN
+        ? 'Ruta actualizada en tiempo real: ahora $nextN pasajero(s).'
+        : nextN < prevN
+            ? 'Ruta actualizada: quedan $nextN pasajero(s) activo(s).'
+            : 'Paradas de la ruta actualizadas.';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _tripFlowSnack(msg, backgroundColor: Colors.lightBlueAccent);
+      _scheduleDrawRoute();
+      _recalcDistanciaDestino();
+    });
+  }
 
   // ==================== BARRA DE ACCIONES ====================
 
   Widget _actionBar(Viaje v, String estadoBase) {
-    final String? orientacion = _mensajeOrientacionFlujo(v, estadoBase);
-    final String actionStateKey =
-        '$estadoBase|${_navegacionIniciada ? 1 : 0}|${_navegacionDestinoIniciada ? 1 : 0}|${_clienteCerca ? 1 : 0}|${v.codigoVerificado ? 1 : 0}|${orientacion ?? ''}';
+    final bool corp = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+    final String? orientacion =
+        corp ? null : _mensajeOrientacionFlujo(v, estadoBase);
+    final List<Widget> buttons = _getActionButtons(v, estadoBase);
+    if (orientacion == null && buttons.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final Widget contenido = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (orientacion != null) ...<Widget>[
+          ViajeFlujoOrientacionBanner(mensaje: orientacion),
+          const SizedBox(height: 12),
+        ],
+        ...buttons,
+      ],
+    );
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -4324,117 +6391,583 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 260),
-        switchInCurve: Curves.easeOutCubic,
-        switchOutCurve: Curves.easeInCubic,
-        transitionBuilder: (child, animation) => FadeTransition(
-          opacity: animation,
-          child: SizeTransition(
-            sizeFactor: animation,
-            axisAlignment: -1,
-            child: child,
-          ),
+      child: corp
+          ? contenido
+          : AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              layoutBuilder: (Widget? currentChild,
+                      List<Widget> previousChildren) =>
+                  currentChild ?? const SizedBox.shrink(),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: child,
+              ),
+              child: KeyedSubtree(
+                key: ValueKey<String>(
+                  '$estadoBase|${_navegacionIniciada ? 1 : 0}|${_navegacionDestinoIniciada ? 1 : 0}|${_clienteCerca ? 1 : 0}|${v.codigoVerificado ? 1 : 0}|${orientacion ?? ''}',
+                ),
+                child: contenido,
+              ),
+            ),
+    );
+  }
+
+  Widget _buildCorporativoPinIngresoPanel(Viaje v) {
+    final uidCli = _uidClienteDe(v);
+    return Container(
+      key: const ValueKey<String>('corp_pin_ingreso_panel'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111827),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: const Color(0xFF5EEAD4).withValues(alpha: 0.45),
         ),
-        child: Column(
-          key: ValueKey<String>(actionStateKey),
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (orientacion != null) ...<Widget>[
-              ViajeFlujoOrientacionBanner(mensaje: orientacion),
-              const SizedBox(height: 12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.pin_rounded, color: Color(0xFF5EEAD4), size: 22),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Paso 3 — Código con los pasajeros',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
             ],
-            ..._getActionButtons(v, estadoBase),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Pedí el PIN de 6 dígitos del período a los empleados o al encargado. '
+            'Tenés hasta ${CorporativoEsperaCodigoConstants.timeoutMinutos} min '
+            'desde la hora de recogida.',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.72),
+              fontSize: 13,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Intentos: ${_corpIntentosFallidos.clamp(0, 3)}/3',
+                style: TextStyle(
+                  color: _corpIntentosFallidos >= 2
+                      ? Colors.redAccent
+                      : Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                'Tiempo: ${_formatoTiempoRestante(_corpTiempoRestanteCodigo)}',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _codigoCtrl,
+            focusNode: _corpPinFocusNode,
+            autofocus: false,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 32,
+              letterSpacing: 8,
+              fontWeight: FontWeight.bold,
+            ),
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            maxLength: 6,
+            onSubmitted: (_) =>
+                _verificarCodigo(v.id, v.codigoVerificacion ?? ''),
+            decoration: InputDecoration(
+              hintText: '000000',
+              hintStyle: TextStyle(
+                color: Colors.white.withValues(alpha: 0.3),
+                fontSize: 32,
+                letterSpacing: 8,
+              ),
+              filled: true,
+              fillColor: Colors.grey[900],
+              border: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: Color(0xFF5EEAD4)),
+              ),
+              enabledBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: Color(0xFF5EEAD4)),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: Color(0xFF5EEAD4), width: 2),
+              ),
+              counterText: '',
+              contentPadding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+          ),
+          const SizedBox(height: 14),
+          _btnPrimario(
+            icon: const Icon(Icons.verified, size: 24),
+            label: const Text(
+              'VERIFICAR E INICIAR RUTA',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+            onPressed: _actionBusy
+                ? null
+                : () => _verificarCodigo(v.id, v.codigoVerificacion ?? ''),
+            backgroundColor: Colors.orange,
+          ),
+          const SizedBox(height: 10),
+          _btnSecundario(
+            icon: const Icon(Icons.help_outline, size: 20),
+            label: const Text('No tengo código'),
+            onPressed:
+                _actionBusy ? null : () => _solicitarCodigoCorpEncargado(v),
+          ),
+          if (uidCli.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _btnSecundario(
+              icon: const Icon(Icons.chat, size: 20),
+              label: Text(_labelContactar(v)),
+              onPressed: () => _contactarCliente(
+                uidCliente: uidCli,
+                viajeId: v.id,
+                viaje: v,
+              ),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
 
+  void _onNavegacionExternaDesdeCardCorp(Viaje v) {
+    if (!mounted) return;
+    final estadoBase = EstadosViaje.normalizar(
+      v.estado.isNotEmpty
+          ? v.estado
+          : (v.completado
+              ? EstadosViaje.completado
+              : (v.aceptado
+                  ? EstadosViaje.aceptado
+                  : EstadosViaje.pendiente)),
+    );
+    if (_corpMostrarNavPickup(v, estadoBase)) {
+      unawaited(_persistNavPickupFlag(v.id, true));
+      setState(() => _navegacionIniciada = true);
+      return;
+    }
+    if (_corpMostrarNavDestino(v, estadoBase)) {
+      _marcarNavegacionDestinoLista(v);
+    }
+  }
+
+  Future<void> _corpIniciarRutaAlDestino(Viaje v) async {
+    if (_actionBusy || _selectorNavegacionAbierto) return;
+    _actionBusy = true;
+    try {
+      await _corpAsegurarViajeEnCurso(v);
+      if (!mounted) return;
+      final operativo = await _corpRefrescarViajeDesdeFirestore(v.id) ?? v;
+      final abierto = await _corpAbrirNavegacionDestinoActual(operativo);
+      if (!mounted) return;
+      if (!abierto) {
+        _tripFlowSnack(
+          'Ruta iniciada. Tocá Maps/Waze arriba o «Navegar a parada».',
+          backgroundColor: Colors.green.shade800,
+        );
+      } else if (_permitePruebaSinRecorrido(operativo)) {
+        _tripFlowSnack(
+          'Ruta iniciada. En modo prueba podés finalizar sin recorrer km.',
+          backgroundColor: Colors.green.shade800,
+        );
+      }
+      _expandirViajeSheetTrasMapa();
+    } finally {
+      if (mounted) _actionBusy = false;
+    }
+  }
+
+  List<Widget> _botonesCorpTrasCodigo(
+    Viaje v,
+    String estadoBase,
+    String uidCli,
+  ) {
+    final bool multi = _esMultiparada(v);
+    final bool multiCompleta = multi && _multiparadaRutaCompleta(v);
+    final bool rutaIniciada = _navegacionDestinoIniciada ||
+        EstadosViaje.esEnCurso(estadoBase) ||
+        (multi && _multiLegCompletadas > 0);
+
+    return [
+      _estadoProfesionalCard(
+        icon: multiCompleta
+            ? Icons.flag_rounded
+            : Icons.task_alt_rounded,
+        color: multiCompleta ? Colors.lightBlueAccent : Colors.greenAccent,
+        titulo: multiCompleta
+            ? 'Paso actual: todas las paradas hechas'
+            : rutaIniciada && multi
+                ? 'Paso actual: ruta en curso'
+                : 'Paso actual: código verificado',
+        detalle: multiCompleta
+            ? 'Finalizá el viaje para cerrar la ruta corporativa.'
+            : rutaIniciada && multi
+                ? 'Confirmá cada parada o navegá con Maps/Waze.'
+                : multi
+                    ? 'Siguiente: iniciar ruta y dejar pasajeros uno a uno.'
+                    : 'Siguiente: abrir navegación al destino y conducir.',
+      ),
+      const SizedBox(height: 12),
+      Text(
+        multiCompleta ? 'Ruta multiparada completa' : 'Código verificado',
+        style: const TextStyle(
+            color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        multiCompleta
+            ? 'Todas las paradas quedaron confirmadas. Tocá «Finalizar viaje».'
+            : rutaIniciada && multi
+                ? 'Seguí con Maps/Waze o confirmá la parada actual abajo.'
+                : multi
+                    ? 'El código del período quedó verificado. Abrí Maps o Waze arriba '
+                        'o tocá «Iniciar ruta» para la primera parada.'
+                    : 'El código quedó verificado. Abrí Maps o Waze arriba o tocá «Iniciar ruta».',
+        style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.35),
+      ),
+      const SizedBox(height: 16),
+      if (!multiCompleta && !rutaIniciada)
+        _btnPrimario(
+          icon: const Icon(Icons.play_arrow, size: 24),
+          label: const Text('Iniciar ruta al destino',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          onPressed: () => unawaited(_corpIniciarRutaAlDestino(v)),
+        ),
+      if (multi) ...[
+        if (!multiCompleta && !rutaIniciada) const SizedBox(height: 12),
+        ..._bloqueNavegacionMultiparada(
+          v,
+          habilitado: _corpMultiparadaHabilitada(v, estadoBase),
+        ),
+      ],
+      if (multiCompleta ||
+          (!multi && _corpMostrarBotonFinalizar(v, estadoBase))) ...[
+        const SizedBox(height: 12),
+        if (multiCompleta)
+          Text(
+            'Todas las paradas confirmadas. Ya podés cerrar el viaje.',
+            style: TextStyle(
+              color: Colors.greenAccent.withValues(alpha: 0.95),
+              fontSize: 12.5,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
+          )
+        else
+          Text(
+            'Si ya estás en destino, podés finalizar cuando corresponda.',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.62),
+              fontSize: 12.5,
+              height: 1.35,
+            ),
+          ),
+        const SizedBox(height: 12),
+        _btnFinalizarViaje(
+          onPressed: _puedePulsarFinalizarViaje(v)
+              ? () => _finalizarViaje(v)
+              : null,
+          label: _labelFinalizarViaje(v),
+        ),
+      ] else if (multi) ...[
+        const SizedBox(height: 8),
+        Text(
+          'Tras «Iniciar ruta», confirmá cada parada. '
+          'Finalizar se activa al completar todas.',
+          style: TextStyle(
+            color: Colors.orangeAccent.withValues(alpha: 0.95),
+            fontSize: 12.5,
+            height: 1.35,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    ];
+  }
+
   List<Widget> _getActionButtons(Viaje v, String estadoBase) {
     final uidCli = _uidClienteDe(v);
+    final bool corp = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
 
-    if (EstadosViaje.esAceptado(estadoBase) ||
-        EstadosViaje.esEnCaminoPickup(estadoBase)) {
+    if (corp) {
       return [
         _estadoProfesionalCard(
-          icon: Icons.directions_car_filled_rounded,
-          color: Colors.lightBlueAccent,
-          titulo: 'Paso actual: ir al punto de recogida',
-          detalle: _navegacionIniciada
-              ? 'Siguiente acción: confirmar "Cliente a bordo" y el código.'
-              : 'Primero abre Waze/Maps con «Navegar hacia el cliente».',
+          icon: Icons.alt_route,
+          color: const Color(0xFF5EEAD4),
+          titulo: 'Ruta corporativa',
+          detalle:
+              'No va en «Viaje en curso». Entrá por Mi trabajo → '
+              'Rutas corporativas.',
         ),
         const SizedBox(height: 12),
-        const Text(
-          'Paso 1: ve al cliente · Paso 2: confirma abordo · Paso 3: código que te dicta · Paso 4: navegas al destino',
-          style: TextStyle(color: Colors.white60, fontSize: 12, height: 1.35),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.grey[850],
-            borderRadius: BorderRadius.circular(12),
+        _btnPrimario(
+          icon: const Icon(Icons.home_rounded, size: 24),
+          label: const Text(
+            'Volver a Mi trabajo',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '📍 Punto de recogida del cliente',
-                style: TextStyle(
-                  color: Colors.greenAccent,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                v.origen,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              if (uidCli.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: ClientePerfilConductorChip(
-                    uidCliente: uidCli,
+          onPressed: _actionBusy
+              ? null
+              : () {
+                  unawaited(_limpiarCorpDeViajeEnCursoAlEntrar());
+                  unawaited(NavigationService.irAlInicioTaxista(context: context));
+                },
+        ),
+      ];
+    }
+
+    if (EstadosViaje.esAceptado(estadoBase) ||
+        EstadosViaje.esEnCaminoPickup(estadoBase) ||
+        _corpEnFasePickup(v, estadoBase)) {
+      final bool corp = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+      return [
+        if (!corp) ...[
+          _estadoProfesionalCard(
+            icon: Icons.directions_car_filled_rounded,
+            color: Colors.lightBlueAccent,
+            titulo: 'Paso actual: ir al punto de recogida',
+            detalle: _navegacionIniciada
+                ? 'Siguiente acción: confirmar "Cliente a bordo" y el código.'
+                : 'Primero abre Waze/Maps con «Navegar hacia el cliente».',
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Paso 1: ve al cliente · Paso 2: confirma abordo · Paso 3: código que te dicta · Paso 4: navegas al destino',
+            style: const TextStyle(
+                color: Colors.white60, fontSize: 12, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey[850],
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '📍 Punto de recogida del cliente',
+                  style: TextStyle(
+                    color: Colors.greenAccent,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ],
-              if (_clienteCerca) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(8),
+                const SizedBox(height: 4),
+                Text(
+                  v.origen,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
                   ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.location_on, color: Colors.green, size: 18),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Estás cerca del punto de recogida.',
-                          style: TextStyle(
-                              color: Colors.green, fontWeight: FontWeight.w500),
+                ),
+                if (uidCli.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: ClientePerfilConductorChip(
+                      uidCliente: uidCli,
+                    ),
+                  ),
+                ],
+                if (_clienteCerca) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.location_on, color: Colors.green, size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Estás cerca del punto de recogida.',
+                            style: TextStyle(
+                                color: Colors.green,
+                                fontWeight: FontWeight.w500),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ] else if (_clienteCerca) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.green.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.location_on, color: Colors.greenAccent, size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Cerca de la empresa',
+                    style: TextStyle(
+                      color: Colors.greenAccent,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],
-            ],
+            ),
           ),
-        ),
-        const SizedBox(height: 16),
-        if (!_navegacionIniciada) ...[
+          const SizedBox(height: 12),
+        ],
+        if (corp) ...[
+          if (_corpSinPin(v)) ...[
+            Text(
+              'Esta ruta usa la pantalla de destinos (sin código de verificación).',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.72),
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _actionBusy
+                    ? null
+                    : () {
+                        final uid = FirebaseAuth.instance.currentUser?.uid;
+                        if (uid == null) return;
+                        unawaited(
+                          NavigationService.abrirViajeCorporativoTaxista(
+                            uidTaxista: uid,
+                            viajeId: v.id,
+                          ),
+                        );
+                      },
+                icon: const Icon(Icons.map_rounded, size: 24),
+                label: const Text(
+                  'Abrir ruta y destinos',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0D9488),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 56),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+          ] else ...[
+          if (!_navegacionIniciada) ...[
+            Text(
+              'Paso 1: abrí Maps o Waze arriba para ir a la empresa.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.72),
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: (_navegacionIniciada && !_actionBusy)
+                  ? () => _marcarClienteAbordo(v)
+                  : null,
+              icon: const Icon(Icons.person_add, size: 24),
+              label: const Text(
+                'Cliente a bordo (paso 2)',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: Colors.grey.shade800,
+                disabledForegroundColor: Colors.white38,
+                minimumSize: const Size(double.infinity, 56),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+          if (!_navegacionIniciada) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Este botón se activa al volver de Maps o Waze.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 12,
+              ),
+            ),
+          ],
+          if (_permitePruebaSinRecorrido(v)) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _actionBusy
+                    ? null
+                    : () async {
+                        unawaited(_persistNavPickupFlag(v.id, true));
+                        await _marcarClienteAbordo(v);
+                      },
+                icon: const Icon(Icons.check_circle_outline_rounded, size: 22),
+                label: const Text('Llegué — mostrar código (prueba)'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.tealAccent,
+                  side: BorderSide(
+                      color: Colors.tealAccent.withValues(alpha: 0.55)),
+                  minimumSize: const Size(double.infinity, 48),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ],
+          ],
+        ] else if (!_navegacionIniciada) ...[
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -4459,14 +6992,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: () async {
-                  unawaited(_persistNavPickupFlag(v.id, true));
-                  setState(() => _navegacionIniciada = true);
-                  _tripFlowSnack(
-                    'Punto marcado. Siguiente: «Cliente a bordo (paso 2)».',
-                    backgroundColor: Colors.teal.shade800,
-                  );
-                },
+                onPressed: _actionBusy
+                    ? null
+                    : () async {
+                        unawaited(_persistNavPickupFlag(v.id, true));
+                        setState(() => _navegacionIniciada = true);
+                        _tripFlowSnack(
+                          'Punto marcado. Siguiente: «Cliente a bordo (paso 2)».',
+                          backgroundColor: Colors.teal.shade800,
+                        );
+                      },
                 icon: const Icon(Icons.check_circle_outline_rounded, size: 22),
                 label: const Text('Llegué al punto (prueba en casa)'),
                 style: OutlinedButton.styleFrom(
@@ -4500,52 +7035,56 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           ),
         ],
-        const SizedBox(height: 16),
-        const Divider(color: Colors.white24),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: uidCli.isEmpty
-                    ? null
-                    : () => _verInfoCliente(uidCliente: uidCli),
-                icon: const Icon(Icons.person, size: 18),
-                label: const Text('Ver cliente'),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
+        if (!corp) ...[
+          const SizedBox(height: 16),
+          const Divider(color: Colors.white24),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: uidCli.isEmpty
+                      ? null
+                      : () => _verInfoCliente(uidCliente: uidCli),
+                  icon: const Icon(Icons.person, size: 18),
+                  label: Text(_labelVerOtro(v)),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: uidCli.isEmpty
-                    ? null
-                    : () =>
-                        _contactarCliente(uidCliente: uidCli, viajeId: v.id),
-                icon: const Icon(Icons.chat, size: 18),
-                label: const Text('Contactar'),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: uidCli.isEmpty
+                      ? null
+                      : () =>
+                          _contactarCliente(
+                              uidCliente: uidCli, viajeId: v.id, viaje: v),
+                  icon: const Icon(Icons.chat, size: 18),
+                  label: Text(_labelContactar(v)),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
                 ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
+        ] else
+          const SizedBox(height: 8),
         const SizedBox(height: 12),
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
-            onPressed: () => _cancelarPorTaxista(v),
+            onPressed: _corpEnFasePickup(v, estadoBase) ? () => _cancelarPorTaxista(v) : null,
             icon: const Icon(Icons.cancel_outlined, size: 20),
             label: const Text('Cancelar viaje', style: TextStyle(fontSize: 15)),
             style: OutlinedButton.styleFrom(
@@ -4560,8 +7099,46 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       ];
     }
 
-    if (EstadosViaje.esAbordo(estadoBase)) {
-      if (!_codigoEsperadoValido(v.codigoVerificacion)) {
+    if (EstadosViaje.esAbordo(estadoBase) ||
+        (CorporativoPasajerosChoferCard.esViajeCorporativo(v) &&
+            !_corpRutaOperativa(v) &&
+            _corpClienteAbordoConfirmado(v) &&
+            (estadoBase == EstadosViaje.enOrigenEsperandoCodigo ||
+                estadoBase == EstadosViaje.pendienteCodigo ||
+                EstadosViaje.esEnCurso(estadoBase)))) {
+      final bool corpPin = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+      if (corpPin && _corpSinPin(v)) {
+        return [
+          _estadoProfesionalCard(
+            icon: Icons.route_rounded,
+            color: const Color(0xFF5EEAD4),
+            titulo: 'Ruta corporativa',
+            detalle:
+                'Sin código de verificación: usá la pantalla de destinos.',
+          ),
+          const SizedBox(height: 12),
+          _btnPrimario(
+            icon: const Icon(Icons.map_rounded, size: 24),
+            label: const Text(
+              'Abrir ruta y destinos',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            onPressed: _actionBusy
+                ? null
+                : () {
+                    final uid = FirebaseAuth.instance.currentUser?.uid;
+                    if (uid == null) return;
+                    unawaited(
+                      NavigationService.abrirViajeCorporativoTaxista(
+                        uidTaxista: uid,
+                        viajeId: v.id,
+                      ),
+                    );
+                  },
+          ),
+        ];
+      }
+      if (!corpPin && !_codigoEsperadoValido(v.codigoVerificacion)) {
         return [
           _estadoProfesionalCard(
             icon: Icons.warning_amber_rounded,
@@ -4590,19 +7167,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             children: [
               _btnSecundario(
                 icon: const Icon(Icons.person, size: 20),
-                label: const Text('Ver cliente'),
+                label: Text(_labelVerOtro(v)),
                 onPressed: uidCli.isEmpty
                     ? null
                     : () => _verInfoCliente(uidCliente: uidCli),
+                enFila: true,
               ),
               const SizedBox(width: 12),
               _btnSecundario(
                 icon: const Icon(Icons.chat, size: 20),
-                label: const Text('Contactar'),
+                label: Text(_labelContactar(v)),
                 onPressed: uidCli.isEmpty
                     ? null
                     : () =>
-                        _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+                        _contactarCliente(
+                            uidCliente: uidCli, viajeId: v.id, viaje: v),
+                enFila: true,
               ),
             ],
           ),
@@ -4622,8 +7202,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             icon: Icons.task_alt_rounded,
             color: Colors.greenAccent,
             titulo: 'Paso actual: código verificado',
-            detalle:
-                'Siguiente acción esperada: abrir navegación al destino y conducir.',
+            detalle: corpPin
+                ? 'Siguiente: iniciar ruta y dejar pasajeros uno a uno.'
+                : 'Siguiente acción esperada: abrir navegación al destino y conducir.',
           ),
           const SizedBox(height: 12),
           const Text(
@@ -4632,82 +7213,50 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'El código ya quedó verificado. Continúa para pasar a «en ruta» y abrir navegación al destino.',
-            style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.35),
+          Text(
+            corpPin
+                ? 'El código del período quedó verificado. Continúa para pasar a «en ruta» y dejar pasajeros en orden.'
+                : 'El código ya quedó verificado. Continúa para pasar a «en ruta» y abrir navegación al destino.',
+            style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.35),
           ),
           const SizedBox(height: 16),
             _btnPrimario(
               icon: const Icon(Icons.play_arrow, size: 24),
               label: const Text('Iniciar ruta al destino',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-              onPressed: () async {
-                if (_actionBusy || _selectorNavegacionAbierto) return;
-                _actionBusy = true;
-                final uidTax = FirebaseAuth.instance.currentUser?.uid;
-                if (uidTax == null) {
-                  _actionBusy = false;
-                  return;
-                }
-                try {
-                  try {
-                    await ViajesRepo.iniciarViaje(
-                        viajeId: v.id, uidTaxista: uidTax);
-                  } catch (e, st) {
-                    await ErrorReporting.reportError(
-                      e,
-                      stack: st,
-                      context: 'viaje_en_curso_taxista: iniciarViaje (continuar)',
-                    );
-                  }
-                  if (!mounted) return;
-                  if (_permitePruebaSinRecorrido(v)) {
-                    _tripFlowSnack(
-                      'Ruta iniciada. Abrí «Navegar al destino» o finalizá directo en prueba.',
-                      backgroundColor: Colors.green.shade800,
-                    );
-                    _expandirViajeSheetTrasMapa();
-                    return;
-                  }
-                  final okGps = await _gpsListoParaAbrirNavegacionExterna(v);
-                  if (!okGps) return;
-                  if (!mounted) return;
-                  if (_esMultiparada(v)) {
-                    await _navegarDestinoMultiparadaActual(v);
-                  } else {
-                    await _selectorNavegacionDestino(
-                      v.latDestino,
-                      v.lonDestino,
-                      viajeParaPersistirDestino: v,
-                    );
-                  }
-                } finally {
-                  _actionBusy = false;
-                }
-              },
+              onPressed: () => unawaited(_corpIniciarRutaAlDestino(v)),
             ),
-          if (_esMultiparada(v)) ..._bloqueNavegacionMultiparada(v),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              _btnSecundario(
-                icon: const Icon(Icons.person, size: 20),
-                label: const Text('Ver cliente'),
-                onPressed: uidCli.isEmpty
-                    ? null
-                    : () => _verInfoCliente(uidCliente: uidCli),
-              ),
-              const SizedBox(width: 12),
-              _btnSecundario(
-                icon: const Icon(Icons.chat, size: 20),
-                label: const Text('Contactar'),
-                onPressed: uidCli.isEmpty
-                    ? null
-                    : () =>
-                        _contactarCliente(uidCliente: uidCli, viajeId: v.id),
-              ),
-            ],
-          ),
+          if (_esMultiparada(v) &&
+              _corpMultiparadaHabilitada(v, estadoBase)) ...[
+            const SizedBox(height: 12),
+            ..._bloqueNavegacionMultiparada(v),
+          ],
+          if (!corpPin) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _btnSecundario(
+                  icon: const Icon(Icons.person, size: 20),
+                  label: Text(_labelVerOtro(v)),
+                  onPressed: uidCli.isEmpty
+                      ? null
+                      : () => _verInfoCliente(uidCliente: uidCli),
+                  enFila: true,
+                ),
+                const SizedBox(width: 12),
+                _btnSecundario(
+                  icon: const Icon(Icons.chat, size: 20),
+                  label: Text(_labelContactar(v)),
+                  onPressed: uidCli.isEmpty
+                      ? null
+                      : () =>
+                          _contactarCliente(
+                              uidCliente: uidCli, viajeId: v.id, viaje: v),
+                  enFila: true,
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
           const SizedBox(height: 12),
@@ -4723,10 +7272,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               ),
             ),
             const SizedBox(height: 12),
-            _ConfirmarTransferenciaTaxistaButton(
-              viajeId: v.id,
-              metodoPagoFallback: v.metodoPago,
-            ),
+            if (!corpPin)
+              _ConfirmarTransferenciaTaxistaButton(
+                viajeId: v.id,
+                metodoPagoFallback: v.metodoPago,
+              ),
             if (_permitePruebaSinRecorrido(v)) ...[
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -4741,13 +7291,25 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               ),
             ],
             _btnFinalizarViaje(
-              onPressed: _actionBusy ? null : () => _finalizarViaje(v),
+              onPressed: _puedePulsarFinalizarViaje(v)
+                  ? () => _finalizarViaje(v)
+                  : null,
               label: _labelFinalizarViaje(v),
+            ),
+          ] else if (corpPin) ...[
+            Text(
+              'Tras «Iniciar ruta», confirmá cada parada. '
+              'Finalizar se activa al completar todas.',
+              style: TextStyle(
+                color: Colors.orangeAccent.withValues(alpha: 0.95),
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ] else ...[
             Text(
-              'Viaje multiparada: iniciá la ruta y confirmá cada parada con '
-              '«Llegué — siguiente destino» antes de finalizar.',
+              'Viaje multiparada: confirmá cada parada con «Llegué — siguiente destino».',
               style: TextStyle(
                 color: Colors.orangeAccent.withValues(alpha: 0.95),
                 fontSize: 12.5,
@@ -4770,23 +7332,56 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         _estadoProfesionalCard(
           icon: Icons.pin_rounded,
           color: Colors.amberAccent,
-          titulo: 'Paso actual: solicitar PIN al cliente',
-          detalle:
-              'Siguiente acción esperada: validar el código para iniciar la ruta.',
+          titulo: corpPin
+              ? 'Paso actual: código con los pasajeros'
+              : 'Paso actual: solicitar PIN al cliente',
+          detalle: corpPin
+              ? 'Pídeselo a los empleados o al encargado en el punto. '
+                  'No aparece en tu pantalla (anti-fraude).'
+              : 'Siguiente acción esperada: validar el código para iniciar la ruta.',
         ),
         const SizedBox(height: 12),
-        const Text(
-          'Paso 3 — Código con el cliente',
-          style: TextStyle(
+        Text(
+          corpPin ? 'Paso 3 — Código con los pasajeros' : 'Paso 3 — Código con el cliente',
+          style: const TextStyle(
               color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 4),
-        const Text(
-          'El mismo PIN de 6 dígitos que el cliente ve en su pantalla. '
-          'Al verificarlo, el viaje pasa a ruta y se puede abrir navegación al destino.',
-          style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.35),
+        Text(
+          corpPin
+              ? 'Los empleados te dictan el PIN de 6 dígitos del período. '
+                  'Tenés hasta ${CorporativoEsperaCodigoConstants.timeoutMinutos} min '
+                  'desde la hora de recogida (si llegaste antes, el reloj cuenta desde esa hora). '
+                  'Si hoy no laboran (feriado), no te lo dan y la ruta no cuenta.'
+              : 'El mismo PIN de 6 dígitos que el cliente ve en su pantalla. '
+                  'Al verificarlo, el viaje pasa a ruta y se puede abrir navegación al destino.',
+          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.35),
         ),
         const SizedBox(height: 16),
+        if (corpPin) ...[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Intentos: ${_corpIntentosFallidos.clamp(0, 3)}/3',
+                style: TextStyle(
+                  color: _corpIntentosFallidos >= 2
+                      ? Colors.redAccent
+                      : Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                'Tiempo: ${_formatoTiempoRestante(_corpTiempoRestanteCodigo)}',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -4845,52 +7440,75 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           children: [
             _btnSecundario(
               icon: const Icon(Icons.person, size: 20),
-              label: const Text('Ver cliente'),
+              label: Text(_labelVerOtro(v)),
               onPressed: uidCli.isEmpty
                   ? null
                   : () => _verInfoCliente(uidCliente: uidCli),
+              enFila: true,
             ),
             const SizedBox(width: 12),
             _btnSecundario(
               icon: const Icon(Icons.chat, size: 20),
-              label: const Text('Contactar'),
+              label: Text(_labelContactar(v)),
               onPressed: uidCli.isEmpty
                   ? null
-                  : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
+                  : () => _contactarCliente(
+                      uidCliente: uidCli, viajeId: v.id, viaje: v),
+              enFila: true,
             ),
           ],
         ),
         const SizedBox(height: 12),
         Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
         const SizedBox(height: 12),
-        _btnPeligro(
-          icon: const Icon(Icons.cancel_outlined, size: 20),
-          label: const Text('Salir a disponibilidad',
-              style: TextStyle(fontSize: 15)),
-          onPressed: () => _cancelarPorTaxista(v),
-        ),
+        if (corpPin) ...[
+          _btnSecundario(
+            icon: const Icon(Icons.help_outline, size: 20),
+            label: const Text('No tengo código'),
+            onPressed: _actionBusy ? null : () => _solicitarCodigoCorpEncargado(v),
+          ),
+          const SizedBox(height: 8),
+          _btnSecundario(
+            icon: const Icon(Icons.chat, size: 20),
+            label: Text(_labelContactar(v)),
+            onPressed: uidCli.isEmpty
+                ? null
+                : () => _contactarCliente(
+                    uidCliente: uidCli, viajeId: v.id, viaje: v),
+          ),
+        ] else
+          _btnPeligro(
+            icon: const Icon(Icons.cancel_outlined, size: 20),
+            label: const Text('Salir a disponibilidad',
+                style: TextStyle(fontSize: 15)),
+            onPressed: () => _cancelarPorTaxista(v),
+          ),
       ];
     }
 
     if (EstadosViaje.esEnCurso(estadoBase)) {
       final legMulti = _destinoMultiActual(v);
+      final bool corpEnRuta = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
       final String destinoUi = _esMultiparada(v) && legMulti != null
           ? legMulti.label
           : v.destino;
       return [
-        _estadoProfesionalCard(
-          icon: Icons.route_rounded,
-          color: Colors.lightBlueAccent,
-          titulo: _esMultiparada(v)
-              ? 'Paso actual: ruta multiparada'
-              : 'Paso actual: en ruta al destino',
-          detalle: _esMultiparada(v)
-              ? 'Navega parada a parada. Al salir de Waze/Maps, toca «Llegué — siguiente destino».'
-              : 'Siguiente acción esperada: al llegar, confirmar y finalizar el viaje.',
-        ),
-        const SizedBox(height: 12),
+        if (!corpEnRuta)
+          _estadoProfesionalCard(
+            icon: Icons.route_rounded,
+            color: Colors.lightBlueAccent,
+            titulo: _esMultiparada(v)
+                ? 'Paso actual: ruta multiparada'
+                : 'Paso actual: en ruta al destino',
+            detalle: _esMultiparada(v)
+                ? 'Navega parada a parada. Al salir de Waze/Maps, toca «Llegué — siguiente destino».'
+                : 'Siguiente acción esperada: al llegar, confirmar y finalizar el viaje.',
+          ),
+        if (!corpEnRuta) const SizedBox(height: 12),
         Text(
-          _esMultiparada(v) ? 'Destino actual' : 'En camino al destino',
+          corpEnRuta && _esMultiparada(v)
+              ? 'Parada actual'
+              : (_esMultiparada(v) ? 'Destino actual' : 'En camino al destino'),
           style: const TextStyle(
               color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
@@ -4901,24 +7519,32 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
         ),
-        const SizedBox(height: 8),
-        Text(
-          _coordsLegMultiActual(v) == null
-              ? 'No hay coordenadas de destino en el viaje: podés finalizar igual para emitir la factura.'
-              : _distanciaMetrosAlDestino == null
-                  ? 'Distancia al destino: sin señal GPS en este momento (podés finalizar igual).'
-                  : 'Distancia al pin actual: ${_textoDistanciaAlPin(_distanciaMetrosAlDestino!)} '
-                      '(referencia; podés finalizar cuando corresponda).',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.62),
-            fontSize: 12.5,
-            height: 1.35,
+        if (!corpEnRuta) ...[
+          const SizedBox(height: 8),
+          Text(
+            _coordsLegMultiActual(v) == null
+                ? 'No hay coordenadas de destino en el viaje: podés finalizar igual para emitir la factura.'
+                : _distanciaMetrosAlDestino == null
+                    ? 'Distancia al destino: sin señal GPS en este momento (podés finalizar igual).'
+                    : 'Distancia al pin actual: ${_textoDistanciaAlPin(_distanciaMetrosAlDestino!)} '
+                        '(referencia; podés finalizar cuando corresponda).',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.62),
+              fontSize: 12.5,
+              height: 1.35,
+            ),
           ),
-        ),
+        ],
         const SizedBox(height: 16),
-        if (_esMultiparada(v)) ..._bloqueNavegacionMultiparada(v),
+        if (_esMultiparada(v))
+          ..._bloqueNavegacionMultiparada(
+            v,
+            habilitado: !_esViajeCorporativo(v) ||
+                _corpMultiparadaHabilitada(v, estadoBase),
+          ),
         if (!_esMultiparada(v) || _multiparadaRutaCompleta(v)) ...[
-          if (!_navegacionDestinoIniciada) ...[
+          if (!_navegacionDestinoIniciada &&
+              (!_esViajeCorporativo(v) || !_esMultiparada(v))) ...[
             _btnPrimario(
               icon: const Icon(Icons.navigation, size: 24),
               label: const Text('Navegar al destino',
@@ -4962,36 +7588,42 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             const SizedBox(height: 12),
           ],
         ],
-        Row(
-          children: [
-            _btnSecundario(
-              icon: const Icon(Icons.person, size: 20),
-              label: const Text('Ver cliente'),
-              onPressed: uidCli.isEmpty
-                  ? null
-                  : () => _verInfoCliente(uidCliente: uidCli),
-            ),
-            const SizedBox(width: 12),
-            _btnSecundario(
-              icon: const Icon(Icons.chat, size: 20),
-              label: const Text('Contactar'),
-              onPressed: uidCli.isEmpty
-                  ? null
-                  : () => _contactarCliente(uidCliente: uidCli, viajeId: v.id),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
+        if (!corpEnRuta) ...[
+          Row(
+            children: [
+              _btnSecundario(
+                icon: const Icon(Icons.person, size: 20),
+                label: Text(_labelVerOtro(v)),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () => _verInfoCliente(uidCliente: uidCli),
+                enFila: true,
+              ),
+              const SizedBox(width: 12),
+              _btnSecundario(
+                icon: const Icon(Icons.chat, size: 20),
+                label: Text(_labelContactar(v)),
+                onPressed: uidCli.isEmpty
+                    ? null
+                    : () => _contactarCliente(
+                        uidCliente: uidCli, viajeId: v.id, viaje: v),
+                enFila: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
         const SizedBox(height: 12),
         // Botón opcional para que el taxista confirme la transferencia él mismo
         // (sin esperar al admin). Solo visible si el método es transferencia y
         // el cliente ya subió el comprobante. No reemplaza al admin: la
         // validación admin sigue funcionando como respaldo.
-        _ConfirmarTransferenciaTaxistaButton(
-          viajeId: v.id,
-          metodoPagoFallback: v.metodoPago,
-        ),
+        if (!CorporativoPasajerosChoferCard.esViajeCorporativo(v))
+          _ConfirmarTransferenciaTaxistaButton(
+            viajeId: v.id,
+            metodoPagoFallback: v.metodoPago,
+          ),
         if (_permitePruebaSinRecorrido(v) && !_navegacionDestinoIniciada) ...[
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -5015,10 +7647,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.45)),
             ),
             child: Text(
-              'Multiparada: faltan destinos por confirmar '
-              '(${_multiLegCompletadas.clamp(0, _destinosOrdenadosMultiparada(v).length)}/'
-              '${_destinosOrdenadosMultiparada(v).length}). '
-              'Usá «Llegué — siguiente destino» en cada parada.',
+              _esViajeCorporativo(v)
+                  ? 'Confirmá cada parada con «Llegué en parada». '
+                      'Finalizar se activa al completar todas '
+                      '(${_multiLegCompletadas.clamp(0, _legsNavegacionMultiparada(v).length)}/'
+                      '${_legsNavegacionMultiparada(v).length}).'
+                  : 'Multiparada: faltan destinos por confirmar '
+                      '(${_multiLegCompletadas.clamp(0, _legsNavegacionMultiparada(v).length)}/'
+                      '${_legsNavegacionMultiparada(v).length}). '
+                      'Usá «Llegué — siguiente destino» en cada parada.',
               style: const TextStyle(
                 color: Colors.orangeAccent,
                 fontSize: 13,
@@ -5029,13 +7666,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ),
           const SizedBox(height: 12),
         ],
-        if (_navegacionDestinoIniciada ||
-            !_permitePruebaSinRecorrido(v) ||
-            _esMultiparada(v)) ...[
+        if (_mostrarBotonFinalizarViaje(v, estadoBase: estadoBase)) ...[
           _btnFinalizarViaje(
-            onPressed: (_actionBusy || !_puedeFinalizarViajeMultiparada(v))
-                ? null
-                : () => _finalizarViaje(v),
+            onPressed: _puedePulsarFinalizarViaje(v)
+                ? () => _finalizarViaje(v)
+                : null,
             label: _labelFinalizarViaje(v),
           ),
         ],
@@ -5054,8 +7689,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   // ==================== ESTILOS DE BOTONES ====================
 
-  String _labelFinalizarViaje(Viaje v) =>
-      v.tipoServicio == 'bola_ahorro' ? 'Finalizar bola' : 'Finalizar viaje';
+  String _labelFinalizarViaje(Viaje v) {
+    if (_esViajeCorporativo(v)) return 'Finalizar ruta corporativa';
+    return v.tipoServicio == 'bola_ahorro' ? 'Finalizar bola' : 'Finalizar viaje';
+  }
 
   Widget _btnFinalizarViaje({
     required VoidCallback? onPressed,
@@ -5117,22 +7754,23 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     required Widget icon,
     required Widget label,
     required VoidCallback? onPressed,
+    bool enFila = false,
   }) {
-    return Expanded(
-      child: OutlinedButton.icon(
-        onPressed: onPressed,
-        icon: icon,
-        label: label,
-        style: OutlinedButton.styleFrom(
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-          foregroundColor: Colors.white,
-          minimumSize: const Size(1, 48),
-          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        ),
+    final Widget boton = OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: icon,
+      label: label,
+      style: OutlinedButton.styleFrom(
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+        foregroundColor: Colors.white,
+        minimumSize: Size(enFila ? 1 : double.infinity, 48),
+        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     );
+    if (enFila) return Expanded(child: boton);
+    return SizedBox(width: double.infinity, child: boton);
   }
 
   Widget _btnPeligro({
@@ -5232,6 +7870,9 @@ class _ConfirmarTransferenciaTaxistaButtonState
         if (!MetodoPagoViaje.esTransferencia(metodo)) {
           return const SizedBox.shrink();
         }
+        if (CorporativoTaxistaService.esViajeCorporativoDoc(data)) {
+          return const SizedBox.shrink();
+        }
         final String comprobante =
             (data['comprobanteTransferenciaUrl'] ?? '').toString().trim();
         if (comprobante.isEmpty) return const SizedBox.shrink();
@@ -5317,9 +7958,13 @@ class _ColaSiguienteViajeBannerSeguro extends StatelessWidget {
 /// (backend). Si en el futuro se cambia el % nominal en
 /// [PlataformaEconomia.comisionViajePorcentaje] (sincronizado desde `config/comision`), la etiqueta se actualiza sola.
 class _DesgloseComisionNeto extends StatelessWidget {
-  const _DesgloseComisionNeto({required this.precio});
+  const _DesgloseComisionNeto({
+    required this.precio,
+    this.esCorporativo = false,
+  });
 
   final double precio;
+  final bool esCorporativo;
 
   @override
   Widget build(BuildContext context) {
@@ -5341,6 +7986,17 @@ class _DesgloseComisionNeto extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (esCorporativo) ...[
+              const Text(
+                '🏢 Ruta corporativa — tarifa acordada con la empresa',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: Color(0xFF5EEAD4),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
             Text(
               '📊 Comisión RAI ($pctLabel%): $comisionTxt',
               style: const TextStyle(
@@ -5358,6 +8014,17 @@ class _DesgloseComisionNeto extends StatelessWidget {
                 fontWeight: FontWeight.w700,
               ),
             ),
+            if (esCorporativo) ...[
+              const SizedBox(height: 4),
+              const Text(
+                'Pago vía RAI al liquidar el período.',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: Colors.white54,
+                  height: 1.35,
+                ),
+              ),
+            ],
           ],
         ),
       );

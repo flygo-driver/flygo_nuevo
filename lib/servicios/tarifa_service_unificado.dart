@@ -187,7 +187,8 @@ class TarifaServiceUnificado {
       final doc = await FirebaseFirestore.instance
           .collection('tarifas')
           .doc('general')
-          .get(const GetOptions(source: Source.server));
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 8));
 
       if (doc.exists) {
         _cacheGeneral = Map<String, dynamic>.from(doc.data()!);
@@ -209,7 +210,8 @@ class TarifaServiceUnificado {
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('tarifa_turismo')
-          .get(const GetOptions(source: Source.server));
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 8));
 
       if (snapshot.docs.isNotEmpty) {
         final Map<String, dynamic> mapa = {};
@@ -241,7 +243,8 @@ class TarifaServiceUnificado {
       final doc = await FirebaseFirestore.instance
           .collection('config')
           .doc('promociones')
-          .get(const GetOptions(source: Source.server));
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 8));
 
       if (doc.exists) {
         _cachePromo = Map<String, dynamic>.from(doc.data()!);
@@ -268,7 +271,8 @@ class TarifaServiceUnificado {
       final doc = await FirebaseFirestore.instance
           .collection('config')
           .doc('tarifas_tramos')
-          .get(const GetOptions(source: Source.server));
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 8));
       final data = doc.data();
       if (!doc.exists || data == null || data.isEmpty) {
         _cacheTramos = TarifasTramosConfig.defaultsPrueba();
@@ -433,6 +437,9 @@ class TarifaServiceUnificado {
   }
 
   /// Calcula precio final y deja [ultimoDesgloseCotizacion] con el detalle.
+  ///
+  /// [forzarTarifaUrbanaLocal]: multiparada compacta en ciudad — solo tarifa
+  /// local (base + km × porKm), sin bandas interurbanas.
   Future<({double precio, Map<String, dynamic>? desglose})>
       calcularPrecioConDesglose({
     required String tipoServicio,
@@ -443,9 +450,13 @@ class TarifaServiceUnificado {
     double peaje = 0.0,
     int contadorViajes = 1,
     bool aplicarPromo = true,
+    bool forzarTarifaUrbanaLocal = false,
   }) async {
     ultimoDesgloseCotizacion = null;
-    final tramos = await _getTarifasTramos();
+    final TarifasTramosConfig tramosRaw = await _getTarifasTramos();
+    final TarifasTramosConfig tramos = forzarTarifaUrbanaLocal
+        ? TarifasTramosConfig.inactiva()
+        : tramosRaw;
     double precioBase;
     Map<String, dynamic> desgloseNucleo;
     bool esLargaDistancia = false;
@@ -590,6 +601,7 @@ class TarifaServiceUnificado {
       ..['peajeRd'] = peaje > 0 ? double.parse(peaje.toStringAsFixed(2)) : 0.0
       ..['antesIdaVueltaRd'] = double.parse(antesIdaVuelta.toStringAsFixed(2))
       ..['promoOmitidaPorLargaDistancia'] = omitirPromo
+      ..['forzarTarifaUrbanaLocal'] = forzarTarifaUrbanaLocal
       ..['totalRd'] = double.parse(precioFinal.toStringAsFixed(2));
 
     ultimoDesgloseCotizacion = desglose;
@@ -606,6 +618,7 @@ class TarifaServiceUnificado {
     double peaje = 0.0,
     int contadorViajes = 1,
     bool aplicarPromo = true,
+    bool forzarTarifaUrbanaLocal = false,
   }) async {
     final r = await calcularPrecioConDesglose(
       tipoServicio: tipoServicio,
@@ -616,6 +629,7 @@ class TarifaServiceUnificado {
       peaje: peaje,
       contadorViajes: contadorViajes,
       aplicarPromo: aplicarPromo,
+      forzarTarifaUrbanaLocal: forzarTarifaUrbanaLocal,
     );
     return r.precio;
   }

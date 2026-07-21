@@ -13,6 +13,7 @@ import 'package:flygo_nuevo/firebase_bootstrap.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/servicios/push_open_router.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 /// Handler top-level requerido por FCM en segundo plano / terminada.
@@ -107,8 +108,27 @@ class FcmService {
     if (payload == null || payload.isEmpty) return;
     print('[FCM] local notification tap payload len=${payload.length}');
     try {
-      final map = jsonDecode(payload) as Map<String, dynamic>;
-      unawaited(openTripFromPushData(map));
+      final trimmed = payload.trim();
+      if (trimmed == 'giras_cupos_catalogo') {
+        unawaited(PushOpenRouter.handleOpenedPushData({
+          'type': 'gira_cupos_catalogo',
+        }));
+        return;
+      }
+      if (!trimmed.startsWith('{')) {
+        unawaited(PushOpenRouter.handleOpenedPushData({
+          'type': 'gira_cupos_actualizada',
+          'poolId': trimmed,
+        }));
+        return;
+      }
+      final map = jsonDecode(trimmed) as Map<String, dynamic>;
+      final type = (map['type'] ?? '').toString();
+      if (type == 'trip_chat_message' || type == 'trip_call_attempt') {
+        unawaited(openTripFromPushData(map));
+        return;
+      }
+      unawaited(PushOpenRouter.handleOpenedPushData(map));
     } catch (e) {
       print('[FCM] tap parse error: $e');
     }

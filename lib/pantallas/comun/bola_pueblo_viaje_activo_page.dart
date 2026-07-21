@@ -386,6 +386,21 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                     ),
                   ],
                 ),
+                actions: [
+                  IconButton(
+                    tooltip: esTaxistaRol
+                        ? 'Volver a Mi trabajo'
+                        : 'Volver al inicio',
+                    icon: Icon(Icons.home_rounded, color: c.onSurface),
+                    onPressed: () => unawaited(
+                      BolaBoardVolverInicioButton.irAlInicio(
+                        context,
+                        esTaxista: esTaxistaRol,
+                        faseViaje: estado,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               body: SafeArea(
                 top: false,
@@ -997,35 +1012,6 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 16),
                                   ],
-                                  if (partActivo &&
-                                      estado == 'acordada' &&
-                                      BolaPuebloRepo.puedeCancelarAcuerdo(
-                                          data)) ...[
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: OutlinedButton.icon(
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor:
-                                              Colors.red.shade700,
-                                          side: BorderSide(
-                                            color: Colors.red
-                                                .withValues(alpha: 0.45),
-                                          ),
-                                        ),
-                                        onPressed: () => BolaPuebloDialogs
-                                            .confirmarCancelarAcuerdoBola(
-                                          context: context,
-                                          bolaId: bolaId,
-                                          uid: user.uid,
-                                        ),
-                                        icon: const Icon(Icons.cancel_outlined,
-                                            size: 20),
-                                        label:
-                                            const Text('Cancelar acuerdo'),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                  ],
                                   if (estado == 'en_curso' && partActivo) ...[
                                     BolaPuebloDialogs
                                         .bannerSinCancelacionEnCurso(context),
@@ -1050,6 +1036,12 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 16),
                                   ],
+                                  BolaBoardVolverInicioButton(
+                                    esTaxista: esTaxistaRol,
+                                    compact: true,
+                                    faseViaje: estado,
+                                  ),
+                                  const SizedBox(height: 12),
                                   Theme(
                                     data: Theme.of(context).copyWith(
                                         dividerColor: Colors.transparent),

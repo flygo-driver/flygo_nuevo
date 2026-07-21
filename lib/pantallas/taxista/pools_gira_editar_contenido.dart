@@ -2,11 +2,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/utils/bancos_rd.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/pool_gira_contenido_form.dart';
-import 'package:intl/intl.dart';
 
 /// Editar publicación de gira sin perder reservas ni pagos aprobados.
 class PoolsGiraEditarContenido extends StatefulWidget {
@@ -159,9 +159,9 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
         ? TimeOfDay.fromDateTime(_fechaVuelta ?? initial)
         : TimeOfDay.fromDateTime(_fechaSalida ?? initial);
 
-    final TimeOfDay? t = await showTimePicker(
-      context: context,
-      initialTime: initialTime,
+    final TimeOfDay? t = await elegirHoraAmPm(
+      context,
+      initial: initialTime,
     );
     if (!mounted || t == null) return;
 
@@ -188,11 +188,7 @@ class _PoolsGiraEditarContenidoState extends State<PoolsGiraEditarContenido> {
 
   String _fmtFecha(DateTime? dt) {
     if (dt == null) return 'Seleccionar';
-    try {
-      return DateFormat('EEE d MMM, HH:mm', 'es').format(dt);
-    } catch (_) {
-      return DateFormat('d/M/y HH:mm').format(dt);
-    }
+    return fmtFechaHoraAmPm(dt);
   }
 
   void _snack(String msg) {

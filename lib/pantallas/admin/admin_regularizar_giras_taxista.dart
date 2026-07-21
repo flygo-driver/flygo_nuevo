@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/configuracion_globals_service.dart';
 import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
 import 'package:flygo_nuevo/widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -228,6 +229,7 @@ class _AdminRegularizarGirasTaxistaState
     return Scaffold(
       backgroundColor: AdminUi.scaffold(context),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.desbloquearGiras,
         title: 'Desbloquear salidas por cupos',
       ),
       drawer: const AdminDrawer(),

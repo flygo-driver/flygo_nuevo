@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../servicios/turismo_catalogo_rd.dart';
 import '../../servicios/turismo_destinos_repo.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -23,6 +24,7 @@ class _AdminTurismoDestinosState extends State<AdminTurismoDestinos> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.destinosTurismo,
         title: 'Destinos turismo',
         actions: [
           IconButton(

@@ -23,7 +23,11 @@ function esClienteDelViaje(data: Record<string, unknown>, uid: string): boolean 
 
 function esTaxistaDelViaje(data: Record<string, unknown>, uid: string): boolean {
   const t = String(data.uidTaxista ?? data.taxistaId ?? "").trim();
-  return t.length > 0 && t === uid;
+  if (t.length > 0 && t === uid) return true;
+  const corp = String(
+    data.corporativoChoferAsignadoUid ?? data.corporativoChoferPreferidoUid ?? "",
+  ).trim();
+  return corp.length > 0 && corp === uid;
 }
 
 function viajeCerrado(d: Record<string, unknown>): boolean {

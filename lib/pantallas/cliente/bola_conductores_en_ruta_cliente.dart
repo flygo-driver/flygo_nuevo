@@ -71,8 +71,14 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                       final m = d.data();
                       final estado = (m['estado'] ?? '').toString();
                       final tipo = (m['tipo'] ?? '').toString();
-                      if (tipo != 'oferta' || estado != 'abierta') return false;
-                      return true;
+                      if (tipo != 'oferta' || estado != 'abierta') {
+                        return false;
+                      }
+                      return BolaPuebloRepo.visibleEnTableroParaUsuario(
+                        m,
+                        user.uid,
+                        bolaId: d.id,
+                      );
                     }).toList();
 
                     return ListView(

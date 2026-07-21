@@ -19,6 +19,7 @@ class ProductosConfigService {
   static bool clienteMotorHabilitado = true;
   static bool clienteGirasHabilitado = true;
   static bool clienteTurismoHabilitado = true;
+  static bool clienteCorporativoHabilitado = false;
 
   static StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
   static bool _started = false;
@@ -36,13 +37,16 @@ class ProductosConfigService {
 
   static bool get muestraTurismo => clienteTurismoHabilitado;
 
+  static bool get muestraCorporativo => clienteCorporativoHabilitado;
+
   static bool get muestraConductoresEnRuta => muestraBola;
 
   static bool get hayOpcionesExtrasHome =>
       muestraMultiparada ||
       muestraMotor ||
       muestraGiras ||
-      muestraTurismo;
+      muestraTurismo ||
+      muestraCorporativo;
 
   static bool get hayExperienciasSecundarias =>
       muestraGiras || muestraBola || muestraConductoresEnRuta;
@@ -78,6 +82,8 @@ class ProductosConfigService {
         _boolOr(data['clienteGirasHabilitado'], true);
     clienteTurismoHabilitado =
         _boolOr(data['clienteTurismoHabilitado'], true);
+    clienteCorporativoHabilitado =
+        _boolOr(data['clienteCorporativoHabilitado'], false);
     revision.value++;
   }
 

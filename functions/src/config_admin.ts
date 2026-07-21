@@ -4,6 +4,11 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logAdminAudit } from "./audit.js";
 import { invalidateComisionViajePctCache } from "./comision_viaje_pct.js";
 import {
+  invalidateCorporativoTarifaConfigCache,
+  parseCorporativoTarifaConfig,
+  type CorporativoTarifaConfig,
+} from "./corporativo_tarifa_config.js";
+import {
   invalidateComisionIncentivosCache,
   parseComisionIncentivosConfig,
   type EscalonIncentivo,
@@ -526,5 +531,60 @@ export const updateTarifasTramosConfig = onCall(async (request) => {
   });
 
   return { ok: true };
+});
+
+/**
+ * Parámetros globales de tarifa corporativa (`config/corporativo`).
+ */
+export const setCorporativoTarifaConfig = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+  await assertAdmin(uid);
+
+  const motivo = String(request.data?.motivo ?? "").trim();
+  if (motivo.length < 6) {
+    throw new HttpsError("invalid-argument", "Motivo requerido (min 6 caracteres)");
+  }
+
+  const raw = (request.data?.corporativo ?? request.data) as AnyMap;
+  const cfg: CorporativoTarifaConfig = parseCorporativoTarifaConfig(raw);
+
+  const ref = db().collection("config").doc("corporativo");
+  const beforeSnap = await ref.get();
+  const before = safeJson(beforeSnap.data() ?? {});
+
+  await ref.set(
+    {
+      ...cfg,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  invalidateCorporativoTarifaConfigCache();
+
+  const afterSnap = await ref.get();
+  const after = safeJson(afterSnap.data() ?? {});
+
+  await writeHistory({
+    configKey: "config/corporativo",
+    changedBy: uid,
+    motivo,
+    before,
+    after,
+  });
+
+  logAdminAudit({
+    action: "set_corporativo_tarifa_config",
+    actorUid: uid,
+    resourceType: "config",
+    resourceId: "config/corporativo",
+    metadata: {
+      minimoViajeRd: cfg.minimoViajeRd,
+      comisionPlataformaPorcentaje: cfg.comisionPlataformaPorcentaje,
+    },
+  });
+
+  return { ok: true, corporativo: cfg };
 });
 

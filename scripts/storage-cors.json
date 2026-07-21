@@ -1,0 +1,30 @@
+[
+  {
+    "origin": [
+      "https://flygo-rd.web.app",
+      "https://flygo-rd.firebaseapp.com",
+      "http://localhost",
+      "http://localhost:5000",
+      "http://localhost:8080",
+      "http://127.0.0.1",
+      "http://127.0.0.1:5000",
+      "http://127.0.0.1:8080"
+    ],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "Authorization",
+      "Content-Length",
+      "x-firebase-storage-version",
+      "x-goog-upload-protocol",
+      "x-goog-upload-command",
+      "x-goog-upload-header-content-length",
+      "x-goog-upload-header-content-type",
+      "x-goog-upload-status",
+      "x-goog-upload-url",
+      "x-goog-meta-uid",
+      "x-goog-meta-tipo"
+    ]
+  }
+]

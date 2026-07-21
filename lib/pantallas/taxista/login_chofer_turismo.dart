@@ -313,7 +313,10 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
     if (_cargandoEstado) {
       return Scaffold(
         backgroundColor: Colors.black,
-        appBar: const RaiAppBar(title: 'Registro Chofer Turismo'),
+        appBar: const RaiAppBar(
+          title: 'Registro Chofer Turismo',
+          showBackWhenCanPop: true,
+        ),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -323,7 +326,10 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: const RaiAppBar(title: 'Registro Chofer Turismo'),
+      appBar: const RaiAppBar(
+        title: 'Registro Chofer Turismo',
+        showBackWhenCanPop: true,
+      ),
       body: mostrarSoloEstado
           ? ListView(
               padding: const EdgeInsets.all(16),

@@ -1370,9 +1370,8 @@ class BolaPuebloDialogs {
           style: TextStyle(color: c.onSurface, fontWeight: FontWeight.w800),
         ),
         content: Text(
-          'Podés cancelar mientras el conductor no haya registrado el abordo '
-          'ni iniciado el traslado con el PIN. Una vez en ruta al destino, '
-          'no se puede cancelar.',
+          'Se borra el viaje de la base de datos para todos (bola, ofertas y espejo). '
+          'Solo si aún no subiste al vehículo ni iniciaste con el PIN.',
           style: TextStyle(color: c.onMuted, height: 1.45, fontSize: 14),
         ),
         actions: [
@@ -1394,13 +1393,137 @@ class BolaPuebloDialogs {
       BolaNavCoordinationGuard.markCancelHandled(bolaId);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(BolaPuebloTheme.snack(context, 'Acuerdo cancelado'));
+          .showSnackBar(BolaPuebloTheme.snack(context, 'Viaje eliminado de la base de datos'));
       await NavigationService.salirModoViajeBola(context);
     } catch (e) {
       if (context.mounted) {
         final msg = BolaPuebloDialogs.mensajeExcepcionUsuario(e);
         ScaffoldMessenger.of(context)
             .showSnackBar(BolaPuebloTheme.snack(context, msg, error: true));
+      }
+    }
+  }
+
+  static Future<void> confirmarRetirarPublicacionAbierta({
+    required BuildContext context,
+    required String bolaId,
+    required String uid,
+  }) async {
+    final c = BolaPuebloColors.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        backgroundColor: c.surfaceRaised,
+        surfaceTintColor: Colors.transparent,
+        title: Text(
+          '¿Eliminar tu publicación?',
+          style: TextStyle(color: c.onSurface, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          'Se borra de la base de datos para todos (bola, ofertas y viaje espejo). '
+          'No se puede deshacer. Podés publicar otra cuando quieras.',
+          style: TextStyle(color: c.onMuted, height: 1.45, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Volver'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red.shade700,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Sí, eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    try {
+      await BolaPuebloRepo.eliminarPublicacionBolaDefinitiva(
+        bolaId: bolaId,
+        uidActor: uid,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(context, 'Publicación eliminada de la base de datos'),
+      );
+      await NavigationService.salirModoViajeBola(context);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(
+            context,
+            mensajeExcepcionUsuario(e),
+            error: true,
+          ),
+        );
+      }
+    }
+  }
+
+  static Future<void> confirmarRetirarMiOferta({
+    required BuildContext context,
+    required String bolaId,
+    required String ofertaId,
+    required String uid,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) {
+        final c = BolaPuebloColors.of(dCtx);
+        return AlertDialog(
+          backgroundColor: c.surface,
+          title: Text(
+            '¿Retirar tu oferta?',
+            style: TextStyle(
+              color: c.onSurface,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Text(
+            'Se elimina tu oferta de la base de datos. Podés enviar otra después si querés.',
+            style: TextStyle(color: c.onMuted, height: 1.45, fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Volver'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red.shade700,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(dCtx, true),
+              child: const Text('Sí, retirar'),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true || !context.mounted) return;
+    try {
+      await BolaPuebloRepo.retirarMiOfertaPendiente(
+        bolaId: bolaId,
+        ofertaId: ofertaId,
+        uid: uid,
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        BolaPuebloTheme.snack(context, 'Oferta retirada'),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          BolaPuebloTheme.snack(
+            context,
+            mensajeExcepcionUsuario(e),
+            error: true,
+          ),
+        );
       }
     }
   }
@@ -2809,6 +2932,295 @@ class _BolaEnCursoDestinoAccionesState extends State<BolaEnCursoDestinoAcciones>
   }
 }
 
+/// Salir del tablero hacia el home del flavor (publicación o viaje siguen activos).
+class BolaBoardVolverInicioButton extends StatelessWidget {
+  const BolaBoardVolverInicioButton({
+    super.key,
+    this.esTaxista = false,
+    this.compact = false,
+    this.confirmar = true,
+    this.faseViaje,
+  });
+
+  final bool esTaxista;
+  final bool compact;
+  final bool confirmar;
+
+  /// `abierta` = esperando en tablero; `acordada` / `en_curso` = viaje operativo.
+  final String? faseViaje;
+
+  static bool _viajeOperativo(String? fase) {
+    return fase == 'acordada' || fase == 'en_curso';
+  }
+
+  static String _mensajeConfirmacion({
+    required bool esTaxista,
+    required String? faseViaje,
+  }) {
+    if (_viajeOperativo(faseViaje)) {
+      return esTaxista
+          ? 'Tu viaje con el pasajero sigue activo. Podés volver a Mi trabajo '
+              'y retomarlo desde Bola Ahorro cuando quieras.'
+          : 'Tu viaje sigue activo. Podés volver al inicio y retomarlo '
+              'desde Bola Ahorro cuando quieras.';
+    }
+    return esTaxista
+        ? 'Tu publicación u oferta siguen en el tablero. Volvé a la pantalla '
+            'principal para seguir recibiendo viajes AHORA.'
+        : 'Tu pedido seguirá en el tablero mientras esperás un '
+            'conductor. Podés volver a Bola Ahorro desde Inicio.';
+  }
+
+  static String _ayudaDebajo({
+    required String? faseViaje,
+  }) {
+    if (_viajeOperativo(faseViaje)) {
+      return 'El viaje sigue activo. Podés retomarlo desde Bola Ahorro.';
+    }
+    if (faseViaje == 'abierta') {
+      return 'Tu oferta o publicación sigue activa en el tablero.';
+    }
+    return 'Tu publicación sigue activa en el tablero.';
+  }
+
+  static Future<void> irAlInicio(
+    BuildContext context, {
+    required bool esTaxista,
+    bool confirmar = true,
+    String? faseViaje,
+  }) async {
+    if (confirmar) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) {
+          final c = BolaPuebloColors.of(ctx);
+          return AlertDialog(
+            backgroundColor: c.surface,
+            title: Text(
+              '¿Volver al inicio?',
+              style: TextStyle(
+                color: c.onSurface,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            content: Text(
+              _mensajeConfirmacion(
+                esTaxista: esTaxista,
+                faseViaje: faseViaje,
+              ),
+              style: TextStyle(color: c.onMuted, height: 1.45),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Quedarme aquí'),
+              ),
+              FilledButton(
+                style: BolaPuebloUi.filledPrimary,
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(esTaxista ? 'Ir a recibir viajes' : 'Ir al inicio'),
+              ),
+            ],
+          );
+        },
+      );
+      if (ok != true) return;
+    }
+    if (!context.mounted) return;
+    if (esTaxista) {
+      await NavigationService.salirVistaBolaTaxista(
+        context,
+        faseViaje: faseViaje,
+      );
+      return;
+    }
+    await NavigationService.salirVistaBolaCliente(context);
+  }
+
+  Future<void> _salir(BuildContext context) => irAlInicio(
+        context,
+        esTaxista: esTaxista,
+        confirmar: confirmar,
+        faseViaje: faseViaje,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final c = BolaPuebloColors.of(context);
+    return Padding(
+      padding: EdgeInsets.only(top: compact ? 8 : 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: BolaPuebloUi.outlineAccent(context),
+              onPressed: () => unawaited(_salir(context)),
+              icon: const Icon(Icons.home_rounded, size: 20),
+              label: Text(
+                esTaxista ? 'Volver a recibir viajes' : 'Volver al inicio',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+          if (!compact) ...[
+            const SizedBox(height: 6),
+            Text(
+              _ayudaDebajo(faseViaje: faseViaje),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: c.onMuted,
+                fontSize: 11.5,
+                height: 1.35,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Botón unificado para cancelar acuerdo antes de abordar (cliente y taxista).
+class BolaCancelarAcuerdoButton extends StatelessWidget {
+  const BolaCancelarAcuerdoButton({
+    super.key,
+    required this.bolaId,
+    required this.uid,
+    this.compact = false,
+  });
+
+  final String bolaId;
+  final String uid;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.red.shade700,
+          side: BorderSide(color: Colors.red.withValues(alpha: 0.45)),
+          padding: EdgeInsets.symmetric(
+            vertical: compact ? 12 : 14,
+            horizontal: 16,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(BolaPuebloUi.radiusButton),
+          ),
+        ),
+        onPressed: () => BolaPuebloDialogs.confirmarCancelarAcuerdoBola(
+          context: context,
+          bolaId: bolaId,
+          uid: uid,
+        ),
+        icon: Icon(Icons.cancel_outlined, size: compact ? 18 : 20),
+        label: const Text(
+          'Cancelar acuerdo',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+}
+
+/// Retirar publicación abierta (sin acuerdo cerrado).
+class BolaRetirarPublicacionButton extends StatelessWidget {
+  const BolaRetirarPublicacionButton({
+    super.key,
+    required this.bolaId,
+    required this.uid,
+    this.compact = false,
+  });
+
+  final String bolaId;
+  final String uid;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(top: compact ? 8 : 10),
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.red.shade700,
+            side: BorderSide(color: Colors.red.withValues(alpha: 0.35)),
+            padding: EdgeInsets.symmetric(
+              vertical: compact ? 11 : 13,
+              horizontal: 16,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(BolaPuebloUi.radiusButton),
+            ),
+          ),
+          onPressed: () => BolaPuebloDialogs.confirmarRetirarPublicacionAbierta(
+            context: context,
+            bolaId: bolaId,
+            uid: uid,
+          ),
+          icon: Icon(Icons.delete_outline_rounded, size: compact ? 18 : 20),
+          label: const Text(
+            'Eliminar mi publicación',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Retirar oferta o contraoferta propia pendiente en una bola ajena.
+class BolaRetirarMiOfertaButton extends StatelessWidget {
+  const BolaRetirarMiOfertaButton({
+    super.key,
+    required this.bolaId,
+    required this.ofertaId,
+    required this.uid,
+    this.compact = false,
+  });
+
+  final String bolaId;
+  final String ofertaId;
+  final String uid;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.red.shade700,
+          side: BorderSide(color: Colors.red.withValues(alpha: 0.45)),
+          padding: EdgeInsets.symmetric(
+            vertical: compact ? 11 : 13,
+            horizontal: 16,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(BolaPuebloUi.radiusButton),
+          ),
+        ),
+        onPressed: () => BolaPuebloDialogs.confirmarRetirarMiOferta(
+          context: context,
+          bolaId: bolaId,
+          ofertaId: ofertaId,
+          uid: uid,
+        ),
+        icon: Icon(Icons.undo_rounded, size: compact ? 18 : 20),
+        label: const Text(
+          'Retirar mi oferta',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+}
+
 /// Cliente: una sola bola activa; oculta «Pedir bola» mientras haya abierta/acordada/en curso.
 class BolaClientePedirPedidoPanel extends StatelessWidget {
   const BolaClientePedirPedidoPanel({
@@ -2882,6 +3294,20 @@ class BolaClientePedirPedidoPanel extends StatelessWidget {
             onPressed: id.isEmpty ? null : () => onContinuarBola(id),
             background: const Color(0xFF2962FF),
           ),
+          if (estado == 'abierta')
+            BolaRetirarPublicacionButton(
+              bolaId: id,
+              uid: uid,
+              compact: true,
+            ),
+          if (estado == 'abierta' ||
+              estado == 'acordada' ||
+              estado == 'en_curso')
+            BolaBoardVolverInicioButton(
+              esTaxista: rol == 'taxista' || rol == 'driver',
+              compact: true,
+              faseViaje: estado,
+            ),
         ],
       );
     }
@@ -3479,24 +3905,9 @@ class BolaTaxistaAcordadaFlowState extends State<BolaTaxistaAcordadaFlow>
               ],
               if (!widget.pickupConfirmadoServidor) ...[
                 const SizedBox(height: 14),
-                Center(
-                  child: TextButton(
-                    onPressed: () =>
-                        BolaPuebloDialogs.confirmarCancelarAcuerdoBola(
-                      context: context,
-                      bolaId: widget.docId,
-                      uid: widget.user.uid,
-                    ),
-                    child: Text(
-                      'Cancelar acuerdo',
-                      style: TextStyle(
-                        color: c.onMuted,
-                        fontWeight: FontWeight.w600,
-                        decoration: TextDecoration.underline,
-                        decorationColor: c.onMuted.withValues(alpha: 0.5),
-                      ),
-                    ),
-                  ),
+                BolaCancelarAcuerdoButton(
+                  bolaId: widget.docId,
+                  uid: widget.user.uid,
                 ),
               ],
               SizedBox(height: BolaPuebloUi.bottomBarSafePadding(context).bottom),
@@ -3786,24 +4197,9 @@ class BolaClienteAcordadaCapas extends StatelessWidget {
             ),
             if (!pickupConfirmadoTaxista && !codigoVerificado) ...[
               const SizedBox(height: 14),
-              Center(
-                child: TextButton(
-                  onPressed: () =>
-                      BolaPuebloDialogs.confirmarCancelarAcuerdoBola(
-                    context: context,
-                    bolaId: bolaId,
-                    uid: user.uid,
-                  ),
-                  child: Text(
-                    'Cancelar acuerdo',
-                    style: TextStyle(
-                      color: fgMuted,
-                      fontWeight: FontWeight.w600,
-                      decoration: TextDecoration.underline,
-                      decorationColor: fgMuted.withValues(alpha: 0.5),
-                    ),
-                  ),
-                ),
+              BolaCancelarAcuerdoButton(
+                bolaId: bolaId,
+                uid: user.uid,
               ),
             ],
           ],
@@ -4543,33 +4939,81 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                 const SizedBox(height: 8),
               ],
               if (!_detallesExpandidos &&
-                  !esMio &&
+                  esMio &&
                   estado == 'abierta') ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    style: BolaPuebloUi.filledPrimary,
-                    onPressed: bloqueadoOperacionBola
-                        ? null
-                        : () => BolaPuebloDialogs.enviarOferta(
-                              context: context,
-                              bolaId: docId,
-                              uid: user.uid,
-                              nombre: nombre,
-                              rol: rol,
-                              montoInicial: montoSemillaOferta,
-                            ),
-                    child: Text(
-                      bloqueadoOperacionBola
-                          ? 'No disponible'
-                          : (monto > 0
-                              ? 'Enviar oferta · RD\$${monto.toStringAsFixed(0)}'
-                              : 'Enviar oferta'),
-                    ),
-                  ),
+                BolaRetirarPublicacionButton(
+                  bolaId: docId,
+                  uid: user.uid,
+                  compact: true,
                 ),
-                const SizedBox(height: 8),
               ],
+              if (!_detallesExpandidos &&
+                  !esMio &&
+                  estado == 'abierta')
+                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: BolaPuebloRepo.streamOfertas(docId),
+                  builder: (context, ofSnap) {
+                    final pend = ofSnap.hasData
+                        ? BolaPuebloRepo.miOfertaPendienteVigente(
+                            ofSnap.data!,
+                            user.uid,
+                          )
+                        : null;
+                    final double montoPend = pend != null
+                        ? ((pend.data['montoRd'] ?? 0) as num).toDouble()
+                        : 0;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (pend != null) ...[
+                          Row(
+                            children: [
+                              BolaPuebloUi.statusChip(
+                                context,
+                                label:
+                                    'Tu oferta RD\$${montoPend.toStringAsFixed(0)} pendiente',
+                                color: BolaPuebloTheme.accent,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          BolaRetirarMiOfertaButton(
+                            bolaId: docId,
+                            ofertaId: pend.id,
+                            uid: user.uid,
+                            compact: true,
+                          ),
+                          const SizedBox(height: 8),
+                        ] else ...[
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton(
+                              style: BolaPuebloUi.filledPrimary,
+                              onPressed: bloqueadoOperacionBola
+                                  ? null
+                                  : () => BolaPuebloDialogs.enviarOferta(
+                                        context: context,
+                                        bolaId: docId,
+                                        uid: user.uid,
+                                        nombre: nombre,
+                                        rol: rol,
+                                        montoInicial: montoSemillaOferta,
+                                      ),
+                              child: Text(
+                                bloqueadoOperacionBola
+                                    ? 'No disponible'
+                                    : (monto > 0
+                                        ? 'Enviar oferta · RD\$${monto.toStringAsFixed(0)}'
+                                        : 'Enviar oferta'),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ],
+                    );
+                  },
+                ),
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
@@ -4794,6 +5238,18 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                     ),
                   ),
                 ),
+                if (estado == 'abierta') ...[
+                  BolaRetirarPublicacionButton(
+                    bolaId: docId,
+                    uid: user.uid,
+                    compact: true,
+                  ),
+                  BolaBoardVolverInicioButton(
+                    esTaxista: esTaxistaRol,
+                    compact: true,
+                    faseViaje: estado,
+                  ),
+                ],
               ],
             ],
             if ((estado == 'acordada' || estado == 'en_curso') &&
@@ -4910,22 +5366,18 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                     if (estado == 'acordada' &&
                         BolaPuebloRepo.puedeCancelarAcuerdo(data)) ...[
                       const SizedBox(height: 10),
-                      OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red.shade700,
-                          side: BorderSide(
-                              color: Colors.red.withValues(alpha: 0.45)),
-                        ),
-                        onPressed: () =>
-                            BolaPuebloDialogs.confirmarCancelarAcuerdoBola(
-                          context: context,
-                          bolaId: docId,
-                          uid: user.uid,
-                        ),
-                        icon: const Icon(Icons.cancel_outlined, size: 20),
-                        label: const Text('Cancelar acuerdo'),
+                      BolaCancelarAcuerdoButton(
+                        bolaId: docId,
+                        uid: user.uid,
+                        compact: true,
                       ),
                     ],
+                    const SizedBox(height: 10),
+                    BolaBoardVolverInicioButton(
+                      esTaxista: soyTaxistaAsignado,
+                      compact: true,
+                      faseViaje: estado,
+                    ),
                   ],
                 ),
               ),
@@ -5153,6 +5605,31 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                           ? 'No disponible'
                           : 'Proponer otro monto',
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: BolaPuebloRepo.streamOfertas(docId),
+                    builder: (context, ofSnap) {
+                      final pend = ofSnap.hasData
+                          ? BolaPuebloRepo.miOfertaPendienteVigente(
+                              ofSnap.data!,
+                              user.uid,
+                            )
+                          : null;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (pend != null) ...[
+                            BolaRetirarMiOfertaButton(
+                              bolaId: docId,
+                              ofertaId: pend.id,
+                              uid: user.uid,
+                              compact: true,
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 ],
               ),

@@ -12,6 +12,9 @@ import 'package:flygo_nuevo/pantallas/taxista/taxista_entry_error.dart';
 
 import 'contrato_taxista_firma.dart';
 import 'documentos_taxista.dart';
+import 'package:flygo_nuevo/pantallas/taxista/completar_registro_organizador_giras.dart';
+import 'package:flygo_nuevo/servicios/organizador_giras_perfil_data.dart';
+import 'package:flygo_nuevo/shell/organizador_giras_shell.dart';
 import 'package:flygo_nuevo/shell/taxista_shell.dart';
 import '../../servicios/pool_repo.dart';
 
@@ -73,6 +76,15 @@ class _TaxistaEntryState extends State<TaxistaEntry> {
 
       final data = usrDoc.data() ?? {};
       final rol = (data['rol'] as String?)?.toLowerCase() ?? '';
+
+      if (OrganizadorGirasPerfilData.esOrganizadorGiras(data)) {
+        if (!OrganizadorGirasPerfilData.registroCompleto(data)) {
+          _go(const CompletarRegistroOrganizadorGiras());
+          return;
+        }
+        _go(const OrganizadorGirasShell());
+        return;
+      }
 
       if (rol != 'taxista' && rol != 'driver') {
         debugPrint(

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/servicios/chat_repo.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 /// Panel compacto estilo inDrive: resalta cuando el otro escribe y abre el chat al tocar.
 /// Sin ListView anidado (no roba gestos al [SingleChildScrollView] del viaje en curso).
@@ -15,6 +16,7 @@ class ViajeChatMensajesEnVivo extends StatefulWidget {
     required this.otroUid,
     required this.otroNombre,
     this.previewLimit = 24,
+    this.esCorporativo = false,
   });
 
   final String viajeId;
@@ -22,6 +24,8 @@ class ViajeChatMensajesEnVivo extends StatefulWidget {
   final String otroUid;
   final String otroNombre;
   final int previewLimit;
+  /// Viaje corporativo: el otro participante es el encargado de la empresa.
+  final bool esCorporativo;
 
   @override
   State<ViajeChatMensajesEnVivo> createState() => _ViajeChatMensajesEnVivoState();
@@ -30,6 +34,22 @@ class ViajeChatMensajesEnVivo extends StatefulWidget {
 class _ViajeChatMensajesEnVivoState extends State<ViajeChatMensajesEnVivo> {
   /// Evita repetir vibración si el mismo snapshot se reconstruye.
   String? _ultimoDocIdConHaptico;
+  bool _chatListo = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepararChat();
+  }
+
+  Future<void> _prepararChat() async {
+    try {
+      await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
+    } catch (_) {
+      // El stream puede seguir funcionando si el doc ya existía.
+    }
+    if (mounted) setState(() => _chatListo = true);
+  }
 
   void _abrirChat(BuildContext context) {
     Navigator.push<void>(
@@ -61,6 +81,10 @@ class _ViajeChatMensajesEnVivoState extends State<ViajeChatMensajesEnVivo> {
         widget.miUid.isEmpty ||
         widget.otroUid.isEmpty) {
       return const SizedBox.shrink();
+    }
+
+    if (!_chatListo) {
+      return _cajaEsqueleto(cs);
     }
 
     return Material(
@@ -264,7 +288,9 @@ class _ViajeChatMensajesEnVivoState extends State<ViajeChatMensajesEnVivo> {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Sin mensajes aún. Tocá para coordinar pickup o pago.',
+                widget.esCorporativo
+                    ? 'Sin mensajes. Tocá para escribir al encargado de la empresa.'
+                    : 'Sin mensajes aún. Tocá para coordinar pickup o pago.',
                 style: TextStyle(
                   color: cs.onSurfaceVariant,
                   fontSize: 13,

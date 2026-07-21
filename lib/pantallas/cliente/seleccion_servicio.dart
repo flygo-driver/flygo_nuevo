@@ -425,6 +425,43 @@ class SeleccionServicio extends StatelessWidget {
                               ),
                             );
                           }
+                          if (ProductosConfigService.muestraCorporativo) {
+                            if (cards.isNotEmpty) {
+                              cards.add(const SizedBox(width: 10));
+                            }
+                            cards.add(
+                              _HomeGiantServiceCard(
+                                cardWidth: cardW,
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFF0D9488),
+                                    Color(0xFF134E4A),
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                icon: Icons.business_center,
+                                iconSize: 30,
+                                title: 'CORPORATIVO\nCOMPARTIDO',
+                                titleSize: 14,
+                                subtitle: 'Rutas de empresa',
+                                price: 'PLANTILLAS',
+                                features: const [
+                                  '🏢 Empresa',
+                                  '👥 Pasajeros',
+                                ],
+                                badge: const Icon(Icons.route,
+                                    color: Colors.white, size: 16),
+                                onTap: () {
+                                  unawaited(
+                                    ClienteViajeNavegacion.pushCorporativoHub(
+                                      context,
+                                    ),
+                                  );
+                                },
+                              ),
+                            );
+                          }
                           return SizedBox(
                             height: stripH,
                             child: ListView(
