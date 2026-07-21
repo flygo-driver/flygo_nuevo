@@ -267,14 +267,18 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
                   style: TextStyle(color: Colors.white54, fontSize: 13),
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  _money(esCorp ? neto : total),
-                  style: const TextStyle(
-                    color: Colors.greenAccent,
-                    fontSize: 42,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.5,
-                    height: 1.05,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _money(esCorp ? neto : total),
+                    style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontSize: 42,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                      height: 1.05,
+                    ),
                   ),
                 ),
                 if (esCorp) ...[

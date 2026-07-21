@@ -72,16 +72,17 @@ class TaxistaPerfilPostViajeCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
                       children: [
-                        Expanded(
-                          child: Text(
-                            p.nombre,
-                            style: TextStyle(
-                              color: fg,
-                              fontSize: 17,
-                              fontWeight: FontWeight.w800,
-                            ),
+                        Text(
+                          p.nombre,
+                          style: TextStyle(
+                            color: fg,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                         if (p.esPremium) _pillPremium(),
@@ -139,7 +140,10 @@ class TaxistaPerfilPostViajeCard extends StatelessWidget {
   Widget _filaEstrellas(TaxistaPerfilCliente p, Color muted) {
     final double avg = p.promedioEstrellas;
     final int llenas = avg.round().clamp(0, 5);
-    return Row(
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 2,
+      runSpacing: 4,
       children: [
         ...List.generate(5, (i) {
           return Icon(
@@ -148,12 +152,14 @@ class TaxistaPerfilPostViajeCard extends StatelessWidget {
             color: Colors.amber,
           );
         }),
-        const SizedBox(width: 6),
-        Text(
-          avg > 0
-              ? '${avg.toStringAsFixed(1)} (${p.totalCalificaciones})'
-              : 'Conductor nuevo en RAI',
-          style: TextStyle(color: muted, fontSize: 12),
+        Padding(
+          padding: const EdgeInsets.only(left: 4),
+          child: Text(
+            avg > 0
+                ? '${avg.toStringAsFixed(1)} (${p.totalCalificaciones})'
+                : 'Conductor nuevo en RAI',
+            style: TextStyle(color: muted, fontSize: 12),
+          ),
         ),
       ],
     );
