@@ -718,6 +718,48 @@
       ]
     },
     {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoPlantillaId", "order": "ASCENDING" },
+        { "fieldPath": "corporativoEmpresaId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoPlantillaId", "order": "ASCENDING" },
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoEmpresaId", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativo", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativo", "order": "ASCENDING" },
+        { "fieldPath": "codigoVerificado", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "plantillas_ruta",
       "queryScope": "COLLECTION",
       "fields": [
