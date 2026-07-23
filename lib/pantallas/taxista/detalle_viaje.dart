@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../widgets/mapa_tiempo_real.dart';
+import '../../widgets/rai_viaje_en_curso_ui.dart';
+import '../../design_system/rai_ds_colors.dart';
 import '../../widgets/navegacion_waze_maps_sheet.dart';
 import '../../widgets/cliente_perfil_conductor_chip.dart';
 import '../../pantallas/comun/bola_pueblo_actions.dart';
@@ -38,7 +40,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
   final DraggableScrollableController _detalleNavSheetCtrl =
       DraggableScrollableController();
   static const double _kDetalleNavSheetMin = 0.14;
-  static const double _kDetalleNavSheetInitial = 0.48;
+  static const double _kDetalleNavSheetInitial = 0.42;
 
   void _colapsarDetalleSheetPorMapa() {
     if (!_detalleNavSheetCtrl.isAttached) return;
@@ -420,13 +422,19 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
     if (uid == null) {
       return Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: RaiViajeEnCursoUi.scaffoldBg,
         appBar: AppBar(
           title: const Text(
             'Detalle del viaje',
-            style: TextStyle(color: Colors.white),
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+            ),
           ),
-          backgroundColor: Colors.black,
+          backgroundColor: RaiViajeEnCursoUi.scaffoldBg,
+          elevation: 0,
+          scrolledUnderElevation: 0,
           iconTheme: const IconThemeData(color: Colors.white),
           centerTitle: true,
         ),
@@ -440,13 +448,19 @@ class _DetalleViajeState extends State<DetalleViaje> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: RaiViajeEnCursoUi.scaffoldBg,
       appBar: AppBar(
         title: const Text(
           'Detalle del viaje',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.3,
+          ),
         ),
-        backgroundColor: Colors.black,
+        backgroundColor: RaiViajeEnCursoUi.scaffoldBg,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
         centerTitle: true,
       ),
@@ -481,7 +495,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(
                       child:
-                          CircularProgressIndicator(color: Colors.greenAccent),
+                          CircularProgressIndicator(color: RaiDsColors.neon),
                     );
                   }
                   if (snapshot.hasError) {
@@ -627,13 +641,17 @@ class _DetalleViajeState extends State<DetalleViaje> {
                   }
 
                   final Widget filaToggleMapa = Material(
-                    color: Colors.grey[900],
-                    borderRadius: BorderRadius.circular(16),
+                    color: RaiViajeEnCursoUi.actionPanelBg,
+                    borderRadius: BorderRadius.circular(20),
                     child: InkWell(
                       onTap: () =>
                           setState(() => _mapaExpandido = !_mapaExpandido),
-                      borderRadius: BorderRadius.circular(16),
-                      child: Padding(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: RaiDsColors.border),
+                        ),
                         padding: const EdgeInsets.symmetric(
                             vertical: 14, horizontal: 16),
                         child: Row(
@@ -642,7 +660,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
                               _mapaExpandido
                                   ? Icons.expand_less
                                   : Icons.map_outlined,
-                              color: Colors.lightBlueAccent,
+                              color: RaiDsColors.neon,
                             ),
                             const SizedBox(width: 10),
                             Expanded(
@@ -705,10 +723,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
                       ),
                     Container(
                       padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[900],
-                        borderRadius: BorderRadius.circular(16),
-                      ),
+                      decoration: RaiViajeEnCursoUi.panelDecoration(),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -818,8 +833,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
                         FormatosMoneda.rd(precio),
                         style: const TextStyle(
                           fontSize: 40,
-                          color: Colors.yellow,
-                          fontWeight: FontWeight.bold,
+                          color: RaiDsColors.neon,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.8,
                         ),
                       ),
                     ),
@@ -829,7 +845,8 @@ class _DetalleViajeState extends State<DetalleViaje> {
                         'Ganas: ${FormatosMoneda.rd(ganancia)}',
                         style: const TextStyle(
                           fontSize: 18,
-                          color: Colors.greenAccent,
+                          color: RaiDsColors.neonSoft,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
@@ -950,20 +967,27 @@ class _DetalleViajeState extends State<DetalleViaje> {
                                           strokeWidth: 2),
                                     )
                                   : const Icon(Icons.check_circle,
-                                      color: Colors.green),
+                                      color: Colors.black),
                               label: Text(
                                 etiquetaBotonAceptar(),
                                 style: TextStyle(
                                   color: aceptarHabilitado
-                                      ? Colors.green
-                                      : Colors.white54,
+                                      ? Colors.black
+                                      : RaiDsColors.textMuted,
+                                  fontWeight: FontWeight.w800,
                                 ),
                               ),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.white,
-                                disabledBackgroundColor: Colors.white24,
+                                backgroundColor: RaiDsColors.neon,
+                                disabledBackgroundColor:
+                                    RaiDsColors.neon.withValues(alpha: 0.25),
+                                foregroundColor: Colors.black,
+                                disabledForegroundColor: RaiDsColors.textMuted,
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
                               ),
                             ),
                           ),
@@ -1025,20 +1049,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
                         ],
                         builder: (sheetCtx, scrollController) {
                           return Container(
-                            decoration: const BoxDecoration(
-                              color: Colors.black,
-                              borderRadius: BorderRadius.vertical(
-                                  top: Radius.circular(20)),
-                              border: Border(
-                                  top: BorderSide(color: Color(0x22FFFFFF))),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Color(0x66000000),
-                                  blurRadius: 16,
-                                  offset: Offset(0, -4),
-                                ),
-                              ],
-                            ),
+                            decoration: RaiViajeEnCursoUi.sheetDecoration(),
                             child: ListView(
                               controller: scrollController,
                               padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -1048,7 +1059,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
                                     width: 40,
                                     height: 5,
                                     decoration: BoxDecoration(
-                                      color: Colors.white24,
+                                      color: RaiDsColors.border,
                                       borderRadius: BorderRadius.circular(3),
                                     ),
                                   ),
@@ -1077,11 +1088,14 @@ class _DetalleViajeState extends State<DetalleViaje> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white10,
+        color: RaiDsColors.cardElevated,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white24),
+        border: Border.all(color: RaiDsColors.border),
       ),
-      child: Text(text, style: const TextStyle(color: Colors.white70)),
+      child: Text(
+        text,
+        style: const TextStyle(color: RaiDsColors.textMuted, fontSize: 12.5),
+      ),
     );
   }
 }
@@ -1113,7 +1127,7 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 12),
             child: Center(
-              child: CircularProgressIndicator(color: Colors.greenAccent),
+              child: CircularProgressIndicator(color: RaiDsColors.neon),
             ),
           );
         }
@@ -1157,10 +1171,9 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.green.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(14),
-            border:
-                Border.all(color: Colors.greenAccent.withValues(alpha: 0.35)),
+            color: RaiDsColors.card,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: RaiDsColors.purple.withValues(alpha: 0.4)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1171,10 +1184,10 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
                   miUid: uid,
                   activo: true,
                 ),
-              const Row(
+              Row(
                 children: [
                   Icon(Icons.savings_outlined,
-                      color: Colors.greenAccent, size: 22),
+                      color: RaiDsColors.purple, size: 22),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1208,7 +1221,7 @@ class _BolaNegociacionDetallePool extends StatelessWidget {
                 const SizedBox(height: 12),
                 FilledButton(
                   style: FilledButton.styleFrom(
-                    backgroundColor: Colors.greenAccent,
+                    backgroundColor: RaiDsColors.neon,
                     foregroundColor: Colors.black,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),

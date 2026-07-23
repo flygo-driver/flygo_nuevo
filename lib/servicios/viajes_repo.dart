@@ -321,7 +321,8 @@ class ViajesRepo {
     DateTime? acceptAfter,
     /// Tab Programar con recogida pronto: alinear `esAhora`/`programado` con pool ya abierto.
     bool? forzarEsAhora,
-    bool turismoIntentarAsignacionAutomatica = true,
+    /// Turismo: publicar en pool turístico (no auto-asignar chofer).
+    bool turismoPublicarEnPool = true,
 
     /// Si se publica también en `bolas_pueblo`, enlaza el viaje espejo del pool para negociación en Bola.
     String? bolaPuebloId,
@@ -570,25 +571,17 @@ class ViajesRepo {
       unawaited(NotificationService.I.marcarViajePropioSinTimbre(doc.id));
     }
 
-    if (tipoSrvFinal == 'turismo' && turismoIntentarAsignacionAutomatica) {
+    if (tipoSrvFinal == 'turismo' && turismoPublicarEnPool) {
       try {
-        final String? uidChofer =
-            await AsignacionTurismoRepo.intentarAsignacionAutomatica(
-                viajeId: doc.id);
-        if (uidChofer != null && uidChofer.isNotEmpty) {
-          await _limpiarOtrosActivosDelTaxista(uidChofer, exceptoId: doc.id);
-          await _limpiarSiguienteSiEsElClaimed(
-            uidTaxista: uidChofer,
-            viajeIdClaimed: doc.id,
-          );
-          await _ensureChatForTrip(doc.id);
-        }
+        await AsignacionTurismoRepo.publicarViajeEnPoolTurismo(
+          viajeId: doc.id,
+          omitirVentanaPublicacion: esAhora == true,
+        );
       } catch (e, st) {
-        // Sin bloquear la creación del viaje; ADM puede asignar después.
         await ErrorReporting.reportError(
           e,
           stack: st,
-          context: 'crearViajePendiente(turismo auto-asignación)',
+          context: 'crearViajePendiente(turismo pool)',
         );
       }
     }
@@ -773,6 +766,23 @@ class ViajesRepo {
       if (uidTx.isNotEmpty) uidTx,
       if (uidActual.isNotEmpty) uidActual,
     };
+
+    if (participantes.length < 2) {
+      final empId = (d['corporativoEmpresaId'] ?? '').toString().trim();
+      if (empId.isNotEmpty) {
+        try {
+          final empSnap =
+              await _db.collection('empresas_corporativas').doc(empId).get();
+          final raw = empSnap.data()?['encargadoUids'];
+          if (raw is List) {
+            for (final item in raw) {
+              final uid = item.toString().trim();
+              if (uid.isNotEmpty) participantes.add(uid);
+            }
+          }
+        } catch (_) {}
+      }
+    }
     if (participantes.length < 2) return;
 
     final cRef = _db.collection('chats').doc(viajeId);
@@ -2641,7 +2651,7 @@ class ViajesRepo {
     return controller.stream;
   }
 
-  /// Misma regla que [streamViajeEnCursoPorTaxista]: solo pool/taxi activo (no corporativo).
+  /// Misma regla que [streamViajeEnCursoPorTaxista]: pool/turismo activo (nunca corporativo).
   static bool viajeVisibleEnCursoTaxista(
     Map<String, dynamic> data,
     String uidTaxista,
@@ -2650,12 +2660,25 @@ class ViajesRepo {
     if (uid.isEmpty) return false;
     final String uidTxDoc =
         (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
-    final String estado =
-        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    final String estadoRaw = (data['estado'] ?? '').toString();
+    final String estado = EstadosViaje.estadoOperativoViaje(
+      estadoRaw: estadoRaw,
+      aceptado: data['aceptado'] == true,
+      completado: data['completado'] == true,
+    );
     final bool esCorpAsignado =
         CorporativoTaxistaService.esViajeCorporativoAsignado(data, uid);
-    // Corporativo piloto: no usar overlay «Mi viaje en curso» (pantalla informativa).
+    // Corporativo: pantalla «Mis rutas» / destinos — no overlay pool/turismo.
     if (esCorpAsignado) return false;
+    // Turismo: overlay pool turístico (nunca corporativo / Mis rutas).
+    if (AsignacionTurismoRepo.esDocumentoViajeTurismo(data)) {
+      if (uidTxDoc != uid) return false;
+      return data['aceptado'] == true ||
+          estado == EstadosViaje.aceptado ||
+          estado == EstadosViaje.enCaminoPickup ||
+          estado == EstadosViaje.aBordo ||
+          estado == EstadosViaje.enCurso;
+    }
     final bool estadoActivo = estado == EstadosViaje.aceptado ||
         estado == EstadosViaje.enCaminoPickup ||
         estado == EstadosViaje.aBordo ||

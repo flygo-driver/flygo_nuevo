@@ -120,6 +120,29 @@ class NavigationService {
     );
   }
 
+  static Future<void> _remontarShellTrasBola({
+    required NavigatorState rootNav,
+    required bool esTaxista,
+  }) async {
+    if (!rootNav.mounted) return;
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    if (esTaxista) {
+      ShellTabController.taxistaIrARecibir();
+      await rootNav.pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(builder: (_) => const TaxistaShell()),
+        (Route<dynamic> r) => false,
+      );
+    } else {
+      ShellTabController.clienteIrAInicio();
+      await rootNav.pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(
+            builder: (_) => const ClienteShellWithDeepLink()),
+        (Route<dynamic> r) => false,
+      );
+    }
+    ActiveTripService.notificarRebuildShell();
+  }
+
   /// Flecha atrás en pantallas Bola: vuelve al tablero de negociación.
   static void popOrGoBolaTablero(BuildContext context) {
     ActiveTripService.cancelarMantenimientoOverlayViaje();
@@ -136,26 +159,34 @@ class NavigationService {
     BuildContext context, {
     String? faseViaje,
   }) async {
-    final NavigatorState? nav = navigatorKey.currentState;
-    if (nav != null && nav.mounted && nav.canPop()) {
-      nav.pop();
-    }
+    final NavigatorState root =
+        Navigator.of(context, rootNavigator: true);
     ShellTabController.taxistaIrARecibir();
     final bool viajeOperativo =
         faseViaje == 'acordada' || faseViaje == 'en_curso';
     if (!viajeOperativo) {
       ShellTabController.taxistaIrAPoolAhora();
     }
+    if (!root.canPop()) {
+      await _remontarShellTrasBola(rootNav: root, esTaxista: true);
+      return;
+    }
+    root.pop();
   }
 
   /// Cliente: sale del tablero Bola (mapa, conductores en ruta, etc.) sin
   /// cancelar pedidos ni viajes activos.
   static Future<void> salirVistaBolaCliente(BuildContext context) async {
-    final NavigatorState? root = navigatorKey.currentState;
-    if (root != null && root.mounted && root.canPop()) {
-      root.pop();
+    final NavigatorState root =
+        Navigator.of(context, rootNavigator: true);
+    ShellTabController.clienteIrAInicio();
+
+    if (!root.canPop()) {
+      await _remontarShellTrasBola(rootNav: root, esTaxista: false);
+      return;
     }
 
+    root.pop();
     if (context.mounted) {
       final NavigatorState tabNav = Navigator.of(context);
       final NavigatorState rootNav =
@@ -166,41 +197,37 @@ class NavigationService {
         }
       }
     }
-
-    ShellTabController.clienteIrAInicio();
   }
 
   /// Salir del modo viaje Bola hacia el home del flavor (post-factura / cancelación).
-  static Future<void> salirModoViajeBola(BuildContext context) async {
-    ActiveTripService.cancelarMantenimientoOverlayViaje();
+  static Future<void> salirModoViajeBola(
+    BuildContext context, {
+    bool? esTaxista,
+  }) async {
     final NavigatorState rootNav =
         Navigator.of(context, rootNavigator: true);
+    final bool tx = esTaxista ?? false;
 
     if (isConductorFlavor) {
-      await rootNav.pushAndRemoveUntil<void>(
-        MaterialPageRoute<void>(builder: (_) => const TaxistaShell()),
-        (Route<dynamic> r) => false,
-      );
+      await _remontarShellTrasBola(rootNav: rootNav, esTaxista: true);
       return;
     }
 
     if (isClienteFlavor) {
-      if (rootNav.canPop()) {
-        rootNav.pop();
+      if (!rootNav.canPop()) {
+        await _remontarShellTrasBola(rootNav: rootNav, esTaxista: false);
         return;
       }
-      await rootNav.pushAndRemoveUntil<void>(
-        MaterialPageRoute<void>(builder: (_) => const ClienteShellWithDeepLink()),
-        (Route<dynamic> r) => false,
-      );
-      return;
-    }
-
-    if (rootNav.canPop()) {
       rootNav.pop();
       return;
     }
-    await clearAndGoBolaTablero(preNav: rootNav);
+
+    // App unificada Play (`com.flygo.rd2`): volver al shell según rol actual.
+    if (!rootNav.canPop()) {
+      await _remontarShellTrasBola(rootNav: rootNav, esTaxista: tx);
+      return;
+    }
+    rootNav.pop();
   }
 
   /// Home del taxista tras cerrar viaje Bola / factura / modo mapa.
@@ -715,6 +742,22 @@ class NavigationService {
         );
         return;
       }
+      if (!await CorporativoTaxistaService.viajeCorporativoEmpresaVigente(d)) {
+        _snackCorporativo(
+          'Esta empresa ya no opera con RAI. La ruta fue retirada.',
+          backgroundColor: Colors.orange.shade800,
+          context: snackContext,
+        );
+        return;
+      }
+      if (CorporativoTaxistaService.viajeCorporativoSuperseded(d)) {
+        _snackCorporativo(
+          'Esta ruta fue reemplazada o cancelada.',
+          backgroundColor: Colors.orange.shade800,
+          context: snackContext,
+        );
+        return;
+      }
       if (d['completado'] == true) {
         _snackCorporativo(
           'Esta ruta ya fue completada.',
@@ -731,7 +774,8 @@ class NavigationService {
         );
         return;
       }
-      if (quedarseEnPantalla) {
+      if (quedarseEnPantalla &&
+          CorporativoTaxistaService.viajeCorporativoEnCursoReal(d)) {
         CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(id.trim());
       } else if (CorporativoTaxistaService.rutaCorpInformativaDismissedRecientemente(
         id.trim(),

@@ -709,12 +709,45 @@
       ]
     },
     {
-      "collectionGroup": "turismo_mensajes_adm",
+      "collectionGroup": "viajes",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "viajeId", "order": "ASCENDING" },
-        { "fieldPath": "uidCliente", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        { "fieldPath": "corporativoPlantillaId", "order": "ASCENDING" },
+        { "fieldPath": "corporativoEmpresaId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoPlantillaId", "order": "ASCENDING" },
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoEmpresaId", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativo", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativo", "order": "ASCENDING" },
+        { "fieldPath": "codigoVerificado", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
       ]
     },
     {

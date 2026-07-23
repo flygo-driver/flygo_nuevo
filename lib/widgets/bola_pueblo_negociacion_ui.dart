@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../pantallas/comun/bola_pueblo_visual.dart';
 
-/// Componentes visuales para ofertas y contraofertas (estilo inDriver, preciso).
+/// Componentes visuales para ofertas y contraofertas Bola Ahorro.
 abstract final class BolaNegociacionUi {
   static Widget offersSheetHeader(
     BuildContext context, {
@@ -33,12 +33,6 @@ abstract final class BolaNegociacionUi {
             fontWeight: FontWeight.w800,
             letterSpacing: -0.4,
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Aceptá, contraofertá o descartá. El precio se cierra cuando ambos aceptan.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: c.onMuted, fontSize: 12, height: 1.3),
         ),
         if (minRd != null &&
             maxRd != null &&
@@ -85,9 +79,13 @@ abstract final class BolaNegociacionUi {
         ),
         const SizedBox(height: 14),
         Text(
-          '$name propuso RD\$${theirAmountRd.toStringAsFixed(0)}. '
-          'Escribí el monto exacto que aceptás.',
-          style: TextStyle(color: c.onMuted, fontSize: 12, height: 1.35),
+          '$name: RD\$${theirAmountRd.toStringAsFixed(0)}',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: c.onMuted,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         if (minRd != null && maxRd != null && maxRd >= minRd) ...[
           const SizedBox(height: 6),
@@ -275,6 +273,7 @@ abstract final class BolaNegociacionUi {
     required double montoRd,
     String? badge,
     String? message,
+    bool showMessage = false,
   }) {
     final c = BolaPuebloColors.of(context);
     return Column(
@@ -318,7 +317,7 @@ abstract final class BolaNegociacionUi {
             ),
           ],
         ),
-        if (message != null && message.trim().isNotEmpty) ...[
+        if (showMessage && message != null && message.trim().isNotEmpty) ...[
           const SizedBox(height: 6),
           Text(
             message,
@@ -399,13 +398,31 @@ abstract final class BolaNegociacionUi {
     );
   }
 
+  static Widget actionStack({
+    required Widget primary,
+    required Widget secondary,
+    bool primaryFirst = true,
+  }) {
+    final first = primaryFirst ? primary : secondary;
+    final second = primaryFirst ? secondary : primary;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        first,
+        const SizedBox(height: 8),
+        second,
+      ],
+    );
+  }
+
   static ButtonStyle rejectBtn(BuildContext context) {
     final c = BolaPuebloColors.of(context);
     return OutlinedButton.styleFrom(
       foregroundColor: c.onSurface,
       side: BorderSide(color: c.onSurface.withValues(alpha: 0.35)),
-      padding: const EdgeInsets.symmetric(vertical: 13),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      minimumSize: const Size(double.infinity, 52),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
   }
 
@@ -413,8 +430,19 @@ abstract final class BolaNegociacionUi {
     return FilledButton.styleFrom(
       backgroundColor: BolaPuebloTheme.accent,
       foregroundColor: Colors.white,
-      padding: const EdgeInsets.symmetric(vertical: 13),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      minimumSize: const Size(double.infinity, 52),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    );
+  }
+
+  static ButtonStyle counterBtn(BuildContext context) {
+    return OutlinedButton.styleFrom(
+      foregroundColor: BolaPuebloTheme.accent,
+      side: BorderSide(color: BolaPuebloTheme.accent.withValues(alpha: 0.55)),
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      minimumSize: const Size(double.infinity, 52),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
   }
 

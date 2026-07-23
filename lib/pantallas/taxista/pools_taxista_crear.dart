@@ -8,6 +8,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
@@ -17,6 +18,7 @@ import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
 import 'package:flygo_nuevo/servicios/organizador_giras_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/utils/bancos_rd.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
@@ -52,21 +54,21 @@ extension _PoolsTaxistaCrearPaletteX on BuildContext {
     final isDark = Theme.of(this).brightness == Brightness.dark;
     return (
       isDark: isDark,
-      scaffoldBg: isDark ? const Color(0xFF0B1020) : const Color(0xFFF1F5F9),
-      appBarBg: isDark ? const Color(0xFF0B1020) : Colors.white,
+      scaffoldBg: isDark ? RaiDsColors.bg : const Color(0xFFF1F5F9),
+      appBarBg: isDark ? RaiDsColors.bg : Colors.white,
       foreground: isDark ? Colors.white : const Color(0xFF101828),
       accent: isDark ? const Color(0xFF6FFFE9) : const Color(0xFF0D9488),
       accentSoft: isDark ? const Color(0xFFBEE9E8) : const Color(0xFF0F766E),
-      fieldFill: isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC),
+      fieldFill: isDark ? RaiDsColors.cardElevated : const Color(0xFFF8FAFC),
       inputText: isDark ? Colors.white : const Color(0xFF101828),
-      subtitleMuted: isDark ? Colors.white60 : const Color(0xFF667085),
+      subtitleMuted: isDark ? RaiDsColors.textMuted : const Color(0xFF667085),
       labelMuted: isDark ? Colors.white70 : const Color(0xFF475467),
-      cardGradA: isDark ? const Color(0xFF1C2541) : const Color(0xFFE0F2FE),
-      cardGradB: isDark ? const Color(0xFF3A506B) : const Color(0xFFF0F9FF),
+      cardGradA: isDark ? RaiDsColors.card : const Color(0xFFE0F2FE),
+      cardGradB: isDark ? RaiDsColors.cardElevated : const Color(0xFFF0F9FF),
       cardBorder: isDark
-          ? const Color(0xFF5BC0BE).withValues(alpha: 0.35)
+          ? RaiDsColors.border
           : const Color(0xFF0D9488).withValues(alpha: 0.35),
-      chipBg: isDark ? Colors.white10 : const Color(0xFFE2E8F0),
+      chipBg: isDark ? RaiDsColors.cardElevated : const Color(0xFFE2E8F0),
       chipSelectedTint: isDark
           ? const Color(0xFF6FFFE9).withValues(alpha: 0.25)
           : const Color(0xFF0D9488).withValues(alpha: 0.22),
@@ -74,7 +76,7 @@ extension _PoolsTaxistaCrearPaletteX on BuildContext {
       tealBtnBg: const Color(0xFF5BC0BE),
       tealBtnFg: isDark ? const Color(0xFF0B1020) : const Color(0xFF042F2E),
       placeholderBox:
-          isDark ? const Color(0xFF1A1A1A) : const Color(0xFFE2E8F0),
+          isDark ? RaiDsColors.cardElevated : const Color(0xFFE2E8F0),
       faintIcon: isDark ? Colors.white38 : const Color(0xFF98A2B3),
     );
   }
@@ -588,17 +590,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
     return Scaffold(
       backgroundColor: p.scaffoldBg,
-      appBar: AppBar(
-        backgroundColor: p.appBarBg,
-        foregroundColor: p.foreground,
-        elevation: p.isDark ? 0 : 0.5,
-        title: Text(
-          PoolsProductoCopy.publicarTitulo,
-          style: TextStyle(
-            color: p.accent,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
+      appBar: RaiAppBar(
+        title: PoolsProductoCopy.publicarTitulo,
+        showBackWhenCanPop: true,
         centerTitle: true,
       ),
       body: SafeArea(

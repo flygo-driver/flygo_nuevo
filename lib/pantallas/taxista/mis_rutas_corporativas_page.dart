@@ -34,6 +34,7 @@ class _MisRutasCorporativasPageState extends State<MisRutasCorporativasPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       if (uid.isNotEmpty) {
+        unawaited(CorporativoTaxistaService.cargarDismissCorpPersistido());
         unawaited(_refrescar(uid, silencioso: true));
       }
     });
@@ -82,7 +83,7 @@ class _MisRutasCorporativasPageState extends State<MisRutasCorporativasPage>
     return Scaffold(
       appBar: RaiShellTabHeader(
         title: 'Mis rutas corporativas',
-        backTooltip: 'Volver a Servicios',
+        backTooltip: 'Volver',
         onBack: () => NavigationService.salirMisRutasCorporativas(context),
       ),
       body: uid.isEmpty
@@ -258,6 +259,14 @@ class _MisRutasCorporativasPageState extends State<MisRutasCorporativasPage>
                         <DocumentSnapshot<Map<String, dynamic>>>[];
                     for (final doc in hoyDedupe) {
                       final data = doc.data() ?? <String, dynamic>{};
+                      if (CorporativoTaxistaService
+                          .viajeCorporativoInformativoCerradoParaChofer(data)) {
+                        continue;
+                      }
+                      if (CorporativoTaxistaService
+                          .rutaCorpInformativaDismissedRecientemente(doc.id)) {
+                        continue;
+                      }
                       if (CorporativoTaxistaService.viajeCorporativoEnPoolTrabajo(
                         data,
                         listoSegunOperacion:
@@ -624,6 +633,7 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
     final enCurso = estadoOp == 'en_curso';
     final cancelado = estadoOp == 'cancelado';
     final puedeAbrir = !recogidaPerdida &&
+        !completadoHoy &&
         viajeId.isNotEmpty &&
         !cancelado &&
         (listo || enCurso);
@@ -1241,7 +1251,12 @@ class _RutaCard extends StatelessWidget {
           listoSegunOperacion: listoSegunOperacion,
         );
     final modoInfo = CorporativoTaxistaService.esModoInformativo(d);
-    final puedeAbrirBtn = listoAbrir || enCurso;
+    final cerradoHoy =
+        CorporativoTaxistaService.viajeCorporativoInformativoCerradoParaChofer(d) ||
+            CorporativoTaxistaService.rutaCorpInformativaDismissedRecientemente(
+              doc.id,
+            );
+    final puedeAbrirBtn = !cerradoHoy && (listoAbrir || enCurso);
 
     Color turnoColor;
     switch (turno) {

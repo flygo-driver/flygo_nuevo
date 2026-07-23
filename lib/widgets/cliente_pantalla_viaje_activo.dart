@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
-import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 
 /// Decide qué pantalla mostrar cuando [ClienteShell] detecta `viajeActivoId`.
 class ClientePantallaViajeActivo extends StatelessWidget {
@@ -13,16 +13,7 @@ class ClientePantallaViajeActivo extends StatelessWidget {
   final Key? viajeEnCursoKey;
 
   static bool debeMostrarEsperaTurismo(Map<String, dynamic> data) {
-    if ((data['tipoServicio'] ?? '').toString() != 'turismo') return false;
-    final String taxista =
-        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
-    if (taxista.isNotEmpty) return false;
-    final String estadoRaw = (data['estado'] ?? '').toString();
-    final String estadoNorm = EstadosViaje.normalizar(estadoRaw);
-    if (data['completado'] == true || EstadosViaje.esTerminal(estadoNorm)) {
-      return false;
-    }
-    return true;
+    return AsignacionTurismoRepo.viajeTurismoEsperandoChofer(data);
   }
 
   @override

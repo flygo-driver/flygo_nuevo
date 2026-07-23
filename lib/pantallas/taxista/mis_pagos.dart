@@ -492,6 +492,7 @@ class _MisPagosState extends State<MisPagos> {
                       child: Padding(
                         padding: const EdgeInsets.all(12),
                         child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             CircleAvatar(
                               backgroundColor:
@@ -507,50 +508,97 @@ class _MisPagosState extends State<MisPagos> {
                                 children: [
                                   Text(
                                     'Semana ${liq.periodo}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       color: cs.onSurface,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
+                                  const SizedBox(height: 2),
                                   Text(
-                                    '${liq.viajesCount} viajes · '
-                                    'Transf. ${formatter.format(liq.totalesPorMetodo.transferencia.totalNetoRd)} · '
-                                    'Tarj. ${formatter.format(liq.totalesPorMetodo.tarjeta.totalNetoRd)}',
+                                    '${liq.viajesCount} viajes',
                                     style: TextStyle(
                                       color: cs.onSurfaceVariant,
                                       fontSize: 12,
                                     ),
                                   ),
-                                  if (liq.viajeIds.isNotEmpty)
-                                    OutlinedButton.icon(
-                                      onPressed: () =>
-                                          _mostrarLineasLiquidacionSemanal(liq),
-                                      icon: const Icon(Icons.list_alt, size: 18),
-                                      label: Text(
-                                          'Ver viajes (${liq.viajeIds.length})'),
+                                  Text(
+                                    'Transf. ${formatter.format(liq.totalesPorMetodo.transferencia.totalNetoRd)}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: cs.onSurfaceVariant,
+                                      fontSize: 11.5,
                                     ),
+                                  ),
+                                  Text(
+                                    'Tarj. ${formatter.format(liq.totalesPorMetodo.tarjeta.totalNetoRd)}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: cs.onSurfaceVariant,
+                                      fontSize: 11.5,
+                                    ),
+                                  ),
+                                  if (liq.viajeIds.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: OutlinedButton.icon(
+                                        onPressed: () =>
+                                            _mostrarLineasLiquidacionSemanal(
+                                                liq),
+                                        icon: const Icon(Icons.list_alt,
+                                            size: 18),
+                                        label: Text(
+                                            'Ver viajes (${liq.viajeIds.length})'),
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  formatter.format(liq.totalNetoRd),
-                                  style: TextStyle(
-                                    color: estadoColor,
-                                    fontWeight: FontWeight.bold,
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 92,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    alignment: Alignment.centerRight,
+                                    child: Text(
+                                      formatter.format(liq.totalNetoRd),
+                                      style: TextStyle(
+                                        color: estadoColor,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
                                   ),
-                                ),
-                                Text(
-                                  estadoText,
-                                  style: TextStyle(
-                                    color: estadoColor,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
+                                  const SizedBox(height: 4),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          estadoColor.withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      estadoText,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: estadoColor,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ],
                         ),
@@ -787,6 +835,7 @@ class _MisPagosState extends State<MisPagos> {
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     CircleAvatar(
                       backgroundColor: estadoColor.withValues(alpha: 0.2),
@@ -801,6 +850,8 @@ class _MisPagosState extends State<MisPagos> {
                         children: <Widget>[
                           Text(
                             'Semana ${pago.semana}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: cs.onSurface,
                               fontWeight: FontWeight.w600,
@@ -816,18 +867,23 @@ class _MisPagosState extends State<MisPagos> {
                           ),
                           Text(
                             '${dateFormat.format(pago.fechaInicio)} - ${dateFormat.format(pago.fechaFin)}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: cs.onSurfaceVariant.withValues(alpha: 0.85),
                               fontSize: 11,
                             ),
                           ),
                           if (pago.viajesLiquidados.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            OutlinedButton.icon(
-                              onPressed: () => _mostrarViajesLiquidados(pago),
-                              icon: const Icon(Icons.list_alt),
-                              label: Text(
-                                'Ver viajes (${pago.viajesLiquidados.length})',
+                            const SizedBox(height: 6),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: OutlinedButton.icon(
+                                onPressed: () => _mostrarViajesLiquidados(pago),
+                                icon: const Icon(Icons.list_alt, size: 18),
+                                label: Text(
+                                  'Ver viajes (${pago.viajesLiquidados.length})',
+                                ),
                               ),
                             ),
                           ],
@@ -835,36 +891,44 @@ class _MisPagosState extends State<MisPagos> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: <Widget>[
-                        Text(
-                          formatter.format(pago.comision),
-                          style: TextStyle(
-                            color: estadoColor,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: estadoColor.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            estadoText,
-                            style: TextStyle(
-                              color: estadoColor,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
+                    SizedBox(
+                      width: 92,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: <Widget>[
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              formatter.format(pago.comision),
+                              style: TextStyle(
+                                color: estadoColor,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: estadoColor.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              estadoText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: estadoColor,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -1432,8 +1496,6 @@ class _PanelRecargaComisionEfectivoState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const CuentaOpenAskDepositoPanel(),
-                  const SizedBox(height: 16),
                   TaxistaCreditoRaiMonederoHero(
                     disponible: disponible,
                     saldoBruto: saldo,
@@ -1542,7 +1604,7 @@ class _PanelRecargaComisionEfectivoState
                       numero: 1,
                       titulo: 'Transferir al banco',
                       detalle:
-                          'Usá la cuenta Open ASK de este mismo recuadro verde (787726249 · Banco Popular). '
+                          'Usá la cuenta Open ASK de arriba (Banco Popular). '
                           'Guardá el comprobante que te da el banco o una captura clara.',
                     ),
                     const SizedBox(height: 8),

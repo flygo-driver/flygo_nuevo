@@ -4,17 +4,18 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/modelos/corporativo_models.dart';
 import 'package:flygo_nuevo/navegacion/post_viaje_taxista_nav.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/chat_repo.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/corporativo_hora_encargado.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/widgets/corporativo_pasajeros_chofer_card.dart';
-import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 /// Ruta corporativa estilo «Elige tu destino»: tarjetas → Maps (sin PIN).
 class CorporativoRutaDetalleInformativoPage extends StatefulWidget {
@@ -36,6 +37,7 @@ class _CorporativoRutaDetalleInformativoPageState
     extends State<CorporativoRutaDetalleInformativoPage> {
   bool _busy = false;
   bool _finalizando = false;
+  bool _expulsandoRuta = false;
   String? _errorFinalizar;
   int _totalPasajerosActual = 0;
   Map<String, dynamic>? _viajeCache;
@@ -79,6 +81,58 @@ class _CorporativoRutaDetalleInformativoPageState
     );
   }
 
+  Future<void> _expulsarPantallaRutaInvalida(String mensaje) async {
+    if (_expulsandoRuta || !mounted) return;
+    _expulsandoRuta = true;
+    await _alSalirDeRuta(viajeData: _viajeCache);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(mensaje),
+        backgroundColor: Colors.orange.shade800,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+    final nav = Navigator.of(context);
+    if (nav.canPop()) nav.pop();
+  }
+
+  Future<void> _verificarCierreAutomatico(Map<String, dynamic> viaje) async {
+    if (_expulsandoRuta || !mounted) return;
+    if (CorporativoTaxistaService.viajeCorporativoDebeExpulsarPantallaChofer(
+      viaje,
+      _uidOperativo,
+    )) {
+      await _expulsarPantallaRutaInvalida(
+        'Esta ruta ya no está disponible.',
+      );
+      return;
+    }
+    final vigente = await CorporativoTaxistaService.viajeCorporativoEmpresaVigente(
+      viaje,
+    );
+    if (!vigente && mounted && !_expulsandoRuta) {
+      await _expulsarPantallaRutaInvalida(
+        'Esta empresa ya no opera con RAI. La ruta fue retirada.',
+      );
+    }
+  }
+
+  Future<void> _verificarViajeEliminadoEnServidor() async {
+    if (_expulsandoRuta || !mounted) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(widget.viajeId)
+          .get(const GetOptions(source: Source.server));
+      if (!snap.exists && mounted && !_expulsandoRuta) {
+        await _expulsarPantallaRutaInvalida(
+          'Esta ruta ya no existe en el servidor.',
+        );
+      }
+    } catch (_) {}
+  }
+
   Future<void> _confirmarTodasEntregasPendientes({
     required int totalPasajeros,
   }) async {
@@ -92,7 +146,7 @@ class _CorporativoRutaDetalleInformativoPageState
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111827),
+        backgroundColor: RaiDsColors.bg,
         title: const Text(
           '¿Confirmar todas las entregas?',
           style: TextStyle(color: Colors.white),
@@ -235,6 +289,8 @@ class _CorporativoRutaDetalleInformativoPageState
       CorporativoTaxistaService.marcarRutaCorpInformativaDismissed(
         widget.viajeId,
       );
+      await CorporativoTaxistaService.refrescarOperacionChofer(_uidOperativo);
+      await ViajesRepo.limpiarViajeActivoSiNoOperativo(_uidOperativo);
       if (!mounted) return;
       final ctx = context;
       await PostViajeTaxistaNav.abrirFacturaYFlujo(
@@ -288,7 +344,7 @@ class _CorporativoRutaDetalleInformativoPageState
     if (_busy) return;
     final elegido = await showModalBottomSheet<String>(
       context: context,
-      backgroundColor: const Color(0xFF111827),
+      backgroundColor: RaiDsColors.bg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -393,7 +449,7 @@ class _CorporativoRutaDetalleInformativoPageState
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111827),
+        backgroundColor: RaiDsColors.bg,
         title: const Text(
           '¿Finalizar la ruta?',
           style: TextStyle(color: Colors.white),
@@ -431,7 +487,7 @@ class _CorporativoRutaDetalleInformativoPageState
     final confirmar = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF111827),
+        backgroundColor: RaiDsColors.bg,
         title: const Text(
           '¿Dejar esta ruta?',
           style: TextStyle(color: Colors.white),
@@ -531,7 +587,7 @@ class _CorporativoRutaDetalleInformativoPageState
     if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF111827),
+      backgroundColor: RaiDsColors.bg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -606,34 +662,48 @@ class _CorporativoRutaDetalleInformativoPageState
     );
   }
 
-  void _abrirChatEncargado(Map<String, dynamic> d) {
-    final encargadoUid = CorporativoTaxistaService.uidEncargadoDesdeViaje(d);
+  Future<void> _abrirChatEncargado(Map<String, dynamic> d) async {
+    final encargadoUid =
+        await CorporativoTaxistaService.uidEncargadoDesdeViajeAsync(d);
     if (encargadoUid.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Encargado no disponible')),
       );
       return;
     }
     final nombre = CorporativoTaxistaService.nombreEncargadoDesdeViaje(d);
-    Navigator.push(
-      context,
+    final miUid = _uidOperativo;
+    if (miUid.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Iniciá sesión para usar el chat')),
+      );
+      return;
+    }
+
+    try {
+      await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
+      await ChatRepo.ensureViajeChatParticipantes(
+        viajeId: widget.viajeId,
+        participantes: {miUid, encargadoUid},
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo preparar el chat: $e')),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    await Navigator.of(context, rootNavigator: true).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => Scaffold(
-          backgroundColor: _fondo,
-          appBar: RaiAppBar(title: nombre),
-          body: FutureBuilder<void>(
-            future: ViajesRepo.ensureChatDocForViaje(widget.viajeId),
-            builder: (ctx, snap) {
-              if (snap.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              return ChatScreen(
-                otroUid: encargadoUid,
-                otroNombre: nombre,
-                viajeId: widget.viajeId,
-              );
-            },
-          ),
+        builder: (_) => ChatScreen(
+          otroUid: encargadoUid,
+          otroNombre: nombre,
+          viajeId: widget.viajeId,
+          tituloCompacto: true,
         ),
       ),
     );
@@ -757,6 +827,9 @@ class _CorporativoRutaDetalleInformativoPageState
             return const Center(child: CircularProgressIndicator());
           }
           if (!snap.hasData || !snap.data!.exists) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              unawaited(_verificarViajeEliminadoEnServidor());
+            });
             return const Center(
               child: Text(
                 'Ruta no encontrada',
@@ -767,6 +840,9 @@ class _CorporativoRutaDetalleInformativoPageState
           final d = Map<String, dynamic>.from(snap.data!.data() ?? {});
           d['id'] = widget.viajeId;
           _viajeCache = d;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            unawaited(_verificarCierreAutomatico(d));
+          });
 
           final empresaIdPl =
               (d['corporativoEmpresaId'] ?? '').toString().trim();
@@ -1835,7 +1911,7 @@ class _TarjetaDestino extends StatelessWidget {
             ? const Color(0xFF1A1508)
             : yaAbierta
                 ? const Color(0xFF0D1117)
-                : const Color(0xFF111827),
+                : RaiDsColors.bg,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
           onTap: onTap,
@@ -1978,7 +2054,7 @@ class _TarjetaPagoCorporativo extends StatelessWidget {
       decoration: BoxDecoration(
         color: destacado
             ? const Color(0xFF14532D)
-            : const Color(0xFF111827),
+            : RaiDsColors.bg,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: destacado

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
@@ -15,6 +16,7 @@ import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/corporativo_hora_encargado.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
+import 'package:flygo_nuevo/utils/corporativo_ventanas_constants.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
 enum CorporativoAbrirResultado {
@@ -27,6 +29,19 @@ enum CorporativoAbrirResultado {
 
 /// Evita que [CorporativoAutoAbrirWatcher] reabra una ruta que el chofer ya cerró.
 final Map<String, DateTime> _rutasCorpInformativasDismissed = <String, DateTime>{};
+final Map<String, String> _rutasCorpDismissDiaPersistido = <String, String>{};
+bool _rutasCorpDismissPrefsCargadas = false;
+
+String _claveDiaCalendarioCorp() {
+  final n = DateTime.now();
+  final m = n.month.toString().padLeft(2, '0');
+  final d = n.day.toString().padLeft(2, '0');
+  return '${n.year}$m$d';
+}
+
+String _viajeIdDesdeDataCorp(Map<String, dynamic> data) {
+  return (data['id'] ?? data['viajeId'] ?? '').toString().trim();
+}
 
 /// Liquidación visible para el chofer (neto del viaje + acumulado del período).
 class CorporativoChoferPagoResumen {
@@ -667,26 +682,92 @@ abstract final class CorporativoTaxistaService {
     return false;
   }
 
-  /// Chofer salió de una ruta cerrada: no auto-abrir de nuevo hoy.
+  static bool viajeCorporativoSuperseded(Map<String, dynamic> data) {
+    return (data['corporativoSupersedidoPor'] ?? '')
+        .toString()
+        .trim()
+        .isNotEmpty;
+  }
+
+  /// Pantalla informativa debe cerrarse (cerrada, huérfana, reemplazada o no asignada).
+  static bool viajeCorporativoDebeExpulsarPantallaChofer(
+    Map<String, dynamic> data,
+    String uidTaxista,
+  ) {
+    if (!esViajeCorporativoAsignado(data, uidTaxista)) return true;
+    if (viajeCorporativoSuperseded(data)) return true;
+    if (viajeCorporativoInformativoCerradoParaChofer(data)) return true;
+    return !estadoPermiteVerViajeCorporativo(data);
+  }
+
+  /// Viaje corporativo que el chofer puede abrir ahora (empresa vigente + estado operativo).
+  static Future<bool> viajeCorporativoAbribleParaChofer(
+    Map<String, dynamic> data,
+    String uidTaxista,
+  ) async {
+    if (viajeCorporativoDebeExpulsarPantallaChofer(data, uidTaxista)) {
+      return false;
+    }
+    return viajeCorporativoEmpresaVigente(data);
+  }
+
+  /// Chofer salió o cerró una ruta: no auto-abrir de nuevo hoy.
+  static Future<void> cargarDismissCorpPersistido() async {
+    if (_rutasCorpDismissPrefsCargadas) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final dia = _claveDiaCalendarioCorp();
+      for (final key in prefs.getKeys()) {
+        if (!key.startsWith('corp_ruta_dismiss_')) continue;
+        if (prefs.getString(key) != dia) continue;
+        final viajeId = key.substring('corp_ruta_dismiss_'.length).trim();
+        if (viajeId.isNotEmpty) {
+          _rutasCorpDismissDiaPersistido[viajeId] = dia;
+        }
+      }
+    } catch (_) {}
+    _rutasCorpDismissPrefsCargadas = true;
+  }
+
   static void marcarRutaCorpInformativaDismissed(String viajeId) {
     final id = viajeId.trim();
     if (id.isEmpty) return;
+    final dia = _claveDiaCalendarioCorp();
     _rutasCorpInformativasDismissed[id] = DateTime.now();
+    _rutasCorpDismissDiaPersistido[id] = dia;
+    unawaited(
+      SharedPreferences.getInstance().then(
+        (prefs) => prefs.setString('corp_ruta_dismiss_$id', dia),
+      ),
+    );
   }
 
   static bool rutaCorpInformativaDismissedRecientemente(String viajeId) {
     final id = viajeId.trim();
+    if (id.isEmpty) return false;
+    final dia = _claveDiaCalendarioCorp();
+    if (_rutasCorpDismissDiaPersistido[id] == dia) return true;
+
     final t = _rutasCorpInformativasDismissed[id];
     if (t == null) return false;
-    if (DateTime.now().difference(t).inHours >= 8) {
-      _rutasCorpInformativasDismissed.remove(id);
-      return false;
+    final ahora = DateTime.now();
+    if (t.year == ahora.year && t.month == ahora.month && t.day == ahora.day) {
+      return true;
     }
-    return true;
+    _rutasCorpInformativasDismissed.remove(id);
+    return false;
   }
 
   static void limpiarDismissRutaCorpInformativa(String viajeId) {
-    _rutasCorpInformativasDismissed.remove(viajeId.trim());
+    final id = viajeId.trim();
+    if (id.isEmpty) return;
+    _rutasCorpInformativasDismissed.remove(id);
+    _rutasCorpDismissDiaPersistido.remove(id);
+    unawaited(
+      SharedPreferences.getInstance().then(
+        (prefs) => prefs.remove('corp_ruta_dismiss_$id'),
+      ),
+    );
   }
 
   /// Corporativo asignado abierto: nunca overlay «Mi viaje en curso» del shell taxista.
@@ -815,9 +896,7 @@ abstract final class CorporativoTaxistaService {
         final snap = await _db.collection('viajes').doc(pref).get();
         if (snap.exists) {
           final d = snap.data() ?? <String, dynamic>{};
-          if (esViajeCorporativoAsignado(d, uid) &&
-              !viajeCorporativoInformativoCerradoParaChofer(d) &&
-              estadoPermiteVerViajeCorporativo(d)) {
+          if (await viajeCorporativoAbribleParaChofer(d, uid)) {
             return pref;
           }
         }
@@ -1038,6 +1117,29 @@ abstract final class CorporativoTaxistaService {
 
   static String uidEncargadoDesdeViaje(Map<String, dynamic> data) {
     return (data['uidCliente'] ?? data['clienteId'] ?? '').toString().trim();
+  }
+
+  /// Si el viaje no trae `uidCliente`, toma el primer encargado de la empresa.
+  static Future<String> uidEncargadoDesdeViajeAsync(
+    Map<String, dynamic> data,
+  ) async {
+    final directo = uidEncargadoDesdeViaje(data);
+    if (directo.isNotEmpty) return directo;
+
+    final empId = (data['corporativoEmpresaId'] ?? '').toString().trim();
+    if (empId.isEmpty) return '';
+
+    try {
+      final snap = await _db.collection('empresas_corporativas').doc(empId).get();
+      final raw = snap.data()?['encargadoUids'];
+      if (raw is List) {
+        for (final item in raw) {
+          final uid = item.toString().trim();
+          if (uid.isNotEmpty) return uid;
+        }
+      }
+    } catch (_) {}
+    return '';
   }
 
   static String nombreEncargadoDesdeViaje(Map<String, dynamic> data) {
@@ -1284,7 +1386,7 @@ abstract final class CorporativoTaxistaService {
     }
     if (completadoHoy) {
       return 'Ruta de hoy cerrada ✓ Mañana se publica el nuevo '
-          '~45 min antes de la recogida.';
+          '~${CorporativoVentanasConstants.minutosPublicarAntesDefault} min antes de la recogida.';
     }
     if (estadoOperacion == 'en_curso') {
       return 'Ruta en curso. Tocá Abrir ruta para continuar.';
@@ -1301,7 +1403,7 @@ abstract final class CorporativoTaxistaService {
       return 'Ruta amarrada · recogida $horaFmt.';
     }
 
-    const leadMin = 45;
+    const leadMin = CorporativoVentanasConstants.minutosPublicarAntesDefault;
     final ahora = DateTime.now();
     final minParaRecogida = proxima.difference(ahora).inMinutes;
     final hoySlot = _recogidaConHoraHoyLocal(horaRaw, ahora);
@@ -1312,7 +1414,7 @@ abstract final class CorporativoTaxistaService {
     if (slotHoyYaPaso && !viajePublicado) {
       return 'Ruta amarrada · recogida $horaFmt. '
           'El viaje de hoy aún no está publicado; '
-          'mañana se abre unos 45 min antes.';
+          'mañana se abre ~$leadMin min antes.';
     }
 
     final minParaAbrir = minParaRecogida - leadMin;
@@ -1322,7 +1424,7 @@ abstract final class CorporativoTaxistaService {
     if (minParaRecogida > 0 && minParaRecogida <= leadMin) {
       return 'Pronto se publica el viaje (recogida $horaFmt).';
     }
-    return 'Ruta amarrada · recogida $horaFmt. Se publica ~45 min antes.';
+    return 'Ruta amarrada · recogida $horaFmt. Se publica ~$leadMin min antes.';
   }
 
   /// Texto de confirmación coherente con la próxima recogida del countdown.
@@ -1394,6 +1496,11 @@ abstract final class CorporativoTaxistaService {
   }) {
     if (viajeCorporativoInformativoCerradoParaChofer(data)) return false;
     if (!estadoPermiteVerViajeCorporativo(data)) return false;
+    final viajeId = _viajeIdDesdeDataCorp(data);
+    if (viajeId.isNotEmpty &&
+        rutaCorpInformativaDismissedRecientemente(viajeId)) {
+      return false;
+    }
     if (listoSegunOperacion == true) return true;
 
     final uidChofer = _uidChoferEnViajeCorporativo(data);
@@ -1425,7 +1532,9 @@ abstract final class CorporativoTaxistaService {
         if (ViajePoolTaxistaGate.ventanaPublicacionYAceptacionOk(data)) {
           return true;
         }
-        if (minParaRecogida <= minPub + 45) return true;
+        if (minParaRecogida <= minPub + CorporativoVentanasConstants.ventanaToleranciaMin) {
+          return true;
+        }
       }
     }
 
@@ -1447,7 +1556,7 @@ abstract final class CorporativoTaxistaService {
     if (pub != null && fechaRecogida.isAfter(pub)) {
       return fechaRecogida.difference(pub).inMinutes.clamp(3, 180);
     }
-    return 90;
+    return CorporativoVentanasConstants.minutosPublicarAntesDefault;
   }
 
   static bool _esRecogidaMismoDiaLocal(DateTime fecha, DateTime ahora) {
@@ -2397,9 +2506,7 @@ abstract final class CorporativoTaxistaService {
       final vSnap = await _db.collection('viajes').doc(raw).get();
       if (!vSnap.exists) continue;
       final d = vSnap.data() ?? <String, dynamic>{};
-      if (esViajeCorporativoAsignado(d, uid) &&
-          !viajeCorporativoInformativoCerradoParaChofer(d) &&
-          estadoPermiteVerViajeCorporativo(d)) {
+      if (await viajeCorporativoAbribleParaChofer(d, uid)) {
         return raw;
       }
     }
@@ -2424,9 +2531,7 @@ abstract final class CorporativoTaxistaService {
             final vSnap = await _db.collection('viajes').doc(id).get();
             if (!vSnap.exists) continue;
             final d = vSnap.data() ?? <String, dynamic>{};
-            if (esViajeCorporativoAsignado(d, uid) &&
-                !viajeCorporativoInformativoCerradoParaChofer(d) &&
-                estadoPermiteVerViajeCorporativo(d)) {
+            if (await viajeCorporativoAbribleParaChofer(d, uid)) {
               return id;
             }
           }
@@ -2447,9 +2552,7 @@ abstract final class CorporativoTaxistaService {
             final vSnap = await _db.collection('viajes').doc(id).get();
             if (!vSnap.exists) continue;
             final d = vSnap.data() ?? <String, dynamic>{};
-            if (esViajeCorporativoAsignado(d, uid) &&
-                !viajeCorporativoInformativoCerradoParaChofer(d) &&
-                estadoPermiteVerViajeCorporativo(d)) {
+            if (await viajeCorporativoAbribleParaChofer(d, uid)) {
               return id;
             }
           }

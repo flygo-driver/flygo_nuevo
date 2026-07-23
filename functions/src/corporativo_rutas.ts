@@ -49,10 +49,13 @@ import {
   yaMarcadaRecogidaPerdidaHoy,
 } from "./corporativo_recogida_perdida.js";
 import {
-  POOL_LEAD_MINUTES_PROGRAMADO,
-  poolOpensAtMsForScheduledPickup,
-  startWindowAtMsForScheduledPickup,
-} from "./trip_publish_windows.js";
+  CORP_CONTRATO_VERSION,
+  CORP_ENVIAR_AHORA_OFFSET_MIN,
+  CORP_MINUTOS_PUBLICAR_ANTES_DEFAULT,
+  CORP_VENTANA_TOLERANCIA_MIN,
+  corporativoPoolOpensAtMs,
+  minutosPublicarAntesCorporativo,
+} from "./corporativo_constants.js";
 
 const db = () => getFirestore();
 const messaging = () => getMessaging();
@@ -79,8 +82,11 @@ function mergeExtrasCorporativo(base: unknown, patch: AnyMap): AnyMap {
   return { ...b, ...patch };
 }
 
-/** Misma ventana que viajes programados en pool (45 min antes de recogida). */
-function ventanasPublicacionCorporativo(fechaRecogida: Date): {
+/** Ventana corporativa (~90 min antes de la recogida, configurable por plantilla). */
+function ventanasPublicacionCorporativo(
+  fechaRecogida: Date,
+  minPub = CORP_MINUTOS_PUBLICAR_ANTES_DEFAULT,
+): {
   publishAt: Timestamp;
   acceptAfter: Timestamp;
   startWindowAt: Timestamp;
@@ -88,12 +94,11 @@ function ventanasPublicacionCorporativo(fechaRecogida: Date): {
 } {
   const pickupMs = fechaRecogida.getTime();
   const nowMs = Date.now();
-  const publishAtMs = poolOpensAtMsForScheduledPickup(pickupMs, nowMs);
-  const startWindowAtMs = startWindowAtMsForScheduledPickup(pickupMs, nowMs);
+  const publishAtMs = corporativoPoolOpensAtMs(pickupMs, nowMs, minPub);
   return {
     publishAt: Timestamp.fromMillis(publishAtMs),
     acceptAfter: Timestamp.fromMillis(publishAtMs),
-    startWindowAt: Timestamp.fromMillis(startWindowAtMs),
+    startWindowAt: Timestamp.fromMillis(publishAtMs),
     publicado: publishAtMs <= nowMs,
   };
 }
@@ -404,7 +409,7 @@ function fechaRecogidaConHora(base: Date, horaStr: string): Date | null {
 function ajustarRecogidaHoySiYaPaso(
   recogida: Date,
   ref: Date = new Date(),
-  minutosFuturo = 15,
+  minutosFuturo = CORP_ENVIAR_AHORA_OFFSET_MIN,
 ): Date {
   const diffMin = (recogida.getTime() - ref.getTime()) / 60000;
   if (diffMin < -5) {
@@ -522,11 +527,10 @@ function ventanaPublicacionCorporativoAbierta(
   const recogida = recogidaConHoraZonaRd(horaStr, ref);
   if (!recogida || !esMismoDiaCalendarioRd(recogida, ref)) return false;
   const diffMin = (recogida.getTime() - ref.getTime()) / 60000;
-  const minPub =
-    typeof plantilla.minutosPublicarAntes === "number"
-      ? Math.max(3, Math.trunc(plantilla.minutosPublicarAntes as number))
-      : 90;
-  return diffMin <= minPub + 45 && diffMin >= -120;
+  const minPub = minutosPublicarAntesCorporativo(plantilla.minutosPublicarAntes);
+  return (
+    diffMin <= minPub + CORP_VENTANA_TOLERANCIA_MIN && diffMin >= -120
+  );
 }
 
 /** ¿Publicar viaje operativo de hoy? (asignación ADM puede forzar recogida hoy). */
@@ -1198,7 +1202,7 @@ async function publicarViajeDesdePlantilla(args: {
         startWindowAt: fechaTs,
         publicado: true,
       }
-    : ventanasPublicacionCorporativo(args.fechaRecogida);
+    : ventanasPublicacionCorporativo(args.fechaRecogida, minPub);
   const kmCotizados = Number(desglose.kmCotizados ?? kmLinea * cfg.factorKmCarretera);
 
   const destinoLabel = `${str(ultimo.nombre)} · ${str(ultimo.destinoLabel || ultimo.destino)}`;
@@ -1256,7 +1260,7 @@ async function publicarViajeDesdePlantilla(args: {
     corporativoServicioContratado: true,
     exentoBloqueoPrepago: true,
     corporativoMinutosPublicarAntes: minPub,
-    corporativoVentanaPoolMinutos: POOL_LEAD_MINUTES_PROGRAMADO,
+    corporativoVentanaPoolMinutos: minPub,
     corporativoPublicadoEn: now,
     codigoVerificacion,
     codigoVerificado: false,
@@ -1655,7 +1659,7 @@ export const scheduledCorporativoRutasFijas = onSchedule(
           }
         }
 
-        // Promover cuando abre la ventana programada (45 min), igual que pool.
+        // Promover cuando abre la ventana corporativa (~90 min antes de recogida).
         const ultimoViajeId = str(d.ultimoViajeId);
         if (
           ultimoViajeId &&
@@ -1997,7 +2001,9 @@ async function pushEntradaOperacionChofer(args: {
     typeof d.minutosPublicarAntes === "number"
       ? Math.max(3, Math.trunc(d.minutosPublicarAntes as number))
       : 90;
-  const ventanas = recogida ? ventanasPublicacionCorporativo(recogida) : null;
+  const ventanas = recogida
+    ? ventanasPublicacionCorporativo(recogida, minPub)
+    : null;
   let puedeAbrirEn = ventanas?.publishAt ?? null;
   if (vData) {
     const pub = vData.publishAt ?? vData.acceptAfter ?? vData.startWindowAt;
@@ -2537,7 +2543,7 @@ function viajeListoParaAbrirCorporativo(
     return true;
   }
   return (
-    esMismoDiaCalendarioRd(recogida, ahora) && diffMin <= minPub + 45
+    esMismoDiaCalendarioRd(recogida, ahora) && diffMin <= ventanaMin
   );
 }
 
@@ -2578,7 +2584,7 @@ function mensajeOperacionRutaCorporativa(args: {
     if (diffMin < -180 && !args.listoParaAbrir && args.estado === "amarrado") {
       return (
         `Ruta amarrada · recogida ${args.hora}. ` +
-        `El viaje de hoy aún no está publicado; mañana se abre unos 45 min antes.`
+        `El viaje de hoy aún no está publicado; mañana se abre ~90 min antes.`
       );
     }
   }
@@ -2634,7 +2640,8 @@ async function patchViajeOperativaDesdePlantilla(args: {
   if (!rawFecha) return false;
   const nuevaFecha = ajustarRecogidaHoySiYaPaso(rawFecha);
   const diffMin = (nuevaFecha.getTime() - Date.now()) / 60000;
-  const ventanas = ventanasPublicacionCorporativo(nuevaFecha);
+  const minPubVentana = minutosPublicarAntesCorporativo(d.minutosPublicarAntes);
+  const ventanas = ventanasPublicacionCorporativo(nuevaFecha, minPubVentana);
   if (diffMin <= 120) {
     ventanas.publicado = true;
   }
@@ -2705,7 +2712,7 @@ async function patchViajeOperativaDesdePlantilla(args: {
     corporativoHoraRecogidaGrupo: horaStr,
     corporativoHoraActualizadaEn: FieldValue.serverTimestamp(),
     corporativoModoInformativo: d.corporativoModoInformativo !== false,
-    corporativoVentanaPoolMinutos: POOL_LEAD_MINUTES_PROGRAMADO,
+    corporativoVentanaPoolMinutos: minPub,
     googleMapsRutaUrl: mapsUrl,
     wazeOrigenUrl: wazeUrl,
     corporativoGoogleMapsRutaUrl: mapsUrl,
@@ -2827,7 +2834,8 @@ async function patchHoraEnViajeCorporativo(args: {
   // Sync desde encargado: hora exacta, sin empujar al futuro (eso es solo «Enviar ahora»).
   const nuevaFecha = rawFecha;
   const diffMin = (nuevaFecha.getTime() - Date.now()) / 60000;
-  const ventanas = ventanasPublicacionCorporativo(nuevaFecha);
+  const minPubVentana = minutosPublicarAntesCorporativo(d.minutosPublicarAntes);
+  const ventanas = ventanasPublicacionCorporativo(nuevaFecha, minPubVentana);
   if (diffMin <= 120) {
     ventanas.publicado = true;
   }
@@ -4063,10 +4071,16 @@ export const encargadoPublicarRutaCorporativaAhora = onCall(
       );
     }
 
-    if (ed.contratoActivo !== true) {
+    if (ed.contratoCorporativoAceptado !== true) {
       throw new HttpsError(
         "failed-precondition",
-        "El servicio corporativo aún no está activado por RAI.",
+        "El encargado debe firmar el contrato corporativo antes de publicar.",
+      );
+    }
+    if (str(ed.contratoCorporativoVersion) !== CORP_CONTRATO_VERSION) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Contrato corporativo desactualizado. El encargado debe firmar la versión vigente.",
       );
     }
 
@@ -4123,12 +4137,13 @@ export const encargadoPublicarRutaCorporativaAhora = onCall(
         fechaRecogida = parsed;
       }
     }
-    fechaRecogida = ajustarRecogidaHoySiYaPaso(fechaRecogida, now, 25);
+    fechaRecogida = ajustarRecogidaHoySiYaPaso(
+      fechaRecogida,
+      now,
+      CORP_ENVIAR_AHORA_OFFSET_MIN,
+    );
 
-    const minPub =
-      typeof d.minutosPublicarAntes === "number"
-        ? Math.trunc(d.minutosPublicarAntes as number)
-        : 90;
+    const minPub = minutosPublicarAntesCorporativo(d.minutosPublicarAntes);
 
     const viajeId = await publicarViajeDesdePlantilla({
       empresaId,

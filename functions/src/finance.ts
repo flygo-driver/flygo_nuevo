@@ -28,6 +28,12 @@ import {
 } from "./liquidacion_semanal_viaje.js";
 import { assertTaxistaAptoParaClaimPool } from "./taxista_operacion_gate.js";
 import {
+  capacidadDesdeVehiculoMap,
+  pasajerosRequeridos,
+  subtipoTurismoRequeridoDesdeViaje,
+  vehiculoQueCoincide,
+} from "./turismo_asignacion_logic.js";
+import {
   PREPAGO_INSUFICIENTE_COMISION_VIAJE,
   prepagoInsuficienteParaViajeEfectivo,
   viajeAplicaComisionPrepago,
@@ -1856,11 +1862,29 @@ export const aceptarViajeSeguro = onCall(async (request) => {
     const poolModo = poolModoConductorFromUser(uData);
     const viajeTipo = String(d.tipoServicio ?? "normal");
     const esTurismoPool = esTurismoPoolTomable(d);
+    let vehiculoTurismoClaim: AnyMap | null = null;
     if (esTurismoPool) {
       const choferSnap = await tx.get(db().collection("choferes_turismo").doc(uidActor));
-      if (!choferTurismoEstadoOperativo((choferSnap.data() as AnyMap | undefined)?.estado)) {
+      const choferData = (choferSnap.data() ?? {}) as AnyMap;
+      if (!choferTurismoEstadoOperativo(choferData.estado)) {
         throw new HttpsError("failed-precondition", "chofer-turismo-no-aprobado");
       }
+      const subtipoReq = subtipoTurismoRequeridoDesdeViaje(d);
+      const pax = pasajerosRequeridos(d);
+      const vehMatch = vehiculoQueCoincide(choferData.vehiculos, subtipoReq);
+      if (!vehMatch) {
+        throw new HttpsError(
+          "failed-precondition",
+          "vehiculo-turismo-no-compatible",
+        );
+      }
+      if (capacidadDesdeVehiculoMap(vehMatch, subtipoReq) < pax) {
+        throw new HttpsError(
+          "failed-precondition",
+          "vehiculo-turismo-capacidad-insuficiente",
+        );
+      }
+      vehiculoTurismoClaim = vehMatch;
     } else if (!viajeCoincideModoConductor(viajeTipo, poolModo)) {
       throw new HttpsError("failed-precondition", "tipo-servicio-no-coincide");
     }
@@ -1868,11 +1892,28 @@ export const aceptarViajeSeguro = onCall(async (request) => {
     const uidCliente = String(d.uidCliente ?? d.clienteId ?? "").trim();
 
     const tel = telefono || String(uData.telefono ?? "");
-    const placaFinal = placa || String(uData.placa ?? "");
-    const tipo = tipoVehiculo || String(uData.tipoVehiculo ?? "");
-    const marca = String(uData.marca ?? uData.vehiculoMarca ?? "");
-    const modelo = String(uData.modelo ?? uData.vehiculoModelo ?? "");
-    const color = String(uData.color ?? uData.vehiculoColor ?? "");
+    const placaFinal =
+      placa ||
+      String(vehiculoTurismoClaim?.placa ?? uData.placa ?? "");
+    const tipo =
+      tipoVehiculo ||
+      String(
+        vehiculoTurismoClaim?.tipo ??
+          uData.tipoVehiculo ??
+          "",
+      );
+    const marca = String(
+      vehiculoTurismoClaim?.marca ?? uData.marca ?? uData.vehiculoMarca ?? "",
+    );
+    const modelo = String(
+      vehiculoTurismoClaim?.modelo ??
+        uData.modelo ??
+        uData.vehiculoModelo ??
+        "",
+    );
+    const color = String(
+      vehiculoTurismoClaim?.color ?? uData.color ?? uData.vehiculoColor ?? "",
+    );
 
     const tipoServicio = String(d.tipoServicio ?? "normal");
     let tipoVehiculoFormateado = tipo;

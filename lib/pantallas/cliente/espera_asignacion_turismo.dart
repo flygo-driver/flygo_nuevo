@@ -172,12 +172,13 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     if (_reintentoAutoEnCurso || !mounted) return;
     _reintentoAutoEnCurso = true;
     try {
-      await AsignacionTurismoRepo.intentarAsignacionAutomatica(
+      final bool esAhora = _ultimoDataViaje?['esAhora'] == true;
+      await AsignacionTurismoRepo.publicarViajeEnPoolTurismo(
         viajeId: widget.viajeId,
-        radioKm: 55,
+        omitirVentanaPublicacion: esAhora,
       );
     } catch (_) {
-      // Firestore stream reflejará asignación ADM o pool.
+      // Firestore stream reflejará pool turístico o ventana programada.
     } finally {
       _reintentoAutoEnCurso = false;
     }
@@ -236,7 +237,8 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     final String taxistaId =
         (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
 
-    if (taxistaId.isNotEmpty) {
+    if (taxistaId.isNotEmpty &&
+        AsignacionTurismoRepo.viajeTurismoChoferConfirmado(data)) {
       _ensureChoferAsignadoUbicacionStream(taxistaId);
       _notificarAsignacionChofer(context, data);
       if (_viajeOperativoParaMapa(data)) {
@@ -350,9 +352,14 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
   }
 
   bool _viajeTieneChoferAsignado(Map<String, dynamic> data) {
-    return (data['uidTaxista'] ?? data['taxistaId'] ?? '')
-        .toString()
-        .isNotEmpty;
+    return AsignacionTurismoRepo.viajeTurismoChoferConfirmado(data);
+  }
+
+  int _choferesCompatiblesConViaje(Map<String, dynamic> data) {
+    return AsignacionTurismoRepo.contarChoferesCompatiblesEnRed(
+      data,
+      _choferesRed,
+    );
   }
 
   Set<Marker> _markersFor(Map<String, dynamic> data) {
@@ -887,6 +894,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
         (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
     final int enMapa = _choferesConUbicacionEnMapa;
     final int total = _choferesRed.length;
+    final int compatibles = _choferesCompatiblesConViaje(data);
     final int disponibles =
         _choferesRed.where((ChoferTurismo c) => c.disponible).length;
 
@@ -936,7 +944,9 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
           Text(
             taxistaId.isNotEmpty
                 ? 'Tu chofer ya fue asignado. Los demás conductores siguen en la red en vivo.'
-                : enMapa > 0
+                : compatibles > 0
+                    ? '$compatibles chofer${compatibles == 1 ? '' : 'es'} con ${AsignacionTurismoRepo.etiquetaVehiculoRequeridoDesdeViaje(data)} en línea'
+                    : enMapa > 0
                     ? '$enMapa en el mapa · $disponibles disponible${disponibles == 1 ? '' : 's'} · actualización en vivo'
                     : total > 0
                         ? '$total chofer${total == 1 ? '' : 'es'} en la red; ubicación en camino al mapa'
@@ -984,7 +994,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            '¿Sin chofer disponible? Contacta asignaciones',
+            '¿Sin chofer con tu vehículo? Escribe a operaciones',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white,
@@ -994,7 +1004,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
           ),
           const SizedBox(height: 6),
           Text(
-            'Soporte RAI para asignar tu viaje turístico:',
+            'Operaciones RAI recibe tu mensaje al instante en el panel admin (push y correo).',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white70, fontSize: 12),
           ),
@@ -1087,8 +1097,11 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     final int total = _choferesRed.length;
     final String texto = choferEnMapa
         ? 'Tu chofer en el mapa · seguimiento en vivo'
-        : taxistaId.isNotEmpty
-            ? 'Chofer asignado · ubicación en camino'
+        : taxistaId.isNotEmpty &&
+                AsignacionTurismoRepo.viajeTurismoChoferConfirmado(data)
+            ? 'Chofer confirmado · ubicación en camino'
+            : taxistaId.isNotEmpty
+                ? 'Esperando confirmación del chofer…'
             : enMapa > 0
                 ? '$enMapa chofer${enMapa == 1 ? '' : 'es'} turístico${enMapa == 1 ? '' : 's'} en el mapa · en vivo'
                 : total > 0
@@ -1387,8 +1400,9 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
   Widget _buildWaitingScreen(Map<String, dynamic> data) {
     final bool choferAsignado = _viajeTieneChoferAsignado(data);
-    final bool sinChoferesEnRed =
-        !choferAsignado && _choferesRed.isEmpty;
+    final int compatibles = _choferesCompatiblesConViaje(data);
+    final bool sinChoferesEnRed = !choferAsignado &&
+        (compatibles == 0 || _choferesRed.isEmpty);
 
     final destino = data['destino'] ?? 'Destino no especificado';
     final origen = data['origen'] ?? 'Origen no especificado';
@@ -1535,11 +1549,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                   ] else ...[
                     Center(
                       child: Text(
-                        AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data)
-                            ? 'En pool turístico'
-                            : estadoRaw.toLowerCase() == 'pendiente_admin'
-                                ? 'Buscando chofer turístico'
-                                : '✅ ¡Viaje solicitado!',
+                        AsignacionTurismoRepo.tituloEsperaTurismoCliente(data),
                         style: const TextStyle(
                           color: Colors.greenAccent,
                           fontSize: 22,
@@ -1550,13 +1560,11 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                     const SizedBox(height: 8),
                     Center(
                       child: Text(
-                        AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data)
-                            ? 'Choferes de turismo aprobados ven tu viaje en «Pool turístico».\n'
-                                'Te avisamos en cuanto uno lo acepte.'
-                            : estadoRaw.toLowerCase() == 'pendiente_admin'
-                                ? 'Primero asignación automática con choferes aprobados.\n'
-                                    'Si no hay disponibles, pasa al pool turístico.'
-                                : 'Buscando el mejor chofer para ti',
+                        AsignacionTurismoRepo.subtituloEsperaTurismoCliente(
+                          data,
+                          choferesCompatibles: compatibles,
+                          choferesEnLinea: _choferesRed.length,
+                        ),
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white70,
@@ -1644,8 +1652,11 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                               child: Text(
                                 choferAsignado
                                     ? 'Chofer confirmado · abriendo viaje…'
-                                    : 'Asignando chofer (auto + pool turístico)…',
-                                maxLines: 2,
+                                    : AsignacionTurismoRepo
+                                            .viajeEnPoolTurismoPublico(data)
+                                        ? 'En pool turístico · esperando que un chofer acepte…'
+                                        : 'Publicando tu viaje en pool turístico…',
+                                maxLines: 3,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(color: Colors.white70),
                               ),

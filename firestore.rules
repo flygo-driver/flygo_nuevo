@@ -1435,7 +1435,8 @@ service cloud.firestore {
 
     // Mensajes cliente → operaciones turismo (panel ADM en tiempo real).
     match /turismo_mensajes_adm/{msgId} {
-      allow read: if isAdmin();
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidCliente == request.auth.uid);
       allow create: if isAuth() &&
         request.resource.data.uidCliente == request.auth.uid &&
         request.resource.data.leidoPorAdm == false &&

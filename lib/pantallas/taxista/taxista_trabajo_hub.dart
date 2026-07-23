@@ -12,7 +12,7 @@ import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
-import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
+import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
 
 /// En curso + disponibilidad (sin duplicar la barra inferior).
 class TaxistaTrabajoHub extends StatelessWidget {
@@ -84,144 +84,8 @@ class TaxistaTrabajoHub extends StatelessWidget {
   }
 
   static Future<void> _abrirRutaCorporativaLista(BuildContext context) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-    final listasListas = <Map<String, dynamic>>[];
-    try {
-      final op = await FirebaseFirestore.instance
-          .collection('chofer_operacion')
-          .doc(uid)
-          .get();
-      final rutas =
-          CorporativoTaxistaService.rutasDesdeOperacion(op.data());
-      for (final r in rutas) {
-        if (r['completadoHoy'] == true) continue;
-        if (r['listoParaAbrir'] != true) continue;
-        final id = (r['viajeHoyId'] ?? '').toString().trim();
-        if (id.isNotEmpty) listasListas.add(r);
-      }
-    } catch (_) {}
-    if (!context.mounted) return;
-
-    String? viajeListoId;
-    if (listasListas.length == 1) {
-      viajeListoId = (listasListas.first['viajeHoyId'] ?? '').toString().trim();
-    } else if (listasListas.length > 1) {
-      viajeListoId = await showModalBottomSheet<String>(
-        context: context,
-        backgroundColor: const Color(0xFF111827),
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        builder: (ctx) {
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    'Elegí la empresa / ruta',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 17,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Tenés más de una ruta lista para trabajar',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white54, fontSize: 13),
-                  ),
-                  const SizedBox(height: 14),
-                  ...listasListas.map((r) {
-                    final emp =
-                        (r['empresaNombre'] ?? 'Empresa').toString().trim();
-                    final pl =
-                        (r['plantillaNombre'] ?? 'Ruta').toString().trim();
-                    final hora = (r['hora'] ?? '').toString().trim();
-                    final vid = (r['viajeHoyId'] ?? '').toString().trim();
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: FilledButton(
-                        onPressed: () => Navigator.pop(ctx, vid),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF0F766E),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            vertical: 14,
-                            horizontal: 12,
-                          ),
-                          alignment: Alignment.centerLeft,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              emp,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 16,
-                              ),
-                            ),
-                            Text(
-                              hora.isNotEmpty ? '$pl · $hora' : pl,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Colors.white70,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
-                ],
-              ),
-            ),
-          );
-        },
-      );
-    }
-
-    if (!context.mounted) return;
-
-    if (viajeListoId != null && viajeListoId.isNotEmpty) {
-      final bloquea = await CorporativoTaxistaService
-          .taxistaTieneViajeNoCorporativoBloqueante(
-        uid,
-        exceptViajeId: viajeListoId,
-      );
-      if (!context.mounted) return;
-      if (bloquea) {
-        await CorporativoTaxistaService.encolarViajeCorporativoInformativo(
-          uidTaxista: uid,
-          viajeId: viajeListoId,
-        );
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Terminá tu viaje actual. La ruta corporativa quedó en cola.',
-            ),
-          ),
-        );
-        return;
-      }
-      await NavigationService.abrirViajeCorporativoTaxista(
-        uidTaxista: uid,
-        viajeId: viajeListoId,
-        snackContext: context,
-      );
-      return;
-    }
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
+    await Navigator.of(context, rootNavigator: true).push<void>(
+      MaterialPageRoute<void>(
         builder: (_) => const MisRutasCorporativasPage(),
       ),
     );
@@ -231,12 +95,11 @@ class TaxistaTrabajoHub extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
-    return RaiShellTabScaffold(
+    return RaiDriverTabScaffold(
       title: 'Mi trabajo',
-      backTooltip: 'Recibir',
-      onBack: ShellTabController.taxistaIrARecibir,
+      subtitle: 'Viaje activo, rutas y disponibilidad',
       body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: [
           if (user != null)
             StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -250,10 +113,11 @@ class TaxistaTrabajoHub extends StatelessWidget {
                     (uData['viajeActivoId'] ?? '').toString().trim();
 
                 if (viajeActivoId.isEmpty) {
-                  return _HubCard(
-                    icon: Icons.navigation_outlined,
+                  return RaiDriverHubCard(
+                    icon: Icons.navigation_rounded,
                     title: 'Viaje en curso',
                     subtitle: 'No tienes un viaje activo',
+                    accent: RaiDriverColors.neon,
                     onTap: () => openViajeActivoTaxista(context),
                   );
                 }
@@ -264,7 +128,6 @@ class TaxistaTrabajoHub extends StatelessWidget {
                       .doc(viajeActivoId)
                       .snapshots(),
                   builder: (context, vSnap) {
-                    final csV = Theme.of(context).colorScheme;
                     final vData = vSnap.data?.data();
                     final uidTx =
                         (vData?['uidTaxista'] ?? vData?['taxistaId'] ?? '')
@@ -283,10 +146,11 @@ class TaxistaTrabajoHub extends StatelessWidget {
 
                     // Corporativo no usa «Viaje en curso» — solo «Rutas corporativas».
                     if (esCorp || vData == null) {
-                      return _HubCard(
-                        icon: Icons.navigation_outlined,
+                      return RaiDriverHubCard(
+                        icon: Icons.navigation_rounded,
                         title: 'Viaje en curso',
                         subtitle: 'No tienes un viaje activo',
+                        accent: RaiDriverColors.neon,
                         onTap: () => openViajeActivoTaxista(context),
                       );
                     }
@@ -295,28 +159,29 @@ class TaxistaTrabajoHub extends StatelessWidget {
                         uidCliente.isNotEmpty &&
                         _estadosActivos.contains(estado);
 
-                    return _HubCard(
-                      icon: Icons.navigation_outlined,
+                    return RaiDriverHubCard(
+                      icon: Icons.navigation_rounded,
                       title: 'Viaje en curso',
                       subtitle: visible
                           ? 'Tienes un viaje activo'
                           : 'Viaje vinculado · abrí para continuar',
-                      trailing: visible
+                      accent: RaiDriverColors.neon,
+                      badge: visible
                           ? Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 10,
                                 vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: csV.primaryContainer,
+                                color: RaiDriverColors.neon
+                                    .withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(999),
-                                border: Border.all(color: csV.primary),
                               ),
-                              child: Text(
+                              child: const Text(
                                 'Activo',
                                 style: TextStyle(
-                                  color: csV.onPrimaryContainer,
-                                  fontWeight: FontWeight.w700,
+                                  color: RaiDriverColors.neon,
+                                  fontWeight: FontWeight.w800,
                                   fontSize: 12,
                                 ),
                               ),
@@ -332,10 +197,11 @@ class TaxistaTrabajoHub extends StatelessWidget {
               },
             )
           else
-            _HubCard(
-              icon: Icons.navigation_outlined,
+            RaiDriverHubCard(
+              icon: Icons.navigation_rounded,
               title: 'Viaje en curso',
               subtitle: 'Inicia sesión',
+              accent: RaiDriverColors.neon,
               onTap: () {},
             ),
           if (user != null)
@@ -375,8 +241,8 @@ class TaxistaTrabajoHub extends StatelessWidget {
                         .where((e) => e.isNotEmpty)
                         .toSet()
                         .join(' · ');
-                    return _HubCard(
-                      icon: Icons.alt_route,
+                    return RaiDriverHubCard(
+                      icon: Icons.alt_route_rounded,
                       title: 'Rutas corporativas',
                       subtitle: listoOp && empresasListas.isNotEmpty
                           ? 'Lista: $empresasListas'
@@ -385,23 +251,20 @@ class TaxistaTrabajoHub extends StatelessWidget {
                               : (n == 1
                                   ? '1 ruta · agenda y horarios'
                                   : '$n rutas · agenda y horarios'),
-                      trailing: Container(
+                      accent: RaiDriverColors.blue,
+                      badge: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .secondaryContainer,
+                          color: RaiDriverColors.blue.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
                           '$n',
-                          style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSecondaryContainer,
+                          style: const TextStyle(
+                            color: RaiDriverColors.blue,
                             fontWeight: FontWeight.w800,
                             fontSize: 12,
                           ),
@@ -411,9 +274,8 @@ class TaxistaTrabajoHub extends StatelessWidget {
                         await _abrirRutaCorporativaLista(context);
                       },
                       onLongPress: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
+                        Navigator.of(context, rootNavigator: true).push<void>(
+                          MaterialPageRoute<void>(
                             builder: (_) => const MisRutasCorporativasPage(),
                           ),
                         );
@@ -423,64 +285,20 @@ class TaxistaTrabajoHub extends StatelessWidget {
                 );
               },
             ),
-          _HubCard(
-            icon: Icons.toggle_on_outlined,
+          RaiDriverHubCard(
+            icon: Icons.toggle_on_rounded,
             title: 'Disponibilidad',
             subtitle: 'Recibir viajes: ON / OFF',
+            accent: RaiDriverColors.teal,
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
+              Navigator.of(context, rootNavigator: true).push<void>(
+                MaterialPageRoute<void>(
                   builder: (_) => const ToggleDisponibilidad(),
                 ),
               );
             },
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _HubCard extends StatelessWidget {
-  const _HubCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-    this.onLongPress,
-    this.trailing,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-  final VoidCallback? onLongPress;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        leading: CircleAvatar(
-          backgroundColor: cs.primaryContainer,
-          foregroundColor: cs.onPrimaryContainer,
-          child: Icon(icon),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-        ),
-        subtitle: Text(subtitle),
-        trailing: trailing ?? Icon(Icons.chevron_right, color: cs.outline),
-        onTap: onTap,
-        onLongPress: onLongPress,
       ),
     );
   }

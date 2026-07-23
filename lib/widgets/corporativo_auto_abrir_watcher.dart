@@ -39,6 +39,8 @@ class _CorporativoAutoAbrirWatcherState extends State<CorporativoAutoAbrirWatche
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
+    await CorporativoTaxistaService.cargarDismissCorpPersistido();
+
     await _opSub?.cancel();
     _opSub = FirebaseFirestore.instance
         .collection('chofer_operacion')
@@ -144,6 +146,12 @@ class _CorporativoAutoAbrirWatcherState extends State<CorporativoAutoAbrirWatche
         return;
       }
       if (CorporativoTaxistaService.viajeCorporativoInformativoCerradoParaChofer(d)) {
+        return;
+      }
+      if (CorporativoTaxistaService.viajeCorporativoSuperseded(d)) {
+        return;
+      }
+      if (!await CorporativoTaxistaService.viajeCorporativoEmpresaVigente(d)) {
         return;
       }
       if (CorporativoTaxistaService.rutaCorpInformativaDismissedRecientemente(id)) {

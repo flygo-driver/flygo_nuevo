@@ -359,6 +359,20 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
                                     color: AdminUi.onCard(context),
                                   ),
                                 ),
+                                if ((m['vehiculoRequerido'] ?? '')
+                                    .toString()
+                                    .trim()
+                                    .isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Vehículo: ${m['vehiculoRequerido']}',
+                                    style: TextStyle(
+                                      color: AdminUi.muted(context),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                                 if (ts != null) ...[
                                   const SizedBox(height: 4),
                                   Text(

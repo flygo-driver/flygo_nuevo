@@ -8,6 +8,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:flygo_nuevo/modelo/vehiculo_turismo.dart';
 import 'package:flygo_nuevo/servicios/choferes_turismo_repo.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_radius.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 class LoginChoferTurismo extends StatefulWidget {
@@ -133,7 +135,7 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
   void _agregarVehiculo() {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.black,
+      backgroundColor: RaiDsColors.bg,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -312,7 +314,7 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
   Widget build(BuildContext context) {
     if (_cargandoEstado) {
       return Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: RaiDsColors.bg,
         appBar: const RaiAppBar(
           title: 'Registro Chofer Turismo',
           showBackWhenCanPop: true,
@@ -325,7 +327,7 @@ class _LoginChoferTurismoState extends State<LoginChoferTurismo> {
         _estado != null && _estado!.fase != 'sin_solicitud' && _estado!.fase != 'rechazado';
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: RaiDsColors.bg,
       appBar: const RaiAppBar(
         title: 'Registro Chofer Turismo',
         showBackWhenCanPop: true,
@@ -549,9 +551,9 @@ class _EstadoCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
+        color: RaiDsColors.card,
+        borderRadius: BorderRadius.circular(RaiDsRadius.xl),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
       ),
       child: Column(
         children: [

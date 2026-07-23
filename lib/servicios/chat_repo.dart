@@ -53,6 +53,54 @@ class ChatRepo {
     }, SetOptions(merge: false));
   }
 
+  /// Asegura `chats/{viajeId}` con chofer + encargado (rutas corporativas).
+  static Future<void> ensureViajeChatParticipantes({
+    required String viajeId,
+    required Set<String> participantes,
+  }) async {
+    final v = viajeId.trim();
+    final uids = participantes.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (v.isEmpty || uids.length < 2) {
+      throw FirebaseException(
+        plugin: 'cloud_firestore',
+        code: 'invalid-participants',
+        message: 'Faltan participantes para el chat del viaje.',
+      );
+    }
+
+    final ref = _db.collection('chats').doc(v);
+    final snap = await ref.get();
+    if (!snap.exists) {
+      await ref.set({
+        'participantes': uids.toList(),
+        'viajeId': v,
+        'lastMessage': '',
+        'lastAt': FieldValue.serverTimestamp(),
+        'creadoAt': FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
+    final raw = snap.data()?['participantes'];
+    final existentes = raw is List
+        ? raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toSet()
+        : <String>{};
+    final merged = <String>{...existentes, ...uids};
+    if (merged.length == existentes.length &&
+        (snap.data()?['viajeId'] ?? '').toString() == v) {
+      return;
+    }
+
+    await ref.set(
+      {
+        'participantes': merged.toList(),
+        'viajeId': v,
+        'lastAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
   /// Devuelve un chatId válido. Hace:
   /// 1) update lastAt
   /// 2) si permiso-denegado -> intenta "repair"
@@ -83,11 +131,31 @@ class ChatRepo {
         return v;
       } on FirebaseException catch (e) {
         debugPrint('[CHAT] touch trip chat "$v": ${e.code}');
+        if (e.code == 'not-found') {
+          try {
+            await _create(cid: v, uidA: uidA, uidB: uidB, viajeId: v);
+            debugPrint('[CHAT] created trip chat: $v');
+            return v;
+          } on FirebaseException catch (eCreate) {
+            debugPrint('[CHAT] create trip chat denied: ${eCreate.code}');
+            rethrow;
+          }
+        }
         try {
           await _tryRepair(cid: v, uidA: uidA, uidB: uidB, viajeId: v);
           return v;
         } on FirebaseException catch (e2) {
           debugPrint('[CHAT] repair trip chat denied: ${e2.code}');
+          if (e2.code == 'not-found' || e2.code == 'permission-denied') {
+            try {
+              await _create(cid: v, uidA: uidA, uidB: uidB, viajeId: v);
+              debugPrint('[CHAT] created trip chat after repair: $v');
+              return v;
+            } on FirebaseException catch (eCreate) {
+              debugPrint('[CHAT] create trip chat fallback denied: ${eCreate.code}');
+              rethrow;
+            }
+          }
           rethrow;
         }
       }

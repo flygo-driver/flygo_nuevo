@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/servicios/solicitud_corporativo_repo.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
@@ -61,6 +62,7 @@ class _LoginChoferCorporativoState extends State<LoginChoferCorporativo> {
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
+      backgroundColor: RaiDsColors.bg,
       appBar: RaiShellTabHeader(
         title: 'Chofer corporativo RAI',
         backTooltip: 'Volver a Servicios',

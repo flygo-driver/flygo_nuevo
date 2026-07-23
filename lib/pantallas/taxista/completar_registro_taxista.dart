@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/servicios/organizador_giras_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/widgets/taxista_onboarding_acciones_footer.dart';
 
@@ -229,6 +230,7 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
   Widget build(BuildContext context) {
     if (_cargando) {
       return const Scaffold(
+        backgroundColor: RaiDsColors.bg,
         body: Center(child: CircularProgressIndicator()),
       );
     }
@@ -241,6 +243,7 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
         if (!didPop) _bloquearSalida();
       },
       child: Scaffold(
+        backgroundColor: RaiDsColors.bg,
         appBar: const RaiAppBar(title: 'Completa tu registro de conductor'),
         body: SafeArea(
           bottom: false,

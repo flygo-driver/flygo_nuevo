@@ -51,13 +51,18 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
     } catch (_) {}
   }
 
-  void _volverAtrasDesdeTablero() {
-    final nav = Navigator.of(context);
+  void _volverAtrasDesdeTablero({required bool esTaxista}) {
+    final nav = Navigator.of(context, rootNavigator: true);
     if (nav.canPop()) {
-      nav.maybePop();
+      nav.pop();
       return;
     }
-    unawaited(NavigationService.salirModoViajeBola(context));
+    unawaited(
+      NavigationService.salirModoViajeBola(
+        context,
+        esTaxista: esTaxista,
+      ),
+    );
   }
 
   Future<void> _restoreBolaBoardSheetToMid() async {
@@ -230,7 +235,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
               leading: IconButton(
                 icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                 tooltip: 'Volver',
-                onPressed: _volverAtrasDesdeTablero,
+                onPressed: () => _volverAtrasDesdeTablero(esTaxista: esTaxista),
               ),
               actions: [
                 if (_rutaPolyline != null)
@@ -622,7 +627,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
               leading: IconButton(
                 icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                 tooltip: 'Volver',
-                onPressed: _volverAtrasDesdeTablero,
+                onPressed: () => _volverAtrasDesdeTablero(esTaxista: esTaxista),
               ),
               title: appBarTitleRow(),
             ),
@@ -672,7 +677,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                     leading: IconButton(
                       icon: Icon(Icons.arrow_back_rounded, color: col.onSurface),
                       tooltip: 'Volver',
-                      onPressed: _volverAtrasDesdeTablero,
+                      onPressed: () => _volverAtrasDesdeTablero(esTaxista: esTaxista),
                     ),
                     title: appBarTitleRow(),
                   ),

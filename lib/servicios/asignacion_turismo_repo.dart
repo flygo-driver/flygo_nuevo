@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flygo_nuevo/modelo/chofer_turismo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
@@ -385,11 +386,118 @@ class AsignacionTurismoRepo {
   /// Valor de `canalAsignacion` cuando administración libera el viaje al pool turístico (choferes aprobados).
   static const String canalTurismoPool = 'turismo_pool';
 
+  /// Documento Firestore de viaje turístico (independiente de corporativo y pool normal).
+  static bool esDocumentoViajeTurismo(Map<String, dynamic> vData) {
+    return (vData['tipoServicio'] ?? '').toString().trim() == 'turismo';
+  }
+
   /// Viaje turístico publicado en pool turístico (choferes aprobados pueden aceptar).
   static bool viajeEnPoolTurismoPublico(Map<String, dynamic> vData) {
     if ((vData['tipoServicio'] ?? '').toString() != 'turismo') return false;
     final canal = (vData['canalAsignacion'] ?? '').toString().trim();
     return canal == canalTurismoPool;
+  }
+
+  /// Chofer confirmó el viaje (aceptó desde pool o asignación ADM).
+  static bool viajeTurismoChoferConfirmado(Map<String, dynamic> vData) {
+    if ((vData['tipoServicio'] ?? '').toString() != 'turismo') return false;
+    final String uidTx =
+        (vData['uidTaxista'] ?? vData['taxistaId'] ?? '').toString().trim();
+    if (uidTx.isEmpty) return false;
+    if (vData['aceptado'] == true) return true;
+    final String st =
+        EstadosViaje.normalizar((vData['estado'] ?? '').toString());
+    return EstadosViaje.activos.contains(st);
+  }
+
+  /// Cliente aún espera chofer (sin confirmación real del conductor).
+  static bool viajeTurismoEsperandoChofer(Map<String, dynamic> vData) {
+    if ((vData['tipoServicio'] ?? '').toString() != 'turismo') return false;
+    final String st =
+        EstadosViaje.normalizar((vData['estado'] ?? '').toString());
+    if (vData['completado'] == true || EstadosViaje.esTerminal(st)) {
+      return false;
+    }
+    return !viajeTurismoChoferConfirmado(vData);
+  }
+
+  /// Texto principal para pantalla de espera del cliente.
+  static String tituloEsperaTurismoCliente(Map<String, dynamic> vData) {
+    if (viajeTurismoChoferConfirmado(vData)) {
+      return 'Chofer confirmado';
+    }
+    if (viajeEnPoolTurismoPublico(vData)) {
+      return 'En pool turístico';
+    }
+    if (vData['esAhora'] == true) {
+      return 'Publicando en pool turístico…';
+    }
+    return 'Reserva turística registrada';
+  }
+
+  /// Subtítulo contextual (pool, vehículo, ventana programada).
+  static String subtituloEsperaTurismoCliente(
+    Map<String, dynamic> vData, {
+    int choferesCompatibles = 0,
+    int choferesEnLinea = 0,
+  }) {
+    final String vehiculo =
+        etiquetaVehiculoRequeridoDesdeViaje(vData);
+    if (viajeTurismoChoferConfirmado(vData)) {
+      return 'Abriendo tu viaje con el chofer asignado…';
+    }
+    if (viajeEnPoolTurismoPublico(vData)) {
+      if (choferesCompatibles > 0) {
+        return 'Pediste $vehiculo.\n'
+            '$choferesCompatibles chofer${choferesCompatibles == 1 ? '' : 'es'} '
+            'con ese vehículo ${choferesCompatibles == 1 ? 'está' : 'están'} '
+            'en línea y pueden ver tu viaje en «Pool turístico».';
+      }
+      if (choferesEnLinea > 0) {
+        return 'Pediste $vehiculo.\n'
+            'Hay choferes turísticos en línea, pero ninguno con ese vehículo ahora. '
+            'Escribe a operaciones abajo y te asignamos uno.';
+      }
+      return 'Pediste $vehiculo.\n'
+          'Tu viaje está visible para choferes de turismo aprobados. '
+          'Si tarda, escribe a operaciones RAI abajo.';
+    }
+    final DateTime? pub = _tsDate(vData['publishAt']);
+    if (pub != null && pub.isAfter(DateTime.now())) {
+      final String hora =
+          '${pub.hour.toString().padLeft(2, '0')}:${pub.minute.toString().padLeft(2, '0')}';
+      return 'Pediste $vehiculo.\n'
+          'El pool turístico abre cerca de las $hora. '
+          'Mientras tanto puedes escribir a operaciones si necesitas ayuda.';
+    }
+    return 'Pediste $vehiculo.\n'
+        'Estamos publicando tu viaje en el pool turístico para choferes aprobados.';
+  }
+
+  static DateTime? _tsDate(dynamic raw) {
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is DateTime) return raw;
+    return null;
+  }
+
+  /// Cuenta choferes de la red con el subtipo exacto que pidió el cliente.
+  static int contarChoferesCompatiblesEnRed(
+    Map<String, dynamic> vData,
+    Iterable<ChoferTurismo> choferes,
+  ) {
+    final String subtipo = subtipoTurismoRequeridoDesdeViaje(vData);
+    final int pax = pasajerosRequeridosDesdeViaje(vData);
+    var n = 0;
+    for (final ChoferTurismo c in choferes) {
+      if (!c.disponible) continue;
+      final bool tiene = c.vehiculos.any((v) {
+        final String t = normalizarCodigoTipoTurismo(v.tipo, v.tipo);
+        if (t != subtipo) return false;
+        return _capacidadPorTipoVehiculo(t) >= pax;
+      });
+      if (tiene) n++;
+    }
+    return n;
   }
 
   /// Pasa de cola ADM (`admin`) al pool turístico cuando no hay chofer asignado.
@@ -731,54 +839,46 @@ class AsignacionTurismoRepo {
     return null;
   }
 
-  static double? _distanciaKmHastaOrigen(
-      Map<String, dynamic> chofer, double latO, double lonO) {
-    double? lat;
-    double? lon;
-    final dynamic u = chofer['ultimaUbicacion'];
-    if (u is GeoPoint) {
-      lat = u.latitude;
-      lon = u.longitude;
-    } else {
-      final Map<String, dynamic>? ubic =
-          chofer['ubicacion'] as Map<String, dynamic>?;
-      if (ubic != null) {
-        lat = (ubic['lat'] as num?)?.toDouble();
-        lon = (ubic['lon'] as num?)?.toDouble();
-      }
+  /// Publica el viaje turístico en el pool (`turismo_pool`) para que lo tome un
+  /// chofer aprobado con el vehículo correcto. No asigna chofer automáticamente.
+  static Future<bool> publicarViajeEnPoolTurismo({
+    required String viajeId,
+    bool omitirVentanaPublicacion = false,
+  }) async {
+    if (viajeId.trim().isEmpty) return false;
+
+    final _CallableTurismoOutcome callable =
+        await _intentarAsignacionTurismoCallable(
+      viajeId: viajeId,
+      omitirVentanaPublicacion: omitirVentanaPublicacion,
+    );
+    if (callable.reachedServer) {
+      return callable.liberadoPool;
     }
-    if (lat == null || lon == null) return null;
-    return Geolocator.distanceBetween(latO, lonO, lat, lon) / 1000;
+
+    return liberarViajeAlPoolTurismoSiAplica(
+      viajeId: viajeId,
+      omitirVentanaPublicacion: omitirVentanaPublicacion,
+    );
   }
 
-  /// Tras crear un viaje turístico en `pendiente_admin`, intenta asignar el chofer
-  /// aprobado más cercano con vehículo compatible y capacidad suficiente.
-  /// No altera precio, método de pago ni extras (facturación intacta).
-  /// Devuelve el UID del chofer si hubo éxito, o `null` si debe intervenir ADM / pool.
+  /// Compatibilidad: reintentos del cliente solo liberan al pool (sin auto-asignar).
   static Future<String?> intentarAsignacionAutomatica({
     required String viajeId,
     double radioKm = 55,
     int maxCandidatos = 18,
+    bool omitirVentanaPublicacion = false,
   }) async {
-    final _CallableTurismoOutcome callable =
-        await _intentarAsignacionTurismoCallable(
+    await publicarViajeEnPoolTurismo(
       viajeId: viajeId,
-      radioKm: radioKm,
+      omitirVentanaPublicacion: omitirVentanaPublicacion,
     );
-    if (callable.reachedServer) {
-      return callable.uidChofer;
-    }
-
-    return _intentarAsignacionAutomaticaLocal(
-      viajeId: viajeId,
-      radioKm: radioKm,
-      maxCandidatos: maxCandidatos,
-    );
+    return null;
   }
 
   static Future<_CallableTurismoOutcome> _intentarAsignacionTurismoCallable({
     required String viajeId,
-    required double radioKm,
+    bool omitirVentanaPublicacion = false,
   }) async {
     if (viajeId.trim().isEmpty) {
       return const _CallableTurismoOutcome(reachedServer: false);
@@ -790,17 +890,16 @@ class AsignacionTurismoRepo {
       final HttpsCallableResult<dynamic> res =
           await callable.call(<String, dynamic>{
         'viajeId': viajeId.trim(),
-        'radioKm': radioKm,
+        if (omitirVentanaPublicacion) 'omitirVentanaPublicacion': true,
       });
       final Map<String, dynamic> data =
           Map<String, dynamic>.from(res.data as Map<dynamic, dynamic>);
       if (data['ok'] != true) {
         return const _CallableTurismoOutcome(reachedServer: false);
       }
-      final String uid = (data['uidChofer'] ?? '').toString().trim();
       return _CallableTurismoOutcome(
         reachedServer: true,
-        uidChofer: uid.isNotEmpty ? uid : null,
+        liberadoPool: data['liberadoPool'] == true,
       );
     } on FirebaseFunctionsException catch (e, st) {
       if (e.code != 'not-found' && e.code != 'failed-precondition') {
@@ -820,244 +919,14 @@ class AsignacionTurismoRepo {
       return const _CallableTurismoOutcome(reachedServer: false);
     }
   }
-
-  static Future<String?> _intentarAsignacionAutomaticaLocal({
-    required String viajeId,
-    double radioKm = 55,
-    int maxCandidatos = 18,
-  }) async {
-    final DocumentReference<Map<String, dynamic>> vRef =
-        _db.collection('viajes').doc(viajeId);
-    final DocumentSnapshot<Map<String, dynamic>> vSnap = await vRef.get();
-    if (!vSnap.exists) return null;
-    final Map<String, dynamic> v0 = vSnap.data()!;
-
-    if (!estadoPermiteAutoAsignacionTurismo(v0)) return null;
-
-    final DateTime now = DateTime.now();
-    final dynamic tsAA = v0['acceptAfter'];
-    if (tsAA is Timestamp && now.isBefore(tsAA.toDate())) return null;
-    final dynamic tsPub = v0['publishAt'];
-    if (tsPub is Timestamp && tsPub.toDate().isAfter(now)) return null;
-
-    double latO = 0, lonO = 0;
-    final dynamic rawLat = v0['latOrigen'] ?? v0['latCliente'];
-    final dynamic rawLon = v0['lonOrigen'] ?? v0['lonCliente'];
-    if (rawLat is num) latO = rawLat.toDouble();
-    if (rawLon is num) lonO = rawLon.toDouble();
-    if (!latO.isFinite || !lonO.isFinite) return null;
-
-    final String subtipo = subtipoTurismoRequeridoDesdeViaje(v0);
-    final int pax = _pasajerosRequeridos(v0);
-
-    final QuerySnapshot<Map<String, dynamic>> q = await _db
-        .collection('choferes_turismo')
-        .where('estado', whereIn: <String>['aprobado', 'activo'])
-        .where('disponible', isEqualTo: true)
-        .limit(40)
-        .get();
-
-    final List<QueryDocumentSnapshot<Map<String, dynamic>>> ordenados =
-        List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(q.docs);
-
-    ordenados.sort((QueryDocumentSnapshot<Map<String, dynamic>> a,
-        QueryDocumentSnapshot<Map<String, dynamic>> b) {
-      final double? da = _distanciaKmHastaOrigen(a.data(), latO, lonO);
-      final double? db = _distanciaKmHastaOrigen(b.data(), latO, lonO);
-      if (da == null && db == null) return 0;
-      if (da == null) return 1;
-      if (db == null) return -1;
-      return da.compareTo(db);
-    });
-
-    int intentos = 0;
-    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in ordenados) {
-      if (intentos >= maxCandidatos) break;
-      final Map<String, dynamic> cData = doc.data();
-      final Map<String, dynamic>? veh =
-          _vehiculoQueCoincide(cData['vehiculos'] as List<dynamic>?, subtipo);
-      if (veh == null) continue;
-      if (_capacidadDesdeVehiculoMap(veh, subtipo) < pax) continue;
-
-      final double? dk = _distanciaKmHastaOrigen(cData, latO, lonO);
-      if (dk != null && dk > radioKm) continue;
-
-      intentos++;
-      final bool ok = await _transaccionAsignarTurismoAutomatico(
-        viajeId: viajeId,
-        uidChofer: doc.id,
-        choferData: cData,
-        vehiculo: veh,
-        subtipoTurismo: subtipo,
-      );
-      if (ok) return doc.id;
-    }
-
-    await liberarViajeAlPoolTurismoSiAplica(viajeId: viajeId);
-    return null;
-  }
-
-  static Future<bool> _transaccionAsignarTurismoAutomatico({
-    required String viajeId,
-    required String uidChofer,
-    required Map<String, dynamic> choferData,
-    required Map<String, dynamic> vehiculo,
-    required String subtipoTurismo,
-  }) async {
-    final DocumentReference<Map<String, dynamic>> vRef =
-        _db.collection('viajes').doc(viajeId);
-    final DocumentReference<Map<String, dynamic>> cRef =
-        _db.collection('choferes_turismo').doc(uidChofer);
-    final DocumentReference<Map<String, dynamic>> uRef =
-        _db.collection('usuarios').doc(uidChofer);
-
-    bool asignado = false;
-    try {
-      await _db.runTransaction((Transaction tx) async {
-        asignado = false;
-        final DocumentSnapshot<Map<String, dynamic>> vSnap = await tx.get(vRef);
-        if (!vSnap.exists) return;
-        final Map<String, dynamic> d = vSnap.data()!;
-
-        if (!estadoPermiteAutoAsignacionTurismo(d)) return;
-
-        final DateTime now = DateTime.now();
-        final dynamic tsAA = d['acceptAfter'];
-        if (tsAA is Timestamp && now.isBefore(tsAA.toDate())) return;
-        final dynamic tsPub = d['publishAt'];
-        if (tsPub is Timestamp && tsPub.toDate().isAfter(now)) return;
-
-        final String reservadoPor = (d['reservadoPor'] ?? '').toString();
-        DateTime? reservadoHasta;
-        final dynamic rh = d['reservadoHasta'];
-        if (rh is Timestamp) reservadoHasta = rh.toDate();
-        final bool reservaVigente = reservadoPor.isNotEmpty &&
-            (reservadoHasta == null || reservadoHasta.isAfter(now));
-        if (reservaVigente && reservadoPor != uidChofer) return;
-
-        final DocumentSnapshot<Map<String, dynamic>> cSnap = await tx.get(cRef);
-        if (!cSnap.exists) return;
-        final Map<String, dynamic> cLive = cSnap.data()!;
-        if (!choferEstadoOperativo(cLive['estado'])) return;
-        if (cLive['disponible'] != true) return;
-
-        final int pax = _pasajerosRequeridos(d);
-        final Map<String, dynamic>? vMatch = _vehiculoQueCoincide(
-            cLive['vehiculos'] as List<dynamic>?, subtipoTurismo);
-        if (vMatch == null) return;
-        if (_capacidadDesdeVehiculoMap(vMatch, subtipoTurismo) < pax) return;
-
-        final DocumentSnapshot<Map<String, dynamic>> uSnap = await tx.get(uRef);
-        final Map<String, dynamic> uData = uSnap.data() ?? <String, dynamic>{};
-        if ((uData['viajeActivoId'] ?? '').toString().isNotEmpty) return;
-
-        final bSnapAuto =
-            await tx.get(_db.collection('billeteras_taxista').doc(uidChofer));
-        if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
-            uData, bSnapAuto.data())) {
-          return;
-        }
-
-        final String nombreChofer =
-            (choferData['nombre'] ?? cLive['nombre'] ?? '').toString();
-        final String telChofer =
-            (choferData['telefono'] ?? cLive['telefono'] ?? '').toString();
-        final String placa =
-            (vehiculo['placa'] ?? vMatch['placa'] ?? '').toString();
-        final String marca = (vehiculo['marca'] ??
-                uData['marca'] ??
-                uData['vehiculoMarca'] ??
-                '')
-            .toString();
-        final String modelo = (vehiculo['modelo'] ??
-                uData['modelo'] ??
-                uData['vehiculoModelo'] ??
-                '')
-            .toString();
-        final String color = (vehiculo['color'] ??
-                uData['color'] ??
-                uData['vehiculoColor'] ??
-                '')
-            .toString();
-        final String tipoOriginal = subtipoTurismo;
-
-        final String uidCliente =
-            (d['uidCliente'] ?? d['clienteId'] ?? '').toString();
-
-        tx.update(vRef, {
-          'uidTaxista': uidChofer,
-          'taxistaId': uidChofer,
-          'nombreTaxista': nombreChofer,
-          'telefono': telChofer,
-          'telefonoTaxista': telChofer,
-          'placa': placa,
-          'tipoVehiculo': '🏝️ TURISMO 🏝️',
-          'tipoVehiculoOriginal': tipoOriginal,
-          'marca': marca,
-          'modelo': modelo,
-          'color': color,
-          'latTaxista': 0.0,
-          'lonTaxista': 0.0,
-          'driverLat': 0.0,
-          'driverLon': 0.0,
-          'estado': EstadosViaje.aceptado,
-          'aceptado': true,
-          'rechazado': false,
-          'activo': true,
-          'aceptadoEn': FieldValue.serverTimestamp(),
-          'asignacionAutomatica': true,
-          'asignadoPor': 'auto',
-          'asignadoEn': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-          'reservadoPor': '',
-          'reservadoHasta': null,
-          'ignoradosPor': FieldValue.delete(),
-        });
-
-        tx.update(cRef, {
-          'disponible': false,
-          'viajeActualId': viajeId,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-
-        tx.set(
-          uRef,
-          {
-            'viajeActivoId': viajeId,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
-        if (uidCliente.isNotEmpty) {
-          tx.set(
-            _db.collection('usuarios').doc(uidCliente),
-            {
-              'viajeActivoId': viajeId,
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          );
-        }
-
-        asignado = true;
-      });
-    } catch (_) {
-      return false;
-    }
-    return asignado;
-  }
 }
 
 class _CallableTurismoOutcome {
   final bool reachedServer;
-  final String? uidChofer;
+  final bool liberadoPool;
 
   const _CallableTurismoOutcome({
     required this.reachedServer,
-    this.uidChofer,
+    this.liberadoPool = false,
   });
 }

@@ -187,6 +187,29 @@ class EstadosViaje {
   static bool esActivo(String e) => activos.contains(normalizar(e));
   static bool esTerminal(String e) => terminales.contains(normalizar(e));
 
+  /// Turismo/pool: si `aceptado==true` pero el doc aún dice `pendiente_admin`,
+  /// la UI del taxista debe tratarlo como `aceptado`.
+  static String estadoOperativoViaje({
+    required String estadoRaw,
+    required bool aceptado,
+    required bool completado,
+  }) {
+    final String base = normalizar(
+      estadoRaw.isNotEmpty
+          ? estadoRaw
+          : (completado
+              ? EstadosViaje.completado
+              : (aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    if (aceptado &&
+        (base == pendiente ||
+            base == pendientePago ||
+            estadoRaw.trim().toLowerCase() == 'pendiente_admin')) {
+      return EstadosViaje.aceptado;
+    }
+    return base;
+  }
+
   /// Cliente/taxista vía app: no cancelar tras abordar o en ruta (anti‑fraude).
   static bool esEstadoSinCancelacionApp(String e) {
     final String n = normalizar(e);

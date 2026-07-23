@@ -125,41 +125,49 @@ class TaxistaCreditoRaiMonederoHero extends StatelessWidget {
               Icon(Icons.account_balance_wallet_outlined,
                   color: cs.onPrimaryContainer, size: 22),
               const SizedBox(width: 8),
-              Text(
-                'Crédito RAI',
-                style: TextStyle(
-                  color: cs.onPrimaryContainer,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 15,
-                  letterSpacing: 0.2,
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: accent.withValues(alpha: 0.5)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(statusIcon, size: 14, color: accent),
-                    const SizedBox(width: 5),
-                    Text(
-                      statusLabel,
-                      style: TextStyle(
-                        color: cs.onSurface,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+              Expanded(
+                child: Text(
+                  'Crédito RAI',
+                  style: TextStyle(
+                    color: cs.onPrimaryContainer,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                    letterSpacing: 0.2,
+                  ),
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: double.infinity),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: accent.withValues(alpha: 0.5)),
+              ),
+              child: Wrap(
+                spacing: 5,
+                runSpacing: 2,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Icon(statusIcon, size: 14, color: accent),
+                  Text(
+                    statusLabel,
+                    style: TextStyle(
+                      color: cs.onSurface,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 16),
           Text(
@@ -250,19 +258,28 @@ class TaxistaCreditoRaiMonederoHero extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
+            flex: 3,
             child: Text(
               label,
               style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
             ),
           ),
-          Text(
-            value,
-            style: TextStyle(
-              color: cs.onSurface,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: cs.onSurface,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -411,14 +428,20 @@ class TaxistaCreditoRaiMovimientosRecientes extends StatelessWidget {
                       ),
                     ),
                     if (monto != null && !esCero)
-                      Text(
-                        monto >= 0
-                            ? '+${formatter.format(monto)}'
-                            : '−${formatter.format(monto.abs())}',
-                        style: TextStyle(
-                          color: esCredito ? Colors.greenAccent : cs.onSurface,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13,
+                      Flexible(
+                        child: Text(
+                          monto >= 0
+                              ? '+${formatter.format(monto)}'
+                              : '−${formatter.format(monto.abs())}',
+                          textAlign: TextAlign.end,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color:
+                                esCredito ? Colors.greenAccent : cs.onSurface,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                          ),
                         ),
                       )
                     else if (esCero)

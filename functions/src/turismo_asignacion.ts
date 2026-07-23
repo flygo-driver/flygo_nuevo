@@ -258,12 +258,6 @@ export async function intentarAsignacionTurismoInterno(args: {
     return { uidChofer: null, liberadoPool: false, canalAsignacion: "admin" };
   }
 
-  const radioKm = typeof args.radioKm === "number" && args.radioKm > 0 ? args.radioKm : 55;
-  const maxCandidatos =
-    typeof args.maxCandidatos === "number" && args.maxCandidatos > 0
-      ? args.maxCandidatos
-      : 18;
-
   const vRef = db().collection("viajes").doc(viajeId);
   const vSnap = await vRef.get();
   if (!vSnap.exists) {
@@ -274,76 +268,6 @@ export async function intentarAsignacionTurismoInterno(args: {
   if (!estadoPermiteAutoAsignacionTurismo(v0)) {
     const canal = String(v0.canalAsignacion ?? "admin").trim();
     return { uidChofer: null, liberadoPool: false, canalAsignacion: canal };
-  }
-
-  const now = new Date();
-  if (!ventanaPublicacionYAceptacionOk(v0, now, args.omitirVentanaPublicacion === true)) {
-    return { uidChofer: null, liberadoPool: false, canalAsignacion: "admin" };
-  }
-
-  const rawLat = v0.latOrigen ?? v0.latCliente;
-  const rawLon = v0.lonOrigen ?? v0.lonCliente;
-  const latO = typeof rawLat === "number" ? rawLat : Number(rawLat);
-  const lonO = typeof rawLon === "number" ? rawLon : Number(rawLon);
-  if (!Number.isFinite(latO) || !Number.isFinite(lonO)) {
-    const liberadoPool = await liberarViajeAlPoolTurismoSiAplica({
-      viajeId,
-      omitirVentanaPublicacion: args.omitirVentanaPublicacion,
-    });
-    const canalAfter = liberadoPool ? CANAL_TURISMO_POOL : "admin";
-    return { uidChofer: null, liberadoPool, canalAsignacion: canalAfter };
-  }
-
-  const subtipo = subtipoTurismoRequeridoDesdeViaje(v0);
-  const pax = pasajerosRequeridos(v0);
-  const prepagoCfg = await getComisionPrepagoConfig();
-  const globalComisionPct = await getComisionViajePorcentajeCached();
-
-  const q = await db()
-    .collection("choferes_turismo")
-    .where("estado", "in", ["aprobado", "activo"])
-    .where("disponible", "==", true)
-    .limit(40)
-    .get();
-
-  const candidatos = ordenarCandidatosPorDistancia(
-    q.docs.map((doc) => ({
-      id: doc.id,
-      data: (doc.data() ?? {}) as AnyMap,
-      distanciaKm: distanciaKmHastaOrigen(doc.data() as AnyMap, latO, lonO),
-    })),
-  );
-
-  let intentos = 0;
-  for (const cand of candidatos) {
-    if (intentos >= maxCandidatos) break;
-    const filtro = filtrarCandidatoTurismo({
-      choferData: cand.data,
-      subtipoTurismo: subtipo,
-      pasajeros: pax,
-      latO,
-      lonO,
-      radioKm,
-    });
-    if (!filtro.ok || !filtro.vehiculo) continue;
-
-    intentos += 1;
-    const ok = await transaccionAsignarTurismoAutomatico({
-      viajeId,
-      uidChofer: cand.id,
-      choferData: cand.data,
-      vehiculo: filtro.vehiculo,
-      subtipoTurismo: subtipo,
-      minimoPrepagoRd: prepagoCfg.minimoOperativoRd,
-      globalComisionPct,
-    });
-    if (ok) {
-      return {
-        uidChofer: cand.id,
-        liberadoPool: false,
-        canalAsignacion: "admin",
-      };
-    }
   }
 
   const liberadoPool = await liberarViajeAlPoolTurismoSiAplica({
@@ -357,7 +281,7 @@ export async function intentarAsignacionTurismoInterno(args: {
   };
 }
 
-/** Cliente / taxista / admin: auto-asignar chofer turismo aprobado o liberar al pool. */
+/** Cliente / taxista / admin: publicar viaje turismo en pool turístico. */
 export const intentarAsignacionTurismoSeguro = onCall(async (request) => {
   if (!request.auth?.uid) {
     throw new HttpsError("unauthenticated", "No autenticado");
@@ -428,7 +352,7 @@ export const liberarViajeTurismoPoolSeguro = onCall(async (request) => {
   return { ok: true, liberadoPool };
 });
 
-/** Turismo programado: cuando llega publishAt, auto-asignar o liberar al pool (app cerrada). */
+/** Turismo programado: cuando llega publishAt, liberar al pool turístico (app cerrada). */
 export const scheduledTurismoProgramadoAlPool = onSchedule(
   {
     schedule: "every 5 minutes",

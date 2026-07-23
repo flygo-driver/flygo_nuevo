@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
@@ -49,7 +50,7 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
   /// Color para montos / acentos tipo “ganancia” (legible en claro y oscuro).
   Color _gainColor(ColorScheme cs) {
     return cs.brightness == Brightness.dark
-        ? const Color(0xFF69F0AE)
+        ? RaiDsColors.neon
         : const Color(0xFF00796B);
   }
 
@@ -78,20 +79,23 @@ class GananciaTaxistaState extends State<GananciaTaxista> {
       );
     }
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? RaiDsColors.bg : cs.surface;
+
     return Scaffold(
-      backgroundColor: cs.surface,
+      backgroundColor: bg,
       appBar: AppBar(
-        backgroundColor: cs.surface,
-        foregroundColor: cs.onSurface,
-        surfaceTintColor: cs.surfaceTint,
+        backgroundColor: bg,
+        foregroundColor: isDark ? Colors.white : cs.onSurface,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
-        scrolledUnderElevation: 1,
+        scrolledUnderElevation: isDark ? 0 : 1,
         title: Text(
           'Ganancias del Taxista',
           style: TextStyle(
             fontSize: 26,
             fontWeight: FontWeight.bold,
-            color: cs.onSurface,
+            color: isDark ? Colors.white : cs.onSurface,
           ),
         ),
         centerTitle: true,
@@ -565,19 +569,21 @@ class _SummaryCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(
-          alpha: isDark ? 0.55 : 0.65,
-        ),
+        color: isDark ? RaiDsColors.card : cs.surfaceContainerHighest.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: cs.shadow.withValues(alpha: isDark ? 0.35 : 0.12),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: cs.shadow.withValues(alpha: 0.12),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
         border: Border.all(
-          color: cs.outlineVariant.withValues(alpha: isDark ? 0.45 : 0.55),
+          color: isDark
+              ? RaiDsColors.border
+              : cs.outlineVariant.withValues(alpha: 0.55),
         ),
       ),
       child: child,

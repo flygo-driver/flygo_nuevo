@@ -11,6 +11,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/widgets/rai_map_vehicle_icons.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_activar_button.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 
@@ -101,6 +102,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   LatLng? _lastCameraFollowTarget;
 
   LatLng? _lastLatLng;
+  LatLng? _prevVehicleLatLng;
   double _lastBearing = 0;
 
   LatLng? _destinoSeleccionado; // si el usuario deja presionado
@@ -122,6 +124,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   @override
   void initState() {
     super.initState();
+    unawaited(RaiMapVehicleIcons.ensureLoaded().then((_) {
+      if (mounted) _actualizarMarcadores();
+    }));
     _iniciarUbicacion();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _actualizarMarcadores();
@@ -170,6 +175,12 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       return;
     }
     if (taxiChanged && (widget.mostrarTaxista || _usaUbicacionTaxistaPasiva)) {
+      final LatLng? nuevo = widget.ubicacionTaxista;
+      if (nuevo != null) {
+        final b = RaiMapVehicleIcons.bearingEntre(_prevVehicleLatLng, nuevo);
+        if (b != null) _lastBearing = b;
+        _prevVehicleLatLng = nuevo;
+      }
       if (_usaUbicacionTaxistaPasiva) {
         _lastLatLng = widget.ubicacionTaxista;
         _myLocEnabled = true;
@@ -246,18 +257,44 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   void _actualizarMarcadores() {
     _markers.clear();
 
-    // Marcador del taxista (para vista de cliente)
+    Marker vehiculoMarker({
+      required String id,
+      required LatLng position,
+      required double bearing,
+      required bool vistaCliente,
+      String title = 'Tu conductor',
+    }) {
+      final BitmapDescriptor? icon = vistaCliente
+          ? RaiMapVehicleIcons.taxiCliente
+          : RaiMapVehicleIcons.taxista;
+      final double rot = vistaCliente
+          ? RaiMapVehicleIcons.rotationTaxiCliente(bearing)
+          : RaiMapVehicleIcons.rotationTaxista(bearing);
+      return Marker(
+        markerId: MarkerId(id),
+        position: position,
+        infoWindow: InfoWindow(title: title),
+        icon: icon ??
+            BitmapDescriptor.defaultMarkerWithHue(
+              vistaCliente
+                  ? BitmapDescriptor.hueYellow
+                  : BitmapDescriptor.hueRed,
+            ),
+        rotation: icon != null ? rot : 0,
+        flat: icon != null,
+        anchor: icon != null ? const Offset(0.5, 0.5) : const Offset(0.5, 1.0),
+        zIndexInt: 9,
+      );
+    }
+
+    // Marcador del taxista (vista cliente)
     if (widget.mostrarTaxista && widget.ubicacionTaxista != null) {
-      _markers.add(Marker(
-        markerId: const MarkerId('taxista'),
+      _markers.add(vehiculoMarker(
+        id: 'taxista',
         position: widget.ubicacionTaxista!,
-        infoWindow: const InfoWindow(title: 'Tu taxista'),
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          widget.estiloCalleAnchaBlanca
-              ? BitmapDescriptor.hueAzure
-              : BitmapDescriptor.hueOrange,
-        ),
-        zIndexInt: 2,
+        bearing: _lastBearing,
+        vistaCliente: true,
+        title: 'Tu taxista',
       ));
     }
 
@@ -291,17 +328,22 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       ));
     }
 
-    // Marcador de ubicación actual del usuario
-    if (_lastLatLng != null) {
+    // Vehículo del taxista en GPS en vivo (o posición pasiva del viaje).
+    if (_lastLatLng != null &&
+        (widget.esTaxista || _usaUbicacionTaxistaPasiva)) {
+      _markers.add(vehiculoMarker(
+        id: 'yo',
+        position: _lastLatLng!,
+        bearing: _lastBearing,
+        vistaCliente: false,
+        title: 'Mi ubicación',
+      ));
+    } else if (_lastLatLng != null && !widget.mostrarTaxista) {
       _markers.add(Marker(
         markerId: const MarkerId('yo'),
         position: _lastLatLng!,
-        infoWindow: InfoWindow(
-          title: widget.esTaxista ? 'Mi ubicación' : 'Mi ubicación',
-        ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(widget.esTaxista
-            ? BitmapDescriptor.hueRed
-            : BitmapDescriptor.hueAzure),
+        infoWindow: const InfoWindow(title: 'Mi ubicación'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
         zIndexInt: 2,
       ));
     }
@@ -405,21 +447,25 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
 
   void _onPosicionLive(Position pos) {
     final here = LatLng(pos.latitude, pos.longitude);
+    final b = RaiMapVehicleIcons.resolverBearing(
+      actual: here,
+      anterior: _prevVehicleLatLng ?? _lastLatLng,
+      headingGps: pos.heading.isFinite && pos.speed > 0.5 ? pos.heading : null,
+      fallback: _lastBearing,
+    );
+    _prevVehicleLatLng = _lastLatLng;
     _lastLatLng = here;
+    _lastBearing = b;
     _scheduleMarkerRefresh();
 
     if (_following && (widget.esTaxista || kIsWeb)) {
       _animateTo(
         here,
         zoom: 17,
-        bearing: (pos.heading.isFinite && pos.speed > 0.5)
-            ? pos.heading
-            : _lastBearing,
+        bearing: _lastBearing,
         followMode: true,
       );
     }
-
-    if (pos.heading.isFinite) _lastBearing = pos.heading;
   }
 
   /// Web (PC / laptop / tablet): pide permiso del navegador y centra el mapa.
@@ -693,7 +739,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
         });
       },
       style: widget.estiloCalleAnchaBlanca ? _kMapStyleBolaRealtimeDark : null,
-      myLocationEnabled: _myLocEnabled,
+      myLocationEnabled: _myLocEnabled &&
+          !((widget.esTaxista || _usaUbicacionTaxistaPasiva) &&
+              RaiMapVehicleIcons.listo),
       myLocationButtonEnabled: false,
       compassEnabled: true,
       zoomControlsEnabled: false,
@@ -761,6 +809,18 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
 
     fm.Marker pinOsm(Marker m) {
       final id = m.markerId.value;
+      if ((id == 'yo' || id == 'taxista') && RaiMapVehicleIcons.listo) {
+        return fm.Marker(
+          point: _ll(m.position),
+          width: 58,
+          height: 58,
+          child: RaiMapVehicleIcons.imagenTaxista(
+            bearing: _lastBearing,
+            vistaCliente: id == 'taxista',
+            size: 54,
+          ),
+        );
+      }
       final destacado = _esPinViajeDestacado(id);
       final esDestino = id.contains('destino') || id.startsWith('destino');
       final esOrigen = id == 'origen' ||

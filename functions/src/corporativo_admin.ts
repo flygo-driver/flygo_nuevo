@@ -1358,7 +1358,25 @@ export const adminDesactivarEmpresaCorporativa = onCall(async (request) => {
     actualizadoEn: FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  return { ok: true, empresaId, activa: false };
+  const choferes = new Set<string>();
+  const plSnap = await ref.collection("plantillas_ruta").get();
+  for (const pl of plSnap.docs) {
+    const uid = str((pl.data() ?? {}).choferPreferidoUid);
+    if (uid) choferes.add(uid);
+  }
+  for (const uid of choferes) {
+    try {
+      await refrescarChoferOperacionCorporativa(uid);
+    } catch (e) {
+      logger.warn("adminDesactivarEmpresaCorporativa refresh chofer", {
+        empresaId,
+        choferUid: uid,
+        e,
+      });
+    }
+  }
+
+  return { ok: true, empresaId, activa: false, choferesRefrescados: choferes.size };
 });
 
 /** Admin: reactiva empresa desactivada (contrato sigue pendiente de activar). */

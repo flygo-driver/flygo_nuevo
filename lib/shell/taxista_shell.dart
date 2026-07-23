@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/taxista_cuenta_tab.dart';
@@ -70,7 +71,7 @@ class _TaxistaShellScaffold extends StatefulWidget {
 }
 
 class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
-  int _index = 0;
+  int _index = ShellTabController.taxistaTabViajes;
 
   final GlobalKey _viajeEnCursoTaxistaShellKey = GlobalKey();
 
@@ -283,7 +284,13 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
   @override
   void initState() {
     super.initState();
-    ShellTabController.taxistaIndex.value = 0;
+    if (widget.openDocumentosOnLaunch) {
+      _index = ShellTabController.taxistaTabCuenta;
+      ShellTabController.taxistaIndex.value = ShellTabController.taxistaTabCuenta;
+    } else {
+      ShellTabController.taxistaIrAViajesAhora();
+      _index = ShellTabController.taxistaTabViajes;
+    }
     ShellTabController.taxistaIndex.addListener(_onShellTabController);
     RaiConnectivityService.instance.ensureStarted();
     unawaited(ComisionPrepagoConfigService.ensureStarted());
@@ -291,10 +298,10 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
     unawaited(RaiUbicacionTaxistaService.instance.ensureStarted());
 
     if (widget.openDocumentosOnLaunch) {
-      _index = 3;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _navigatorKeys[3].currentState?.push<void>(
+        _navigatorKeys[ShellTabController.taxistaTabCuenta].currentState
+            ?.push<void>(
               MaterialPageRoute<void>(
                   builder: (_) => const DocumentosTaxista()),
             );
@@ -565,7 +572,18 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
         ),
       );
     }
-    return Scaffold(
+    final Color barSurface = Theme.of(context).colorScheme.surface;
+    final bool barOscura =
+        ThemeData.estimateBrightnessForColor(barSurface) == Brightness.dark;
+    final overlayBarra = SystemUiOverlayStyle(
+      systemNavigationBarColor: barSurface,
+      systemNavigationBarIconBrightness:
+          barOscura ? Brightness.light : Brightness.dark,
+      systemNavigationBarContrastEnforced: false,
+    );
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayBarra,
+      child: Scaffold(
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -575,42 +593,77 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
             child: IndexedStack(
               index: _index,
               children: [
-                _tabNavigator(0, const ViajeDisponible()),
-                _tabNavigator(1, const TaxistaTrabajoHub()),
-                _tabNavigator(2, const TaxistaServiciosTab()),
+                _tabNavigator(
+                  0,
+                  const ViajeDisponible(ocultarTabCompartidos: true),
+                ),
+                _tabNavigator(1, const TaxistaServiciosTab()),
+                _tabNavigator(2, const TaxistaTrabajoHub()),
                 _tabNavigator(3, const TaxistaCuentaTab()),
               ],
             ),
           ),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: _seleccionarTab,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.local_taxi_outlined),
-            selectedIcon: Icon(Icons.local_taxi),
-            label: 'Recibir',
+      bottomNavigationBar: ColoredBox(
+        color: barSurface,
+        child: Theme(
+          data: Theme.of(context).copyWith(
+            navigationBarTheme: NavigationBarThemeData(
+              height: 58,
+              elevation: 0,
+              labelTextStyle: WidgetStateProperty.resolveWith((states) {
+                final selected = states.contains(WidgetState.selected);
+                return TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  height: 1.0,
+                );
+              }),
+              iconTheme: WidgetStateProperty.resolveWith(
+                (_) => const IconThemeData(size: 22),
+              ),
+              indicatorShape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.work_outline),
-            selectedIcon: Icon(Icons.work_rounded),
-            label: 'Trabajo',
+          child: SafeArea(
+            top: false,
+            minimum: EdgeInsets.zero,
+            child: NavigationBar(
+              backgroundColor: barSurface,
+              surfaceTintColor: Colors.transparent,
+              selectedIndex: _index,
+              onDestinationSelected: _seleccionarTab,
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.local_taxi_outlined),
+                  selectedIcon: Icon(Icons.local_taxi),
+                  label: 'Viajes',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.grid_view_outlined),
+                  selectedIcon: Icon(Icons.grid_view_rounded),
+                  label: 'Servicios',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.work_outline),
+                  selectedIcon: Icon(Icons.work_rounded),
+                  label: 'Trabajo',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.person_outline),
+                  selectedIcon: Icon(Icons.person_rounded),
+                  label: 'Cuenta',
+                ),
+              ],
+            ),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.travel_explore_outlined),
-            selectedIcon: Icon(Icons.travel_explore),
-            label: 'Servicios',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: 'Cuenta',
-          ),
-        ],
+        ),
       ),
+    ),
     );
   }
 }

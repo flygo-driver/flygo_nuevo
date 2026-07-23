@@ -15,6 +15,8 @@ import 'package:flygo_nuevo/utils/pool_gira_cancelar_ui.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_recaudo_central_taxista_panel.dart';
+import 'package:flygo_nuevo/design_system/rai_design_system.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 import 'pools_gira_editar_contenido.dart';
 import 'pools_taxista_reservas.dart';
@@ -30,8 +32,27 @@ class PoolsTaxistaLista extends StatefulWidget {
   State<PoolsTaxistaLista> createState() => _PoolsTaxistaListaState();
 }
 
-class _PoolsTaxistaListaState extends State<PoolsTaxistaLista> {
+class _PoolsTaxistaListaState extends State<PoolsTaxistaLista>
+    with SingleTickerProviderStateMixin {
   bool _accionEnCurso = false;
+  late final TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
   /// Cancelada / finalizada → pestaña Historial. El resto (abierto, en_ruta…) queda
   /// en Activas para editar / operar.
   bool _esHistorialEstado(String raw) {
@@ -462,51 +483,72 @@ Contactanos por esta via para mas informacion y confirmacion.
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
     final Color textSecondary =
         isDark ? Colors.white70 : const Color(0xFF475467);
-    final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
-    final Color accent = isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
-    final Color scaffoldBg = isDark ? Colors.black : const Color(0xFFE8EAED);
-    final Color cardBg = isDark ? const Color(0xFF121212) : Colors.white;
-    final Color cardBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
-    final Color softFill = isDark ? Colors.white10 : const Color(0xFFEFF1F5);
+    final Color textMuted =
+        isDark ? RaiDsColors.textMuted : const Color(0xFF667085);
+    final Color accent = isDark ? RaiDsColors.neon : const Color(0xFF0F9D58);
+    final Color scaffoldBg = isDark ? RaiDsColors.bg : const Color(0xFFE8EAED);
+    final Color cardBg = isDark ? RaiDsColors.card : Colors.white;
+    final Color cardBorder = isDark ? RaiDsColors.border : const Color(0xFFD0D5DD);
+    final Color softFill = isDark ? RaiDsColors.cardElevated : const Color(0xFFEFF1F5);
+    const double cardRadius = 20;
 
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        backgroundColor: scaffoldBg,
-        appBar: AppBar(
-          backgroundColor: isDark ? Colors.black : Colors.white,
-          foregroundColor: textPrimary,
-          elevation: isDark ? 0 : 0.5,
-          title: Text(
-            PoolsProductoCopy.salidasMis,
-            style: TextStyle(
-              color: accent,
-              fontWeight: FontWeight.w800,
+    void abrirPublicar() {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const PoolsTaxistaCrear()),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: scaffoldBg,
+      appBar: RaiAppBar(
+        title: PoolsProductoCopy.salidasMis,
+        showBackWhenCanPop: true,
+        centerTitle: true,
+        actions: [
+          if (!widget.embeddedInOrganizadorShell)
+            IconButton(
+              onPressed: abrirPublicar,
+              icon: const Icon(Icons.add_rounded),
+              tooltip: 'Publicar salida',
             ),
-          ),
-          centerTitle: true,
-          actions: [
-            if (!widget.embeddedInOrganizadorShell)
-              IconButton(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const PoolsTaxistaCrear()),
-                ),
-                icon: const Icon(Icons.add),
-                tooltip: 'Publicar salida',
+        ],
+      ),
+      bottomNavigationBar: widget.embeddedInOrganizadorShell
+          ? null
+          : SafeArea(
+              minimum: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: AppButton(
+                label: 'Publicar nueva ruta',
+                icon: Icons.add_rounded,
+                onPressed: abrirPublicar,
               ),
-          ],
-          bottom: TabBar(
-            labelColor: accent,
-            unselectedLabelColor: textMuted,
-            indicatorColor: accent,
-            tabs: const [
-              Tab(text: 'Activas'),
-              Tab(text: 'Historial'),
-            ],
-          ),
-        ),
-        body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (isDark)
+            AppPoolTabBar(
+              labels: const ['Mis rutas', 'Historial'],
+              index: _tabController.index,
+              onChanged: _tabController.animateTo,
+            )
+          else
+            Material(
+              color: Colors.white,
+              child: TabBar(
+                controller: _tabController,
+                labelColor: accent,
+                unselectedLabelColor: textMuted,
+                indicatorColor: accent,
+                tabs: const [
+                  Tab(text: 'Mis rutas'),
+                  Tab(text: 'Historial'),
+                ],
+              ),
+            ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: PoolRepo.streamPoolsTaxista(ownerTaxistaId: u.uid),
           builder: (context, snap) {
             if (snap.connectionState == ConnectionState.waiting) {
@@ -608,10 +650,10 @@ Contactanos por esta via para mas informacion y confirmacion.
                   puedeIniciar || puedeFinalizar || puedeCancelar;
 
               return Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(cardRadius),
                   border: Border.all(color: cardBorder),
                 ),
                 child: Column(
@@ -969,6 +1011,7 @@ Contactanos por esta via para mas informacion y confirmacion.
             }
 
             return TabBarView(
+              controller: _tabController,
               children: [
                 lista(
                   activas,
@@ -984,7 +1027,9 @@ Contactanos por esta via para mas informacion y confirmacion.
               ],
             );
           },
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }

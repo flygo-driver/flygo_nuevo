@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/foundation.dart'
     show debugPrint, defaultTargetPlatform, kIsWeb, kReleaseMode, TargetPlatform;
 import 'package:flutter/services.dart';
@@ -541,9 +542,11 @@ class _RaiAppState extends State<RaiApp> {
           onError: Colors.white,
         ),
         dividerColor: border,
-        textTheme: base.textTheme.apply(
-          bodyColor: onBg,
-          displayColor: onBg,
+        textTheme: GoogleFonts.interTextTheme(
+          base.textTheme.apply(
+            bodyColor: onBg,
+            displayColor: onBg,
+          ),
         ),
         iconTheme: IconThemeData(color: onBg),
         iconButtonTheme: IconButtonThemeData(

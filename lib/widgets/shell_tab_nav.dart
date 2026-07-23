@@ -6,19 +6,41 @@ import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 class ShellTabController {
   ShellTabController._();
 
-  static final ValueNotifier<int> taxistaIndex = ValueNotifier<int>(0);
+  static final ValueNotifier<int> taxistaIndex =
+      ValueNotifier<int>(taxistaTabViajes);
+
   static final ValueNotifier<int> clienteIndex = ValueNotifier<int>(0);
 
-  /// Pestaña interna del pool en Recibir: 0 COMPARTIDOS · 1 AHORA · 2 PROGRAMADOS.
+  /// Índices del shell taxista: Viajes · Servicios · Trabajo · Cuenta.
+  static const int taxistaTabViajes = 0;
+  static const int taxistaTabServicios = 1;
+  static const int taxistaTabTrabajo = 2;
+  static const int taxistaTabCuenta = 3;
+
+  /// Sub-pestaña en Viajes: 0 COMPARTIDOS · 1 AHORA · 2 PROGRAMADOS.
   static final ValueNotifier<int?> taxistaPoolSubTab = ValueNotifier<int?>(null);
 
-  static void taxistaIrARecibir() => taxistaIndex.value = 0;
+  /// Vuelve al pool principal (tab Viajes).
+  static void taxistaIrARecibir() => taxistaIrAViajesAhora();
 
-  /// Sale de Bola Ahorro en Recibir → pestaña AHORA (viajes inmediatos).
+  /// Sale de Bola Ahorro → tab Viajes, sub-pestaña AHORA.
   static void taxistaIrAPoolAhora() {
-    taxistaIndex.value = 0;
+    taxistaIndex.value = taxistaTabViajes;
     taxistaPoolSubTab.value = 1;
   }
+
+  static void taxistaIrAViajesAhora() {
+    taxistaIndex.value = taxistaTabViajes;
+    taxistaPoolSubTab.value = 1;
+  }
+
+  static void taxistaIrAViajesProgramados() {
+    taxistaIndex.value = taxistaTabViajes;
+    taxistaPoolSubTab.value = 2;
+  }
+
+  static void taxistaIrAServicios() =>
+      taxistaIndex.value = taxistaTabServicios;
 
   static void clienteIrAInicio() => clienteIndex.value = 0;
 }

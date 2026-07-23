@@ -1305,6 +1305,7 @@ class _CorporativoHubPageState extends State<CorporativoHubPage> {
                           empresaId: _empresaId!,
                           onEmpresaDadaDeBaja: () =>
                               _cargar(empresaIdConocido: _empresaId),
+                          onCerrarSesion: _cerrarSesion,
                         ),
                       ],
                     ),
@@ -1394,10 +1395,12 @@ class _CuentaCorporativoTab extends StatefulWidget {
   const _CuentaCorporativoTab({
     required this.empresaId,
     this.onEmpresaDadaDeBaja,
+    this.onCerrarSesion,
   });
 
   final String empresaId;
   final VoidCallback? onEmpresaDadaDeBaja;
+  final Future<void> Function()? onCerrarSesion;
 
   @override
   State<_CuentaCorporativoTab> createState() => _CuentaCorporativoTabState();
@@ -2280,11 +2283,63 @@ class _CuentaCorporativoTabState extends State<_CuentaCorporativoTab> {
             ),
             const SizedBox(height: 24),
             _cardDarDeBajaEmpresa(empresa, totalDeuda),
+            const SizedBox(height: 16),
+            _cardCerrarSesionEncargado(),
           ],
             );
           },
         );
       },
+    );
+  }
+
+  Widget _cardCerrarSesionEncargado() {
+    final p = context.corporativoPalette;
+    return corporativoCard(
+      context,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.logout_rounded, color: p.muted, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Cerrar sesión',
+                  style: TextStyle(
+                    color: p.onCard,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Salís de la cuenta encargado y volvés a la pantalla de entrada. '
+            'No cancela el servicio corporativo de la empresa.',
+            style: TextStyle(color: p.muted, fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: widget.onCerrarSesion == null
+                  ? null
+                  : () => widget.onCerrarSesion!(),
+              icon: const Icon(Icons.logout_rounded),
+              label: const Text('Cerrar sesión'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: p.onCard,
+                side: BorderSide(color: p.cardBorder),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

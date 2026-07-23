@@ -390,6 +390,13 @@ class ViajePoolTaxistaGate {
       return false;
     }
 
+    // Turismo: el chofer solo ve overlay tras aceptar desde el pool (no cola ADM).
+    if ((data['tipoServicio'] ?? '').toString() == 'turismo' && esTaxista) {
+      final bool aceptadoTrip = data['aceptado'] == true ||
+          EstadosViaje.activos.contains(st);
+      if (!aceptadoTrip) return false;
+    }
+
     if (esCliente &&
         data['programado'] == true &&
         data['activo'] != true &&

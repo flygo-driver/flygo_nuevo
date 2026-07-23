@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/utils/estilos.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
@@ -388,9 +389,9 @@ class _BilleteraTaxistaState extends State<BilleteraTaxista> {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color, width: 2),
+        color: RaiDsColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.55), width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -424,9 +425,9 @@ class _OperativaPrepagoCard extends StatelessWidget {
             width: double.infinity,
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Colors.grey[900],
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white24),
+              color: RaiDsColors.card,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: RaiDsColors.border),
             ),
             child: const Center(
               child: SizedBox(
@@ -453,8 +454,8 @@ class _OperativaPrepagoCard extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
-            color: Colors.grey[900],
-            borderRadius: BorderRadius.circular(16),
+            color: RaiDsColors.card,
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
                 color: bloqueoLegacy ? Colors.redAccent : EstilosRai.textoVerde,
                 width: 2),

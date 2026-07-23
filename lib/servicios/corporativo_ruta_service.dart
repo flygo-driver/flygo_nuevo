@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/corporativo_ciclo_facturacion.dart';
 import 'package:flygo_nuevo/utils/corporativo_hora_encargado.dart';
 import 'package:flygo_nuevo/utils/corporativo_recurrencia_helper.dart';
+import 'package:flygo_nuevo/utils/corporativo_ventanas_constants.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
@@ -671,12 +672,14 @@ abstract final class CorporativoRutaService {
     return horaRecogidaEnDia(pl, DateTime.now());
   }
 
-  /// Para «Enviar ahora»: si la hora de hoy ya pasó, recogida en ~15 min.
+  /// Para «Enviar ahora»: si la hora de hoy ya pasó, recogida en ~20 min.
   static DateTime fechaRecogidaParaPublicarAhora(CorporativoPlantilla pl) {
     final ahora = DateTime.now();
     final programada = recogidaHoy(pl) ?? ahora.add(const Duration(hours: 1));
     if (programada.isBefore(ahora.subtract(const Duration(minutes: 5)))) {
-      return ahora.add(const Duration(minutes: 15));
+      return ahora.add(
+        const Duration(minutes: CorporativoVentanasConstants.enviarAhoraOffsetMin),
+      );
     }
     return programada;
   }

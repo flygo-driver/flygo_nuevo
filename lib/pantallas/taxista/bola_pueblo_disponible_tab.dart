@@ -88,7 +88,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: const Color.fromRGBO(255, 152, 0, 0.14),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(20),
                       border: Border.all(
                         color: const Color.fromRGBO(255, 152, 0, 0.45),
                       ),

@@ -4,13 +4,13 @@
  * Uso (PowerShell, desde raíz del repo):
  *   gcloud auth application-default login
  *   node scripts/reset_piloto_corporativo.mjs
- *   node scripts/reset_piloto_corporativo.mjs --empresa=5GztuEyAkIm18CfDI4Vu --chofer=4CyXCaseJwPkiIj9snV8ABVkcJ92
+ *   node scripts/reset_piloto_corporativo.mjs --empresa=zdTBOgWjOfrl5q243tRV --chofer=4CyXCaseJwPkiIj9snV8ABVkcJ92
  *   node scripts/reset_piloto_corporativo.mjs --dry-run
  */
 import admin from "./lib/firebase_admin.mjs";
 
 const projectId = "flygo-rd";
-const DEFAULT_EMPRESA = "5GztuEyAkIm18CfDI4Vu";
+const DEFAULT_EMPRESA = "zdTBOgWjOfrl5q243tRV";
 const DEFAULT_CHOFER = "4CyXCaseJwPkiIj9snV8ABVkcJ92";
 
 const args = process.argv.slice(2);
@@ -50,7 +50,31 @@ function esHoyRd(ts) {
 async function cancelarViaje(id, data) {
   const estado = String(data.estado ?? "").toLowerCase();
   if (data.completado === true) return false;
-  if (estado === "cancelado" || estado === "rechazado") return false;
+  if (
+    estado === "cancelado" ||
+    estado === "rechazado" ||
+    estado === "cancelado_por_tiempo"
+  ) {
+    console.log(`  cerrar viaje ${id} (${estado}, completado=false)`);
+    if (!dryRun) {
+      await db.collection("viajes").doc(id).set(
+        {
+          estado: "cancelado",
+          completado: true,
+          aceptado: false,
+          rechazado: true,
+          activo: false,
+          corporativoSupersedidoPor: "reset_piloto",
+          corporativoSupersedidoEn: now,
+          canceladoMotivo: "reset_piloto_laboratorio",
+          updatedAt: now,
+          actualizadoEn: now,
+        },
+        { merge: true },
+      );
+    }
+    return true;
+  }
   if (estado === "en_curso" || estado === "a_bordo" || estado === "abordo") {
     console.log(`  SKIP en curso: ${id} (${estado})`);
     return false;
@@ -60,6 +84,7 @@ async function cancelarViaje(id, data) {
     await db.collection("viajes").doc(id).set(
       {
         estado: "cancelado",
+        completado: true,
         aceptado: false,
         rechazado: true,
         activo: false,
@@ -87,15 +112,25 @@ async function main() {
   const q = await db
     .collection("viajes")
     .where("corporativoEmpresaId", "==", empresaId)
-    .limit(40)
+    .limit(80)
     .get();
 
   for (const doc of q.docs) {
     const d = doc.data();
-    const fh = d.fechaHora;
-    const esCorp = d.corporativo === true || String(d.corporativoEmpresaId ?? "") === empresaId;
+    const esCorp =
+      d.corporativo === true ||
+      String(d.corporativoEmpresaId ?? "") === empresaId;
     if (!esCorp) continue;
-    if (fh && !esHoyRd(fh)) continue;
+    if (await cancelarViaje(doc.id, d)) cancelados++;
+  }
+
+  // Viajes huérfanos por nombre (empresa borrada fuera del flujo normal).
+  const corp = await db.collection("viajes").where("corporativo", "==", true).limit(120).get();
+  for (const doc of corp.docs) {
+    const d = doc.data();
+    const name = String(d.corporativoEmpresaNombre ?? "").toLowerCase();
+    if (!name.includes("bravo") && !name.includes("supermercado bravo")) continue;
+    if (String(d.corporativoEmpresaId ?? "") === empresaId) continue;
     if (await cancelarViaje(doc.id, d)) cancelados++;
   }
 
