@@ -2806,35 +2806,57 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   Widget _buildContenidoPrincipal(BuildContext context, Position pos, User u) {
     final pal = context._poolTaxistaPal;
     final media = MediaQuery.of(context);
-    final accesibilidad = media.textScaler.clamp(
-      minScaleFactor: 1.08,
-      maxScaleFactor: 1.18,
+    final scaler = media.textScaler;
+    final tabBarH = (scaler.scale(14.0) * 1.25 * 2 + 20).clamp(48.0, 96.0);
+    final tabBarBottom = PreferredSize(
+      preferredSize: Size.fromHeight(tabBarH),
+      child: SizedBox(
+        height: tabBarH,
+        child: TabBar(
+          controller: _tabPool,
+          indicatorColor: pal.accent,
+          labelColor: pal.accent,
+          unselectedLabelColor: pal.textMuted,
+          tabs: [
+            for (final label in _tabLabels)
+              Tab(
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+          ],
+        ),
+      ),
     );
 
     _asegurarStreamsPoolUi();
     final streamAhora = _streamPoolAhora!;
     final streamProg = _streamPoolProg!;
 
-    return MediaQuery(
-      data: media.copyWith(textScaler: accesibilidad),
-      child: Scaffold(
+    return Scaffold(
         backgroundColor: pal.scaffoldBg,
-        appBar: RaiAppBar(
-          title: '',
-          titleSemanticsLabel: _sinCompartidos ? 'Viajes' : 'RAI Driver',
-          showBackWhenCanPop: true,
-          actions: [
-            if (!_sinCompartidos) _PoolTurismoAppBarAction(uid: u.uid),
-            const SaldoGananciasChip(),
-          ],
-          bottom: TabBar(
-            controller: _tabPool,
-            indicatorColor: pal.accent,
-            labelColor: pal.accent,
-            unselectedLabelColor: pal.textMuted,
-            tabs: [
-              for (final label in _tabLabels) Tab(text: label),
+        appBar: PreferredSize(
+          preferredSize: RaiAppBar.preferredTotalSize(
+            context,
+            bottom: tabBarBottom,
+          ),
+          child: RaiAppBar(
+            title: '',
+            titleSemanticsLabel: _sinCompartidos ? 'Viajes' : 'RAI Driver',
+            showBackWhenCanPop: true,
+            actions: [
+              if (!_sinCompartidos) _PoolTurismoAppBarAction(uid: u.uid),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width * 0.48,
+                ),
+                child: const SaldoGananciasChip(),
+              ),
             ],
+            bottom: tabBarBottom,
           ),
         ),
         body: StreamBuilder<bool>(
@@ -2955,7 +2977,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
               );
             },
           ),
-        ),
     );
   }
 }

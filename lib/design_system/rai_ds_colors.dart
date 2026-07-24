@@ -17,4 +17,27 @@ abstract final class RaiDsColors {
   static const Color blue = Color(0xFF3B82F6);
   static const Color teal = Color(0xFF14B8A6);
   static const Color gold = Color(0xFFEAB308);
+
+  static bool isDark(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark;
+
+  /// Fondo de pantallas conductor (tabs shell).
+  static Color scaffoldBg(BuildContext context) => isDark(context)
+      ? bg
+      : const Color(0xFFF3F6FA);
+
+  static Color cardBg(BuildContext context) =>
+      isDark(context) ? card : Colors.white;
+
+  static Color cardElevatedBg(BuildContext context) =>
+      isDark(context) ? cardElevated : Colors.white;
+
+  static Color textPrimary(BuildContext context) =>
+      isDark(context) ? Colors.white : const Color(0xFF111827);
+
+  static Color textSecondary(BuildContext context) =>
+      isDark(context) ? textMuted : const Color(0xFF6B7280);
+
+  static Color borderColor(BuildContext context) =>
+      isDark(context) ? border : const Color(0xFFE5E7EB);
 }

@@ -140,7 +140,9 @@ class TaxistaServiciosTab extends StatelessWidget {
                             child: Text(
                               'Algunos servicios requieren aprobación de administración. '
                               'Cuando te aprueben, aparecerán aquí automáticamente.',
-                              style: RaiDsTypography.caption(context),
+                              style: RaiDsTypography.caption(context).copyWith(
+                                color: RaiDsColors.textSecondary(context),
+                              ),
                             ),
                           ),
                         ],

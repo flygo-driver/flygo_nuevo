@@ -29,8 +29,10 @@ class AppSection extends StatelessWidget {
               Expanded(
                 child: Text(
                   title.toUpperCase(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: RaiDsTypography.label(context).copyWith(
-                    color: accent ?? RaiDsColors.textMuted,
+                    color: accent ?? RaiDsColors.textSecondary(context),
                   ),
                 ),
               ),

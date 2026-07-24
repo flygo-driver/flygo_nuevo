@@ -610,14 +610,14 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
         child: Theme(
           data: Theme.of(context).copyWith(
             navigationBarTheme: NavigationBarThemeData(
-              height: 58,
+              height: MediaQuery.textScalerOf(context).scale(58).clamp(58, 76),
               elevation: 0,
               labelTextStyle: WidgetStateProperty.resolveWith((states) {
                 final selected = states.contains(WidgetState.selected);
                 return TextStyle(
                   fontSize: 10.5,
                   fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                  height: 1.0,
+                  height: 1.1,
                 );
               }),
               iconTheme: WidgetStateProperty.resolveWith(

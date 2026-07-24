@@ -31,6 +31,7 @@ class AppServiceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = RaiDsColors.isDark(context);
     final badge = switch (status) {
       AppServiceStatus.activo => AppBadge.success(statusLabel ?? 'Activo'),
       AppServiceStatus.pendiente => AppBadge.warning(statusLabel ?? 'Pendiente'),
@@ -41,7 +42,9 @@ class AppServiceCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
-        color: RaiDsColors.card,
+        color: RaiDsColors.cardBg(context),
+        elevation: isDark ? 0 : 0.5,
+        shadowColor: Colors.black12,
         borderRadius: BorderRadius.circular(RaiDsRadius.lg),
         child: InkWell(
           onTap: enabled ? onTap : null,
@@ -51,8 +54,8 @@ class AppServiceCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(RaiDsRadius.lg),
               border: Border.all(
                 color: enabled
-                    ? accent.withValues(alpha: 0.35)
-                    : RaiDsColors.border,
+                    ? accent.withValues(alpha: isDark ? 0.35 : 0.28)
+                    : RaiDsColors.borderColor(context),
               ),
             ),
             padding: const EdgeInsets.all(16),
@@ -62,12 +65,12 @@ class AppServiceCard extends StatelessWidget {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.16),
+                    color: accent.withValues(alpha: isDark ? 0.16 : 0.12),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(
                     icon,
-                    color: enabled ? accent : RaiDsColors.textMuted,
+                    color: enabled ? accent : RaiDsColors.textSecondary(context),
                     size: 24,
                   ),
                 ),
@@ -81,10 +84,12 @@ class AppServiceCard extends StatelessWidget {
                           Expanded(
                             child: Text(
                               title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: enabled
-                                    ? Colors.white
-                                    : RaiDsColors.textMuted,
+                                    ? RaiDsColors.textPrimary(context)
+                                    : RaiDsColors.textSecondary(context),
                                 fontWeight: FontWeight.w700,
                                 fontSize: 16,
                               ),
@@ -96,8 +101,10 @@ class AppServiceCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         subtitle,
-                        style: const TextStyle(
-                          color: RaiDsColors.textMuted,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: RaiDsColors.textSecondary(context),
                           fontSize: 13,
                           height: 1.35,
                         ),
@@ -108,8 +115,9 @@ class AppServiceCard extends StatelessWidget {
                 Icon(
                   enabled ? Icons.chevron_right_rounded : Icons.lock_outline,
                   color: enabled
-                      ? Colors.white.withValues(alpha: 0.35)
-                      : RaiDsColors.textMuted,
+                      ? RaiDsColors.textSecondary(context)
+                          .withValues(alpha: 0.75)
+                      : RaiDsColors.textSecondary(context),
                 ),
               ],
             ),

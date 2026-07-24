@@ -17,6 +17,11 @@ class SaldoGananciasChip extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return const SizedBox.shrink();
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? Colors.greenAccent : const Color(0xFF047857);
+    final bg = isDark ? Colors.white10 : const Color(0xFFECFDF5);
+    final muted = isDark ? Colors.white70 : const Color(0xFF475467);
+
     return StreamBuilder<Map<String, int>>(
       stream: WalletService.streamResumenTaxista(uid),
       builder: (context, snap) {
@@ -25,42 +30,51 @@ class SaldoGananciasChip extends StatelessWidget {
         final viajes = data?['viajes_completados'] ?? 0;
         final monto = cents / 100.0;
 
-        final child = Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.white10,
-            border: Border.all(color: Colors.greenAccent, width: 1.2),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.account_balance_wallet_outlined,
-                  color: Colors.greenAccent, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                _rd(monto),
-                style: const TextStyle(
-                  color: Colors.greenAccent,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 14,
-                  letterSpacing: 0.2,
+        final child = FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerRight,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: bg,
+              border: Border.all(color: accent, width: 1.1),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.account_balance_wallet_outlined,
+                    color: accent, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  _rd(monto),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: accent,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                    letterSpacing: 0.2,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '(${viajes}v)',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w600,
+                const SizedBox(width: 6),
+                Text(
+                  '(${viajes}v)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: muted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
 
         return Padding(
-          padding: const EdgeInsets.only(right: 10),
+          padding: const EdgeInsets.only(right: 8),
           child: Tooltip(
             message: 'Ver billetera',
             child: Material(

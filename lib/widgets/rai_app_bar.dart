@@ -34,6 +34,21 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.bottom,
   });
 
+  /// Altura de barra superior que respeta letra grande del sistema.
+  static double toolbarHeight(BuildContext context) {
+    return MediaQuery.textScalerOf(context)
+        .scale(kToolbarHeight)
+        .clamp(kToolbarHeight, 80);
+  }
+
+  static Size preferredTotalSize(
+    BuildContext context, {
+    PreferredSizeWidget? bottom,
+  }) {
+    final bottomH = bottom?.preferredSize.height ?? 0;
+    return Size.fromHeight(toolbarHeight(context) + bottomH);
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -86,6 +101,7 @@ class RaiAppBar extends StatelessWidget implements PreferredSizeWidget {
     );
 
     return AppBar(
+      toolbarHeight: RaiAppBar.toolbarHeight(context),
       leading: resolvedLeading,
       automaticallyImplyLeading: false,
       title: titleWidget,

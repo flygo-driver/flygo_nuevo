@@ -34,67 +34,85 @@ class RaiDriverTabHeader extends StatelessWidget implements PreferredSizeWidget 
   final String title;
   final String? subtitle;
 
-  /// Altura segura: evita overflow de 10px con subtítulo y letra grande.
-  static double heightFor(BuildContext context, {String? subtitle}) {
-    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
-    final base = subtitle == null ? 72.0 : 100.0;
-    return (base * scale).clamp(base, base + 24);
+  /// Altura dinámica: respeta letra grande del sistema (sin overflow).
+  static double preferredHeight(BuildContext context, {String? subtitle}) {
+    final media = MediaQuery.of(context);
+    final scaler = media.textScaler;
+    const topPad = 6.0;
+    const bottomPad = 12.0;
+    const logoBlock = 30.0 + 8.0;
+    const titleSubtitleGap = 4.0;
+    final titleH = scaler.scale(26.0) * 1.1 * 2;
+    final subtitleH = subtitle == null
+        ? 0.0
+        : titleSubtitleGap + scaler.scale(13.0) * 1.3 * 2;
+    return media.padding.top + topPad + logoBlock + titleH + subtitleH + bottomPad;
   }
 
   @override
-  Size get preferredSize => Size.fromHeight(subtitle == null ? 76 : 112);
+  Size get preferredSize => const Size.fromHeight(112);
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark ? RaiDriverColors.bg : Theme.of(context).scaffoldBackgroundColor;
+    final bg = isDark
+        ? RaiDriverColors.bg
+        : Theme.of(context).colorScheme.surface;
+    final titleColor = isDark ? Colors.white : const Color(0xFF111827);
+    final subtitleColor =
+        isDark ? RaiDriverColors.textMuted : const Color(0xFF6B7280);
+    final borderColor = isDark
+        ? RaiDriverColors.border
+        : const Color(0xFFE5E7EB);
 
     return Material(
       color: bg,
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              const Center(child: RaiDriverBrandMark(compact: true)),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: Text(
+      elevation: isDark ? 0 : 0.5,
+      shadowColor: Colors.black26,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: bg,
+          border: Border(bottom: BorderSide(color: borderColor)),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Center(child: RaiDriverBrandMark(compact: true)),
+                const SizedBox(height: 8),
+                Text(
                   title,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: isDark ? Colors.white : Colors.black87,
+                    color: titleColor,
                     fontSize: 26,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.6,
-                    height: 1.05,
+                    height: 1.1,
                   ),
                 ),
-              ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 3),
-                SizedBox(
-                  width: double.infinity,
-                  child: Text(
+                if (subtitle != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
                     subtitle!,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: isDark ? RaiDriverColors.textMuted : Colors.black54,
+                      color: subtitleColor,
                       fontSize: 13,
-                      height: 1.25,
+                      height: 1.3,
                     ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -117,10 +135,16 @@ class RaiDriverTabScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final headerHeight =
+        RaiDriverTabHeader.preferredHeight(context, subtitle: subtitle);
     return Scaffold(
-      backgroundColor:
-          isDark ? RaiDriverColors.bg : Theme.of(context).scaffoldBackgroundColor,
-      appBar: RaiDriverTabHeader(title: title, subtitle: subtitle),
+      backgroundColor: isDark
+          ? RaiDriverColors.bg
+          : RaiDsColors.scaffoldBg(context),
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(headerHeight),
+        child: RaiDriverTabHeader(title: title, subtitle: subtitle),
+      ),
       body: body,
     );
   }
@@ -230,6 +254,8 @@ class RaiDriverServiceCard extends StatelessWidget {
                           Expanded(
                             child: Text(
                               title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: enabled
                                     ? (isDark ? Colors.white : Colors.black87)
@@ -263,6 +289,8 @@ class RaiDriverServiceCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         subtitle,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: isDark
                               ? RaiDriverColors.textMuted
@@ -350,6 +378,8 @@ class RaiDriverHubCard extends StatelessWidget {
                     children: [
                       Text(
                         title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
                           fontWeight: FontWeight.w700,
@@ -359,6 +389,8 @@ class RaiDriverHubCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         subtitle,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: isDark
                               ? RaiDriverColors.textMuted
@@ -400,6 +432,8 @@ class RaiDriverSectionTitle extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(4, 18, 4, 10),
       child: Text(
         label.toUpperCase(),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: color ?? (isDark ? RaiDriverColors.textMuted : Colors.black45),
           fontWeight: FontWeight.w800,
@@ -551,6 +585,8 @@ class RaiDriverPoolTabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scaler = MediaQuery.textScalerOf(context);
+    final verticalPad = scaler.scale(10.0).clamp(8.0, 16.0);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -571,7 +607,7 @@ class RaiDriverPoolTabBar extends StatelessWidget {
                 onTap: () => onChanged(i),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  padding: EdgeInsets.symmetric(vertical: verticalPad),
                   decoration: BoxDecoration(
                     color: selected
                         ? (isDark
@@ -588,7 +624,7 @@ class RaiDriverPoolTabBar extends StatelessWidget {
                   child: Text(
                     labels[i],
                     textAlign: TextAlign.center,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: selected
@@ -601,6 +637,7 @@ class RaiDriverPoolTabBar extends StatelessWidget {
                       fontWeight:
                           selected ? FontWeight.w800 : FontWeight.w600,
                       fontSize: 11.5,
+                      height: 1.15,
                     ),
                   ),
                 ),
