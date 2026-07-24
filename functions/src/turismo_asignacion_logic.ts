@@ -197,6 +197,73 @@ export function capacidadDesdeVehiculoMap(v: AnyMap, tipoFallback: string): numb
   return capacidadPorTipoVehiculo(t);
 }
 
+export function labelTipoVehiculoTurismo(codigo: string): string {
+  switch (normalizarCodigoTipoTurismo(codigo, codigo)) {
+    case "jeepeta":
+      return "Jeepeta Turismo";
+    case "minivan":
+      return "Minivan Turismo";
+    case "bus":
+      return "Bus Turismo";
+    case "carro":
+    default:
+      return "Carro Turismo";
+  }
+}
+
+export function labelsVehiculosAprobadosEnChofer(choferData: AnyMap): string[] {
+  const vehiculos = choferData.vehiculos;
+  if (!Array.isArray(vehiculos)) return [];
+  const out: string[] = [];
+  for (const v of vehiculos) {
+    if (!v || typeof v !== "object") continue;
+    const map = v as AnyMap;
+    const t = normalizarCodigoTipoTurismo(map.tipo, map.tipoLabel);
+    if (t) out.push(labelTipoVehiculoTurismo(t));
+  }
+  return out;
+}
+
+export function evaluarVehiculoTurismoEnChofer(args: {
+  choferData: AnyMap;
+  vData: AnyMap;
+}): { ok: boolean; vehiculo: AnyMap | null; mensaje?: string } {
+  const subtipo = subtipoTurismoRequeridoDesdeViaje(args.vData);
+  const pasajeros = pasajerosRequeridos(args.vData);
+  const reqLabel = labelTipoVehiculoTurismo(subtipo);
+  const suyos = labelsVehiculosAprobadosEnChofer(args.choferData);
+
+  const veh = vehiculoQueCoincide(args.choferData.vehiculos, subtipo);
+  if (!veh) {
+    const suyosTxt =
+      suyos.length === 0
+        ? "ninguno registrado en tu perfil de turismo"
+        : suyos.join(", ");
+    return {
+      ok: false,
+      vehiculo: null,
+      mensaje:
+        `Este viaje pidió ${reqLabel}. Tus vehículos aprobados: ${suyosTxt}. ` +
+        "Si tienes el vehículo correcto, actualiza tu solicitud de chofer turismo.",
+    };
+  }
+
+  const cap = capacidadDesdeVehiculoMap(veh, subtipo);
+  if (cap < pasajeros) {
+    const tipoLabel = labelTipoVehiculoTurismo(String(veh.tipo ?? subtipo));
+    return {
+      ok: false,
+      vehiculo: null,
+      mensaje:
+        `Este viaje requiere ${pasajeros} pasajero(s). ` +
+        `Tu ${tipoLabel} aprobado(a) admite hasta ${cap}. ` +
+        "Revisa los datos de tu vehículo en tu perfil de turismo.",
+    };
+  }
+
+  return { ok: true, vehiculo: veh };
+}
+
 export function vehiculoQueCoincide(
   vehiculos: unknown,
   tipoReq: string,

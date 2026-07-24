@@ -1470,10 +1470,17 @@ class ViajesRepo {
       final snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe');
       final d = snap.data()!;
-      if ((d['uidTaxista'] ?? '') != uidTaxista) {
+      final String asignado = (d['uidTaxista'] ?? d['taxistaId'] ?? '')
+          .toString()
+          .trim();
+      if (asignado.isEmpty || asignado != uidTaxista) {
         throw Exception('No autorizado');
       }
       final String estado = (d['estado'] ?? '').toString();
+      if (estado == EstadosViaje.enCaminoPickup ||
+          EstadosViaje.esEnCaminoPickup(estado)) {
+        return;
+      }
       if (!EstadosViaje.puedeTransicionar(
           estado, EstadosViaje.enCaminoPickup)) {
         throw Exception('Estado inválido para en_camino_pickup');

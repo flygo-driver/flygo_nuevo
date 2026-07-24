@@ -93,8 +93,11 @@ service cloud.firestore {
     }
 
     /// taxista o driver (misma convención que la app y Cloud Functions).
+    /// Usa [rolUsuarioSesion] para incluir rol en `roles/{uid}` si falta en `usuarios`.
     function esRolChoferEnSesion() {
-      return isAuth() && (myRole() == "taxista" || myRole() == "driver");
+      return isAuth() && (
+        rolUsuarioSesion() == "taxista" || rolUsuarioSesion() == "driver"
+      );
     }
 
     /// Pedido = solo cliente publica; Oferta «Voy para» = solo chofer publica.

@@ -896,6 +896,13 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     if (res == 'chofer-turismo-no-aprobado') {
       return AsignacionTurismoRepo.mensajeNoAutorizadoPoolTurismo;
     }
+    if (res.startsWith('Este viaje pidió') ||
+        res.startsWith('Este viaje requiere')) {
+      return res;
+    }
+    if (res == 'vehiculo-turismo-no-compatible') {
+      return AsignacionTurismoRepo.mensajeVehiculoNoCompatiblePoolTurismo;
+    }
     return taxistaMensajeClaimFallido(res);
   }
 
@@ -1286,6 +1293,15 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
           if (_ocultosPoolLocal.contains(d.id)) continue;
           if (usandoFallback && !filtroLocalSiFallback(data)) continue;
           if (!_disponibleParaMiPool(data, myUid)) continue;
+
+          if (choferData != null && choferData.isNotEmpty) {
+            final evalPool =
+                AsignacionTurismoRepo.evaluarVehiculoTurismoParaViaje(
+              choferData: choferData,
+              rawViaje: data,
+            );
+            if (!evalPool.ok) continue;
+          }
 
           final v = Viaje.fromMap(d.id, Map<String, dynamic>.from(data));
 

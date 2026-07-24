@@ -21,6 +21,7 @@ import {
   metodoPagoNormalizadoDesde,
 } from "./liquidacion_semanal_viaje.js";
 import { assertTaxistaAptoParaClaimPool } from "./taxista_operacion_gate.js";
+import { evaluarVehiculoTurismoEnChofer } from "./turismo_asignacion_logic.js";
 import {
   PREPAGO_INSUFICIENTE_COMISION_VIAJE,
   prepagoInsuficienteParaViajeEfectivo,
@@ -1647,11 +1648,21 @@ export const aceptarViajeSeguro = onCall(async (request) => {
     const poolModo = poolModoConductorFromUser(uData);
     const viajeTipo = String(d.tipoServicio ?? "normal");
     const esTurismoPool = esTurismoPoolTomable(d);
+    let vehTurismoAsignado: AnyMap | null = null;
     if (esTurismoPool) {
       const choferSnap = await tx.get(db().collection("choferes_turismo").doc(uidActor));
-      if (!choferTurismoEstadoOperativo((choferSnap.data() as AnyMap | undefined)?.estado)) {
+      const choferData = (choferSnap.data() ?? {}) as AnyMap;
+      if (!choferTurismoEstadoOperativo(choferData.estado)) {
         throw new HttpsError("failed-precondition", "chofer-turismo-no-aprobado");
       }
+      const evalVeh = evaluarVehiculoTurismoEnChofer({ choferData, vData: d });
+      if (!evalVeh.ok) {
+        throw new HttpsError(
+          "failed-precondition",
+          evalVeh.mensaje ?? "vehiculo-turismo-no-compatible",
+        );
+      }
+      vehTurismoAsignado = evalVeh.vehiculo;
     } else if (!viajeCoincideModoConductor(viajeTipo, poolModo)) {
       throw new HttpsError("failed-precondition", "tipo-servicio-no-coincide");
     }
@@ -1659,8 +1670,12 @@ export const aceptarViajeSeguro = onCall(async (request) => {
     const uidCliente = String(d.uidCliente ?? d.clienteId ?? "").trim();
 
     const tel = telefono || String(uData.telefono ?? "");
-    const placaFinal = placa || String(uData.placa ?? "");
-    const tipo = tipoVehiculo || String(uData.tipoVehiculo ?? "");
+    const placaFinal =
+      placa ||
+      String(vehTurismoAsignado?.placa ?? uData.placa ?? "");
+    const tipo =
+      tipoVehiculo ||
+      String(vehTurismoAsignado?.tipo ?? uData.tipoVehiculo ?? "");
     const marca = String(uData.marca ?? uData.vehiculoMarca ?? "");
     const modelo = String(uData.modelo ?? uData.vehiculoModelo ?? "");
     const color = String(uData.color ?? uData.vehiculoColor ?? "");

@@ -5,6 +5,7 @@ import {
   choferEstadoOperativo,
   estadoPermiteAutoAsignacionTurismo,
   estadoPermiteLiberarAlPool,
+  evaluarVehiculoTurismoEnChofer,
   filtrarCandidatoTurismo,
   pasajerosRequeridos,
   subtipoTurismoRequeridoDesdeViaje,
@@ -120,4 +121,35 @@ test("subtipoTurismoRequeridoDesdeViaje: codigo vehiculo en subtipoTurismo", () 
     }),
     "jeepeta",
   );
+});
+
+test("evaluarVehiculoTurismoEnChofer: rechaza carro si pidieron jeepeta", () => {
+  const evalRes = evaluarVehiculoTurismoEnChofer({
+    choferData: {
+      estado: "aprobado",
+      vehiculos: [{ tipo: "carro", placa: "ABC123", capacidad: 4 }],
+    },
+    vData: {
+      subtipoTurismo: "jeepeta",
+      tipoVehiculoOriginal: "Jeepeta Turismo",
+    },
+  });
+  assert.equal(evalRes.ok, false);
+  assert.match(evalRes.mensaje ?? "", /pidió Jeepeta Turismo/i);
+  assert.match(evalRes.mensaje ?? "", /Carro Turismo/i);
+});
+
+test("evaluarVehiculoTurismoEnChofer: acepta jeepeta con capacidad suficiente", () => {
+  const evalRes = evaluarVehiculoTurismoEnChofer({
+    choferData: {
+      estado: "aprobado",
+      vehiculos: [{ tipo: "jeepeta", placa: "JEP001", capacidad: 6 }],
+    },
+    vData: {
+      subtipoTurismo: "jeepeta",
+      extras: { pasajeros: 4 },
+    },
+  });
+  assert.equal(evalRes.ok, true);
+  assert.equal(evalRes.vehiculo?.placa, "JEP001");
 });

@@ -84,14 +84,33 @@ String? viajeFlujoOrientacionMensajeTaxista({
       if (!navegacionDestinoIniciada) {
         return 'Desliza la hoja y toca «Navegar a la parada» o «Navegar al destino final».';
       }
-      return null;
+      return 'Confirma cada parada con «Llegué — siguiente destino» antes de finalizar.';
     }
     if (!navegacionDestinoIniciada) {
       return 'Desliza la hoja hacia arriba y toca «Navegar al destino».';
     }
+    return 'Al llegar al destino, toca «Finalizar viaje».';
   }
 
   return null;
+}
+
+/// Paso 1: solo «Navegar hacia el cliente».
+bool taxistaMostrarNavegarPickup(bool navegacionPickupIniciada) =>
+    !navegacionPickupIniciada;
+
+/// Paso 2: «Cliente a bordo» solo después de abrir navegación al pickup.
+bool taxistaMostrarClienteAbordo(bool navegacionPickupIniciada) =>
+    navegacionPickupIniciada;
+
+/// En `en_curso`: «Finalizar» solo tras «Navegar al destino» (o multiparada completa).
+bool taxistaMostrarFinalizarViaje({
+  required bool navegacionDestinoIniciada,
+  required bool esMultiparada,
+  required bool multiparadaRutaCompleta,
+}) {
+  if (esMultiparada) return multiparadaRutaCompleta;
+  return navegacionDestinoIniciada;
 }
 
 String? viajeFlujoOrientacionMensajeCliente({

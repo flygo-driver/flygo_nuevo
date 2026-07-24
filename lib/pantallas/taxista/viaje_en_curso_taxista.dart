@@ -1826,6 +1826,53 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   // ===================== Acciones Principales =====================
 
+  /// Marca `en_camino_pickup` sin bloquear Waze/Maps si Firestore rechaza el write.
+  Future<void> _intentarMarcarEnCaminoPickupBestEffort(
+    Viaje v,
+    String uid,
+  ) async {
+    try {
+      await ViajesRepo.marcarEnCaminoPickup(
+        viajeId: v.id,
+        uidTaxista: uid,
+      );
+    } on FirebaseException catch (e, st) {
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'viaje_en_curso_taxista: marcarEnCaminoPickup best-effort',
+      );
+      if (!mounted) return;
+      if (e.code == 'permission-denied') {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No se pudo actualizar el estado en el servidor. '
+                'Puedes abrir Waze/Maps igual; si persiste, contacta soporte.',
+              ),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        });
+      }
+    } catch (e, st) {
+      final msg = e.toString().toLowerCase();
+      if (msg.contains('estado inválido') ||
+          msg.contains('estado invalido') ||
+          msg.contains('estado inválido para en_camino_pickup') ||
+          msg.contains('estado invalido para en_camino_pickup')) {
+        return;
+      }
+      await ErrorReporting.reportError(
+        e,
+        stack: st,
+        context: 'viaje_en_curso_taxista: marcarEnCaminoPickup best-effort',
+      );
+    }
+  }
+
   Future<void> _iniciarNavegacionPickup(Viaje v) async {
     if (_actionBusy) return;
     _actionBusy = true;
@@ -1851,28 +1898,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       }
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (!yaEnCaminoPickup) {
-        if (uid != null) {
-          try {
-            await ViajesRepo.marcarEnCaminoPickup(
-              viajeId: v.id,
-              uidTaxista: uid,
-            );
-          } catch (e) {
-            // Robustez: si el backend ya está en `en_camino_pickup`,
-            // `marcarEnCaminoPickup` puede lanzar "Estado inválido".
-            // No bloqueamos la navegación por esto.
-            final msg = e.toString().toLowerCase();
-            if (msg.contains('estado inválido') ||
-                msg.contains('estado invalido') ||
-                msg.contains('estado inválido para en_camino_pickup') ||
-                msg.contains('estado invalido para en_camino_pickup')) {
-              // Continuar: la navegación puede abrirse igual.
-            } else {
-              rethrow;
-            }
-          }
-        }
+      if (!yaEnCaminoPickup && uid != null) {
+        await _intentarMarcarEnCaminoPickupBestEffort(v, uid);
       }
 
       final gpsOk = await _gpsListoParaAbrirNavegacionExterna(v);
@@ -4434,11 +4461,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ),
         ),
         const SizedBox(height: 16),
-        if (!_navegacionIniciada) ...[
+        if (taxistaMostrarNavegarPickup(_navegacionIniciada)) ...[
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: () => _iniciarNavegacionPickup(v),
+              onPressed:
+                  _actionBusy ? null : () => _iniciarNavegacionPickup(v),
               icon: const Icon(Icons.navigation, size: 24),
               label: const Text(
                 'Navegar hacia el cliente',
@@ -4480,11 +4508,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               ),
             ),
           ],
-        ] else ...[
+        ] else if (taxistaMostrarClienteAbordo(_navegacionIniciada)) ...[
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: () => _marcarClienteAbordo(v),
+              onPressed: _actionBusy ? null : () => _marcarClienteAbordo(v),
               icon: const Icon(Icons.person_add, size: 24),
               label: const Text(
                 'Cliente a bordo (paso 2)',
@@ -4686,84 +4714,35 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 }
               },
             ),
-          if (_esMultiparada(v)) ..._bloqueNavegacionMultiparada(v),
           const SizedBox(height: 12),
           Row(
-            children: [
-              _btnSecundario(
-                icon: const Icon(Icons.person, size: 20),
-                label: const Text('Ver cliente'),
-                onPressed: uidCli.isEmpty
-                    ? null
-                    : () => _verInfoCliente(uidCliente: uidCli),
-              ),
-              const SizedBox(width: 12),
-              _btnSecundario(
-                icon: const Icon(Icons.chat, size: 20),
-                label: const Text('Contactar'),
-                onPressed: uidCli.isEmpty
-                    ? null
-                    : () =>
-                        _contactarCliente(uidCliente: uidCli, viajeId: v.id),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
-          const SizedBox(height: 12),
-          if (!_esMultiparada(v)) ...[
-            Text(
-              'Si ya estás en destino o el sistema no pasó a «en ruta», podés finalizar '
-              'igual: se usa la misma facturación que con «FINALIZAR» en viaje en curso '
-              '(motor, turismo o programado).',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.62),
-                fontSize: 12.5,
-                height: 1.35,
-              ),
+          children: [
+            _btnSecundario(
+              icon: const Icon(Icons.person, size: 20),
+              label: const Text('Ver cliente'),
+              onPressed: uidCli.isEmpty
+                  ? null
+                  : () => _verInfoCliente(uidCliente: uidCli),
             ),
-            const SizedBox(height: 12),
-            _ConfirmarTransferenciaTaxistaButton(
-              viajeId: v.id,
-              metodoPagoFallback: v.metodoPago,
-            ),
-            if (_permitePruebaSinRecorrido(v)) ...[
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  _hintPruebaSinRecorrido(v, trasIniciarRuta: true),
-                  style: TextStyle(
-                    color: Colors.deepOrangeAccent.withValues(alpha: 0.95),
-                    fontSize: 11.5,
-                    height: 1.35,
-                  ),
-                ),
-              ),
-            ],
-            _btnFinalizarViaje(
-              onPressed: _actionBusy ? null : () => _finalizarViaje(v),
-              label: _labelFinalizarViaje(v),
-            ),
-          ] else ...[
-            Text(
-              'Viaje multiparada: iniciá la ruta y confirmá cada parada con '
-              '«Llegué — siguiente destino» antes de finalizar.',
-              style: TextStyle(
-                color: Colors.orangeAccent.withValues(alpha: 0.95),
-                fontSize: 12.5,
-                height: 1.35,
-                fontWeight: FontWeight.w600,
-              ),
+            const SizedBox(width: 12),
+            _btnSecundario(
+              icon: const Icon(Icons.chat, size: 20),
+              label: const Text('Contactar'),
+              onPressed: uidCli.isEmpty
+                  ? null
+                  : () =>
+                      _contactarCliente(uidCliente: uidCli, viajeId: v.id),
             ),
           ],
-          const SizedBox(height: 12),
-          Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
-          const SizedBox(height: 12),
-          const Text(
-            'Cancelación bloqueada: el cliente ya está a bordo.',
-            style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
-          ),
-        ];
+        ),
+        const SizedBox(height: 12),
+        Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
+        const SizedBox(height: 12),
+        const Text(
+          'Cancelación bloqueada: el cliente ya está a bordo.',
+          style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
+        ),
+      ];
       }
 
       return [
@@ -5029,9 +5008,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ),
           const SizedBox(height: 12),
         ],
-        if (_navegacionDestinoIniciada ||
-            !_permitePruebaSinRecorrido(v) ||
-            _esMultiparada(v)) ...[
+        if (taxistaMostrarFinalizarViaje(
+          navegacionDestinoIniciada: _navegacionDestinoIniciada,
+          esMultiparada: _esMultiparada(v),
+          multiparadaRutaCompleta: _multiparadaRutaCompleta(v),
+        )) ...[
           _btnFinalizarViaje(
             onPressed: (_actionBusy || !_puedeFinalizarViajeMultiparada(v))
                 ? null

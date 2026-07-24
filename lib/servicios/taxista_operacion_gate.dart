@@ -199,10 +199,17 @@ String taxistaMensajeClaimFallido(
       return poolModoConductor == TaxistaPoolModoConductor.motor
           ? 'Este viaje es de carro/taxi. Tu perfil es de motores.'
           : 'Este viaje es de motores. Tu perfil es vehículo.';
+    case 'vehiculo-turismo-no-compatible':
+      return 'Tu vehículo aprobado no coincide con lo que pidió este viaje turístico. '
+          'Revisa tu perfil de chofer turismo.';
     case 'no-puede-recibir-viajes':
       return 'Tu cuenta no está habilitada para recibir viajes. '
           'Si ya tienes documentos aprobados, contacta administración.';
     default:
+      if (res.startsWith('Este viaje pidió') ||
+          res.startsWith('Este viaje requiere')) {
+        return res;
+      }
       if (res.startsWith('permiso:')) {
         return 'No se pudo aceptar (permisos). Intenta de nuevo o contacta soporte.';
       }
