@@ -731,7 +731,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
         _OfertaPoolPendiente(
           id: key,
           data: null,
-          titulo: 'Nueva oferta · Ahorra',
+          titulo: 'Nuevo pedido · Ahorra',
           cuerpo: '$origen → $destino',
         ),
       );
@@ -1072,13 +1072,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     return docId;
   }
 
-  /// Nueva publicación en tablero Bola (abierta y no es la mía).
+  /// Nueva publicación en tablero Bola (pedido de pasajero, abierta y no es la mía).
   bool _bolaDisparaTimbre(Map<String, dynamic> m, String myUid) {
     final estado = (m['estado'] ?? '').toString();
     if (estado != 'abierta') return false;
     final owner = (m['createdByUid'] ?? '').toString();
     if (owner.isNotEmpty && owner == myUid) return false;
-    return true;
+    final tipo = (m['tipo'] ?? '').toString().trim().toLowerCase();
+    return tipo == 'pedido';
   }
 
   /// Pool “real”: ya hay tarifa (>0). Usado para la notificación en bandeja; el timbre in-app suena antes si hace falta.

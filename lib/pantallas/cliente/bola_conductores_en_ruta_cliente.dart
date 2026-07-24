@@ -78,6 +78,7 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                         m,
                         user.uid,
                         bolaId: d.id,
+                        rol: 'cliente',
                       );
                     }).toList();
 

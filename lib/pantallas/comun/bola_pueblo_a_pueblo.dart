@@ -330,6 +330,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                               d.data(),
                               user.uid,
                               bolaId: d.id,
+                              rol: rol,
                             );
                           }).toList();
                           final bool taxistaPubAbierta = esTaxista &&

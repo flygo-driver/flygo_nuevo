@@ -238,6 +238,7 @@ class BolaPuebloDisponibleTab extends StatelessWidget {
                 d.data(),
                 user.uid,
                 bolaId: d.id,
+                rol: rol,
               );
             }).toList();
 

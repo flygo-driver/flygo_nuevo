@@ -547,13 +547,53 @@ class BolaPuebloRepo {
     return null;
   }
 
-  /// Tablero visible para este usuario.
+  static bool _esRolTaxista(String rol) {
+    final String r = rol.trim().toLowerCase();
+    return r == 'taxista' || r == 'driver';
+  }
+
+  static bool _esRolCliente(String rol) {
+    final String r = rol.trim().toLowerCase();
+    return r == 'cliente' || r.isEmpty;
+  }
+
+  static bool _esParticipanteBola(Map<String, dynamic> m, String uid) {
+    final String u = uid.trim();
+    if (u.isEmpty) return false;
+    final String ownerUid = (m['createdByUid'] ?? '').toString().trim();
+    final String uidTx = (m['uidTaxista'] ?? '').toString().trim();
+    final String uidCli = (m['uidCliente'] ?? '').toString().trim();
+    return ownerUid == u || uidTx == u || uidCli == u;
+  }
+
+  /// Tablero visible para este usuario según rol y tipo de publicación.
+  ///
+  /// - [pedido] (cliente): lo ven taxistas y el dueño.
+  /// - [oferta] (conductor): lo ven clientes y el dueño.
   static bool visibleEnTableroParaUsuario(
     Map<String, dynamic> m,
     String uid, {
     String? bolaId,
+    String? rol,
   }) {
-    return visibleEnTablero(m, uid, bolaId: bolaId);
+    if (!visibleEnTablero(m, uid, bolaId: bolaId)) return false;
+
+    final String u = uid.trim();
+    if (u.isEmpty) return false;
+    if (_esParticipanteBola(m, u)) return true;
+
+    final String r = (rol ?? '').trim().toLowerCase();
+    if (r == 'admin') return true;
+
+    final String estado = (m['estado'] ?? '').toString().trim();
+    if (estado == 'en_curso' || estado == 'acordada') return false;
+
+    if (estado != 'abierta') return false;
+
+    final String tipo = (m['tipo'] ?? '').toString().trim().toLowerCase();
+    if (tipo == 'pedido') return _esRolTaxista(r);
+    if (tipo == 'oferta') return _esRolCliente(r) && !_esRolTaxista(r);
+    return false;
   }
 
   static Future<void> _marcarOfertasRetiradas(
