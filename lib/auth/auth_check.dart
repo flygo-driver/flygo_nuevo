@@ -6,8 +6,11 @@ import 'package:flygo_nuevo/auth/rai_identity_resolve.dart'
     show RaiIdentityResolve, kQaAllowAnonOnAuthError, kQaFlexibleAccess;
 import 'package:flygo_nuevo/auth/rai_identity_router.dart';
 import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
+import 'package:flygo_nuevo/pantallas/corporativo/corporativo_hub_page.dart';
+import 'package:flygo_nuevo/servicios/post_auth_navigation.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/rai_linear_loading_body.dart';
+import 'package:flygo_nuevo/widgets/verify_email_gate.dart';
 
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
@@ -72,6 +75,17 @@ class _AuthCheckState extends State<AuthCheck> {
 
       final dest = await RaiIdentityRouter.buildDestinationForAuthCheck(user);
       if (!mounted) return;
+
+      final postRoute = await PostAuthNavigation.consumeRoute();
+      if (postRoute == '/corporativo') {
+        _go(
+          const VerifyEmailGate(
+            childWhenVerified: CorporativoHubPage(),
+          ),
+        );
+        return;
+      }
+
       _go(dest);
     } on FirebaseAuthException catch (e) {
       if (e.code == 'role-mismatch') {

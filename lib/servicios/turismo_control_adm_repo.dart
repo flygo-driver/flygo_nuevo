@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
+
 /// Mensajes cliente → operaciones turismo ADM y consultas del radar en vivo.
 class TurismoControlAdmRepo {
   TurismoControlAdmRepo._();
@@ -42,6 +44,24 @@ class TurismoControlAdmRepo {
         .where('viajeId', isEqualTo: viajeId.trim())
         .orderBy('createdAt', descending: false)
         .limit(40)
+        .snapshots();
+  }
+
+  /// Cliente: historial de sus mensajes a operaciones en este viaje.
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamMensajesClienteViaje(
+    String viajeId,
+  ) {
+    final User? user = FirebaseAuth.instance.currentUser;
+    final String uid = user?.uid.trim() ?? '';
+    if (uid.isEmpty) {
+      return const Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
+    }
+    return _db
+        .collection(coleccionMensajes)
+        .where('viajeId', isEqualTo: viajeId.trim())
+        .where('uidCliente', isEqualTo: uid)
+        .orderBy('createdAt', descending: false)
+        .limit(20)
         .snapshots();
   }
 
@@ -106,6 +126,11 @@ class TurismoControlAdmRepo {
       'clienteNombre': clienteNombre,
       'mensaje': texto,
       'ruta': ruta,
+      'subtipoTurismo':
+          (v['subtipoTurismo'] ?? '').toString().trim(),
+      'vehiculoRequerido': AsignacionTurismoRepo
+          .etiquetaVehiculoRequeridoDesdeViaje(v),
+      'canalAsignacion': (v['canalAsignacion'] ?? 'admin').toString(),
       'origenPantalla': origenPantalla,
       'leidoPorAdm': false,
       'createdAt': FieldValue.serverTimestamp(),

@@ -8,6 +8,7 @@ import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 
 class BolaPuebloCrearPublicacionResult {
   const BolaPuebloCrearPublicacionResult({
@@ -120,10 +121,10 @@ class _BolaPuebloCrearPublicacionFlowState
     );
     if (!mounted) return;
     if (d == null) return;
-    final t = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(_fecha),
-      builder: (c, child) => Theme(data: pickerTheme, child: child!),
+    final t = await elegirHoraAmPm(
+      context,
+      initial: TimeOfDay.fromDateTime(_fecha),
+      wrapChild: (c, child) => Theme(data: pickerTheme, child: child),
     );
     if (!mounted) return;
     if (t == null) return;

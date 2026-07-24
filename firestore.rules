@@ -66,8 +66,22 @@ service cloud.firestore {
       );
     }
 
+    /// taxista o driver (misma convención que la app y Cloud Functions).
+    /// Usa rolUsuarioSesion: usuarios.rol o fallback roles/{uid} (como getRole en CF).
+    function esRolChoferEnSesion() {
+      return isAuth() && (
+        rolUsuarioSesion() == "taxista" || rolUsuarioSesion() == "driver"
+      );
+    }
+
     function isTaxista() {
-      return isAuth() && (myRole() == "taxista");
+      return isAuth() && rolUsuarioSesion() == "taxista";
+    }
+
+    /// Chofer habilitado en el pool corporativo (lectura de logo/nombre empresa).
+    function esChoferCorporativoAprobado() {
+      return isTaxista() &&
+        exists(/databases/$(database)/documents/choferes_corporativos/$(request.auth.uid));
     }
 
     /// PR2: sin escritura legacy en pagos_taxistas (solo lectura histórica).
@@ -81,6 +95,23 @@ service cloud.firestore {
       return isAuth() && rolUsuarioSesion() == "cliente";
     }
 
+    function esEncargadoCorporativo(empId) {
+      return isAuth() &&
+        exists(/databases/$(database)/documents/empresas_corporativas/$(empId)) &&
+        get(/databases/$(database)/documents/empresas_corporativas/$(empId)).data.keys().hasAny(['encargadoUids']) &&
+        get(/databases/$(database)/documents/empresas_corporativas/$(empId)).data.encargadoUids is list &&
+        request.auth.uid in get(/databases/$(database)/documents/empresas_corporativas/$(empId)).data.encargadoUids;
+    }
+
+    /// Lectura de doc empresa (get/list): usa resource para que el query
+    /// arrayContains:encargadoUids no dé permission-denied.
+    function esEncargadoCorporativoResource() {
+      return isAuth() &&
+        resource.data.keys().hasAny(['encargadoUids']) &&
+        resource.data.encargadoUids is list &&
+        request.auth.uid in resource.data.encargadoUids;
+    }
+
     /// Crear viaje pasajero: dueño autenticado (no admin). Cuentas conductor también
     /// pueden pedir viaje en la app pasajero (Play unificado / mismo uid).
     function puedeCrearViajeComoCliente() {
@@ -90,14 +121,6 @@ service cloud.firestore {
         request.resource.data.uidTaxista == "" &&
         request.resource.data.taxistaId == "" &&
         rolUsuarioSesion() != "admin";
-    }
-
-    /// taxista o driver (misma convención que la app y Cloud Functions).
-    /// Usa [rolUsuarioSesion] para incluir rol en `roles/{uid}` si falta en `usuarios`.
-    function esRolChoferEnSesion() {
-      return isAuth() && (
-        rolUsuarioSesion() == "taxista" || rolUsuarioSesion() == "driver"
-      );
     }
 
     /// Pedido = solo cliente publica; Oferta «Voy para» = solo chofer publica.
@@ -152,6 +175,56 @@ service cloud.firestore {
         taxistaDocsEstadoDe(uid) == "aprobado" &&
         u.contratoTaxistaAceptado == true &&
         !(u.bloqueado == true);
+    }
+
+    function esViajeCorporativoDocData() {
+      return resource.data.corporativo == true ||
+        resource.data.canalAsignacion == "corporativo_fijo" ||
+        (resource.data.categoria is string &&
+          resource.data.categoria == "corporativo") ||
+        resource.data.recaudoDestino == "empresa_corporativa";
+    }
+
+    function esChoferCorporativoDelViaje() {
+      return request.auth.uid == resource.data.uidTaxista ||
+        request.auth.uid == resource.data.taxistaId ||
+        request.auth.uid == resource.data.corporativoChoferPreferidoUid ||
+        request.auth.uid == resource.data.corporativoChoferAsignadoUid;
+    }
+
+    /// Chofer corporativo en pantalla «Elige tu destino» (paradas, Maps, sin PIN).
+    function esPatchRutaCorpInformativaChofer() {
+      return esRolChoferEnSesion() &&
+        esViajeCorporativoDocData() &&
+        esChoferCorporativoDelViaje() &&
+        viajeNoTocaCamposFinancierosProtegidos() &&
+        changedOnly([
+          "corporativoModoInformativo",
+          "corporativoParadasHechas",
+          "corporativoParadasAbiertas",
+          "corporativoParadaActualIdx",
+          "corporativoParadaAbiertaEn",
+          "corporativoParadaActualizadaEn",
+          "corporativoRecogidaAbierta",
+          "corporativoRecogidaAbiertaEn",
+          "corporativoLlegadaEmpresaEn",
+          "multiparadaLegsTotal",
+          "multiparadaLegCompletadas",
+          "multiparadaCompleta",
+          "clienteAbordo",
+          "pickupConfirmadoEn",
+          "estado",
+          "extras",
+          "updatedAt",
+          "actualizadoEn"
+        ]) &&
+        request.resource.data.estado != "completado" &&
+        request.resource.data.completado != true &&
+        (
+          !(request.resource.data.estado in ["en_curso", "encurso"]) ||
+          resource.data.corporativoModoInformativo == true ||
+          request.resource.data.corporativoModoInformativo == true
+        );
     }
 
     function changedOnly(allowed) {
@@ -338,7 +411,8 @@ service cloud.firestore {
       return obj.keys().hasAll(keys);
     }
 
-    // Anti‑fraude: no cancelar/liberar desde app una vez a bordo o en curso (cliente → cancelado; taxista → pendiente republicado).
+    // Anti‑fraude: no cancelar/liberar desde app una vez a bordo o en curso.
+    // Cliente → cancelado; taxista → cancelado (ya no se republica a pendiente).
     function viajeEstadoActual() {
       return 'estado' in resource.data ? resource.data.estado : '';
     }
@@ -356,12 +430,17 @@ service cloud.firestore {
     function esDuenoClienteDelViaje() {
       return isAuth() && (
         resource.data.uidCliente == request.auth.uid ||
-        resource.data.clienteId == request.auth.uid
+        resource.data.clienteId == request.auth.uid ||
+        resource.data.uid == request.auth.uid
       );
     }
 
     function taxistaIntentaRepublicarPendiente() {
       return 'estado' in request.resource.data && request.resource.data.estado == 'pendiente';
+    }
+
+    function taxistaIntentaMarcarCancelado() {
+      return 'estado' in request.resource.data && request.resource.data.estado == 'cancelado';
     }
 
     // Rol auxiliar (GoogleAuth / admin). Sin esta regla, el catch-all denegaba la lectura y el login con Google fallaba después de Auth.
@@ -389,7 +468,8 @@ service cloud.firestore {
           "aceptacionTerminos",
           "phoneVerified", "lastPhoneReauthAt",
           "registroClienteCompleto",
-          "verificacionIdentidadEn", "verificacionIdentidadUrl"
+          "verificacionIdentidadEn", "verificacionIdentidadUrl",
+          "empresaCorporativaId", "empresaCorporativaNombre"
         ]);
       // Disponibilidad operativa (toggle): aislado de campos de aprobación documental.
       allow update: if isOwner(uid) &&
@@ -465,15 +545,62 @@ service cloud.firestore {
           !("estadoDocumentos" in request.resource.data) ||
           request.resource.data.estadoDocumentos in ["pendiente", "en_revision"]
         );
-      // Firma de contrato conductor (solo aceptación; no revocación desde cliente).
+      // Organizador de giras (sin vehículo): identidad + agencia; sin docs de chofer.
       allow update: if isOwner(uid) &&
-        resource.data.rol == "taxista" &&
+        changedOnly([
+          "nombre", "telefono", "whatsapp", "email", "proveedor", "fotoUrl",
+          "cedula", "ciTaxista", "cedulaFotoUrl", "documentoIdentidadUrl",
+          "agenciaNombre", "agenciaLogoUrl",
+          "bancoNombre", "bancoCuenta", "bancoTipoCuenta", "bancoTitular",
+          "perfilOperador", "tipoServicio", "soloGiras", "rol",
+          "registroTaxistaCompleto", "registroOrganizadorGirasCompleto",
+          "docsEstado", "estadoDocumentos", "documentosCompletos",
+          "puedeRecibirViajes", "disponible",
+          "updatedAt", "actualizadoEn"
+        ]) &&
+        request.resource.data.perfilOperador == "organizador_giras" &&
+        request.resource.data.soloGiras == true &&
+        request.resource.data.puedeRecibirViajes != true &&
+        (
+          !("docsEstado" in request.resource.data) ||
+          request.resource.data.docsEstado in ["no_aplica", "pendiente", "en_revision"]
+        ) &&
+        (
+          !("estadoDocumentos" in request.resource.data) ||
+          request.resource.data.estadoDocumentos in ["no_aplica", "pendiente", "en_revision"]
+        );
+      // Edición de perfil organizador (foto, agencia, banco) tras el registro.
+      allow update: if isOwner(uid) &&
+        resource.data.perfilOperador == "organizador_giras" &&
+        changedOnly([
+          "nombre", "telefono", "whatsapp", "fotoUrl", "email",
+          "agenciaNombre", "agenciaLogoUrl",
+          "bancoNombre", "bancoCuenta", "bancoTipoCuenta", "bancoTitular",
+          "updatedAt", "actualizadoEn"
+        ]);
+      // Firma de contrato conductor (solo aceptación; no revocación desde cliente).
+      // Acepta taxista/driver o rol vacío en onboarding (antes de fijar rol).
+      allow update: if isOwner(uid) &&
+        (
+          !("rol" in resource.data) ||
+          resource.data.rol == "" ||
+          resource.data.rol == "taxista" ||
+          resource.data.rol == "driver"
+        ) &&
         changedOnly([
           "contratoTaxistaAceptado", "contratoTaxistaVersion",
           "contratoTaxistaAceptadoEn", "contratoTaxistaFirmaTipo",
           "updatedAt", "actualizadoEn"
         ]) &&
         request.resource.data.contratoTaxistaAceptado == true;
+      // Firma contrato corporativo (encargado) en su perfil de usuario.
+      allow update: if isOwner(uid) &&
+        changedOnly([
+          "contratoCorporativoAceptado", "contratoCorporativoVersion",
+          "contratoCorporativoEmpresaId", "contratoCorporativoAceptadoEn",
+          "actualizadoEn", "updatedAt"
+        ]) &&
+        request.resource.data.contratoCorporativoAceptado == true;
       allow update: if isAdmin();
       allow delete: if isAdmin();
 
@@ -495,6 +622,30 @@ service cloud.firestore {
           request.resource.data.contentType == 'image/jpeg';
         allow delete: if isOwner(uid) || isAdmin();
       }
+
+      /// Viajes completados y pagados que el chofer quitó de su historial (no borra `viajes`).
+      match /historial_viajes_ocultos/{viajeId} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) &&
+          exists(/databases/$(database)/documents/viajes/$(viajeId)) &&
+          (
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidTaxista == request.auth.uid ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.taxistaId == request.auth.uid
+          ) &&
+          get(/databases/$(database)/documents/viajes/$(viajeId)).data.completado == true &&
+          (
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.liquidado == true ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.estadoPago in ['pagado', 'verificado', 'liquidado'] ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.pagoATaxistaPendiente == false ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.pagoTaxistaPendiente == false ||
+            (
+              'corporativoChoferPagadoEn' in get(/databases/$(database)/documents/viajes/$(viajeId)).data &&
+              get(/databases/$(database)/documents/viajes/$(viajeId)).data.corporativoChoferPagadoEn != null
+            )
+          );
+        allow delete: if isOwner(uid) || isAdmin();
+        allow update: if false;
+      }
     }
 
     match /viajes/{viajeId} {
@@ -508,6 +659,10 @@ service cloud.firestore {
           resource.data.uidTaxista == request.auth.uid ||
           resource.data.taxistaId == request.auth.uid
         )) ||
+        (isAuth() &&
+          esViajeCorporativoDocData() &&
+          resource.data.corporativoEmpresaId is string &&
+          esEncargadoCorporativo(resource.data.corporativoEmpresaId)) ||
         // Pool visible para taxista (no asignado, no turismo/admin)
         (
           (isTaxista() || esRolChoferEnSesion()) &&
@@ -574,6 +729,7 @@ service cloud.firestore {
             "transferenciaReportadaEn",
             "motivoRechazoTransferencia",
             "canceladoPor", "motivoCancelacion", "canceladoClienteEn",
+            "canceladoTaxistaEn", "republicado",
             "reportado",
             "updatedAt", "actualizadoEn"
           ]) &&
@@ -629,61 +785,119 @@ service cloud.firestore {
           request.resource.data.reportado == true
         ) ||
         (
-          esRolChoferEnSesion() &&
+          // Claim pool: exige rol chofer.
+          // Operación ya asignada (GPS / en_camino_pickup): basta ser el uidTaxista del viaje
+          // (aceptarViajeSeguro usa Admin SDK y puede haber rol solo en roles/{uid}).
           (
-            // Toma de viaje desde pool: requiere estar al día.
+            esRolChoferEnSesion() &&
+            taxistaSinDeuda(request.auth.uid) &&
+            taxistaAptoParaClaimPool(request.auth.uid) &&
             (
-              taxistaSinDeuda(request.auth.uid) &&
-              taxistaAptoParaClaimPool(request.auth.uid) &&
-              (
-                (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
-                (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data))
-              ) &&
-              request.resource.data.uidTaxista == request.auth.uid &&
-              request.resource.data.taxistaId == request.auth.uid &&
-              changedOnly([
-                "uidTaxista", "taxistaId", "nombreTaxista",
-                "telefono", "placa", "tipoVehiculo", "tipoVehiculoOriginal",
-                "marca", "modelo", "color",
-                "latTaxista", "lonTaxista", "driverLat", "driverLon",
-                "estado", "aceptado", "rechazado", "activo",
-                "aceptadoEn", "updatedAt", "actualizadoEn",
-                "reservadoPor", "reservadoHasta", "ignoradosPor",
-                "bolaNegociacionAbierta"
-              ])
-            ) ||
-            // Operación de viaje ya asignado (GPS/estado): NO bloquear por deuda.
-            (
-              (resource.data.uidTaxista == request.auth.uid || resource.data.taxistaId == request.auth.uid)
-              &&
-              viajeNoTocaCamposFinancierosProtegidos() &&
-              changedOnly([
-                "estado", "aceptado", "rechazado", "activo",
-                "updatedAt", "actualizadoEn",
-                "latTaxista", "lonTaxista", "driverLat", "driverLon",
-                "pickupConfirmadoEn", "inicioEnRutaEn", "viajeIniciadoEn", "finalizadoEn",
-                "clienteAbordo", "clienteAbordoEn",
-                "codigoVerificacion", "codigoVerificado", "codigoVerificadoEn",
-                "canceladoPor", "canceladoTaxistaEn", "motivoCancelacion",
-                "uidTaxista", "taxistaId", "nombreTaxista",
-                "telefono", "placa", "marca", "modelo", "color",
-                "reservadoPor", "reservadoHasta", "ignoradosPor",
-                "republicado", "completado"
-              ])
-              &&
-              // En curso solo si ya estaba verificado por backend (callable).
-              (!(request.resource.data.estado in ["en_curso", "encurso"]) ||
-                resource.data.codigoVerificado == true)
-              &&
-              request.resource.data.estado != "completado" &&
-              request.resource.data.completado != true
-              &&
-              !(viajeTrasAbordarOEnRuta() && taxistaIntentaRepublicarPendiente())
+              (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
+              (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data))
+            ) &&
+            request.resource.data.uidTaxista == request.auth.uid &&
+            request.resource.data.taxistaId == request.auth.uid &&
+            changedOnly([
+              "uidTaxista", "taxistaId", "nombreTaxista",
+              "telefono", "placa", "tipoVehiculo", "tipoVehiculoOriginal",
+              "marca", "modelo", "color",
+              "latTaxista", "lonTaxista", "driverLat", "driverLon",
+              "estado", "aceptado", "rechazado", "activo",
+              "aceptadoEn", "updatedAt", "actualizadoEn",
+              "reservadoPor", "reservadoHasta", "ignoradosPor",
+              "bolaNegociacionAbierta"
+            ])
+          ) ||
+          // Operación de viaje ya asignado (GPS/estado): NO bloquear por deuda ni por rol vacío.
+          (
+            isAuth() &&
+            (resource.data.uidTaxista == request.auth.uid || resource.data.taxistaId == request.auth.uid)
+            &&
+            viajeNoTocaCamposFinancierosProtegidos() &&
+            changedOnly([
+              "estado", "aceptado", "rechazado", "activo",
+              "updatedAt", "actualizadoEn",
+              "latTaxista", "lonTaxista", "driverLat", "driverLon",
+              "pickupConfirmadoEn", "inicioEnRutaEn", "viajeIniciadoEn", "finalizadoEn",
+              "clienteAbordo", "clienteAbordoEn",
+              "codigoVerificacion", "codigoVerificado", "codigoVerificadoEn",
+              "canceladoPor", "canceladoTaxistaEn", "motivoCancelacion",
+              "uidTaxista", "taxistaId", "nombreTaxista",
+              "telefono", "placa", "marca", "modelo", "color",
+              "reservadoPor", "reservadoHasta", "ignoradosPor",
+              "republicado", "completado", "esAhora"
+            ])
+            &&
+            // En curso solo si ya estaba verificado por backend (callable).
+            (!(request.resource.data.estado in ["en_curso", "encurso"]) ||
+              resource.data.codigoVerificado == true)
+            &&
+            request.resource.data.estado != "completado" &&
+            request.resource.data.completado != true
+            &&
+            !(viajeTrasAbordarOEnRuta() && taxistaIntentaRepublicarPendiente())
+            &&
+            !(viajeTrasAbordarOEnRuta() && taxistaIntentaMarcarCancelado())
+            &&
+            // Ya no se republica: cancelar desde app debe ir a cancelado (CF) o fallar.
+            !(
+              viajeEstadoActual() in [
+                'aceptado',
+                'en_camino_pickup',
+                'enCaminoPickup'
+              ] &&
+              taxistaIntentaRepublicarPendiente()
             )
           )
-        );
+        ) ||
+        (
+          // Abrir ruta corporativa fija (cola → viaje en curso): sin reglas de claim pool.
+          esRolChoferEnSesion() &&
+          esViajeCorporativoDocData() &&
+          esChoferCorporativoDelViaje() &&
+          viajeNoTocaCamposFinancierosProtegidos() &&
+          request.resource.data.uidTaxista == request.auth.uid &&
+          request.resource.data.taxistaId == request.auth.uid &&
+          request.resource.data.aceptado == true &&
+          request.resource.data.activo == true &&
+          request.resource.data.estado in ["aceptado", "en_camino_pickup", "enCaminoPickup"] &&
+          changedOnly([
+            "canalAsignacion",
+            "corporativoChoferAsignadoUid",
+            "uidTaxista", "taxistaId", "nombreTaxista",
+            "telefono", "placa", "tipoVehiculo",
+            "estado", "aceptado", "rechazado", "activo",
+            "aceptadoEn", "updatedAt", "actualizadoEn"
+          ])
+        ) ||
+        esPatchRutaCorpInformativaChofer();
 
       allow delete: if false;
+
+      // Trazabilidad GPS corporativa (chofer durante viaje en curso).
+      match /gps_track/{puntoId} {
+        allow read: if isAdmin() ||
+          (isAuth() && (
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidTaxista == request.auth.uid ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.taxistaId == request.auth.uid ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidCliente == request.auth.uid
+          ));
+        allow create: if isAuth() &&
+          (
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.corporativo == true ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.categoria == "corporativo"
+          ) &&
+          (
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidTaxista == request.auth.uid ||
+            get(/databases/$(database)/documents/viajes/$(viajeId)).data.taxistaId == request.auth.uid
+          ) &&
+          request.resource.data.keys().hasAll(['lat', 'lon', 'timestamp', 'tipo']) &&
+          request.resource.data.lat is number &&
+          request.resource.data.lon is number &&
+          request.resource.data.tipo in ['inicio', 'parada', 'en_ruta', 'fin'];
+        allow update, delete: if false;
+      }
     }
 
     match /pagos/{pagoId} {
@@ -971,13 +1185,26 @@ service cloud.firestore {
     }
 
     // Chat del viaje: doc id == viajeId (ViajesRepo / ChatRepo)
+    function datosViajeChat(viajeId) {
+      return get(/databases/$(database)/documents/viajes/$(viajeId)).data;
+    }
+
+    function esEncargadoDelViajeCorporativo(viajeId) {
+      let v = datosViajeChat(viajeId);
+      let empId = v.corporativoEmpresaId is string ? v.corporativoEmpresaId : "";
+      return empId != "" && esEncargadoCorporativo(empId);
+    }
+
     function esParticipanteViajeChat(viajeId) {
       return isAuth() && exists(/databases/$(database)/documents/viajes/$(viajeId)) &&
         (
-          get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidCliente == request.auth.uid ||
-          get(/databases/$(database)/documents/viajes/$(viajeId)).data.clienteId == request.auth.uid ||
-          get(/databases/$(database)/documents/viajes/$(viajeId)).data.uidTaxista == request.auth.uid ||
-          get(/databases/$(database)/documents/viajes/$(viajeId)).data.taxistaId == request.auth.uid
+          datosViajeChat(viajeId).uidCliente == request.auth.uid ||
+          datosViajeChat(viajeId).clienteId == request.auth.uid ||
+          datosViajeChat(viajeId).uidTaxista == request.auth.uid ||
+          datosViajeChat(viajeId).taxistaId == request.auth.uid ||
+          datosViajeChat(viajeId).corporativoChoferAsignadoUid == request.auth.uid ||
+          datosViajeChat(viajeId).corporativoChoferPreferidoUid == request.auth.uid ||
+          esEncargadoDelViajeCorporativo(viajeId)
         );
     }
 
@@ -1007,6 +1234,25 @@ service cloud.firestore {
       allow read: if isAuth();
       allow create, update: if isAdmin() || (isOwner(uid) && isTaxista());
       allow delete: if isAdmin();
+    }
+
+    match /choferes_corporativos/{uid} {
+      allow read: if isAuth();
+      allow create, update, delete: if isAdmin();
+    }
+
+    /// Panel único tiempo real del chofer corporativo (solo Cloud Functions escribe).
+    match /chofer_operacion/{uid} {
+      allow read: if isAdmin() || isOwner(uid);
+      allow write: if false;
+    }
+
+    match /solicitudes_corporativo/{id} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidChofer == request.auth.uid);
+      allow create: if isAuth() &&
+        request.resource.data.uidChofer == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
 
     match /seguridad/{uid} {
@@ -1191,7 +1437,8 @@ service cloud.firestore {
 
     // Mensajes cliente → operaciones turismo (panel ADM en tiempo real).
     match /turismo_mensajes_adm/{msgId} {
-      allow read: if isAdmin();
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidCliente == request.auth.uid);
       allow create: if isAuth() &&
         request.resource.data.uidCliente == request.auth.uid &&
         request.resource.data.leidoPorAdm == false &&
@@ -1238,6 +1485,129 @@ service cloud.firestore {
     // Auditoría administrativa: solo Cloud Functions (Admin SDK). Clientes nunca leen/escriben.
     match /admin_audit/{docId} {
       allow read, write: if false;
+    }
+
+      match /empresas_corporativas/{empresaId} {
+      // Admin primero (listados globales: Cuentas / Empresas).
+      allow read: if isAdmin();
+      // Encargado: solo su(s) empresa(s).
+      allow read: if esEncargadoCorporativoResource();
+      // Chofer corporativo: logo/nombre en historial y rutas (solo get, no list).
+      allow get: if esChoferCorporativoAprobado();
+      allow create: if isAuth() &&
+        request.resource.data.encargadoUids is list &&
+        request.auth.uid in request.resource.data.encargadoUids &&
+        request.resource.data.contratoActivo == false;
+      // Firma digital B2B del encargado (no activa el servicio; eso es contratoActivo / admin).
+      allow update: if esEncargadoCorporativo(empresaId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'contratoCorporativoAceptado',
+          'contratoCorporativoVersion',
+          'contratoCorporativoAceptadoEn',
+          'contratoCorporativoAceptadoPorUid',
+          'contratoCorporativoFirmaTipo',
+          'actualizadoEn',
+          'updatedAt'
+        ]) &&
+        request.resource.data.contratoCorporativoAceptado == true &&
+        request.resource.data.contratoCorporativoVersion is string &&
+        request.resource.data.contratoCorporativoVersion.size() > 0;
+      // Encargado puede editar datos comerciales + ciclo/forma de pago a RAI.
+      // No toca período abierto, deuda, tarifa, contratoActivo ni encargados.
+      // facturacionCicloDias solo afecta el *próximo* corte (renew/archive en CF).
+      allow update: if isAdmin() || (
+        esEncargadoCorporativo(empresaId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'periodoActual',
+          'activa',
+          'contratoActivo',
+          'contratoDesde',
+          'contratoHasta',
+          'encargadoUids',
+          'ultimoPagoEn',
+          'ultimoPagoReportado',
+          'tarifaViajeContratadaRd',
+          'creadoPorUid',
+          'contratoActivadoEn',
+          'contratoActivadoPorUid',
+          'servicioTipo'
+        ]) &&
+        (
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['facturacionCicloDias']) ||
+          (
+            request.resource.data.facturacionCicloDias is number &&
+            request.resource.data.facturacionCicloDias >= 1 &&
+            request.resource.data.facturacionCicloDias <= 90
+          )
+        ) &&
+        (
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['formaPagoRai']) ||
+          (
+            request.resource.data.formaPagoRai is string &&
+            request.resource.data.formaPagoRai in [
+              '', 'transferencia', 'deposito', 'cheque', 'efectivo', 'otro'
+            ]
+          )
+        )
+      );
+      allow delete: if isAdmin();
+
+      match /plantillas_ruta/{plantillaId} {
+        allow read: if isAdmin() ||
+          esEncargadoCorporativo(empresaId) ||
+          (
+            isTaxista() &&
+            resource.data.choferPreferidoUid == request.auth.uid
+          );
+        allow create: if isAdmin() || (
+          esEncargadoCorporativo(empresaId) &&
+          !request.resource.data.keys().hasAny([
+            'choferPreferidoUid',
+            'choferPreferidoNombre',
+            'choferPreferidoTelefono',
+            'choferAsignadoPerfil',
+            'choferAsignacion',
+          ])
+        );
+        allow update: if isAdmin() || (
+          esEncargadoCorporativo(empresaId) &&
+          request.resource.data.get('choferPreferidoUid', '') ==
+              resource.data.get('choferPreferidoUid', '') &&
+          request.resource.data.get('choferPreferidoNombre', '') ==
+              resource.data.get('choferPreferidoNombre', '') &&
+          request.resource.data.get('choferPreferidoTelefono', '') ==
+              resource.data.get('choferPreferidoTelefono', '')
+        );
+        allow delete: if isAdmin() || esEncargadoCorporativo(empresaId);
+      }
+
+      match /historial/{histId} {
+        allow read, create: if isAdmin() || esEncargadoCorporativo(empresaId);
+        allow update, delete: if isAdmin();
+      }
+
+      match /liquidaciones/{liqId} {
+        allow read: if isAdmin() || esEncargadoCorporativo(empresaId);
+        allow write: if false;
+      }
+
+      // Bauches / pagos reportados por el encargado (escritura solo Cloud Functions).
+      match /pagos_reportados/{pagoId} {
+        allow read: if isAdmin() || esEncargadoCorporativo(empresaId);
+        allow write: if false;
+      }
+
+      match /notificaciones_historial/{notifId} {
+        allow read: if isAdmin() || esEncargadoCorporativo(empresaId);
+        allow write: if false;
+      }
+    }
+
+    match /corporativo_feriados/{yearId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
     }
 
     match /{document=**} {

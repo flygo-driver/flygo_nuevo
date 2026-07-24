@@ -13,6 +13,7 @@ import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
 import 'package:flygo_nuevo/widgets/rai_asistente_launcher.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_config_panel.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
 String _textoPerfilCliente(
   Map<String, dynamic> data, {
@@ -51,16 +52,10 @@ class ClienteCuentaTab extends StatelessWidget {
     final accent = cs.primary;
     final accentSoft = accent.withValues(alpha: isDark ? 0.18 : 0.12);
 
-    return Scaffold(
-      backgroundColor:
-          isDark ? const Color(0xFF0B1020) : const Color(0xFFF4F7FB),
-      appBar: AppBar(
-        title: const Text('Cuenta'),
-        centerTitle: true,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        backgroundColor: Colors.transparent,
-      ),
+    return RaiShellTabScaffold(
+      title: 'Cuenta',
+      backTooltip: 'Inicio',
+      onBack: ShellTabController.clienteIrAInicio,
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
         children: [

@@ -22,3 +22,6 @@ Future<void> abrirTerminosWeb(BuildContext context) =>
 
 Future<void> abrirEliminarCuentaWeb(BuildContext context) =>
     abrirUrlLegal(context, kAccountDeletionPublicUrl);
+
+Future<void> abrirContratoCorporativoWeb(BuildContext context) =>
+    abrirUrlLegal(context, kCorporativoContractPublicUrl);

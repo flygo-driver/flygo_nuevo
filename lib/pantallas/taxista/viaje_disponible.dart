@@ -17,7 +17,7 @@ import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
-import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/disponibilidad_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -31,8 +31,14 @@ import 'package:flygo_nuevo/pantallas/taxista/bola_pueblo_disponible_tab.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/pantallas/taxista/detalle_viaje.dart';
 import 'package:flygo_nuevo/widgets/cliente_perfil_conductor_chip.dart';
+import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
 import 'package:flygo_nuevo/widgets/empty_trips_widget.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
+import 'package:flygo_nuevo/design_system/components/app_balance_card.dart';
+import 'package:flygo_nuevo/design_system/components/app_pool_tab_bar.dart';
+import 'package:flygo_nuevo/design_system/components/pool_viajes_mapa_hero.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
 import 'package:flygo_nuevo/widgets/rai_linear_loading_body.dart';
 import 'package:flygo_nuevo/widgets/rai_pool_offline_hint.dart';
 import 'package:flygo_nuevo/navegacion/taxista_operacion_nav.dart';
@@ -82,24 +88,23 @@ extension _PoolTaxistaTheme on BuildContext {
     Color panelBorder,
   }) get _poolTaxistaPal {
     final t = Theme.of(this);
-    final cs = t.colorScheme;
     final isDark = t.brightness == Brightness.dark;
     if (isDark) {
-      final accent = Colors.greenAccent;
+      const accent = RaiDsColors.neon;
       return (
-        scaffoldBg: cs.surface,
-        textPrimary: cs.onSurface,
-        textSecondary: cs.onSurfaceVariant,
-        textMuted: cs.onSurfaceVariant,
-        textFaint: cs.onSurfaceVariant.withValues(alpha: 0.72),
+        scaffoldBg: RaiDsColors.bg,
+        textPrimary: Colors.white,
+        textSecondary: Colors.white70,
+        textMuted: RaiDsColors.textMuted,
+        textFaint: RaiDsColors.textMuted.withValues(alpha: 0.72),
         accent: accent,
-        cardBg: cs.surfaceContainerHighest.withValues(alpha: 0.42),
-        cardBorder: accent.withValues(alpha: 0.45),
-        chipBg: cs.surfaceContainerLow,
-        chipBorder: cs.outlineVariant,
-        chipIcon: Colors.greenAccent,
-        panelBg: cs.surfaceContainerLow.withValues(alpha: 0.95),
-        panelBorder: cs.outlineVariant.withValues(alpha: 0.65),
+        cardBg: RaiDsColors.card,
+        cardBorder: RaiDsColors.border,
+        chipBg: RaiDsColors.cardElevated,
+        chipBorder: RaiDsColors.border,
+        chipIcon: accent,
+        panelBg: RaiDsColors.card,
+        panelBorder: RaiDsColors.border,
       );
     }
     // Modo claro: alto contraste tipo inDrive (fondo suave, cards blancas, texto oscuro).
@@ -137,7 +142,14 @@ class _PoolEntradaLoading extends StatelessWidget {
 }
 
 class ViajeDisponible extends StatefulWidget {
-  const ViajeDisponible({super.key});
+  const ViajeDisponible({
+    super.key,
+    this.ocultarTabCompartidos = false,
+  });
+
+  /// En el tab Viajes del shell: solo AHORA y PROGRAMADOS (Bola en Servicios).
+  final bool ocultarTabCompartidos;
+
   @override
   State<ViajeDisponible> createState() => _ViajeDisponibleState();
 }
@@ -161,8 +173,17 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreProg;
   StreamSubscription<fs.QuerySnapshot<Map<String, dynamic>>>? _subTimbreBola;
 
-  /// Pestañas BOLA / AHORA / PROGRAMADOS (índices 0 / 1 / 2).
+  /// Pestañas BOLA / AHORA / PROGRAMADOS (índices lógicos 0 / 1 / 2).
   late TabController _tabPool;
+
+  bool get _sinCompartidos => widget.ocultarTabCompartidos;
+
+  int get _tabLogico =>
+      _sinCompartidos ? _tabPool.index + 1 : _tabPool.index;
+
+  List<String> get _tabLabels => _sinCompartidos
+      ? const ['AHORA', 'PROGRAMADOS']
+      : const ['COMPARTIDOS', 'AHORA', 'PROGRAMADOS'];
 
   /// Último snapshot de las queries de timbre (para sonar al cambiar de pestaña).
   fs.QuerySnapshot<Map<String, dynamic>>? _snapTimbreAhora;
@@ -213,12 +234,33 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   bool _ubicacionActualizacionIniciada = false;
   DateTime? _ultimaPersistenciaUbicacion;
 
+  void _onTaxistaPoolSubTabRequest() {
+    final int? destino = ShellTabController.taxistaPoolSubTab.value;
+    if (destino == null || !mounted) return;
+    ShellTabController.taxistaPoolSubTab.value = null;
+    if (_sinCompartidos) {
+      if (destino == 0) return;
+      final int uiIndex = destino - 1;
+      if (_tabPool.index != uiIndex) {
+        _tabPool.animateTo(uiIndex);
+      }
+      return;
+    }
+    if (_tabPool.index != destino) {
+      _tabPool.animateTo(destino);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabPool = TabController(length: 3, vsync: this);
+    _tabPool = TabController(
+      length: widget.ocultarTabCompartidos ? 2 : 3,
+      vsync: this,
+    );
     _tabPool.addListener(_onPoolTabChanged);
+    ShellTabController.taxistaPoolSubTab.addListener(_onTaxistaPoolSubTabRequest);
 
     FirebaseAuth.instance.currentUser?.getIdToken(true);
 
@@ -413,6 +455,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   void dispose() {
     _activeUserListener?.cancel();
     _activeTripListener?.cancel();
+    ShellTabController.taxistaPoolSubTab
+        .removeListener(_onTaxistaPoolSubTabRequest);
     _tabPool.removeListener(_onPoolTabChanged);
     _tabPool.dispose();
     WidgetsBinding.instance.removeObserver(this);
@@ -467,7 +511,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     if (!await _taxistaDisponibleParaTimbre(myUid)) return;
 
-    final pendientes = _idsOfertasNoVistasEnTab(tabIndex, myUid);
+    final int logico = _sinCompartidos ? tabIndex + 1 : tabIndex;
+    final pendientes = _idsOfertasNoVistasEnTab(logico, myUid);
     if (pendientes.isEmpty) return;
     if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
 
@@ -489,7 +534,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     if (!await _taxistaDisponibleParaTimbre(myUid)) return;
 
     final pendientes =
-        _idsOfertasNoVistasEnTab(_tabPool.index, myUid);
+        _idsOfertasNoVistasEnTab(_tabLogico, myUid);
     if (pendientes.isEmpty) return;
     if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
 
@@ -530,7 +575,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     final pendientes =
-        _idsOfertasNoVistasEnTab(_tabPool.index, myUid);
+        _idsOfertasNoVistasEnTab(_tabLogico, myUid);
 
     if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
 
@@ -558,7 +603,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     List<_OfertaPoolPendiente> nuevas,
   ) async {
     if (!_entradaInicialProcesada || !_appEnForeground) return;
-    if (_tabPool.index != tabIndex) return;
+    if (_tabLogico != tabIndex) return;
     if (nuevas.isEmpty) return;
     if (!await _taxistaDisponibleParaTimbre(myUid)) return;
 
@@ -1195,17 +1240,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
       if (res == 'ok') {
         await NotificationService.I.stopTimbre();
-        await fs.FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(taxista.uid)
-            .set(
-          {
-            'siguienteViajeId': '',
-            'updatedAt': fs.FieldValue.serverTimestamp(),
-            'actualizadoEn': fs.FieldValue.serverTimestamp(),
-          },
-          fs.SetOptions(merge: true),
-        );
+        // No borrar `siguienteViajeId` aquí: claim ya preserva cola corporativa.
 
         if (mounted) {
           messenger.showSnackBar(
@@ -1638,33 +1673,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     if (disponibilidadCargando || disponible) {
       return const SizedBox.shrink();
     }
-    final pal = context._poolTaxistaPal;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color.fromRGBO(255, 152, 0, 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color.fromRGBO(255, 152, 0, 0.45)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.pause_circle_outline, color: pal.accent, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'No disponible — actívalo en Cuenta para recibir viajes del pool.',
-              style: TextStyle(
-                color: pal.textSecondary,
-                fontSize: 12,
-                height: 1.3,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return RaiDriverAlertBanner(
+      icon: Icons.pause_circle_outline,
+      color: RaiDriverColors.orange,
+      message: 'No disponible — actívalo en Trabajo para recibir viajes.',
     );
   }
 
@@ -1679,7 +1691,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _SaldoRecargaPoolBanner(uidTaxista: uidTaxista),
+        AppBalanceCard(uidTaxista: uidTaxista),
         const RaiPoolOfflineHint(),
         if (bloqueadoPago)
           _bannerBloqueoSemanal()
@@ -1694,61 +1706,120 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     );
   }
 
-  /// Deuda semanal sin tope de comisión: el taxista sigue operando; recordatorio en Mis pagos.
-  Widget _bannerRecordatorioPagoSemanal() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color.fromRGBO(255, 193, 7, 0.14),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color.fromRGBO(255, 193, 7, 0.7)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.calendar_month, color: Colors.amber),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Tienes un pago semanal pendiente: revísalo en Mis pagos y salda el monto de la semana. '
-              'Mientras tanto puedes seguir tomando viajes y usando el pool.',
-              style: TextStyle(
-                color: isDark ? Colors.white70 : const Color(0xFF374151),
-              ),
-            ),
-          ),
-        ],
+  Widget _buildPoolTabsBar() {
+    return AnimatedBuilder(
+      animation: _tabPool,
+      builder: (context, _) {
+        if (_sinCompartidos) {
+          return AppPoolTabBar(
+            labels: _tabLabels,
+            index: _tabPool.index,
+            onChanged: (i) => _tabPool.animateTo(i),
+          );
+        }
+        return RaiDriverPoolTabBar(
+          labels: _tabLabels,
+          index: _tabPool.index,
+          onChanged: (i) => _tabPool.animateTo(i),
+        );
+      },
+    );
+  }
+
+  Widget _buildMapaHeroViajes(Position pos) {
+    if (!_sinCompartidos) return const SizedBox.shrink();
+    return PoolViajesMapaHero(
+      latitude: pos.latitude,
+      longitude: pos.longitude,
+      bearing: pos.heading,
+    );
+  }
+
+  Widget _buildColaSiguienteBanner(String uidTaxista) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      child: AnimatedBuilder(
+        animation: _tabPool,
+        builder: (context, _) {
+          if (!_sinCompartidos && _tabPool.index == 0) {
+            return const SizedBox.shrink();
+          }
+          return ColaSiguienteViajeBannerTaxista(
+            uidTaxista: uidTaxista,
+            compact: true,
+          );
+        },
       ),
     );
   }
 
+  List<Widget> _buildPoolTabViewChildren({
+    required User user,
+    required bool disponible,
+    required bool disponibilidadCargando,
+    required Stream<fs.QuerySnapshot<Map<String, dynamic>>> streamAhora,
+    required Stream<fs.QuerySnapshot<Map<String, dynamic>>> streamProg,
+    required String poolModo,
+    required double latTaxista,
+    required double lonTaxista,
+  }) {
+    final listaAhora = _buildLista(
+      stream: streamAhora,
+      preferSnapshot: _snapTimbreAhora,
+      disponible: disponible,
+      disponibilidadCargando: disponibilidadCargando,
+      myUid: user.uid,
+      filtroLocalSiFallback: _pasaFiltroAhoraLocal,
+      ordenarAscEnMemoria: false,
+      usandoFallback: _usarFallbackSinIndiceAhora,
+      esTabAhora: true,
+      latTaxista: latTaxista,
+      lonTaxista: lonTaxista,
+      poolModoConductor: poolModo,
+    );
+    final listaProg = _buildLista(
+      stream: streamProg,
+      preferSnapshot: _snapTimbreProg,
+      disponible: disponible,
+      disponibilidadCargando: disponibilidadCargando,
+      myUid: user.uid,
+      filtroLocalSiFallback: _pasaFiltroProgLocal,
+      ordenarAscEnMemoria: true,
+      usandoFallback: _usarFallbackSinIndiceProg,
+      esTabAhora: false,
+      latTaxista: latTaxista,
+      lonTaxista: lonTaxista,
+      poolModoConductor: poolModo,
+    );
+    if (_sinCompartidos) {
+      return [listaAhora, listaProg];
+    }
+    return [
+      BolaPuebloDisponibleTab(
+        user: user,
+        disponible: disponible,
+        disponibilidadCargando: disponibilidadCargando,
+      ),
+      listaAhora,
+      listaProg,
+    ];
+  }
+
+  /// Deuda semanal sin tope de comisión: el taxista sigue operando; recordatorio en Mis pagos.
+  Widget _bannerRecordatorioPagoSemanal() {
+    return RaiDriverAlertBanner(
+      icon: Icons.calendar_month_rounded,
+      color: RaiDriverColors.orange,
+      message:
+          'Pago semanal pendiente — revísalo en Mis pagos. Podés seguir operando.',
+    );
+  }
+
   Widget _bannerBloqueoSemanal() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color.fromRGBO(244, 67, 54, 0.15),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color.fromRGBO(244, 67, 54, 0.7)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.lock_outline, color: Colors.redAccent),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              PagosTaxistaRepo.mensajeRecargaBannerLista,
-              style: TextStyle(
-                color: isDark ? Colors.white70 : const Color(0xFF374151),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return RaiDriverAlertBanner(
+      icon: Icons.lock_outline_rounded,
+      color: Colors.redAccent,
+      message: PagosTaxistaRepo.mensajeRecargaBannerLista,
     );
   }
 
@@ -2209,7 +2280,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           physics: scrollPhysics,
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
           itemCount: items.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 4),
+          separatorBuilder: (_, __) => const SizedBox(height: 10),
           itemBuilder: (context, index) {
             final pal = context._poolTaxistaPal;
             final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -2275,9 +2346,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
             return Card(
               color: pal.cardBg,
-              margin: const EdgeInsets.symmetric(vertical: 6),
+              margin: const EdgeInsets.symmetric(vertical: 4),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(20),
                 side: BorderSide(
                   color: bordeCard,
                   width: anchoBordeCard,
@@ -2614,8 +2685,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     if (u == null) {
       return Scaffold(
         backgroundColor: Colors.black,
-        appBar: const RaiAppBar(
-          title: 'Viajes Disponibles',
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          elevation: 0,
+          title: const RaiDriverBrandMark(),
         ),
         body: const Center(
           child: Text(
@@ -2731,7 +2804,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
   Widget _buildContenidoPrincipal(BuildContext context, Position pos, User u) {
     final pal = context._poolTaxistaPal;
-    final cs = Theme.of(context).colorScheme;
     final media = MediaQuery.of(context);
     final accesibilidad = media.textScaler.clamp(
       minScaleFactor: 1.08,
@@ -2747,9 +2819,11 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       child: Scaffold(
         backgroundColor: pal.scaffoldBg,
         appBar: RaiAppBar(
-          title: 'RAI Driver',
+          title: '',
+          titleSemanticsLabel: _sinCompartidos ? 'Viajes' : 'RAI Driver',
+          showBackWhenCanPop: true,
           actions: [
-            _PoolTurismoAppBarAction(uid: u.uid),
+            if (!_sinCompartidos) _PoolTurismoAppBarAction(uid: u.uid),
             const SaldoGananciasChip(),
           ],
           bottom: TabBar(
@@ -2757,11 +2831,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             indicatorColor: pal.accent,
             labelColor: pal.accent,
             unselectedLabelColor: pal.textMuted,
-            dividerColor: cs.outlineVariant.withValues(alpha: 0.45),
-            tabs: const [
-              Tab(text: 'AHORRA'),
-              Tab(text: 'AHORA'),
-              Tab(text: 'PROGRAMADOS'),
+            tabs: [
+              for (final label in _tabLabels) Tab(text: label),
             ],
           ),
         ),
@@ -2833,6 +2904,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                               _usarFallbackSinIndiceAhora ||
                                   _usarFallbackSinIndiceProg,
                             ),
+                            _buildColaSiguienteBanner(u.uid),
                             Expanded(
                               child: _panelBloqueoConOpcionesPago(
                                 deudaSemanal: deudaSemanal,
@@ -2856,51 +2928,20 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                 disponibilidadCargando,
                           ),
                           _bannerFallback(usarFallbackIndice),
+                          _buildColaSiguienteBanner(u.uid),
                           Expanded(
                             child: TabBarView(
                               controller: _tabPool,
-                              children: [
-                                BolaPuebloDisponibleTab(
-                                  user: u,
-                                  disponible: disponible,
-                                  disponibilidadCargando:
-                                      disponibilidadCargando,
-                                ),
-                                _buildLista(
-                                  stream: streamAhora,
-                                  preferSnapshot: _snapTimbreAhora,
-                                  disponible: disponible,
-                                  disponibilidadCargando:
-                                      disponibilidadCargando,
-                                  myUid: u.uid,
-                                  filtroLocalSiFallback:
-                                      _pasaFiltroAhoraLocal,
-                                  ordenarAscEnMemoria: false,
-                                  usandoFallback:
-                                      _usarFallbackSinIndiceAhora,
-                                  esTabAhora: true,
-                                  latTaxista: pos.latitude,
-                                  lonTaxista: pos.longitude,
-                                  poolModoConductor: poolModo,
-                                ),
-                                _buildLista(
-                                  stream: streamProg,
-                                  preferSnapshot: _snapTimbreProg,
-                                  disponible: disponible,
-                                  disponibilidadCargando:
-                                      disponibilidadCargando,
-                                  myUid: u.uid,
-                                  filtroLocalSiFallback:
-                                      _pasaFiltroProgLocal,
-                                  ordenarAscEnMemoria: true,
-                                  usandoFallback:
-                                      _usarFallbackSinIndiceProg,
-                                  esTabAhora: false,
-                                  latTaxista: pos.latitude,
-                                  lonTaxista: pos.longitude,
-                                  poolModoConductor: poolModo,
-                                ),
-                              ],
+                              children: _buildPoolTabViewChildren(
+                                user: u,
+                                disponible: disponible,
+                                disponibilidadCargando: disponibilidadCargando,
+                                streamAhora: streamAhora,
+                                streamProg: streamProg,
+                                poolModo: poolModo,
+                                latTaxista: pos.latitude,
+                                lonTaxista: pos.longitude,
+                              ),
                             ),
                           ),
                         ],
@@ -2914,141 +2955,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             },
           ),
         ),
-    );
-  }
-}
-
-/// Saldo prepago: una línea por defecto; tap para desplegar el detalle completo.
-class _SaldoRecargaPoolBanner extends StatefulWidget {
-  const _SaldoRecargaPoolBanner({required this.uidTaxista});
-
-  final String uidTaxista;
-
-  @override
-  State<_SaldoRecargaPoolBanner> createState() =>
-      _SaldoRecargaPoolBannerState();
-}
-
-class _SaldoRecargaPoolBannerState extends State<_SaldoRecargaPoolBanner> {
-  bool _expandido = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final minSaldo = PagosTaxistaRepo.minSaldoPrepagoComisionRd;
-    return StreamBuilder<fs.DocumentSnapshot<Map<String, dynamic>>>(
-      stream: fs.FirebaseFirestore.instance
-          .collection('billeteras_taxista')
-          .doc(widget.uidTaxista)
-          .snapshots(),
-      builder: (context, snap) {
-        final data = snap.data?.data();
-        final saldo = PagosTaxistaRepo.saldoPrepagoComisionDesdeBilletera(data);
-        final disponible =
-            PagosTaxistaRepo.saldoDisponiblePrepagoComisionDesdeBilletera(data);
-        final pendLegacy =
-            PagosTaxistaRepo.comisionPendienteDesdeBilletera(data);
-        final legacyTope = PagosTaxistaRepo.bloqueoPorComisionLegacyTope(data);
-        final bloqueado =
-            PagosTaxistaRepo.bloqueoOperativoPorComisionEfectivo(data);
-        final ultimaComisionCents = data?['ultimaComisionCents'];
-        final ultimaComisionRd = (ultimaComisionCents is num)
-            ? (ultimaComisionCents.toDouble() / 100.0)
-            : 0.0;
-        final viajesEstimados = ultimaComisionRd > 0
-            ? (disponible / ultimaComisionRd).floor().clamp(0, 9999)
-            : null;
-        final faltante = (minSaldo - disponible).clamp(0.0, double.infinity);
-
-        final resumen = bloqueado
-            ? 'Recarga bloqueada · disp. ${FormatosMoneda.rd(disponible)}'
-            : 'Prepago ${FormatosMoneda.rd(saldo)} · disp. ${FormatosMoneda.rd(disponible)}';
-
-        final detalle = bloqueado
-            ? (legacyTope
-                ? 'Recarga BLOQUEADA: comisión legacy ${FormatosMoneda.rd(pendLegacy)} (tope RD\$${PagosTaxistaRepo.umbralComisionLegacyBloqueoRd.toStringAsFixed(0)}). '
-                    'Prepago bruto: ${FormatosMoneda.rd(saldo)}; disponible p. comisión: ${FormatosMoneda.rd(disponible)}.'
-                : 'Recarga BLOQUEADA. Disponible p. comisión: ${FormatosMoneda.rd(disponible)} '
-                    '(mín. RD\$${minSaldo.toStringAsFixed(0)}). Te faltan ${FormatosMoneda.rd(faltante)}. '
-                    'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.')
-            : 'Saldo recarga: ${FormatosMoneda.rd(saldo)} (disponible p. comisión: ${FormatosMoneda.rd(disponible)}). '
-                '${viajesEstimados == null ? '' : 'Estimado: ~$viajesEstimados viajes como el último antes del mínimo. '}'
-                'Legacy pendiente: ${FormatosMoneda.rd(pendLegacy)}.';
-
-        final textColor = isDark
-            ? Colors.white.withValues(alpha: 0.88)
-            : const Color(0xFF1E3A8A);
-        final iconColor =
-            bloqueado ? Colors.redAccent : const Color(0xFF2563EB);
-
-        return Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => setState(() => _expandido = !_expandido),
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              width: double.infinity,
-              margin: const EdgeInsets.fromLTRB(12, 4, 12, 2),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: bloqueado
-                    ? (isDark
-                        ? const Color.fromRGBO(244, 67, 54, 0.15)
-                        : const Color.fromRGBO(254, 226, 226, 1))
-                    : (isDark
-                        ? const Color.fromRGBO(33, 150, 243, 0.12)
-                        : const Color(0xFFEFF6FF)),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: bloqueado
-                      ? (isDark
-                          ? const Color.fromRGBO(244, 67, 54, 0.65)
-                          : const Color(0xFFF87171))
-                      : (isDark
-                          ? const Color.fromRGBO(33, 150, 243, 0.55)
-                          : const Color(0xFFBFDBFE)),
-                ),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    bloqueado
-                        ? Icons.warning_amber_rounded
-                        : Icons.account_balance_wallet_outlined,
-                    color: iconColor,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _expandido ? detalle : resumen,
-                          style: TextStyle(
-                            color: textColor,
-                            fontSize: _expandido ? 12 : 12.5,
-                            height: 1.35,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    _expandido
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    color: textColor.withValues(alpha: 0.55),
-                    size: 20,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 }

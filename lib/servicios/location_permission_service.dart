@@ -235,6 +235,21 @@ class LocationPermissionService {
     bool requestIfDenied = false,
   }) async {
     print('[LOCATION] checkAndRequestBasicPermission requestIfDenied=$requestIfDenied');
+    if (kIsWeb) {
+      // PC / laptop / tablet: Geolocator del navegador (no Platform Android/iOS).
+      final serviceOn = await GpsService.isServiceEnabled();
+      var perm = await GpsService.checkPermission();
+      if (requestIfDenied && !GpsService.permissionUsable(perm)) {
+        perm = await GpsService.requestPermissionExplicitUser();
+      }
+      if (GpsService.permissionUsable(perm)) {
+        unawaited(_marcarClienteUbicacionListoEnPrefs());
+      }
+      return LocationBasicResult(
+        serviceEnabled: serviceOn,
+        permission: perm,
+      );
+    }
     if (!_nativeMobile) {
       print('[LOCATION] skip: no es móvil nativo');
       return const LocationBasicResult(
@@ -331,27 +346,171 @@ class LocationPermissionService {
     );
   }
 
+  /// Web: pide permiso del navegador (no hay “Ajustes de la app”).
+  /// Si el sitio ya está bloqueado (`deniedForever`), el cuadro **no aparece**
+  /// (política de Chrome/Edge): hay que cambiarlo en el candado de la URL.
+  static Future<LocationPermission> _pedirPermisoUbicacionWeb() async {
+    print('[LOCATION] _pedirPermisoUbicacionWeb');
+    var perm = await Geolocator.checkPermission();
+    print('[LOCATION] web checkPermission → $perm');
+    if (GpsService.permissionUsable(perm)) {
+      await marcarUbicacionConcedidaEnPrefs();
+      return perm;
+    }
+    // Ya bloqueado: no insistir con getCurrentPosition (solo genera “User denied”).
+    if (perm == LocationPermission.deniedForever) {
+      print('[LOCATION] web deniedForever → sin prompt (candado de la URL)');
+      return perm;
+    }
+    try {
+      perm = await Geolocator.requestPermission();
+      print('[LOCATION] web requestPermission → $perm');
+    } catch (e) {
+      print('[LOCATION] web requestPermission error: $e');
+      perm = await Geolocator.checkPermission();
+    }
+    if (GpsService.permissionUsable(perm)) {
+      await marcarUbicacionConcedidaEnPrefs();
+      return perm;
+    }
+    return perm;
+  }
+
+  /// Diálogo cuando el navegador ya bloqueó ubicación (no se puede “abrir ajustes”).
+  static Future<void> mostrarDialogoAyudaUbicacionWeb(
+    BuildContext context,
+  ) async {
+    if (!kIsWeb || !context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          title: Text(
+            'Ubicación bloqueada en el navegador',
+            style: TextStyle(
+              color: cs.onSurface,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Text(
+              RaiUbicacionUiConstants.msgDialogoAyudaUbicacionWeb,
+              style: TextStyle(color: cs.onSurface, height: 1.4),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cerrar'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final perm = await _pedirPermisoUbicacionWeb();
+                if (!ctx.mounted) return;
+                Navigator.pop(ctx);
+                if (GpsService.permissionUsable(perm)) {
+                  await marcarUbicacionConcedidaEnPrefs();
+                  await limpiarActivacionDesdeAppRai();
+                  if (context.mounted) {
+                    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Ubicación activada. Si el aviso sigue rojo, '
+                          'tocá Activar ubicación otra vez.',
+                        ),
+                        duration: Duration(seconds: 5),
+                      ),
+                    );
+                  }
+                } else if (context.mounted) {
+                  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Sigue bloqueada. Candado → Ubicación → Permitir, '
+                        'luego tocá otra vez «Abrir ajustes».',
+                      ),
+                      duration: Duration(seconds: 7),
+                    ),
+                  );
+                }
+              },
+              child: const Text('Ya lo permití'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Tras tocar Activar / Abrir ajustes en web: pide permiso o muestra ayuda.
+  static Future<LocationPermission> activarUbicacionWebConAyuda(
+    BuildContext context,
+  ) async {
+    await marcarActivacionDesdeAppRai();
+    final perm = await _pedirPermisoUbicacionWeb();
+    if (GpsService.permissionUsable(perm)) {
+      await limpiarActivacionDesdeAppRai();
+      return perm;
+    }
+    if (context.mounted) {
+      await mostrarDialogoAyudaUbicacionWeb(context);
+    }
+    return perm;
+  }
+
   /// Abre ajustes de **ubicación del sistema** (activar GPS).
-  static Future<void> openSystemLocationSettings() async {
+  /// En web: pide permiso del navegador.
+  static Future<void> openSystemLocationSettings({
+    BuildContext? context,
+  }) async {
     print('[LOCATION] openSystemLocationSettings');
+    if (kIsWeb) {
+      if (context != null && context.mounted) {
+        await activarUbicacionWebConAyuda(context);
+      } else {
+        await _pedirPermisoUbicacionWeb();
+      }
+      return;
+    }
     await Geolocator.openLocationSettings();
   }
 
   /// Abre la ficha de la app en ajustes (permisos revocados permanentemente).
-  static Future<void> openAppSettingsPage() async {
+  /// En web: pide permiso del navegador (no existe ficha de app).
+  static Future<void> openAppSettingsPage({BuildContext? context}) async {
     print('[LOCATION] openAppSettingsPage');
+    if (kIsWeb) {
+      if (context != null && context.mounted) {
+        await activarUbicacionWebConAyuda(context);
+      } else {
+        await _pedirPermisoUbicacionWeb();
+      }
+      return;
+    }
     await ph.openAppSettings();
   }
 
   /// Desde Cuenta / banner rojo: GPS del sistema o permisos de RAI en ajustes.
-  static Future<void> abrirAjustesUbicacionManualmente() async {
+  /// En web: pide permiso del navegador o muestra cómo desbloquear en Chrome.
+  static Future<void> abrirAjustesUbicacionManualmente({
+    BuildContext? context,
+  }) async {
     await marcarActivacionDesdeAppRai();
-    final bool gpsOn = await Geolocator.isLocationServiceEnabled();
-    if (!gpsOn) {
-      await openSystemLocationSettings();
+    if (kIsWeb) {
+      if (context != null && context.mounted) {
+        await activarUbicacionWebConAyuda(context);
+      } else {
+        await _pedirPermisoUbicacionWeb();
+      }
       return;
     }
-    await openAppSettingsPage();
+    final bool gpsOn = await Geolocator.isLocationServiceEnabled();
+    if (!gpsOn) {
+      await openSystemLocationSettings(context: context);
+      return;
+    }
+    await openAppSettingsPage(context: context);
   }
 
   /// Resultado del botón «Activar ubicación» / «Abrir ajustes».
@@ -365,13 +524,31 @@ class LocationPermissionService {
       })> activarUbicacionRai({
     required bool bannerEnAlertaRoja,
     required bool modoPermisoBloqueado,
+    BuildContext? context,
   }) async {
     bool abrioAjustesApp = false;
     bool abrioAjustesGps = false;
 
+    if (kIsWeb) {
+      final LocationPermission perm;
+      if (context != null && context.mounted) {
+        perm = await activarUbicacionWebConAyuda(context);
+      } else {
+        perm = await _pedirPermisoUbicacionWeb();
+      }
+      final concedido = GpsService.permissionUsable(perm);
+      return (
+        concedido: concedido,
+        gpsApagado: false,
+        abrioAjustesApp: !concedido,
+        abrioAjustesGps: false,
+        permission: perm,
+      );
+    }
+
     final bool gpsOn = await Geolocator.isLocationServiceEnabled();
     if (!gpsOn) {
-      await openSystemLocationSettings();
+      await openSystemLocationSettings(context: context);
       abrioAjustesGps = true;
       return (
         concedido: false,
@@ -387,7 +564,7 @@ class LocationPermissionService {
         await ubicacionDenegadaTrasBannerEnPrefs();
 
     if (modoPermisoBloqueado || perm == LocationPermission.deniedForever) {
-      await openAppSettingsPage();
+      await openAppSettingsPage(context: context);
       abrioAjustesApp = true;
       perm = await Geolocator.checkPermission();
       return (
@@ -401,7 +578,7 @@ class LocationPermissionService {
 
     // Banner rojo: ir directo a ajustes del teléfono (sin repetir cuadro «Permitir»).
     if (bannerEnAlertaRoja && !GpsService.permissionUsable(perm)) {
-      await openAppSettingsPage();
+      await openAppSettingsPage(context: context);
       abrioAjustesApp = true;
       perm = await Geolocator.checkPermission();
       return (
@@ -432,7 +609,7 @@ class LocationPermissionService {
 
     // Android a veces no vuelve a mostrar el cuadro tras un «Denegar».
     if (reintentoTrasDenegacion || perm == LocationPermission.denied) {
-      await openAppSettingsPage();
+      await openAppSettingsPage(context: context);
       abrioAjustesApp = true;
       perm = await GpsService.waitUntilPermissionUsable(
         timeout: const Duration(seconds: 2),
@@ -569,8 +746,31 @@ class LocationPermissionService {
       '[LOCATION] ensureLocationReady maxAge=${maxAge.inSeconds}s '
       'requestIfDenied=$req',
     );
+    if (kIsWeb) {
+      final pos = await GpsService.obtenerUbicacionMapaProduccion(
+        timeout: timeout,
+        pedirPermisoSiFalta: true,
+      );
+      if (pos == null) {
+        print('[LOCATION] ensureLocationReady web: sin posición');
+        return const LocationReadiness(
+          permissionDenied: true,
+          staleOrInvalid: true,
+        );
+      }
+      print('[LOCATION] ensureLocationReady web: ok');
+      return LocationReadiness(ok: true, position: pos);
+    }
     if (!_nativeMobile) {
-      return const LocationReadiness(permissionDenied: true);
+      // Desktop / tablet no-Android-iOS: mismo GPS de producción.
+      final pos = await GpsService.obtenerUbicacionMapaProduccion(
+        timeout: timeout,
+        pedirPermisoSiFalta: true,
+      );
+      if (pos == null) {
+        return const LocationReadiness(permissionDenied: true);
+      }
+      return LocationReadiness(ok: true, position: pos);
     }
 
     final basic = await checkAndRequestBasicPermission(
@@ -609,6 +809,14 @@ class LocationPermissionService {
           );
         }
       }
+      // Último intento producción (cel): puede abrir diálogo si [req].
+      final pos = await GpsService.obtenerUbicacionMapaProduccion(
+        timeout: timeout,
+        pedirPermisoSiFalta: req,
+      );
+      if (pos != null) {
+        return LocationReadiness(ok: true, position: pos);
+      }
       return const LocationReadiness(permissionDenied: true);
     }
 
@@ -629,6 +837,11 @@ class LocationPermissionService {
       pos = await Geolocator.getLastKnownPosition();
     }
 
+    pos ??= await GpsService.obtenerUbicacionMapaProduccion(
+      timeout: timeout,
+      pedirPermisoSiFalta: req,
+    );
+
     if (pos == null) {
       print('[LOCATION] ensureLocationReady: pos null');
       return const LocationReadiness(staleOrInvalid: true);
@@ -644,8 +857,7 @@ class LocationPermissionService {
           timeLimit: timeout,
         );
         final age2 = DateTime.now().difference(pos2.timestamp).abs();
-        if (age2 <= maxAge ||
-            age2 < age) {
+        if (age2 <= maxAge || age2 < age) {
           current = pos2;
           age = age2;
         }
@@ -662,10 +874,36 @@ class LocationPermissionService {
 
     if (age > maxAge) {
       print('[LOCATION] ubicación aún demasiado antigua');
-      return LocationReadiness(staleOrInvalid: true, position: current);
+      // Para cotizar en producción preferimos posición usable aunque no sea fresquísima.
+      return LocationReadiness(ok: true, position: current);
     }
 
     return LocationReadiness(ok: true, position: current);
+  }
+
+  /// Origen para cotizar tarifa en cel / laptop / PC / tablet.
+  /// Acepta GPS hasta 30 min y cae a [GpsService.obtenerUbicacionMapaProduccion].
+  static Future<Position?> posicionParaCotizarProduccion({
+    BuildContext? context,
+    Duration timeout = const Duration(seconds: 14),
+    bool pedirPermisoSiFalta = true,
+  }) async {
+    final ready = await ensureLocationReady(
+      context: context,
+      maxAge: const Duration(minutes: 30),
+      timeout: timeout,
+      requestIfDenied: pedirPermisoSiFalta,
+    );
+    if (ready.position != null &&
+        ready.position!.latitude.isFinite &&
+        ready.position!.longitude.isFinite &&
+        !(ready.position!.latitude == 0 && ready.position!.longitude == 0)) {
+      return ready.position;
+    }
+    return GpsService.obtenerUbicacionMapaProduccion(
+      timeout: timeout,
+      pedirPermisoSiFalta: pedirPermisoSiFalta,
+    );
   }
 
   static void _snackOpenLocationSettings(
@@ -676,10 +914,10 @@ class LocationPermissionService {
         content: Text(message),
         duration: const Duration(seconds: 6),
         action: SnackBarAction(
-          label: 'Ajustes de ubicación',
+          label: kIsWeb ? 'Permitir ubicación' : 'Ajustes de ubicación',
           onPressed: () {
             print('[LOCATION] user tap abrir ajustes ubicación sistema');
-            unawaited(openSystemLocationSettings());
+            unawaited(openSystemLocationSettings(context: context));
           },
         ),
       ),
@@ -693,10 +931,10 @@ class LocationPermissionService {
         content: Text(message),
         duration: const Duration(seconds: 8),
         action: SnackBarAction(
-          label: 'Ajustes de la app',
+          label: kIsWeb ? 'Permitir ubicación' : 'Ajustes de la app',
           onPressed: () {
             print('[LOCATION] user tap abrir ajustes app');
-            unawaited(openAppSettingsPage());
+            unawaited(openAppSettingsPage(context: context));
           },
         ),
       ),

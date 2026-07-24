@@ -383,7 +383,36 @@ function cuposReservaComision(
   return Math.min(tope, minConf, cap);
 }
 
+function esOrganizadorGiras(ud: AnyMap): boolean {
+  const perfil = String(ud.perfilOperador ?? "").trim();
+  if (perfil === "organizador_giras") return true;
+  if (ud.soloGiras === true) return true;
+  return false;
+}
+
+function organizadorGirasRegistroCompleto(ud: AnyMap): boolean {
+  if (ud.registroOrganizadorGirasCompleto === false) return false;
+  const nombre = String(ud.nombre ?? "").trim();
+  if (nombre.length < 2) return false;
+  const telefono = String(ud.telefono ?? "").replace(/\D/g, "");
+  if (telefono.length !== 10 && !(telefono.length === 11 && telefono.startsWith("1"))) {
+    return false;
+  }
+  const cedula = String(ud.cedula ?? ud.ciTaxista ?? "").trim();
+  if (cedula.length < 5) return false;
+  const docUrl = String(ud.cedulaFotoUrl ?? ud.documentoIdentidadUrl ?? "").trim();
+  if (!docUrl) return false;
+  const agencia = String(ud.agenciaNombre ?? "").trim();
+  if (agencia.length < 2) return false;
+  if (ud.registroOrganizadorGirasCompleto === true) return true;
+  if (ud.registroTaxistaCompleto === true && esOrganizadorGiras(ud)) return true;
+  return false;
+}
+
 function taxistaRegistroPerfilCompleto(ud: AnyMap): boolean {
+  if (esOrganizadorGiras(ud)) {
+    return organizadorGirasRegistroCompleto(ud);
+  }
   if (ud.registroTaxistaCompleto === false) return false;
   const nombre = String(ud.nombre ?? "").trim();
   if (nombre.length < 2) return false;

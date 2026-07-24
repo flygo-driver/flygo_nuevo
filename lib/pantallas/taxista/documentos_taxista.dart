@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,6 +12,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/firebase_bootstrap.dart';
 import 'package:flygo_nuevo/servicios/flygo_storage.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
+import 'package:flygo_nuevo/widgets/rai_docs_ui.dart';
 import 'package:flygo_nuevo/widgets/saldo_ganancias_chip.dart';
 import 'package:flygo_nuevo/widgets/taxista_onboarding_acciones_footer.dart';
 
@@ -91,7 +94,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
       const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.light,
-        systemNavigationBarColor: Colors.black87,
+        systemNavigationBarColor: RaiDsColors.card,
         systemNavigationBarIconBrightness: Brightness.light,
         systemNavigationBarContrastEnforced: false,
       ),
@@ -317,7 +320,8 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
         user: u,
         tipo: tipo,
         bytes: bytes,
-        localFilePath: img.path,
+        // En web el path es blob: y rompe putFile; solo bytes.
+        localFilePath: kIsWeb ? null : img.path,
       );
       _logDocUpload('storage OK tipo=$tipo');
 
@@ -375,6 +379,13 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
 
   Future<void> _elegirFuenteYSubir(String tipo) async {
     if (_subiendo) return;
+
+    // En laptop/PC/tablet web: abrir selector de archivos directo (sin cámara).
+    if (kIsWeb) {
+      await _seleccionarFotoYSubir(tipo, ImageSource.gallery);
+      return;
+    }
+
     final ImageSource? source = await showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1C),
@@ -584,18 +595,27 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
     const double footerReserva = 118;
 
     final scaffold = Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: RaiDocsUi.scaffoldBg,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: RaiDocsUi.scaffoldBg,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         automaticallyImplyLeading: !widget.onboardingObligatorio,
-        title: const Text('Documentos', style: TextStyle(color: Colors.white)),
+        title: const Text(
+          'Documentos',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.3,
+          ),
+        ),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: const [SaldoGananciasChip()],
       ),
       body: _cargando
           ? const Center(
-              child: CircularProgressIndicator(color: Colors.greenAccent))
+              child: CircularProgressIndicator(color: RaiDsColors.neon))
           : ListView(
               padding: EdgeInsets.fromLTRB(
                 16,
@@ -605,40 +625,23 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
               ),
               children: [
                     if (widget.onboardingObligatorio && !_renovacionObligatoria) ...[
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1a1f2e),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.greenAccent.withValues(alpha: 0.5),
-                          ),
-                        ),
-                        child: const Text(
-                          'Paso obligatorio: sube tus 5 documentos y pulsa '
-                          '«Enviar a revisión». Administración validará tu cuenta '
-                          'antes de que puedas operar en el pool.',
-                          style: TextStyle(color: Colors.white70, height: 1.35),
-                        ),
+                      const RaiDocsInfoBanner(
+                        accent: RaiDsColors.neon,
+                        icon: Icons.assignment_outlined,
+                        message:
+                            'Paso obligatorio: sube tus 5 documentos y pulsa '
+                            '«Enviar a revisión». Administración validará tu cuenta '
+                            'antes de que puedas operar en el pool.',
                       ),
                       const SizedBox(height: 16),
                     ],
                     if (_renovacionObligatoria) ...[
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1a2a1a),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                              color: Colors.greenAccent.withValues(alpha: 0.6)),
-                        ),
-                        child: const Text(
-                          'Renovación de documentos: han pasado unos 6 meses desde la última '
-                          'aprobación. Sube de nuevo las fotos y envía a revisión para seguir operando.',
-                          style: TextStyle(color: Colors.white70, height: 1.35),
-                        ),
+                      const RaiDocsInfoBanner(
+                        accent: RaiDsColors.neon,
+                        icon: Icons.update_rounded,
+                        message:
+                            'Renovación de documentos: han pasado unos 6 meses desde la última '
+                            'aprobación. Sube de nuevo las fotos y envía a revisión para seguir operando.',
                       ),
                       const SizedBox(height: 16),
                     ],
@@ -648,12 +651,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: colorEstado.withValues(alpha: 0.12),
-                          border: Border.all(
-                              color: colorEstado.withValues(alpha: 0.65)),
-                          borderRadius: BorderRadius.circular(24),
-                        ),
+                        decoration: RaiDocsUi.statusChipDecoration(colorEstado),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -672,7 +670,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                                 height: 16,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  color: Colors.greenAccent,
+                                  color: RaiDsColors.neon,
                                 ),
                               ),
                             ]
@@ -684,57 +682,30 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                     if (docsEstado.toLowerCase() == 'rechazado' &&
                         (comentarioAdmin?.isNotEmpty ?? false)) ...[
                       const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2a1b1b),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFFF5252)),
-                        ),
-                        child: Text(
-                          'Observación del revisor: $comentarioAdmin',
-                          style: const TextStyle(
-                              color: Colors.white70, height: 1.3),
-                        ),
+                      RaiDocsInfoBanner(
+                        accent: Colors.redAccent,
+                        icon: Icons.error_outline_rounded,
+                        message: 'Observación del revisor: $comentarioAdmin',
                       ),
                     ],
 
                     if (estadoL == 'en_revision') ...[
                       const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2a2410),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: const Color(0xFFFFD54F).withValues(alpha: 0.6),
-                          ),
-                        ),
-                        child: const Text(
-                          'En revisión por administración. Al aprobar, entrarás al pool en vivo '
-                          '(o al contrato si falta firmarlo).',
-                          style: TextStyle(color: Colors.white70, height: 1.35),
-                        ),
+                      const RaiDocsInfoBanner(
+                        accent: RaiDsColors.orange,
+                        icon: Icons.hourglass_top_rounded,
+                        message:
+                            'En revisión por administración. Al aprobar, entrarás al pool en vivo '
+                            '(o al contrato si falta firmarlo).',
                       ),
                     ],
                     if (_aptoParaPool && widget.onboardingObligatorio) ...[
                       const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1a2a1a),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: const Color(0xFF00E676).withValues(alpha: 0.6),
-                          ),
-                        ),
-                        child: const Text(
-                          'Documentos aprobados. Pulsa «Continuar al pool» para operar.',
-                          style: TextStyle(color: Colors.white70, height: 1.35),
-                        ),
+                      const RaiDocsInfoBanner(
+                        accent: RaiDsColors.neon,
+                        icon: Icons.check_circle_outline_rounded,
+                        message:
+                            'Documentos aprobados. Pulsa «Continuar al pool» para operar.',
                       ),
                     ],
 
@@ -788,7 +759,7 @@ class _DocumentosTaxistaState extends State<DocumentosTaxista> {
                     const SizedBox(height: 16),
                     const Text(
                       'Nota: si cambias un documento después de estar aprobado, el estado volverá a “pendiente”.',
-                      style: TextStyle(color: Colors.white54),
+                      style: TextStyle(color: RaiDsColors.textMuted, fontSize: 12.5),
                     ),
                   ],
             ),
@@ -842,11 +813,10 @@ class _DocItem extends StatelessWidget {
     final tieneArchivo = url != null && url!.isNotEmpty;
     final bool esRed = tieneArchivo && !RaiDocUrl.isFirestoreDoc(url);
 
-    return Card(
-      color: const Color(0xFF171717),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    return DecoratedBox(
+      decoration: RaiDocsUi.docItemDecoration(),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -863,16 +833,16 @@ class _DocItem extends StatelessWidget {
                 child: Container(
                   width: 64,
                   height: 64,
-                  color: const Color(0xFF262626),
+                  color: RaiDocsUi.previewBg,
                   child: previewBytes != null && previewBytes!.isNotEmpty
                       ? Image.memory(previewBytes!, fit: BoxFit.cover)
                       : tieneArchivo && esRed
                           ? Image.network(url!, fit: BoxFit.cover)
                           : tieneArchivo
                               ? const Icon(Icons.cloud_done,
-                                  color: Colors.greenAccent)
+                                  color: RaiDsColors.neon)
                               : const Icon(Icons.insert_drive_file,
-                                  color: Colors.white38),
+                                  color: RaiDsColors.textMuted),
                 ),
               ),
             ),
@@ -896,13 +866,14 @@ class _DocItem extends StatelessWidget {
                   Row(
                     children: [
                       Icon(
-                          tieneArchivo
-                              ? Icons.check_circle
-                              : Icons.info_outline,
-                          size: 16,
-                          color: tieneArchivo
-                              ? Colors.greenAccent
-                              : Colors.white60),
+                        tieneArchivo
+                            ? Icons.check_circle
+                            : Icons.info_outline,
+                        size: 16,
+                        color: tieneArchivo
+                            ? RaiDsColors.neon
+                            : RaiDsColors.textMuted,
+                      ),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
@@ -911,8 +882,8 @@ class _DocItem extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: tieneArchivo
-                                ? Colors.greenAccent
-                                : Colors.white70,
+                                ? RaiDsColors.neon
+                                : RaiDsColors.textMuted,
                             fontSize: 12,
                           ),
                         ),
@@ -931,13 +902,13 @@ class _DocItem extends StatelessWidget {
               icon: const Icon(Icons.upload_file, size: 18),
               label: const Text('Subir'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.green,
+                backgroundColor: RaiDsColors.neon,
+                foregroundColor: Colors.black,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                    borderRadius: BorderRadius.circular(14)),
+                textStyle: const TextStyle(fontWeight: FontWeight.w800),
               ),
             ),
             const SizedBox(width: 6),

@@ -10,18 +10,51 @@ abstract final class ClientePerfilOnboarding {
   static bool telefonoValido(String? raw) =>
       TaxistaRegistroPerfilData.telefonoRdValido(raw);
 
+  static bool _esGoogle(User? user, Map<String, dynamic> data) {
+    final proveedor =
+        (data['proveedor'] ?? '').toString().trim().toLowerCase();
+    if (proveedor == 'google') return true;
+    return user?.providerData.any((p) => p.providerId == 'google.com') ??
+        false;
+  }
+
   static bool datosMinimosCompletos(Map<String, dynamic> data) {
     final nombre = (data['nombre'] ?? '').toString().trim();
     if (nombre.length < 2) return false;
     return telefonoValido((data['telefono'] ?? '').toString());
   }
 
+  /// `true` = hay que mostrar [CompletarPerfilCliente] y bloquear el shell.
   static bool debeCompletarPerfil(Map<String, dynamic> data) {
-    if (data['registroClienteCompleto'] == true &&
-        datosMinimosCompletos(data)) {
+    final User? user = FirebaseAuth.instance.currentUser;
+    final String nombreFs = (data['nombre'] ?? '').toString().trim();
+    final String nombre = nombreFs.length >= 2
+        ? nombreFs
+        : (user?.displayName ?? '').trim();
+
+    // Google con nombre: entrar sin exigir teléfono (web/laptop).
+    if (_esGoogle(user, data) && nombre.length >= 2) {
       return false;
     }
-    return !datosMinimosCompletos(data);
+
+    // Ya completó el onboarding antes: no volver a atrapar tras cancelar viaje.
+    if (data['registroClienteCompleto'] == true && nombre.length >= 2) {
+      return false;
+    }
+
+    final String telFs = (data['telefono'] ?? '').toString();
+    final String telAuth = (user?.phoneNumber ?? '').toString();
+    if (nombre.length >= 2 &&
+        (telefonoValido(telFs) || telefonoValido(telAuth))) {
+      return false;
+    }
+
+    return !datosMinimosCompletos(<String, dynamic>{
+      ...data,
+      if (nombre.isNotEmpty) 'nombre': nombre,
+      if (!telefonoValido(telFs) && telefonoValido(telAuth))
+        'telefono': telAuth,
+    });
   }
 
   static String telefonoDesdeUsuario(User? user, Map<String, dynamic> data) {

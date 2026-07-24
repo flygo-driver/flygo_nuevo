@@ -22,8 +22,6 @@ android/key.properties
 ios/Pods/
 ios/.symlinks/
 ios/Flutter/Flutter.podspec
-# Mantén privados los plist de Firebase si no quieres subirlos
-ios/Runner/GoogleService-Info.plist
 
 # Firebase / secretos
 android/app/google-services.json

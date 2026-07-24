@@ -378,7 +378,9 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                     Text(
                       estado == 'en_curso'
                           ? 'En curso'
-                          : 'Acordado — seguí los pasos',
+                          : (soyClienteAsignado
+                              ? 'Tu conductor va por vos'
+                              : 'Andá a buscar al pasajero'),
                       style: TextStyle(
                           color: c.onMuted,
                           fontSize: 12,
@@ -386,6 +388,21 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                     ),
                   ],
                 ),
+                actions: [
+                  IconButton(
+                    tooltip: esTaxistaRol
+                        ? 'Volver a Mi trabajo'
+                        : 'Volver al inicio',
+                    icon: Icon(Icons.home_rounded, color: c.onSurface),
+                    onPressed: () => unawaited(
+                      BolaBoardVolverInicioButton.irAlInicio(
+                        context,
+                        esTaxista: esTaxistaRol,
+                        faseViaje: estado,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               body: SafeArea(
                 top: false,
@@ -483,6 +500,16 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                 padding:
                                     EdgeInsets.fromLTRB(18, 16, 18, bottomPad),
                                 children: [
+                                  _BolaEnVivoHeroBanner(
+                                    estado: estado,
+                                    esCliente: soyClienteAsignado,
+                                    esTaxista: soyTaxistaAsignado,
+                                    origen: origen,
+                                    pickupConfirmado: pickupConfirmadoTaxista,
+                                    fg: fg,
+                                    fgMuted: fgMuted,
+                                  ),
+                                  const SizedBox(height: 12),
                                   BolaPuebloUi.routeBlock(context,
                                       origen: origen, destino: destino),
                                   if (soyClienteAsignado &&
@@ -997,35 +1024,6 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 16),
                                   ],
-                                  if (partActivo &&
-                                      estado == 'acordada' &&
-                                      BolaPuebloRepo.puedeCancelarAcuerdo(
-                                          data)) ...[
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: OutlinedButton.icon(
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor:
-                                              Colors.red.shade700,
-                                          side: BorderSide(
-                                            color: Colors.red
-                                                .withValues(alpha: 0.45),
-                                          ),
-                                        ),
-                                        onPressed: () => BolaPuebloDialogs
-                                            .confirmarCancelarAcuerdoBola(
-                                          context: context,
-                                          bolaId: bolaId,
-                                          uid: user.uid,
-                                        ),
-                                        icon: const Icon(Icons.cancel_outlined,
-                                            size: 20),
-                                        label:
-                                            const Text('Cancelar acuerdo'),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                  ],
                                   if (estado == 'en_curso' && partActivo) ...[
                                     BolaPuebloDialogs
                                         .bannerSinCancelacionEnCurso(context),
@@ -1050,6 +1048,12 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 16),
                                   ],
+                                  BolaBoardVolverInicioButton(
+                                    esTaxista: esTaxistaRol,
+                                    compact: true,
+                                    faseViaje: estado,
+                                  ),
+                                  const SizedBox(height: 12),
                                   Theme(
                                     data: Theme.of(context).copyWith(
                                         dividerColor: Colors.transparent),
@@ -1206,6 +1210,17 @@ class _BolaEspejoPoolAutoNavListenerState
       }
       unawaited(() async {
         try {
+          // Mientras la bola siga en recogida, quedarse en pantalla Bola en vivo.
+          final DocumentSnapshot<Map<String, dynamic>> bolaSnap =
+              await FirebaseFirestore.instance
+                  .collection('bolas_pueblo')
+                  .doc(widget.bolaId)
+                  .get();
+          final String estadoBola =
+              (bolaSnap.data()?['estado'] ?? '').toString().trim();
+          if (estadoBola == 'acordada') {
+            return;
+          }
           await BolaPuebloDialogs.abrirViajeEnCursoOperativoBola(
             bolaId: widget.bolaId,
             esTaxista: widget.esTaxistaAsignado,
@@ -1307,7 +1322,10 @@ class _BolaViajeTerminalPageState extends State<BolaViajeTerminalPage> {
 
   Future<void> _salir() async {
     if (!mounted) return;
-    await NavigationService.salirModoViajeBola(context);
+    await NavigationService.salirModoViajeBola(
+      context,
+      esTaxista: _role == 'taxista',
+    );
   }
 
   @override
@@ -1399,6 +1417,146 @@ class _BolaViajeTerminalPageState extends State<BolaViajeTerminalPage> {
 }
 
 /// Pantalla puente: redirige al tablero (negociación abierta, no viaje operativo).
+/// Franja superior de estado en vivo (recogida / en curso).
+class _BolaEnVivoHeroBanner extends StatelessWidget {
+  const _BolaEnVivoHeroBanner({
+    required this.estado,
+    required this.esCliente,
+    required this.esTaxista,
+    required this.origen,
+    required this.pickupConfirmado,
+    required this.fg,
+    required this.fgMuted,
+  });
+
+  final String estado;
+  final bool esCliente;
+  final bool esTaxista;
+  final String origen;
+  final bool pickupConfirmado;
+  final Color fg;
+  final Color fgMuted;
+
+  @override
+  Widget build(BuildContext context) {
+    if (estado != 'acordada' && estado != 'en_curso') {
+      return const SizedBox.shrink();
+    }
+    final String titulo;
+    final String subtitulo;
+    final IconData icono;
+    final Color accent;
+    if (estado == 'en_curso') {
+      titulo = 'Viaje en curso';
+      subtitulo = 'Seguí la ruta al destino en tiempo real.';
+      icono = Icons.route_rounded;
+      accent = BolaPuebloTheme.accentSecondary;
+    } else if (esCliente) {
+      titulo = pickupConfirmado
+          ? 'El conductor está cerca'
+          : 'Tu conductor va por vos';
+      subtitulo = pickupConfirmado
+          ? 'Preparate para subir. Mostrá tu código al llegar.'
+          : 'Mirá el mapa: se actualiza en vivo con su ubicación.';
+      icono = Icons.local_taxi_rounded;
+      accent = BolaPuebloTheme.accent;
+    } else if (esTaxista) {
+      titulo = 'El pasajero te espera';
+      subtitulo = origen.trim().isEmpty
+          ? 'Andá al punto de recogida y marcá cada paso abajo.'
+          : 'Recogida: ${origen.trim()}';
+      icono = Icons.person_pin_circle_rounded;
+      accent = Colors.tealAccent.shade400;
+    } else {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            accent.withValues(alpha: 0.22),
+            accent.withValues(alpha: 0.08),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(BolaPuebloUi.radiusSmall),
+        border: Border.all(color: accent.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icono, color: accent, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: accent,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: accent.withValues(alpha: 0.6),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'EN VIVO',
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  titulo,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitulo,
+                  style: TextStyle(
+                    color: fgMuted,
+                    fontSize: 12.5,
+                    height: 1.35,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BolaRedirigirAlTablero extends StatefulWidget {
   const _BolaRedirigirAlTablero({required this.mensaje});
 

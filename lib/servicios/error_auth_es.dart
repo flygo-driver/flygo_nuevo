@@ -1,7 +1,31 @@
 // lib/servicios/error_auth_es.dart
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 String errorAuthEs(Object e) {
+  if (e is FirebaseFunctionsException) {
+    switch (e.code) {
+      case 'permission-denied':
+        return 'Permiso denegado.';
+      case 'unauthenticated':
+        return 'Sesión expirada. Vuelve a iniciar sesión.';
+      case 'failed-precondition':
+        return (e.message ?? '').trim().isNotEmpty
+            ? e.message!.trim()
+            : 'No se puede completar en este estado del viaje.';
+      case 'not-found':
+        return 'No se encontró el viaje.';
+      case 'invalid-argument':
+        return (e.message ?? '').trim().isNotEmpty
+            ? e.message!.trim()
+            : 'Datos inválidos.';
+      default:
+        return (e.message ?? '').trim().isNotEmpty
+            ? e.message!.trim()
+            : 'Error de servidor (${e.code}).';
+    }
+  }
+
   if (e is FirebaseAuthException) {
     switch (e.code) {
       case 'email-already-in-use':

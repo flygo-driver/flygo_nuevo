@@ -30,6 +30,7 @@ class LaunchConfigBootstrap {
     'clienteMotorHabilitado': true,
     'clienteGirasHabilitado': true,
     'clienteTurismoHabilitado': true,
+    'clienteCorporativoHabilitado': false,
     'launchConfigVersion': _version,
   };
 

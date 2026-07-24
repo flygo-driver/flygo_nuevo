@@ -94,38 +94,58 @@ class CuentaOpenAskDepositoPanel extends StatelessWidget {
           fila('Banco', RecargaBancariaConfig.banco),
           fila('Tipo', RecargaBancariaConfig.tipoCuenta),
           const SizedBox(height: 4),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('No. cuenta', style: label()),
-                    Text(
-                      RecargaBancariaConfig.numeroCuenta,
-                      style: TextStyle(
-                        color: accent,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        height: 1.2,
-                      ),
-                    ),
-                  ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final stacked = constraints.maxWidth < 340;
+              final cuenta = Text(
+                RecargaBancariaConfig.numeroCuenta,
+                style: TextStyle(
+                  color: accent,
+                  fontSize: stacked ? 20 : 22,
+                  fontWeight: FontWeight.w900,
+                  height: 1.2,
                 ),
-              ),
-              FilledButton.tonalIcon(
+              );
+              final copiar = FilledButton.tonalIcon(
                 onPressed: () => _copiarNumero(context),
                 style: fondoOscuro
                     ? FilledButton.styleFrom(
-                        backgroundColor: Colors.greenAccent.withValues(alpha: 0.2),
+                        backgroundColor:
+                            Colors.greenAccent.withValues(alpha: 0.2),
                         foregroundColor: Colors.greenAccent,
                       )
                     : null,
                 icon: const Icon(Icons.copy, size: 18),
                 label: const Text('Copiar'),
-              ),
-            ],
+              );
+              if (stacked) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('No. cuenta', style: label()),
+                    cuenta,
+                    const SizedBox(height: 8),
+                    Align(alignment: Alignment.centerLeft, child: copiar),
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('No. cuenta', style: label()),
+                        cuenta,
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  copiar,
+                ],
+              );
+            },
           ),
           if (mostrarNota) ...[
             const SizedBox(height: 8),

@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -159,7 +160,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     if (c == null) return;
     _mapProgrammaticCameraDepth++;
     try {
-      await op(c);
+      await op(c).timeout(const Duration(seconds: 2));
     } catch (_) {
       if (_mapProgrammaticCameraDepth > 0) _mapProgrammaticCameraDepth--;
     }
@@ -454,6 +455,27 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
   Future<void> _onLongPressMap(LatLng p) async {
     unawaited(_collapseMotorSheetForMap());
+
+    // Web / sin GPS: el primer long-press marca origen (recogida) para no
+    // dejar al cliente bloqueado si Chrome denegó ubicación.
+    if (_origenMap == null &&
+        (kIsWeb || !RaiUbicacionClienteService.instance.ubicacionLista)) {
+      _origenMap = p;
+      _updateOrigenMarker(p);
+      final placemarksO = await _safePlacemark(p.latitude, p.longitude);
+      origenTexto = placemarksO.isNotEmpty
+          ? _direccionBonitaRD(placemarksO.first)
+          : '(${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)})';
+      if (mounted) {
+        setState(() {});
+        _snack(
+          'Origen marcado en el mapa. Ahora elegí el destino '
+          '(buscador o mantén pulsado otra vez).',
+        );
+      }
+      return;
+    }
+
     latDestino = p.latitude;
     lonDestino = p.longitude;
     _destinoDet = null;
@@ -695,12 +717,17 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     setState(() => _cargando = true);
     final int runId = _cotizacionSeq;
     try {
-      final ready = await LocationPermissionService.ensureLocationReady(
+      final Position? pos =
+          await LocationPermissionService.posicionParaCotizarProduccion(
         context: context,
-        requestIfDenied: false,
+        pedirPermisoSiFalta: true,
       );
-      if (!ready.isUsable) {
-        if (!RaiUbicacionClienteService.instance.bannerActivo) {
+      if (pos == null && _origenMap == null) {
+        if (kIsWeb || !RaiUbicacionClienteService.instance.ubicacionLista) {
+          _snack(
+            'Sin GPS: mantené pulsado el mapa para marcar dónde te recogen.',
+          );
+        } else if (!RaiUbicacionClienteService.instance.bannerActivo) {
           _snack(LocationReadiness.kMsgEsperandoUbicacion);
         }
         setState(() => _cargando = false);
@@ -708,9 +735,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
       }
       unawaited(RaiUbicacionClienteService.instance.refrescar());
 
-      final posicion = ready.position!;
-      final origenLat = posicion.latitude;
-      final origenLon = posicion.longitude;
+      final origenLat = pos?.latitude ?? _origenMap!.latitude;
+      final origenLon = pos?.longitude ?? _origenMap!.longitude;
 
       final placemarksO = await _safePlacemark(origenLat, origenLon);
       final origenLegible = placemarksO.isNotEmpty
@@ -799,6 +825,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
       if (!mounted || runId != _cotizacionSeq) return;
 
+      final bool precioListo = precioDouble > 0;
       setState(() {
         latCliente = origenLat;
         lonCliente = origenLon;
@@ -812,6 +839,9 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         precioCalculado = precioDouble;
         _precioEsEstimadoOffline = estimadoOffline;
         ubicacionObtenida = true;
+        // Quitar "Calculando…" YA: no esperar el mapa (puede colgarse).
+        _cargando = false;
+        if (precioListo) _vistaResumenCotizada = true;
 
         _markers
           ..removeWhere((m) => m.markerId.value == 'destino')
@@ -853,15 +883,17 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         }
       });
 
+      if (precioListo) _animarSheetResumenMotor();
+
       if (_map != null && runId == _cotizacionSeq) {
         if (routeLatLng.length >= 2) {
-          await _motorMapAnimate(
+          unawaited(_motorMapAnimate(
             (c) => c.animateCamera(
               CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
             ),
-          );
+          ));
         } else {
-          await _motorMapAnimate(
+          unawaited(_motorMapAnimate(
             (c) => c.animateCamera(
               CameraUpdate.newLatLngBounds(
                 _boundsFrom(
@@ -871,7 +903,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                 80,
               ),
             ),
-          );
+          ));
         }
       }
     } catch (e) {
@@ -879,13 +911,8 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         _snack("❌ Error al calcular distancia: $e");
       }
     } finally {
-      if (mounted && runId == _cotizacionSeq) {
-        final mostrar = precioCalculado > 0 && ubicacionObtenida;
-        setState(() {
-          _cargando = false;
-          if (mostrar) _vistaResumenCotizada = true;
-        });
-        if (mostrar) _animarSheetResumenMotor();
+      if (mounted && runId == _cotizacionSeq && _cargando) {
+        setState(() => _cargando = false);
       }
     }
   }
@@ -1606,22 +1633,17 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                                 setState(() {});
 
                                                 if (_origenMap != null) {
-                                                  await _dibujarRutaReal(
+                                                  unawaited(_dibujarRutaReal(
                                                     oLat: _origenMap!.latitude,
                                                     oLon: _origenMap!.longitude,
                                                     dLat: det.lat,
                                                     dLon: det.lon,
                                                     previewOnly: true,
-                                                  );
+                                                  ));
                                                 }
+                                                // Cotizar en cel / laptop / PC / tablet.
                                                 if (mounted) {
-                                                  if (_origenMap != null) {
-                                                    await _obtenerUbicacionYCalcularPrecio();
-                                                  } else {
-                                                    setState(() =>
-                                                        _cotizacionPendienteSinGps =
-                                                            true);
-                                                  }
+                                                  await _obtenerUbicacionYCalcularPrecio();
                                                 }
                                               },
                                               onTextChanged: (t) {

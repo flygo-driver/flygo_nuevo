@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 
 import '../../widgets/admin_pool_comprobante_dialog.dart';
 import '../../widgets/admin_pool_cierre_recaudo_panel.dart';
@@ -11,6 +11,7 @@ import '../../servicios/pool_repo.dart';
 import '../../utils/pool_recaudo_central.dart';
 import '../../utils/pools_producto_copy.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 import 'package:flygo_nuevo/pantallas/comun/pool_gira_validar_entrada_page.dart';
@@ -653,8 +654,6 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
 
   @override
   Widget build(BuildContext context) {
-    final df = DateFormat('EEE d MMM yyyy • HH:mm', 'es');
-
     final chipSel = AdminUi.infoFill(context);
     final chipOn = AdminUi.onCard(context);
     final chipOff = AdminUi.secondary(context);
@@ -663,6 +662,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.girasCupos,
         title: 'Salidas por cupos (admin)',
         actions: [
           IconButton(
@@ -908,7 +908,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        df.format(fecha),
+                                        fmtFechaHoraAmPm(fecha, conAnio: true, sep: '•'),
                                         style: TextStyle(
                                             color: AdminUi.secondary(context),
                                             fontSize: 13),

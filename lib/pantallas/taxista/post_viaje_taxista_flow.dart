@@ -4,9 +4,11 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/taxista/reportar_cliente_viaje.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
@@ -18,11 +20,13 @@ class PostViajeTaxistaFlow extends StatefulWidget {
     required this.viajeId,
     required this.uidTaxista,
     this.viajeDataSemilla,
+    this.regresarAlPoolNormal = false,
   });
 
   final String viajeId;
   final String uidTaxista;
   final Map<String, dynamic>? viajeDataSemilla;
+  final bool regresarAlPoolNormal;
 
   @override
   State<PostViajeTaxistaFlow> createState() => _PostViajeTaxistaFlowState();
@@ -98,12 +102,14 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     if (!mounted) {
       await TaxistaColaPostCompletar.navegarTrasCompletar(
         uidTaxista: widget.uidTaxista,
+        regresarAlPoolNormal: widget.regresarAlPoolNormal,
       );
       return;
     }
     await TaxistaColaPostCompletar.navegarTrasCompletar(
       context: context,
       uidTaxista: widget.uidTaxista,
+      regresarAlPoolNormal: widget.regresarAlPoolNormal,
     );
   }
 
@@ -121,8 +127,9 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
         d['clienteCalificado'] == true || _salioDeCalificacion;
     final bool puedeRate =
         !yaCalificado && v.uidCliente.trim().isNotEmpty;
+    final bool esCorp = CorporativoTaxistaService.esViajeCorporativoDoc(d);
     final bool mostrarCalificacion = puedeRate &&
-        PostViajeRatingThrottle.viajeSolicitaCalificacionMutua(d);
+        (esCorp || PostViajeRatingThrottle.viajeSolicitaCalificacionMutua(d));
     if (puedeRate && !mostrarCalificacion) {
       _omitioCalificacionPorThrottle = true;
     }
@@ -196,8 +203,18 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     );
   }
 
+  double _gananciaNetaRd(Map<String, dynamic> d, Viaje v) {
+    final gc = d['ganancia_cents'];
+    if (gc is num && gc > 0) return gc.toDouble() / 100.0;
+    final g = d['gananciaTaxista'];
+    if (g is num && g > 0) return g.toDouble();
+    return PlataformaEconomia.gananciaTaxistaRdDesdeTotal(_totalRd(d, v));
+  }
+
   Widget _stepResumen(Viaje v, Map<String, dynamic> d) {
     final double total = _totalRd(d, v);
+    final double neto = _gananciaNetaRd(d, v);
+    final bool esCorp = CorporativoTaxistaService.esViajeCorporativoDoc(d);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(v.metodoPago);
     final bool esTransfer = MetodoPagoViaje.esTransferencia(v.metodoPago);
 
@@ -250,17 +267,41 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
                   style: TextStyle(color: Colors.white54, fontSize: 13),
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  _money(total),
-                  style: const TextStyle(
-                    color: Colors.greenAccent,
-                    fontSize: 42,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.5,
-                    height: 1.05,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _money(esCorp ? neto : total),
+                    style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontSize: 42,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                      height: 1.05,
+                    ),
                   ),
                 ),
-                if (esEfectivo) ...[
+                if (esCorp) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tarifa ruta ${_money(total)} · tu neto acumulado',
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Ruta corporativa: este neto se suma en Ganancias → Corporativo. '
+                    'RAI te transfiere al liquidar el período con la empresa. '
+                    'No cobrás al pasajero en la calle.',
+                    style: TextStyle(
+                      color: Colors.white60,
+                      fontSize: 13,
+                      height: 1.35,
+                    ),
+                  ),
+                ] else if (esEfectivo) ...[
                   const SizedBox(height: 12),
                   Text(
                     'Cobraste ${_money(total)} en efectivo al pasajero.',
@@ -308,6 +349,7 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
   Widget _stepCalificar(Viaje v, Map<String, dynamic> d) {
     final bool ya =
         d['clienteCalificado'] == true || _salioDeCalificacion;
+    final bool esCorp = CorporativoTaxistaService.esViajeCorporativoDoc(d);
 
     final double bottomPad = _scrollBottomPad(context);
     return SingleChildScrollView(
@@ -315,14 +357,21 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'Califica al pasajero',
-            style: TextStyle(
+          Text(
+            esCorp ? 'Califica al encargado' : 'Califica al pasajero',
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 22,
               fontWeight: FontWeight.w800,
             ),
           ),
+          if (esCorp) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Ruta corporativa: calificás al contacto de la empresa, no a cada pasajero.',
+              style: TextStyle(color: Colors.white60, fontSize: 13, height: 1.35),
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             '${v.origen} → ${v.destino}',

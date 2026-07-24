@@ -6,6 +6,9 @@ abstract final class MultiparadaRutaHelper {
 
   static const double metrosMinEntrePuntos = 40;
 
+  /// Rutas corporativas (recogida empresa → bajadas): umbral más bajo que taxi.
+  static const double metrosMinEntrePuntosCorporativo = 20;
+
   static double round6(double v) => double.parse(v.toStringAsFixed(6));
 
   static String normalizarLabel(String raw, String fallback) {
@@ -83,13 +86,23 @@ abstract final class MultiparadaRutaHelper {
     required double lonDestino,
     required String labelDestino,
     required List<({double lat, double lon, String label})> paradas,
+    double metrosMinimos = metrosMinEntrePuntos,
+    String? mensajeOrigenDestinoCercanos,
+    String? mensajeOrigenDestinoCoinciden,
   }) {
     if (!coordsValidas(latOrigen, lonOrigen) ||
         !coordsValidas(latDestino, lonDestino)) {
       return 'Origen o destino sin ubicación válida en el mapa.';
     }
-    if (coordsCercanas(latOrigen, lonOrigen, latDestino, lonDestino)) {
-      return 'El destino está demasiado cerca del origen. Elegí puntos distintos.';
+    if (coordsCercanas(
+      latOrigen,
+      lonOrigen,
+      latDestino,
+      lonDestino,
+      metros: metrosMinimos,
+    )) {
+      return mensajeOrigenDestinoCercanos ??
+          'El destino está demasiado cerca del origen. Elegí puntos distintos.';
     }
     final List<({double lat, double lon, String label})> secuencia =
         <({double lat, double lon, String label})>[
@@ -104,9 +117,11 @@ abstract final class MultiparadaRutaHelper {
           secuencia[i].lon,
           secuencia[j].lat,
           secuencia[j].lon,
+          metros: metrosMinimos,
         )) {
           if (i == 0 && j == secuencia.length - 1) {
-            return 'El destino coincide con el origen. Revisá la ruta.';
+            return mensajeOrigenDestinoCoinciden ??
+                'El destino coincide con el origen. Revisá la ruta.';
           }
           return 'Hay dos paradas en el mismo lugar (${secuencia[i].label} y '
               '${secuencia[j].label}). Ajustá origen, paradas o destino.';
@@ -129,23 +144,24 @@ abstract final class MultiparadaRutaHelper {
       <String, dynamic>{
         'lat': round6(latOrigen),
         'lon': round6(lonOrigen),
-        'label': labelOrigen,
+        'label': normalizarLabel(labelOrigen, 'Origen'),
         'rol': 'origen',
       },
     ];
     for (final Map<String, dynamic> w in waypoints) {
+      final orden = w['orden'];
       out.add(<String, dynamic>{
         'lat': w['lat'],
         'lon': w['lon'],
-        'label': w['label'],
+        'label': normalizarLabel((w['label'] ?? '').toString(), 'Parada'),
         'rol': 'parada',
-        'orden': w['orden'],
+        if (orden is num) 'orden': orden.toInt(),
       });
     }
     out.add(<String, dynamic>{
       'lat': round6(latDestino),
       'lon': round6(lonDestino),
-      'label': labelDestino,
+      'label': normalizarLabel(labelDestino, 'Destino'),
       'rol': 'destino',
     });
     return out;

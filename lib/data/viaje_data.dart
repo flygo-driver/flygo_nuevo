@@ -13,6 +13,7 @@ import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/data/pago_data.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/taxista_historial_repo.dart';
 import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
@@ -629,14 +630,28 @@ class ViajeData {
 
   /// Viajes completados del taxista: `uidTaxista` **o** `taxistaId` (legacy).
   static Future<List<Viaje>> obtenerHistorialTaxista(String uid) async {
-    final String trimmed = uid.trim();
-    if (trimmed.isEmpty) return <Viaje>[];
+    final raw = await rawHistorialTaxista(uid);
+    final ocultos = await TaxistaHistorialRepo.idsOcultos(uid.trim());
+    final List<Viaje> list = raw.entries
+        .where((e) => !ocultos.contains(e.key))
+        .map((e) => Viaje.fromMap(e.key, _normalize(e.value)))
+        .toList();
+    list.sort((Viaje a, Viaje b) => b.fechaHora.compareTo(a.fechaHora));
+    return list;
+  }
 
-    final Map<String, Viaje> byId = <String, Viaje>{};
+  /// Mapa crudo id → datos (para flags de pago / ocultar historial).
+  static Future<Map<String, Map<String, dynamic>>> rawHistorialTaxista(
+    String uid,
+  ) async {
+    final String trimmed = uid.trim();
+    if (trimmed.isEmpty) return <String, Map<String, dynamic>>{};
+
+    final Map<String, Map<String, dynamic>> byId = <String, Map<String, dynamic>>{};
 
     void merge(QuerySnapshot<Map<String, dynamic>> snap) {
       for (final QueryDocumentSnapshot<Map<String, dynamic>> d in snap.docs) {
-        byId[d.id] = Viaje.fromMap(d.id, _normalize(d.data()));
+        byId[d.id] = Map<String, dynamic>.from(d.data());
       }
     }
 
@@ -657,9 +672,11 @@ class ViajeData {
       );
     } catch (_) {}
 
-    final List<Viaje> list = byId.values.toList();
-    list.sort((Viaje a, Viaje b) => b.fechaHora.compareTo(a.fechaHora));
-    return list;
+    final ocultos = await TaxistaHistorialRepo.idsOcultos(trimmed);
+    for (final id in ocultos) {
+      byId.remove(id);
+    }
+    return byId;
   }
 
   /// Igual que [obtenerHistorialTaxista] en tiempo real (uid + taxistaId).
@@ -1220,64 +1237,11 @@ class ViajeData {
     required String viajeId,
     required String uidTaxista,
   }) async {
-    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
-    await _db.runTransaction((Transaction tx) async {
-      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
-      if (!snap.exists) throw Exception('El viaje no existe');
-      final Map<String, dynamic> d = snap.data()!;
-      if ((d['uidTaxista'] ?? '') != uidTaxista) {
-        throw Exception('No autorizado');
-      }
-
-      final String estadoActual =
-          EstadosViaje.normalizar((d['estado'] ?? '').toString());
-      final bool permitido = (estadoActual == EstadosViaje.aceptado ||
-          estadoActual == EstadosViaje.enCaminoPickup);
-      if (!permitido) {
-        throw Exception('No se puede cancelar en este estado.');
-      }
-
-      DateTime fh;
-      final dynamic ts = d['fechaHora'];
-      if (ts is Timestamp) {
-        fh = ts.toDate();
-      } else if (ts is DateTime) {
-        fh = ts;
-      } else if (ts is String) {
-        fh = DateTime.tryParse(ts) ?? DateTime.now();
-      } else {
-        fh = DateTime.now();
-      }
-      final bool esAhora =
-          TripPublishWindows.esAhoraPorFechaPickup(fh, DateTime.now());
-
-      tx.update(ref, <String, dynamic>{
-        'estado': _estadoCanon(EstadosViaje.pendiente),
-        'aceptado': false,
-        'rechazado': false,
-        'uidTaxista': '',
-        'taxistaId': '',
-        'nombreTaxista': '',
-        'telefono': '',
-        'placa': '',
-        'republicado': true,
-        'canceladoPor': 'taxista',
-        'canceladoTaxistaEn': FieldValue.serverTimestamp(),
-        'esAhora': esAhora,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      });
-
-      final refTax = _db.collection('usuarios').doc(uidTaxista);
-      tx.set(
-          refTax,
-          {
-            'viajeActivoId': '',
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true));
-    });
+    // Ya no se republica: misma semántica que cancelarPorTaxista (viaje cancelado).
+    await ViajesRepo.cancelarPorTaxista(
+      viajeId: viajeId,
+      uidTaxista: uidTaxista,
+    );
   }
 
   // ===================================================================

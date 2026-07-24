@@ -136,7 +136,7 @@ class BolaPuebloFirestoreSync {
         'estado': 'finalizada',
         'estadoViajeBola': 'finalizada',
         'finalizadaEn': FieldValue.serverTimestamp(),
-        'comisionAplicada': true,
+        // No marcar comisionAplicada aquí: lo fija el servidor al debitar prepago.
         'viajeCompletadoId': vid,
         'updatedAt': FieldValue.serverTimestamp(),
         'metodoPago': esEfectivo ? 'efectivo' : 'transferencia',

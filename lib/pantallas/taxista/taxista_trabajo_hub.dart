@@ -4,11 +4,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/toggle_disponibilidad.dart';
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
 
 /// En curso + disponibilidad (sin duplicar la barra inferior).
 class TaxistaTrabajoHub extends StatelessWidget {
@@ -19,34 +23,70 @@ class TaxistaTrabajoHub extends StatelessWidget {
     'en_camino_pickup',
     'a_bordo',
     'en_curso',
+    'en_origen_esperando_codigo',
+    'pendiente_codigo',
+    'esperando_codigo_encargado',
   };
 
-  static const bool _qaGraceOnAccountSwitch = bool.fromEnvironment(
-    'QA_ACCOUNT_SWITCH_GRACE',
-    defaultValue: true,
-  );
-  static const Duration _qaGraceWindow = Duration(minutes: 3);
-
-  static DateTime? _toDate(dynamic v) {
-    if (v is Timestamp) return v.toDate();
-    if (v is DateTime) return v;
-    return null;
-  }
-
-  /// Negociación Bola → tablero; acordado/en curso → [ViajeEnCursoTaxista] como taxi.
-  static void openViajeActivoTaxista(
+  /// Negociación Bola → tablero; taxi/pool → Viaje en curso. Corporativo → Mis rutas.
+  static Future<void> openViajeActivoTaxista(
     BuildContext context, {
     Map<String, dynamic>? datosViaje,
-  }) {
+  }) async {
     if (datosViaje != null &&
         ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(
             datosViaje)) {
       unawaited(NavigationService.clearAndGoBolaTablero());
       return;
     }
-    Navigator.of(context).push<void>(
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    String viajeId = '';
+    Map<String, dynamic>? viajeData = datosViaje;
+    try {
+      final uSnap = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uid)
+          .get();
+      viajeId = (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (viajeId.isNotEmpty && viajeData == null) {
+        final vSnap = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(viajeId)
+            .get();
+        viajeData = vSnap.data();
+      }
+    } catch (_) {}
+
+    if (!context.mounted) return;
+
+    if (viajeId.isEmpty ||
+        viajeData == null ||
+        CorporativoTaxistaService.esViajeCorporativoAsignado(viajeData, uid) ||
+        !ViajesRepo.viajeVisibleEnCursoTaxista(viajeData, uid)) {
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+      ActiveTripService.cancelarBloqueoShellTaxista();
+      ActiveTripService.notificarRebuildShell();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No tienes un viaje en curso. Las rutas corporativas están en '
+            '«Rutas corporativas».',
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    await NavigationService.clearAndGoViajeEnCursoTaxista();
+  }
+
+  static Future<void> _abrirRutaCorporativaLista(BuildContext context) async {
+    await Navigator.of(context, rootNavigator: true).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => const ViajeEnCursoTaxista(),
+        builder: (_) => const MisRutasCorporativasPage(),
       ),
     );
   }
@@ -55,13 +95,11 @@ class TaxistaTrabajoHub extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mi trabajo'),
-        centerTitle: true,
-      ),
+    return RaiDriverTabScaffold(
+      title: 'Mi trabajo',
+      subtitle: 'Viaje activo, rutas y disponibilidad',
       body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: [
           if (user != null)
             StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -75,10 +113,11 @@ class TaxistaTrabajoHub extends StatelessWidget {
                     (uData['viajeActivoId'] ?? '').toString().trim();
 
                 if (viajeActivoId.isEmpty) {
-                  return _HubCard(
-                    icon: Icons.navigation_outlined,
+                  return RaiDriverHubCard(
+                    icon: Icons.navigation_rounded,
                     title: 'Viaje en curso',
                     subtitle: 'No tienes un viaje activo',
+                    accent: RaiDriverColors.neon,
                     onTap: () => openViajeActivoTaxista(context),
                   );
                 }
@@ -89,81 +128,60 @@ class TaxistaTrabajoHub extends StatelessWidget {
                       .doc(viajeActivoId)
                       .snapshots(),
                   builder: (context, vSnap) {
-                    final csV = Theme.of(context).colorScheme;
                     final vData = vSnap.data?.data();
                     final uidTx =
                         (vData?['uidTaxista'] ?? vData?['taxistaId'] ?? '')
                             .toString();
                     final estado = EstadosViaje.normalizar(
                         (vData?['estado'] ?? '').toString());
-                    final activo = vData?['activo'] == true;
                     final uidCliente =
                         (vData?['uidCliente'] ?? vData?['clienteId'] ?? '')
                             .toString()
                             .trim();
-                    final visible = vData != null &&
-                        uidTx == user.uid &&
-                        activo &&
+                    final esCorp = vData != null &&
+                        CorporativoTaxistaService.esViajeCorporativoAsignado(
+                          vData,
+                          user.uid,
+                        );
+
+                    // Corporativo no usa «Viaje en curso» — solo «Rutas corporativas».
+                    if (esCorp || vData == null) {
+                      return RaiDriverHubCard(
+                        icon: Icons.navigation_rounded,
+                        title: 'Viaje en curso',
+                        subtitle: 'No tienes un viaje activo',
+                        accent: RaiDriverColors.neon,
+                        onTap: () => openViajeActivoTaxista(context),
+                      );
+                    }
+
+                    final visible = uidTx == user.uid &&
                         uidCliente.isNotEmpty &&
                         _estadosActivos.contains(estado);
 
-                    if (!visible && viajeActivoId.isNotEmpty) {
-                      final now = DateTime.now();
-                      final lastLoginAt = _toDate(
-                        uData['lastLogin'] ??
-                            uData['updatedAt'] ??
-                            uData['actualizadoEn'],
-                      );
-                      final inQaGrace = _qaGraceOnAccountSwitch &&
-                          lastLoginAt != null &&
-                          now.difference(lastLoginAt) <= _qaGraceWindow;
-                      if (inQaGrace) {
-                        return _HubCard(
-                          icon: Icons.navigation_outlined,
-                          title: 'Viaje en curso',
-                          subtitle: 'Sincronizando estado del viaje...',
-                          onTap: () => openViajeActivoTaxista(
-                            context,
-                            datosViaje: vData,
-                          ),
-                        );
-                      }
-                      Future<void>(() async {
-                        try {
-                          await FirebaseFirestore.instance
-                              .collection('usuarios')
-                              .doc(user.uid)
-                              .set({
-                            'viajeActivoId': '',
-                            'updatedAt': FieldValue.serverTimestamp(),
-                            'actualizadoEn': FieldValue.serverTimestamp(),
-                          }, SetOptions(merge: true));
-                        } catch (_) {}
-                      });
-                    }
-
-                    return _HubCard(
-                      icon: Icons.navigation_outlined,
+                    return RaiDriverHubCard(
+                      icon: Icons.navigation_rounded,
                       title: 'Viaje en curso',
                       subtitle: visible
                           ? 'Tienes un viaje activo'
-                          : 'No tienes viaje en curso',
-                      trailing: visible
+                          : 'Viaje vinculado · abrí para continuar',
+                      accent: RaiDriverColors.neon,
+                      badge: visible
                           ? Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 10,
                                 vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: csV.primaryContainer,
+                                color: RaiDriverColors.neon
+                                    .withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(999),
-                                border: Border.all(color: csV.primary),
                               ),
-                              child: Text(
+                              child: const Text(
                                 'Activo',
                                 style: TextStyle(
-                                  color: csV.onPrimaryContainer,
-                                  fontWeight: FontWeight.w700,
+                                  color: RaiDriverColors.neon,
+                                  fontWeight: FontWeight.w800,
                                   fontSize: 12,
                                 ),
                               ),
@@ -179,67 +197,108 @@ class TaxistaTrabajoHub extends StatelessWidget {
               },
             )
           else
-            _HubCard(
-              icon: Icons.navigation_outlined,
+            RaiDriverHubCard(
+              icon: Icons.navigation_rounded,
               title: 'Viaje en curso',
               subtitle: 'Inicia sesión',
+              accent: RaiDriverColors.neon,
               onTap: () {},
             ),
-          _HubCard(
-            icon: Icons.toggle_on_outlined,
+          if (user != null)
+            StreamBuilder<Map<String, dynamic>?>(
+              stream:
+                  CorporativoTaxistaService.streamOperacionChofer(user.uid),
+              builder: (context, opSnap) {
+                final rutasOp =
+                    CorporativoTaxistaService.rutasDesdeOperacion(opSnap.data);
+                return StreamBuilder<
+                    List<DocumentSnapshot<Map<String, dynamic>>>>(
+                  stream:
+                      CorporativoTaxistaService.streamViajesAsignados(user.uid),
+                  builder: (context, snap) {
+                    final nDocs = snap.data?.length ?? 0;
+                    final n = nDocs > 0 ? nDocs : rutasOp.length;
+                    if (n <= 0) return const SizedBox.shrink();
+                    final listoOp = rutasOp.any(
+                      (r) =>
+                          r['listoParaAbrir'] == true &&
+                          (r['viajeHoyId'] ?? '').toString().trim().isNotEmpty,
+                    );
+                    final empresasListas = rutasOp
+                        .where(
+                          (r) =>
+                              r['listoParaAbrir'] == true &&
+                              (r['viajeHoyId'] ?? '')
+                                  .toString()
+                                  .trim()
+                                  .isNotEmpty,
+                        )
+                        .map(
+                          (r) => (r['empresaNombre'] ?? 'Empresa')
+                              .toString()
+                              .trim(),
+                        )
+                        .where((e) => e.isNotEmpty)
+                        .toSet()
+                        .join(' · ');
+                    return RaiDriverHubCard(
+                      icon: Icons.alt_route_rounded,
+                      title: 'Rutas corporativas',
+                      subtitle: listoOp && empresasListas.isNotEmpty
+                          ? 'Lista: $empresasListas'
+                          : listoOp
+                              ? 'Lista · tocá para abrir el viaje del día'
+                              : (n == 1
+                                  ? '1 ruta · agenda y horarios'
+                                  : '$n rutas · agenda y horarios'),
+                      accent: RaiDriverColors.blue,
+                      badge: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: RaiDriverColors.blue.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '$n',
+                          style: const TextStyle(
+                            color: RaiDriverColors.blue,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      onTap: () async {
+                        await _abrirRutaCorporativaLista(context);
+                      },
+                      onLongPress: () {
+                        Navigator.of(context, rootNavigator: true).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const MisRutasCorporativasPage(),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          RaiDriverHubCard(
+            icon: Icons.toggle_on_rounded,
             title: 'Disponibilidad',
             subtitle: 'Recibir viajes: ON / OFF',
+            accent: RaiDriverColors.teal,
             onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
+              Navigator.of(context, rootNavigator: true).push<void>(
+                MaterialPageRoute<void>(
                   builder: (_) => const ToggleDisponibilidad(),
                 ),
               );
             },
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _HubCard extends StatelessWidget {
-  const _HubCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-    this.trailing,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        leading: CircleAvatar(
-          backgroundColor: cs.primaryContainer,
-          foregroundColor: cs.onPrimaryContainer,
-          child: Icon(icon),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-        ),
-        subtitle: Text(subtitle),
-        trailing: trailing ?? Icon(Icons.chevron_right, color: cs.outline),
-        onTap: onTap,
       ),
     );
   }

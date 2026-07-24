@@ -1,12 +1,12 @@
 // lib/pantallas/cliente/confirmar_viaje.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
 class ConfirmarViajePage extends StatefulWidget {
@@ -82,13 +82,13 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
     );
     if (!mounted || pickedDate == null) return;
 
-    final pickedTime = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(
+    final pickedTime = await elegirHoraAmPm(
+      context,
+      initial: TimeOfDay.fromDateTime(
         _fechaHora.isAfter(now) ? _fechaHora : now,
       ),
-      helpText: 'Selecciona la hora',
-      builder: (context, child) => Theme(
+      helpText: 'Selecciona la hora (AM / PM)',
+      wrapChild: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.dark(
             primary: Colors.greenAccent,
@@ -96,7 +96,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
             onSurface: Colors.white,
           ),
         ),
-        child: child!,
+        child: child,
       ),
     );
     if (!mounted || pickedTime == null) return;
@@ -306,8 +306,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          DateFormat('EEE d MMM, HH:mm', 'es')
-                              .format(_fechaHora),
+                          fmtFechaHoraAmPm(_fechaHora, sep: ','),
                           maxLines: 2,
                           softWrap: true,
                           overflow: TextOverflow.ellipsis,

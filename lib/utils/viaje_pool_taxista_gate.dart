@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
@@ -198,6 +199,10 @@ class ViajePoolTaxistaGate {
     final String canalAsignacion =
         (data['canalAsignacion'] ?? 'pool').toString();
 
+    if (canalAsignacion == 'corporativo_fijo') {
+      return false;
+    }
+
     if (tipoServicio == 'turismo' ||
         canalAsignacion == 'admin' ||
         canalAsignacion == AsignacionTurismoRepo.canalTurismoPool) {
@@ -364,6 +369,14 @@ class ViajePoolTaxistaGate {
     if (data['completado'] == true || EstadosViaje.esTerminal(st)) {
       return false;
     }
+    if (data['rechazado'] == true) return false;
+
+    // Taxista canceló (incluso legado republicado a pendiente): no overlay.
+    final String canceladoPor =
+        (data['canceladoPor'] ?? '').toString().trim().toLowerCase();
+    if (canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado') {
+      return false;
+    }
 
     if (debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(data)) {
       return false;
@@ -371,6 +384,18 @@ class ViajePoolTaxistaGate {
 
     final bool esCliente = _usuarioEsClienteEnDoc(data, uid);
     final bool esTaxista = _usuarioEsTaxistaEnDoc(data, uid);
+
+    if (CorporativoTaxistaService.esViajeCorporativoAsignado(data, uid)) {
+      // Corporativo: pantalla «Elige tu destino» / Mis rutas — sin overlay taxista.
+      return false;
+    }
+
+    // Turismo: el chofer solo ve overlay tras aceptar desde el pool (no cola ADM).
+    if ((data['tipoServicio'] ?? '').toString() == 'turismo' && esTaxista) {
+      final bool aceptadoTrip = data['aceptado'] == true ||
+          EstadosViaje.activos.contains(st);
+      if (!aceptadoTrip) return false;
+    }
 
     if (esCliente &&
         data['programado'] == true &&

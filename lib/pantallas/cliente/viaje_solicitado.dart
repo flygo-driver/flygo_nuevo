@@ -37,20 +37,25 @@ class _ViajeSolicitadoActivoBootstrapState
 
   Future<void> _redirigirSiCorresponde() async {
     if (!mounted) return;
+    if (ActiveTripService.debeForzarInicioClienteShell) {
+      print(
+        '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap omitido (forzar inicio)',
+      );
+      return;
+    }
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) return;
-    NavigatorState? preNav = NavigationService.navigatorKey.currentState;
-    if (preNav == null && mounted) {
-      preNav = Navigator.of(context, rootNavigator: true);
-    }
     print(
         '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap init uid=$uid → comprobar activo');
     try {
       final bool ok = await ActiveTripService.tieneViajeActivo(uid);
       if (!mounted || !ok) return;
+      // Ya estamos dentro de [ClienteShell]: no hacer pushAndRemoveUntil en el
+      // tab anidado (deja el flujo roto). Pedimos overlay y rebuild del shell.
       print(
-          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → clearAndGoViajeEnCursoCliente');
-      await NavigationService.clearAndGoViajeEnCursoCliente(preNav: preNav);
+          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → overlay shell');
+      ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 120));
+      ActiveTripService.notificarRebuildShell();
     } catch (e) {
       print('[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap error: $e');
     }
@@ -70,6 +75,12 @@ class ViajeSolicitadoActivo {
     NavigatorState? preNav,
   }) async {
     if (!context.mounted) return;
+    if (ActiveTripService.debeForzarInicioClienteShell) {
+      print(
+        '[VIAJE_ACTIVO] ViajeSolicitadoActivo omitido (forzar inicio)',
+      );
+      return;
+    }
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     NavigatorState? nav = preNav ?? NavigationService.navigatorKey.currentState;

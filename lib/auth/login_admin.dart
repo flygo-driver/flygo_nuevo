@@ -1,4 +1,5 @@
 // lib/auth/login_admin.dart
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -148,29 +149,43 @@ class _LoginAdminState extends State<LoginAdmin> {
 
     setState(() => _loadingGoogle = true);
     try {
-      final g = GoogleSignIn(scopes: const ['email']);
-      final acc = await g.signIn();
-      if (acc == null) {
-        // cancelado
+      // Cerrar sesión previa para poder elegir otro Gmail (admin vs cliente).
+      await _signOutAll();
+
+      if (kIsWeb) {
+        final provider = GoogleAuthProvider()
+          ..addScope('email')
+          ..addScope('profile')
+          ..setCustomParameters(const {'prompt': 'select_account'});
+        // Account Chooser clásico (no popup FedCM: solo mostraba 1 cuenta).
+        await FirebaseAuth.instance.signInWithRedirect(provider);
         return;
+      } else {
+        final g = GoogleSignIn(scopes: const ['email']);
+        await g.signOut();
+        final acc = await g.signIn();
+        if (acc == null) return;
+        final gAuth = await acc.authentication;
+        final idToken = gAuth.idToken;
+        final accessToken = gAuth.accessToken;
+        if (idToken == null || accessToken == null) {
+          _snack('Google no devolvió tokens. Intenta otra vez.');
+          return;
+        }
+        await FirebaseAuth.instance.signInWithCredential(
+          GoogleAuthProvider.credential(
+            idToken: idToken,
+            accessToken: accessToken,
+          ),
+        );
       }
-      final gAuth = await acc.authentication;
-      final idToken = gAuth.idToken;
-      final accessToken = gAuth.accessToken;
-
-      if (idToken == null || accessToken == null) {
-        _snack('Google no devolvió tokens. Intenta otra vez.');
-        return;
-      }
-
-      final cred = GoogleAuthProvider.credential(
-        idToken: idToken,
-        accessToken: accessToken,
-      );
-
-      await FirebaseAuth.instance.signInWithCredential(cred);
       await _postLoginCheckAdmin();
     } on FirebaseAuthException catch (e) {
+      if (e.code == 'popup-closed-by-user' ||
+          e.code == 'cancelled-popup-request' ||
+          e.code == 'redirect-pending') {
+        return;
+      }
       _snack('No se pudo iniciar con Google (${e.code}).');
     } catch (err) {
       _snack('Error: $err');

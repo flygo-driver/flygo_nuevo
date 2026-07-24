@@ -47,7 +47,9 @@ class LocationDeniedWidget extends StatelessWidget {
           if (showOpenGps)
             FilledButton.tonalIcon(
               onPressed: () =>
-                  LocationPermissionService.openSystemLocationSettings(),
+                  LocationPermissionService.openSystemLocationSettings(
+                    context: context,
+                  ),
               icon: const Icon(Icons.gps_fixed),
               label: const Text('Abrir ajustes de ubicación'),
             ),
@@ -55,7 +57,9 @@ class LocationDeniedWidget extends StatelessWidget {
           if (showOpenAppSettings)
             OutlinedButton.icon(
               onPressed: () =>
-                  LocationPermissionService.openAppSettingsPage(),
+                  LocationPermissionService.openAppSettingsPage(
+                    context: context,
+                  ),
               icon: const Icon(Icons.app_settings_alt_outlined),
               label: const Text('Permisos de la app'),
             ),

@@ -18,7 +18,9 @@ class PermisosService {
           action: SnackBarAction(
             label: 'Ajustes de ubicación',
             onPressed: () =>
-                LocationPermissionService.openSystemLocationSettings(),
+                LocationPermissionService.openSystemLocationSettings(
+                  context: context,
+                ),
           ),
         ),
       );
@@ -33,7 +35,9 @@ class PermisosService {
           ),
           action: SnackBarAction(
             label: 'Ajustes',
-            onPressed: () => LocationPermissionService.openAppSettingsPage(),
+            onPressed: () => LocationPermissionService.openAppSettingsPage(
+              context: context,
+            ),
           ),
         ),
       );
@@ -46,7 +50,9 @@ class PermisosService {
           content: const Text('RAI necesita permiso de ubicación para continuar.'),
           action: SnackBarAction(
             label: 'Ajustes',
-            onPressed: () => LocationPermissionService.openAppSettingsPage(),
+            onPressed: () => LocationPermissionService.openAppSettingsPage(
+              context: context,
+            ),
           ),
         ),
       );

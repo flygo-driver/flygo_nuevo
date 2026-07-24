@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
@@ -73,7 +75,7 @@ class RaiOfflineCotizacionService {
         destLon: destLon,
         withTraffic: withTraffic,
         region: region,
-      );
+      ).timeout(const Duration(seconds: 14));
       if (dir != null && dir.km > 0 && _kmValido(dir.km, maxKmCotizable)) {
         return RaiDistanciaCotizacion(
           km: dir.km,
@@ -83,7 +85,7 @@ class RaiOfflineCotizacionService {
         );
       }
     } catch (_) {
-      // Fallback local si Directions falla con red inestable.
+      // Timeout / red inestable → haversine (no congelar "Calculando precio…").
     }
 
     if (!_kmValido(haversine, maxKmCotizable)) return null;

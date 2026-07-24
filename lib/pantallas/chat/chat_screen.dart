@@ -15,11 +15,15 @@ class ChatScreen extends StatefulWidget {
   final String otroNombre;
   final String? viajeId;
 
+  /// Si true, el AppBar muestra solo [otroNombre] (sin prefijo «Chat con»).
+  final bool tituloCompacto;
+
   const ChatScreen({
     super.key,
     required this.otroUid,
     required this.otroNombre,
     this.viajeId,
+    this.tituloCompacto = false,
   });
 
   static const int kMaxMensajeLen = 800;
@@ -194,7 +198,11 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       backgroundColor: cs.surface,
       appBar: AppBar(
-        title: Text('Chat con ${widget.otroNombre}'),
+        title: Text(
+          widget.tituloCompacto
+              ? widget.otroNombre
+              : 'Chat con ${widget.otroNombre}',
+        ),
         backgroundColor: cs.surface,
         foregroundColor: cs.onSurface,
         surfaceTintColor: cs.surfaceTint,

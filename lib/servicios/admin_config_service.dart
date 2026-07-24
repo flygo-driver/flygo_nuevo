@@ -1,5 +1,7 @@
 import 'package:cloud_functions/cloud_functions.dart';
 
+import 'package:flygo_nuevo/servicios/corporativo_tarifa_config_service.dart';
+
 class AdminConfigService {
   static final FirebaseFunctions _fx = FirebaseFunctions.instanceFor(
     region: 'us-central1',
@@ -42,6 +44,17 @@ class AdminConfigService {
     final c = _fx.httpsCallable('updateTarifasTramosConfig');
     await c.call(<String, dynamic>{
       'tarifasTramos': tarifasTramos,
+      'motivo': motivo,
+    });
+  }
+
+  static Future<void> setCorporativoTarifaConfig({
+    required CorporativoTarifaConfig config,
+    required String motivo,
+  }) async {
+    final c = _fx.httpsCallable('setCorporativoTarifaConfig');
+    await c.call(<String, dynamic>{
+      'corporativo': config.toMap(),
       'motivo': motivo,
     });
   }

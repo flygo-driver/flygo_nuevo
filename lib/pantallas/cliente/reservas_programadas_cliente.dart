@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_confirmacion.dart
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 
 /// Lista de viajes programados aún no terminados (acceso desde el menú).
 class ReservasProgramadasCliente extends StatelessWidget {
@@ -21,13 +22,6 @@ class ReservasProgramadasCliente extends StatelessWidget {
       return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
     }
     return DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  static double _asDouble(dynamic v) {
-    if (v == null) return 0;
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v) ?? 0;
-    return 0;
   }
 
   static bool _esTerminal(Map<String, dynamic> d) {
@@ -124,8 +118,7 @@ class ReservasProgramadasCliente extends StatelessWidget {
                     final destino = (m['destino'] ?? '').toString();
                     final esTurismo =
                         (m['tipoServicio'] ?? '').toString() == 'turismo';
-                    final precio = _asDouble(
-                        m['precioFinal'] ?? m['precio'] ?? m['total']);
+                    final precio = totalRdDesdeDocViaje(m);
                     final ref = d.id.length >= 6 ? d.id.substring(0, 6) : d.id;
                     return Material(
                       color: const Color(0xFF1A1A1A),

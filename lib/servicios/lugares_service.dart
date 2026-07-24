@@ -1,10 +1,22 @@
 // lib/servicios/lugares_service.dart
 import 'dart:convert';
-import 'dart:io';
+
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:geocoding/geocoding.dart' as geocoding;
+import 'package:http/http.dart' as http;
 import 'package:flygo_nuevo/keys.dart' as app_keys; // key centralizada
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+
+Map<String, dynamic>? _asStringKeyedMap(dynamic value) {
+  if (value == null) return null;
+  if (value is Map<String, dynamic>) return value;
+  if (value is Map) {
+    return value.map((k, v) => MapEntry(k.toString(), v));
+  }
+  return null;
+}
 
 class PrediccionLugar {
   final String placeId;
@@ -52,10 +64,22 @@ class DetalleLugar {
 
 /// Búsqueda reciente compartida en toda la app (mismo prefs que [CampoLugarAutocomplete]).
 class RecienteLugar {
-  const RecienteLugar({required this.label, required this.placeId});
+  const RecienteLugar({
+    required this.label,
+    required this.placeId,
+    this.lat,
+    this.lon,
+    this.name,
+  });
 
   final String label;
   final String placeId;
+  final double? lat;
+  final double? lon;
+  final String? name;
+
+  bool get tieneCoordenadas =>
+      lat != null && lon != null && lat!.abs() > 1e-6 && lon!.abs() > 1e-6;
 }
 
 // ---------------- POIs locales (RD) con aliases ----------------
@@ -310,7 +334,18 @@ class LugaresService {
             final l = (m['l'] ?? m['label'] ?? '').toString().trim();
             if (l.isEmpty) continue;
             final p = (m['p'] ?? m['placeId'] ?? '').toString().trim();
-            list.add(RecienteLugar(label: l, placeId: p));
+            final lat = (m['lat'] as num?)?.toDouble();
+            final lon = (m['lon'] as num?)?.toDouble();
+            final name = (m['n'] ?? m['name'] ?? '').toString().trim();
+            list.add(
+              RecienteLugar(
+                label: l,
+                placeId: p,
+                lat: lat,
+                lon: lon,
+                name: name.isNotEmpty ? name : null,
+              ),
+            );
           }
         }
       } catch (_) {}
@@ -338,13 +373,29 @@ class LugaresService {
     });
     list.insert(
       0,
-      RecienteLugar(label: det.displayLabel, placeId: det.placeId),
+      RecienteLugar(
+        label: det.displayLabel,
+        placeId: det.placeId,
+        lat: det.lat,
+        lon: det.lon,
+        name: det.name,
+      ),
     );
     if (list.length > maxRecientesGlobal) {
       list = list.sublist(0, maxRecientesGlobal);
     }
     final encoded = jsonEncode(
-      list.map((e) => {'l': e.label, 'p': e.placeId}).toList(),
+      list
+          .map(
+            (e) => {
+              'l': e.label,
+              'p': e.placeId,
+              if (e.lat != null) 'lat': e.lat,
+              if (e.lon != null) 'lon': e.lon,
+              if (e.name != null && e.name!.trim().isNotEmpty) 'n': e.name,
+            },
+          )
+          .toList(),
     );
     await prefs.setString(prefsRecientesGlobal, encoded);
     await prefs.remove(prefsRecientesLegacy);
@@ -559,7 +610,8 @@ class LugaresService {
         if (status != 'OK' && status != 'ZERO_RESULTS') return;
         final List list = (json['predictions'] as List?) ?? const [];
         for (final e in list) {
-          final m = e as Map<String, dynamic>;
+          final m = _asStringKeyedMap(e);
+          if (m == null) continue;
           final placeId = (m['place_id'] ?? '').toString();
           if (placeId.isEmpty) continue;
           if (!seenIds.add(placeId)) continue;
@@ -568,7 +620,7 @@ class LugaresService {
           final int? distanceMeters = (m['distance_meters'] as num?)?.round();
           String primary = desc;
           String? secondary;
-          final sf = m['structured_formatting'] as Map<String, dynamic>?;
+          final sf = _asStringKeyedMap(m['structured_formatting']);
           final mainText = sf?['main_text']?.toString();
           final secText = sf?['secondary_text']?.toString();
           if ((mainText ?? '').trim().isNotEmpty) {
@@ -594,12 +646,24 @@ class LugaresService {
       Future<void> fetchVariant(String v) async {
         if (v.trim().isEmpty || remotes.length >= 30) return;
         final params = <String, String>{...baseParams, 'input': v.trim()};
-        final uri = Uri.https(
-          'maps.googleapis.com',
-          '/maps/api/place/autocomplete/json',
-          params,
-        );
-        parseAndAdd(await _getJson(uri));
+        Map<String, dynamic>? json;
+        if (kIsWeb) {
+          json = await _placesAutocompleteViaFunctions(
+            input: v.trim(),
+            country: country,
+            sessiontoken: _sessionToken,
+            biasLat: biasLat,
+            biasLon: biasLon,
+          );
+        } else {
+          final uri = Uri.https(
+            'maps.googleapis.com',
+            '/maps/api/place/autocomplete/json',
+            params,
+          );
+          json = await _getJson(uri);
+        }
+        parseAndAdd(json);
       }
 
       final variantList = expanded.toList();
@@ -638,8 +702,55 @@ class LugaresService {
   }
 
   /// Resuelve coordenadas a partir de una sugerencia del autocomplete (texto + placeId).
-  Future<DetalleLugar?> detalleDesdePrediccion(PrediccionLugar p) {
+  Future<DetalleLugar?> detalleDesdePrediccion(PrediccionLugar p) async {
+    if (_esPrediccionReciente(p)) {
+      final desdeCache = await detalleDesdeReciente(p);
+      if (desdeCache != null) return desdeCache;
+    }
     return detalle(p.placeId, hintDireccion: _hintDesdePrediccion(p));
+  }
+
+  bool _esPrediccionReciente(PrediccionLugar p) =>
+      p.secondary == 'Reciente' || p.placeId.startsWith('recent:');
+
+  /// Reciente con coords guardadas al elegir el lugar (evita geocodificar de nuevo).
+  Future<DetalleLugar?> detalleDesdeReciente(PrediccionLugar p) async {
+    final list = await cargarRecientes();
+    RecienteLugar? match;
+    final pid = p.placeId.trim();
+    final primary = p.primary.trim();
+    for (final e in list) {
+      if (pid.isNotEmpty && e.placeId.isNotEmpty && e.placeId == pid) {
+        match = e;
+        break;
+      }
+      if (pid.startsWith('recent:') &&
+          _norm(e.label) == _norm(pid.substring('recent:'.length))) {
+        match = e;
+        break;
+      }
+      if (_norm(e.label) == _norm(primary)) {
+        match = e;
+        break;
+      }
+    }
+    if (match == null) return null;
+    if (match.tieneCoordenadas) {
+      final nombre = (match.name ?? match.label).trim();
+      return DetalleLugar(
+        placeId: match.placeId.isNotEmpty
+            ? match.placeId
+            : 'recent:${match.label}',
+        name: nombre.isNotEmpty ? nombre : match.label,
+        address: match.label,
+        lat: match.lat!,
+        lon: match.lon!,
+      );
+    }
+    if (match.placeId.isNotEmpty && _esPlaceIdGoogle(match.placeId)) {
+      return _detalleGoogle(match.placeId);
+    }
+    return null;
   }
 
   String _hintDesdePrediccion(PrediccionLugar p) {
@@ -673,6 +784,41 @@ class LugaresService {
   }) async {
     final base = texto.trim();
     if (base.length < 2) return null;
+
+    // En web el plugin geocoding no funciona: usamos Places vía Functions.
+    if (kIsWeb) {
+      final json = await _placesFindFromTextViaFunctions(
+        input: base,
+        country: 'do',
+      );
+      if (json != null && (json['status'] ?? '').toString() == 'OK') {
+        final candidates = (json['candidates'] as List?) ?? const [];
+        if (candidates.isNotEmpty) {
+          final c = _asStringKeyedMap(candidates.first);
+          if (c != null) {
+            final geometry = _asStringKeyedMap(c['geometry']);
+            final loc = _asStringKeyedMap(geometry?['location']);
+            final lat = (loc?['lat'] as num?)?.toDouble();
+            final lon = (loc?['lng'] as num?)?.toDouble();
+            if (lat != null && lon != null) {
+              final name = (c['name'] ?? '').toString().trim();
+              final formatted =
+                  (c['formatted_address'] ?? '').toString().trim();
+              final pid = (c['place_id'] ?? placeId ?? 'geocoded:${_norm(base)}')
+                  .toString();
+              return DetalleLugar(
+                placeId: pid,
+                name: name.isNotEmpty ? name : (formatted.isNotEmpty ? formatted : base),
+                address: formatted.isNotEmpty ? formatted : base,
+                lat: lat,
+                lon: lon,
+              );
+            }
+          }
+        }
+      }
+      return null;
+    }
 
     final intentos = <String>{
       base,
@@ -717,31 +863,38 @@ class LugaresService {
 
   Future<DetalleLugar?> _detalleGoogle(String pid) async {
     try {
-      final params = <String, String>{
-        'place_id': pid,
-        'fields': 'name,formatted_address,geometry,address_components',
-        'language': 'es',
-        'key': app_keys.kGooglePlacesApiKey,
-      };
-      // Mismo session token que autocomplete (requerido tras el cambio a sesiones Places).
-      if (_sessionToken != null && _sessionToken!.trim().isNotEmpty) {
-        params['sessiontoken'] = _sessionToken!;
+      Map<String, dynamic>? json;
+      if (kIsWeb) {
+        json = await _placesDetailsViaFunctions(
+          placeId: pid,
+          sessiontoken: _sessionToken,
+        );
+      } else {
+        final params = <String, String>{
+          'place_id': pid,
+          'fields': 'name,formatted_address,geometry,address_components',
+          'language': 'es',
+          'key': app_keys.kGooglePlacesApiKey,
+        };
+        if (_sessionToken != null && _sessionToken!.trim().isNotEmpty) {
+          params['sessiontoken'] = _sessionToken!;
+        }
+        final uri = Uri.https(
+          'maps.googleapis.com',
+          '/maps/api/place/details/json',
+          params,
+        );
+        json = await _getJson(uri);
       }
-      final uri = Uri.https(
-        'maps.googleapis.com',
-        '/maps/api/place/details/json',
-        params,
-      );
-      final json = await _getJson(uri);
       if (json == null) return null;
       final status = (json['status'] ?? '').toString();
       if (status != 'OK') return null;
 
-      final r = json['result'] as Map<String, dynamic>?;
+      final r = _asStringKeyedMap(json['result']);
       if (r == null) return null;
 
-      final geometry = r['geometry'] as Map<String, dynamic>?;
-      final loc = geometry?['location'] as Map<String, dynamic>?;
+      final geometry = _asStringKeyedMap(r['geometry']);
+      final loc = _asStringKeyedMap(geometry?['location']);
       final lat = (loc?['lat'] as num?)?.toDouble();
       final lon = (loc?['lng'] as num?)?.toDouble();
       if (lat == null || lon == null) return null;
@@ -760,6 +913,71 @@ class LugaresService {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<Map<String, dynamic>?> _placesAutocompleteViaFunctions({
+    required String input,
+    String? country,
+    String? sessiontoken,
+    double? biasLat,
+    double? biasLon,
+  }) async {
+    try {
+      final fn = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('placesAutocomplete');
+      final res = await fn.call(<String, dynamic>{
+        'input': input,
+        if (country != null && country.trim().isNotEmpty) 'country': country,
+        if (sessiontoken != null && sessiontoken.trim().isNotEmpty)
+          'sessiontoken': sessiontoken,
+        if (biasLat != null) 'biasLat': biasLat,
+        if (biasLon != null) 'biasLon': biasLon,
+      });
+      final data = res.data;
+      if (data is Map) {
+        return _asStringKeyedMap(data);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _placesDetailsViaFunctions({
+    required String placeId,
+    String? sessiontoken,
+  }) async {
+    try {
+      final fn = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('placesDetails');
+      final res = await fn.call(<String, dynamic>{
+        'placeId': placeId,
+        if (sessiontoken != null && sessiontoken.trim().isNotEmpty)
+          'sessiontoken': sessiontoken,
+      });
+      final data = res.data;
+      if (data is Map) {
+        return _asStringKeyedMap(data);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _placesFindFromTextViaFunctions({
+    required String input,
+    String? country,
+  }) async {
+    try {
+      final fn = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('placesFindFromText');
+      final res = await fn.call(<String, dynamic>{
+        'input': input,
+        if (country != null && country.trim().isNotEmpty) 'country': country,
+      });
+      final data = res.data;
+      if (data is Map) {
+        return _asStringKeyedMap(data);
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<DetalleLugar?> detalle(
@@ -804,17 +1022,15 @@ class LugaresService {
   }
 
   Future<Map<String, dynamic>?> _getJson(Uri uri) async {
-    final client = HttpClient();
     try {
-      final req = await client.getUrl(uri);
-      final res = await req.close();
-      if (res.statusCode != 200) {
-        return null;
-      }
-      final body = await res.transform(utf8.decoder).join();
-      return jsonDecode(body) as Map<String, dynamic>;
-    } finally {
-      client.close(force: true);
+      final res = await http.get(uri).timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return null;
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 

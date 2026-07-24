@@ -50,14 +50,16 @@ abstract final class RaiPhoneAuthSync {
     if (!esAdmin &&
         !AppFlavorRolGuard.rolCompatibleConFlavor(rolActual) &&
         rolActual.isNotEmpty) {
+      final msg = AppFlavorRolGuard.mensajeMismatch(
+        rolFirestore: rolActual,
+        email: user.email,
+        telefono: telE164,
+      );
+      AppFlavorRolGuard.guardarMotivoRechazo(msg);
       await AppFlavorRolGuard.cerrarSesionTrasRechazo();
       throw FirebaseAuthException(
         code: 'role-mismatch',
-        message: AppFlavorRolGuard.mensajeMismatch(
-          rolFirestore: rolActual,
-          email: user.email,
-          telefono: telE164,
-        ),
+        message: msg,
       );
     }
 

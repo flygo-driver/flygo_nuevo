@@ -8,6 +8,7 @@ import '../../servicios/asignacion_turismo_repo.dart';
 import '../../servicios/turismo_control_adm_repo.dart';
 import '../../utils/calculos/estados.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 import 'asignar_viaje_turismo.dart';
@@ -358,6 +359,20 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
                                     color: AdminUi.onCard(context),
                                   ),
                                 ),
+                                if ((m['vehiculoRequerido'] ?? '')
+                                    .toString()
+                                    .trim()
+                                    .isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Vehículo: ${m['vehiculoRequerido']}',
+                                    style: TextStyle(
+                                      color: AdminUi.muted(context),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                                 if (ts != null) ...[
                                   const SizedBox(height: 4),
                                   Text(
@@ -778,6 +793,7 @@ class _AdminTurismoControlState extends State<AdminTurismoControl>
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.controlTurismo,
         title: 'Control turismo',
         bottom: TabBar(
           controller: _tabs,

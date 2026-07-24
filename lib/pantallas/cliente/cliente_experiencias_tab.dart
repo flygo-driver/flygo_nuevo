@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.d
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
 /// Tours / giras y Bola ahorro (mismas rutas que el drawer).
 class ClienteExperienciasTab extends StatelessWidget {
@@ -171,11 +172,10 @@ class ClienteExperienciasTab extends StatelessWidget {
       );
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Experiencias'),
-        centerTitle: true,
-      ),
+    return RaiShellTabScaffold(
+      title: 'Experiencias',
+      backTooltip: 'Inicio',
+      onBack: ShellTabController.clienteIrAInicio,
       body: cards.isEmpty
           ? Center(
               child: Padding(

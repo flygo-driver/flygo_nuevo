@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/auth/login_admin.dart';
+
 // Importa el panel admin desde donde realmente está en tu proyecto.
 import '../pantallas/admin/admin_centro_operaciones.dart';
 import '../servicios/launch_config_bootstrap.dart';
@@ -36,12 +38,15 @@ class AdminGate extends StatelessWidget {
           return _Error(msg: 'Error usuarios: ${snapUser.error}');
         }
 
-        final rolUsuario = (snapUser.data?.data()?['rol'] ?? '')
+        final dataUser = snapUser.data?.data() ?? <String, dynamic>{};
+        final rolUsuario = (dataUser['rol'] ?? '')
             .toString()
             .trim()
             .toLowerCase();
+        final isAdminFlag =
+            dataUser['isAdmin'] == true || dataUser['admin'] == true;
 
-        if (RolesService.esRolAdmin(rolUsuario)) {
+        if (RolesService.esRolAdmin(rolUsuario) || isAdminFlag) {
           return child ?? const _AdminCentroConBootstrap();
         }
 
@@ -97,15 +102,8 @@ class _NoAuth extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-        child: Text(
-          'Inicia sesión para continuar',
-          style: TextStyle(color: Colors.white70),
-        ),
-      ),
-    );
+    // Sin sesión → pantalla de login admin (no el selector de pasajero).
+    return const LoginAdmin();
   }
 }
 

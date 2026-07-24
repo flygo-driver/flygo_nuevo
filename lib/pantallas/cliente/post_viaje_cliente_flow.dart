@@ -564,14 +564,18 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
                   style: const TextStyle(color: Colors.white54, fontSize: 13),
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  _money(total),
-                  style: const TextStyle(
-                    color: Colors.greenAccent,
-                    fontSize: 42,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.5,
-                    height: 1.05,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _money(total),
+                    style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontSize: 42,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                      height: 1.05,
+                    ),
                   ),
                 ),
               ],

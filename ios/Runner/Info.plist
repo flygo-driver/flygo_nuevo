@@ -80,9 +80,12 @@
 			<string>fetch</string>
 			<string>remote-notification</string>
 		</array>
-		<!-- Reemplaza con tu clave real de Maps SDK para iOS -->
+		<key>NSMicrophoneUsageDescription</key>
+		<string>RAI necesita el micrófono para buscar direcciones por voz.</string>
+		<key>NSSpeechRecognitionUsageDescription</key>
+		<string>RAI usa reconocimiento de voz para buscar direcciones.</string>
 		<key>GMSApiKey</key>
-		<string>TU_API_KEY_DE_GOOGLE_MAPS</string>
+		<string>AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w</string>
 		<key>UIStatusBarHidden</key>
 		<true/>
 		<key>UIViewControllerBasedStatusBarAppearance</key>

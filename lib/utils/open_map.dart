@@ -21,11 +21,11 @@ Future<void> openMap({
   final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$q');
 
   if (await canLaunchUrl(uri)) {
-    // En web dejamos el modo por defecto; en móvil forzamos externa (app)
+    // Web: pestaña nueva (platformDefault navega la misma y deja RAI en blanco).
     await launchUrl(
       uri,
-      mode:
-          kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+      mode: LaunchMode.externalApplication,
+      webOnlyWindowName: kIsWeb ? '_blank' : null,
     );
   }
 }

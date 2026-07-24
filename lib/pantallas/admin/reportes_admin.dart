@@ -13,6 +13,7 @@ import 'admin_ui_theme.dart';
 import '../../servicios/admin_dashboard_service.dart';
 import '../../servicios/admin_reportes_service.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 
 class ReportesAdmin extends StatefulWidget {
@@ -96,6 +97,7 @@ class _ReportesAdminState extends State<ReportesAdmin> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.reportes,
         title: 'Reportes y Estadísticas',
         actions: [
           PopupMenuButton<int>(

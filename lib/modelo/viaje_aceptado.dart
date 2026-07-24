@@ -2,8 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import '../../utils/calculos/estados.dart';
 
 class ViajeAceptado extends StatefulWidget {
@@ -25,16 +26,11 @@ class _ViajeAceptadoState extends State<ViajeAceptado> {
 
   // --- Navegación ---
   Future<void> _abrirGoogleMapsDestino(double lat, double lon) async {
-    final url = Uri.parse(
-      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=driving',
-    );
-    await launchUrl(url, mode: LaunchMode.externalApplication);
+    await NavegacionExternaLauncher.abrirGoogleMapsDestino(lat, lon);
   }
 
   Future<void> _abrirGoogleMapsDireccion(String direccion) async {
-    final q = Uri.encodeComponent(direccion);
-    final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$q');
-    await launchUrl(url, mode: LaunchMode.externalApplication);
+    await NavegacionExternaLauncher.abrirGoogleMapsDireccion(direccion);
   }
 
   // --- Acciones ---
@@ -48,31 +44,13 @@ class _ViajeAceptadoState extends State<ViajeAceptado> {
       return;
     }
 
-    final ref = _db.collection('viajes').doc(widget.viajeId);
     final messenger = ScaffoldMessenger.maybeOf(context);
 
     try {
-      await _db.runTransaction((tx) async {
-        final snap = await tx.get(ref);
-        if (!snap.exists) throw Exception('El viaje no existe');
-        final d = snap.data() as Map<String, dynamic>;
-
-        // seguridad básica
-        if ((d['uidTaxista'] ?? '') != uid) {
-          throw Exception('No autorizado');
-        }
-
-        final estado = (d['estado'] ?? '').toString();
-        if (!EstadosViaje.esAceptado(estado)) {
-          throw Exception('El estado actual no permite marcar a bordo');
-        }
-
-        tx.update(ref, {
-          'estado': EstadosViaje.aBordo, // 'a_bordo'
-          'pickupConfirmadoEn': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      });
+      await ViajesRepo.marcarClienteAbordo(
+        viajeId: widget.viajeId,
+        uidTaxista: uid,
+      );
 
       if (!mounted) return;
       messenger?.showSnackBar(

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -196,7 +197,7 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
     RaiUbicacionClienteModo modoActual,
   ) async {
     if (modoActual == RaiUbicacionClienteModo.permisoBloqueado) {
-      feedbackSinUbicacion.value = RaiUbicacionUiConstants.msgIrAjustesManual;
+      feedbackSinUbicacion.value = RaiUbicacionUiConstants.msgIrAjustesManualPlataforma;
       return;
     }
     if (modoActual == RaiUbicacionClienteModo.gpsApagado &&
@@ -223,7 +224,7 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
   }
 
   /// Botón único de RAI → GPS del teléfono, cuadro «Permitir» o Ajustes de la app.
-  Future<void> activarUbicacionDesdeApp() async {
+  Future<void> activarUbicacionDesdeApp({BuildContext? context}) async {
     if (solicitudEnCurso.value) return;
     await LocationPermissionService.marcarActivacionDesdeAppRai();
     solicitudEnCurso.value = true;
@@ -232,6 +233,7 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
         bannerEnAlertaRoja: bannerEnAlertaRoja,
         modoPermisoBloqueado:
             modo.value == RaiUbicacionClienteModo.permisoBloqueado,
+        context: context,
       );
 
       if (r.concedido) {
@@ -250,14 +252,14 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
 
       if (r.permission == LocationPermission.deniedForever) {
         await _registrarIntentoFallido(
-          RaiUbicacionUiConstants.msgIrAjustesManual,
+          RaiUbicacionUiConstants.msgIrAjustesManualPlataforma,
         );
         modo.value = RaiUbicacionClienteModo.permisoBloqueado;
         return;
       }
 
       if (r.abrioAjustesApp) {
-        await _registrarIntentoFallido(RaiUbicacionUiConstants.msgIrAjustesManual);
+        await _registrarIntentoFallido(RaiUbicacionUiConstants.msgIrAjustesManualPlataforma);
         modo.value = RaiUbicacionClienteModo.permisoPendiente;
       } else {
         await _registrarIntentoFallido(kMsgAunSinUbicacion);
@@ -301,12 +303,20 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
   String get mensajeBanner {
     switch (modo.value) {
       case RaiUbicacionClienteModo.gpsApagado:
-        return 'Enciende el GPS del teléfono. Toca «Activar ubicación» y RAI te lleva ahí.';
+        return kIsWeb
+            ? 'Activa la ubicación del equipo o permite ubicación en el navegador. '
+                'Toca «Activar ubicación».'
+            : 'Enciende el GPS del teléfono. Toca «Activar ubicación» y RAI te lleva ahí.';
       case RaiUbicacionClienteModo.permisoPendiente:
-        return 'Para cotizar tu viaje, toca «Activar ubicación». '
-            'Se abrirá el cuadro del teléfono: elige «Al usar la app».';
+        return kIsWeb
+            ? 'Para cotizar tu viaje, toca «Activar ubicación». '
+                'Elige «Permitir» en el cuadro del navegador.'
+            : 'Para cotizar tu viaje, toca «Activar ubicación». '
+                'Se abrirá el cuadro del teléfono: elige «Al usar la app».';
       case RaiUbicacionClienteModo.permisoBloqueado:
-        return 'Toca «Abrir ajustes» o ve a Cuenta → Ubicación para permitir ubicación.';
+        return kIsWeb
+            ? RaiUbicacionUiConstants.msgIrAjustesManualWeb
+            : 'Toca «Abrir ajustes» o ve a Cuenta → Ubicación para permitir ubicación.';
       case RaiUbicacionClienteModo.listo:
         return '';
     }

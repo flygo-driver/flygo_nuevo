@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
@@ -336,22 +338,18 @@ class _PoolsTaxistaReservasState extends State<PoolsTaxistaReservas> {
     final poolRef = PoolRepo.pools.doc(widget.poolId);
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color textPrimary = isDark ? Colors.white : const Color(0xFF101828);
-    final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
-    final Color accent = isDark ? Colors.greenAccent : const Color(0xFF0F9D58);
-    final Color scaffoldBg = isDark ? Colors.black : const Color(0xFFE8EAED);
-    final Color cardBg = isDark ? const Color(0xFF121212) : Colors.white;
-    final Color cardBorder = isDark ? Colors.white24 : const Color(0xFFD0D5DD);
+    final Color textMuted =
+        isDark ? RaiDsColors.textMuted : const Color(0xFF667085);
+    final Color accent = isDark ? RaiDsColors.neon : const Color(0xFF0F9D58);
+    final Color scaffoldBg = isDark ? RaiDsColors.bg : const Color(0xFFE8EAED);
+    final Color cardBg = isDark ? RaiDsColors.card : Colors.white;
+    final Color cardBorder = isDark ? RaiDsColors.border : const Color(0xFFD0D5DD);
 
     return Scaffold(
       backgroundColor: scaffoldBg,
-      appBar: AppBar(
-        backgroundColor: isDark ? Colors.black : Colors.white,
-        foregroundColor: textPrimary,
-        elevation: isDark ? 0 : 0.5,
-        title: Text(
-          'Reservas',
-          style: TextStyle(color: accent, fontWeight: FontWeight.w800),
-        ),
+      appBar: RaiAppBar(
+        title: 'Reservas',
+        showBackWhenCanPop: true,
         centerTitle: true,
         actions: [
           IconButton(
@@ -524,7 +522,7 @@ class _PoolsTaxistaReservasState extends State<PoolsTaxistaReservas> {
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: cardBg,
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: cardBorder),
                     ),
                     child: Row(

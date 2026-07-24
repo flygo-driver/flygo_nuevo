@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
@@ -84,6 +85,7 @@ class FirebaseBootstrap {
       }
       await _configureFirestoreForScale();
       await PhoneAuthConfig.aplicarTrasFirebaseInit();
+      await _configureAuthPersistenceWeb();
       _didInit = true;
       return;
     }
@@ -96,6 +98,7 @@ class FirebaseBootstrap {
       );
       await _configureFirestoreForScale();
       await PhoneAuthConfig.aplicarTrasFirebaseInit();
+      await _configureAuthPersistenceWeb();
       _didInit = true;
     } on FirebaseException catch (e) {
       if (e.code == 'duplicate-app' ||
@@ -103,6 +106,7 @@ class FirebaseBootstrap {
           (e.message ?? '').toLowerCase().contains('already exists')) {
         await _configureFirestoreForScale();
         await PhoneAuthConfig.aplicarTrasFirebaseInit();
+        await _configureAuthPersistenceWeb();
         _didInit = true;
         return;
       }
@@ -113,11 +117,21 @@ class FirebaseBootstrap {
       if (msg.contains('duplicate') && msg.contains('already exists')) {
         await _configureFirestoreForScale();
         await PhoneAuthConfig.aplicarTrasFirebaseInit();
+        await _configureAuthPersistenceWeb();
         _didInit = true;
         return;
       }
       debugPrint('Error inicializando Firebase: $e');
       rethrow;
+    }
+  }
+
+  static Future<void> _configureAuthPersistenceWeb() async {
+    if (!kIsWeb) return;
+    try {
+      await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+    } catch (e) {
+      debugPrint('[FirebaseBootstrap] Auth persistence web: $e');
     }
   }
 

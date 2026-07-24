@@ -707,7 +707,85 @@
         { "fieldPath": "viajeId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "turismo_mensajes_adm",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "viajeId", "order": "ASCENDING" },
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoPlantillaId", "order": "ASCENDING" },
+        { "fieldPath": "corporativoEmpresaId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoPlantillaId", "order": "ASCENDING" },
+        { "fieldPath": "uidTaxista", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativoEmpresaId", "order": "ASCENDING" },
+        { "fieldPath": "completado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativo", "order": "ASCENDING" },
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "viajes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "corporativo", "order": "ASCENDING" },
+        { "fieldPath": "codigoVerificado", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "plantillas_ruta",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activa", "order": "ASCENDING" },
+        { "fieldPath": "choferPreferidoUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "plantillas_ruta",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "choferPreferidoUid", "order": "ASCENDING" },
+        { "fieldPath": "activa", "order": "ASCENDING" }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "plantillas_ruta",
+      "fieldPath": "choferPreferidoUid",
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    }
+  ]
 }

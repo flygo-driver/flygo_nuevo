@@ -1,13 +1,21 @@
 {
-    "name": "RAI Driver",
-    "short_name": "RAI Driver",
-    "start_url": ".",
+    "name": "RAI Corporativo",
+    "short_name": "RAI Empresa",
+    "start_url": "/corporativo",
+    "scope": "/",
     "display": "standalone",
     "background_color": "#000000",
     "theme_color": "#000000",
-    "description": "RAI Driver — movilidad.",
-    "orientation": "portrait-primary",
-    "prefer_related_applications": false,
+    "description": "RAI Corporativo — empresas en PC, laptop, tablet y celular.",
+    "orientation": "any",
+    "prefer_related_applications": true,
+    "related_applications": [
+        {
+            "platform": "play",
+            "url": "https://play.google.com/store/apps/details?id=com.flygo.rd2",
+            "id": "com.flygo.rd2"
+        }
+    ],
     "icons": [
         {
             "src": "icons/Icon-192.png",

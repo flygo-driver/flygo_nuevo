@@ -7,6 +7,7 @@ import 'package:flygo_nuevo/servicios/admin_config_service.dart';
 
 import 'admin_ui_theme.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 
 class AdminTarifas extends StatefulWidget {
@@ -686,6 +687,7 @@ class _AdminTarifasState extends State<AdminTarifas> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.tarifas,
         title: 'Tarifas + Tramos',
       ),
       body: ListView(

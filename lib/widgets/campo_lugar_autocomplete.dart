@@ -76,7 +76,16 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   OverlayEntry? _entry;
   List<PrediccionLugar> _sugs = const [];
   Timer? _debounce;
+  Timer? _unfocusClearTimer;
   bool _loading = false;
+  /// Evita que al hacer clic en laptop/web el unfocus borre el overlay antes del tap.
+  bool _seleccionEnCurso = false;
+  /// Scroll/toques en el panel de sugerencias (no cerrar al perder foco del TextField).
+  bool _overlayInteracting = false;
+  /// Campo + lista de sugerencias: mismo grupo para no cerrar al tocar una opción.
+  final Object _tapRegionGroup = Object();
+  /// En móvil el teclado quita el foco al tocar un chip; sin esto desaparecen antes del tap.
+  bool _mostrarRecientes = false;
 
   // Evita que una respuesta anterior (petición atrasada) sobrescriba
   // el estado actual cuando el usuario escribe rápido.
@@ -100,11 +109,15 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     if (init.isNotEmpty) _controller.text = init;
 
     _focus.addListener(() {
-      if (!_focus.hasFocus) {
-        _clearSugsAndOverlay();
-      } else {
+      if (_focus.hasFocus) {
+        _unfocusClearTimer?.cancel();
+        _mostrarRecientes = true;
         if (_sugs.isNotEmpty) _showOverlay();
+        return;
       }
+      // No cerrar recientes ni overlay al perder foco: en móvil el tap en chip
+      // quita el foco del TextField antes de registrar el gesto.
+      _unfocusClearTimer?.cancel();
     });
 
     _cargarRecientes();
@@ -246,9 +259,38 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
       p.secondary == 'Reciente' || p.placeId.startsWith('recent:');
 
   @override
+  void didUpdateWidget(covariant CampoLugarAutocomplete oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nuevo = (widget.initialText ?? '').trim();
+    final anterior = (oldWidget.initialText ?? '').trim();
+    if (nuevo.isNotEmpty &&
+        nuevo != anterior &&
+        nuevo != _controller.text.trim()) {
+      _applyingResolvedPlace = true;
+      try {
+        _controller.text = nuevo;
+      } finally {
+        _applyingResolvedPlace = false;
+      }
+    }
+  }
+
+  /// Sincroniza el texto visible sin volver a disparar [onPlaceSelected].
+  void sincronizarTexto(String texto) {
+    if (texto == _controller.text) return;
+    _applyingResolvedPlace = true;
+    try {
+      _controller.text = texto;
+    } finally {
+      _applyingResolvedPlace = false;
+    }
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
+    _unfocusClearTimer?.cancel();
     if (_voz.isListening) unawaited(_voz.stop());
     _removeOverlay();
     _controller.dispose();
@@ -315,10 +357,13 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
         return Stack(
           clipBehavior: Clip.none,
           children: [
+            // Barrera DETRÁS de la lista: cierra al tocar fuera, pero no
+            // intercepta scroll/tap de las opciones (van encima en el Stack).
             Positioned.fill(
               child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
+                behavior: HitTestBehavior.opaque,
                 onTap: () {
+                  if (_seleccionEnCurso || _overlayInteracting) return;
                   _focus.unfocus();
                   _clearSugsAndOverlay();
                 },
@@ -332,90 +377,103 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
               followerAnchor:
                   openUpward ? Alignment.bottomLeft : Alignment.topLeft,
               offset: Offset(0, openUpward ? -8 : 8),
-              child: Material(
-                color: Colors.transparent,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: fieldSize.width,
-                    maxHeight: maxListH,
-                  ),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: overlayBg,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: overlayBorder),
-                      boxShadow: [
-                        BoxShadow(
-                          color: isDark
-                              ? Colors.black54
-                              : Colors.black.withValues(alpha: 0.12),
-                          blurRadius: 18,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: Scrollbar(
-                      thumbVisibility: _sugs.length > 5,
-                      child: ListView.separated(
-                        padding: EdgeInsets.zero,
-                        shrinkWrap: true,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        itemCount: _sugs.length,
-                        separatorBuilder: (_, __) =>
-                            Divider(height: 1, color: dividerColor),
-                        itemBuilder: (_, i) {
-                          final p = _sugs[i];
-                          final esReciente = _esPrediccionReciente(p);
-                          final esRai = p.placeId == '__rai_inteligente__';
-                          final subtitle = esRai
-                              ? (p.secondary ?? '').trim()
-                              : esReciente
-                                  ? null
-                                  : (p.secondary ?? '').trim();
-                          return ListTile(
-                            dense: true,
-                            leading: Icon(
-                              esRai
-                                  ? Icons.auto_awesome_rounded
-                                  : esReciente
-                                      ? Icons.history
-                                      : Icons.place,
-                              color: esReciente
-                                  ? (isDark
-                                      ? Colors.amber.shade200
-                                      : Colors.amber.shade800)
-                                  : placeIconColor,
-                              size: 20,
+              child: TapRegion(
+                groupId: _tapRegionGroup,
+                child: Material(
+                  color: Colors.transparent,
+                  elevation: 8,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: (_) {
+                      _overlayInteracting = true;
+                      _unfocusClearTimer?.cancel();
+                    },
+                    onPointerUp: (_) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _overlayInteracting = false;
+                      });
+                    },
+                    onPointerCancel: (_) {
+                      _overlayInteracting = false;
+                    },
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: fieldSize.width,
+                        maxHeight: maxListH,
+                      ),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: overlayBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: overlayBorder),
+                          boxShadow: [
+                            BoxShadow(
+                              color: isDark
+                                  ? Colors.black54
+                                  : Colors.black.withValues(alpha: 0.12),
+                              blurRadius: 18,
+                              offset: const Offset(0, 6),
                             ),
-                            title: Text(p.primary, style: titleStyle),
-                            subtitle: subtitle != null && subtitle.isNotEmpty
-                                ? Text(subtitle, style: subtitleStyle)
-                                : null,
-                            onTap: () {
-                              if (p.placeId == '__rai_inteligente__') {
-                                _focus.unfocus();
-                                _clearSugsAndOverlay();
-                                unawaited(abrirBusquedaInteligenteRai());
-                                return;
-                              }
-                              if (esReciente) {
-                                final idx = _recientes.indexWhere(
-                                  (e) =>
-                                      e.label == p.primary ||
-                                      (e.placeId.isNotEmpty &&
-                                          e.placeId == p.placeId),
+                          ],
+                        ),
+                        child: NotificationListener<ScrollNotification>(
+                          onNotification: (_) => true,
+                          child: Scrollbar(
+                            thumbVisibility: _sugs.length > 5,
+                            child: ListView.separated(
+                              padding: EdgeInsets.zero,
+                              shrinkWrap: true,
+                              primary: false,
+                              physics: const ClampingScrollPhysics(),
+                              itemCount: _sugs.length,
+                              separatorBuilder: (_, __) =>
+                                  Divider(height: 1, color: dividerColor),
+                              itemBuilder: (_, i) {
+                                final p = _sugs[i];
+                                final esReciente = _esPrediccionReciente(p);
+                                final esRai =
+                                    p.placeId == '__rai_inteligente__';
+                                final subtitle = esRai
+                                    ? (p.secondary ?? '').trim()
+                                    : esReciente
+                                        ? null
+                                        : (p.secondary ?? '').trim();
+                                return Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: () =>
+                                        _manejarSeleccionSugerencia(p),
+                                    child: ListTile(
+                                      dense: true,
+                                      mouseCursor: SystemMouseCursors.click,
+                                      leading: Icon(
+                                        esRai
+                                            ? Icons.auto_awesome_rounded
+                                            : esReciente
+                                                ? Icons.history
+                                                : Icons.place,
+                                        color: esReciente
+                                            ? (isDark
+                                                ? Colors.amber.shade200
+                                                : Colors.amber.shade800)
+                                            : placeIconColor,
+                                        size: 20,
+                                      ),
+                                      title:
+                                          Text(p.primary, style: titleStyle),
+                                      subtitle: subtitle != null &&
+                                              subtitle.isNotEmpty
+                                          ? Text(subtitle,
+                                              style: subtitleStyle)
+                                          : null,
+                                    ),
+                                  ),
                                 );
-                                if (idx >= 0) {
-                                  _seleccionarReciente(_recientes[idx]);
-                                } else {
-                                  _seleccionarPopular(p.primary);
-                                }
-                              } else {
-                                _selectPrediction(p);
-                              }
-                            },
-                          );
-                        },
+                              },
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -428,6 +486,25 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     );
 
     overlay.insert(_entry!);
+  }
+
+  void _manejarSeleccionSugerencia(PrediccionLugar p) {
+    _seleccionEnCurso = true;
+    _unfocusClearTimer?.cancel();
+    if (_esPrediccionReciente(p)) {
+      _pegarTextoEnCampo(p.primary);
+    }
+    if (p.placeId == '__rai_inteligente__') {
+      _focus.unfocus();
+      _clearSugsAndOverlay();
+      _seleccionEnCurso = false;
+      unawaited(abrirBusquedaInteligenteRai());
+      return;
+    }
+    // Reciente y Places: mismo flujo (detalle → texto → onPlaceSelected → cotización).
+    unawaited(_selectPrediction(p).whenComplete(() {
+      _seleccionEnCurso = false;
+    }));
   }
 
   void _refreshOverlay() {
@@ -486,8 +563,13 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     _debounce = Timer(const Duration(milliseconds: 110), () async {
       final q = text.trim();
       if (!_focus.hasFocus) {
-        _clearSugsAndOverlay();
-        return;
+        // Mantener recientes/sugerencias visibles aunque el teclado quite el foco;
+        // el usuario está eligiendo en el overlay.
+        if (_entry != null || _sugs.isNotEmpty) {
+          // seguir con la búsqueda/redibujo abajo
+        } else {
+          return;
+        }
       }
 
       if (q.isEmpty) {
@@ -501,13 +583,7 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
           _loading = false;
           _sugs = soloRecientes;
         });
-        if (_focus.hasFocus) {
-          if (_entry == null) {
-            _showOverlay();
-          } else {
-            _refreshOverlay();
-          }
-        }
+        _ensureOverlayVisible();
         return;
       }
 
@@ -522,13 +598,7 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
           _loading = false;
           _sugs = parcial;
         });
-        if (_focus.hasFocus) {
-          if (_entry == null) {
-            _showOverlay();
-          } else {
-            _refreshOverlay();
-          }
-        }
+        _ensureOverlayVisible();
         return;
       }
 
@@ -580,14 +650,23 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
             _showOverlay();
           }
         }
-      } else if (_focus.hasFocus) {
-        if (_entry == null) {
-          _showOverlay();
-        } else {
-          _refreshOverlay();
-        }
+      } else {
+        _ensureOverlayVisible();
       }
     });
+  }
+
+  /// Mantiene o abre el panel aunque el teclado quite el foco
+  /// (típico al tocar/scroll las opciones).
+  void _ensureOverlayVisible() {
+    if (!mounted || _sugs.isEmpty) return;
+    if (_entry != null) {
+      _refreshOverlay();
+      return;
+    }
+    if (_focus.hasFocus || _overlayInteracting || _seleccionEnCurso) {
+      _showOverlay();
+    }
   }
 
   Future<void> aplicarDetalleExterno(DetalleLugar det) async {
@@ -610,18 +689,70 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     await _voz.stop();
     if (mounted) setState(() => _escuchando = false);
     _debounce?.cancel();
+    _unfocusClearTimer?.cancel();
     _autocompleteSeq++;
     _applyingResolvedPlace = true;
+    _seleccionEnCurso = true;
     try {
       _controller.text = det.displayLabel;
-      // Antes de prefs async: el padre fija coords y programa cotización sin ventana intermedia.
+      // Solo onPlaceSelected: onTextChanged en el padre limpia lat/_destinoDet
+      // y cancela la cotización (viajes normales / motor).
       widget.onPlaceSelected(det);
       await _guardarReciente(det);
     } finally {
       _applyingResolvedPlace = false;
+      _seleccionEnCurso = false;
+      _mostrarRecientes = false;
     }
     _focus.unfocus();
     _clearSugsAndOverlay();
+  }
+
+  /// Pega el texto en el buscador al instante (chips/overlay recientes).
+  void _pegarTextoEnCampo(String texto) {
+    final t = texto.trim();
+    if (t.isEmpty) return;
+    _applyingResolvedPlace = true;
+    try {
+      _controller.text = t;
+    } finally {
+      _applyingResolvedPlace = false;
+    }
+    if (mounted) setState(() {});
+  }
+
+  DetalleLugar? _detalleDesdeRecienteLocal(RecienteLugar entry) {
+    if (entry.tieneCoordenadas) {
+      final nombre = (entry.name ?? entry.label).trim();
+      return DetalleLugar(
+        placeId: entry.placeId.isNotEmpty
+            ? entry.placeId
+            : 'recent:${entry.label}',
+        name: nombre.isNotEmpty ? nombre : entry.label,
+        address: entry.label,
+        lat: entry.lat!,
+        lon: entry.lon!,
+      );
+    }
+    return null;
+  }
+
+  DetalleLugar? _detalleDesdeRecientePrediccion(PrediccionLugar p) {
+    final pid = p.placeId.trim();
+    final primary = p.primary.trim();
+    for (final e in _recientes) {
+      if (pid.isNotEmpty && e.placeId.isNotEmpty && e.placeId == pid) {
+        return _detalleDesdeRecienteLocal(e);
+      }
+      if (pid.startsWith('recent:') &&
+          _norm(e.label) == _norm(pid.substring('recent:'.length))) {
+        return _detalleDesdeRecienteLocal(e);
+      }
+      if (_norm(e.label) == _norm(primary)) {
+        return _detalleDesdeRecienteLocal(e);
+      }
+    }
+    return null;
   }
 
   Future<void> _selectPrediction(PrediccionLugar p) async {
@@ -629,6 +760,17 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     if (mounted) setState(() => _escuchando = false);
     if (mounted) setState(() => _loading = true);
     _removeOverlay();
+
+    if (_esPrediccionReciente(p)) {
+      _pegarTextoEnCampo(p.primary);
+      final detMem = _detalleDesdeRecientePrediccion(p);
+      if (detMem != null) {
+        if (!mounted) return;
+        setState(() => _loading = false);
+        await _finalizePlaceSelection(detMem);
+        return;
+      }
+    }
 
     if (p.secondary == 'Sugerencia por voz') {
       for (final d in _candidatosVozResueltos) {
@@ -639,6 +781,16 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
           await _finalizePlaceSelection(d);
           return;
         }
+      }
+    }
+
+    if (_esPrediccionReciente(p)) {
+      final detRec = await _svc.detalleDesdeReciente(p);
+      if (!mounted) return;
+      if (detRec != null) {
+        setState(() => _loading = false);
+        await _finalizePlaceSelection(detRec);
+        return;
       }
     }
 
@@ -660,70 +812,36 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     }
   }
 
-  /// Toca un chip reciente: prioriza `detalle(placeId)` para disparar igual que una sugerencia.
-  Future<void> _seleccionarReciente(RecienteLugar entry) async {
-    if (entry.placeId.isNotEmpty) {
-      if (mounted) setState(() => _loading = true);
-      _removeOverlay();
-      final det = await _svc.detalle(
-        entry.placeId,
-        hintDireccion: entry.label,
-      );
-      if (!mounted) return;
-      setState(() => _loading = false);
-      if (det != null) {
-        await _finalizePlaceSelection(det);
-        return;
+  Future<void> _seleccionarRecienteChip(RecienteLugar entry) async {
+    if (_loading || _seleccionEnCurso) return;
+    _seleccionEnCurso = true;
+    _overlayInteracting = true;
+    _mostrarRecientes = true;
+    _unfocusClearTimer?.cancel();
+    _pegarTextoEnCampo(entry.label);
+
+    final detLocal = _detalleDesdeRecienteLocal(entry);
+    if (detLocal != null) {
+      try {
+        await _finalizePlaceSelection(detLocal);
+      } finally {
+        _seleccionEnCurso = false;
+        _overlayInteracting = false;
       }
-    }
-    await _seleccionarPopular(entry.label);
-  }
-
-  // NUEVO: seleccionar lugar popular
-  Future<void> _seleccionarPopular(String lugar) async {
-    _debounce?.cancel();
-    _autocompleteSeq++;
-    _applyingResolvedPlace = true;
-    try {
-      _controller.text = lugar;
-    } finally {
-      _applyingResolvedPlace = false;
+      return;
     }
 
-    List<PrediccionLugar> sugs = await _svc.autocompletar(
-      lugar,
-      biasLat: widget.biasLat,
-      biasLon: widget.biasLon,
-      country: widget.country ?? 'DO',
+    final p = PrediccionLugar(
+      placeId:
+          entry.placeId.isNotEmpty ? entry.placeId : 'recent:${entry.label}',
+      primary: entry.label,
+      secondary: 'Reciente',
     );
-
-    if (sugs.isEmpty && lugar.contains(',')) {
-      final shorter = lugar.split(',').first.trim();
-      if (shorter.length >= widget.minChars) {
-        sugs = await _svc.autocompletar(
-          shorter,
-          biasLat: widget.biasLat,
-          biasLon: widget.biasLon,
-          country: widget.country ?? 'DO',
-        );
-      }
-    }
-
-    if (!mounted) return;
-    if (sugs.isNotEmpty) {
-      final ranked = _svc.rankearPredicciones(sugs, lugar);
-      await _selectPrediction(ranked.first);
-    } else if (widget.asistenteDireccionHabilitado) {
-      await abrirBusquedaInteligenteRai();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No encontramos ese lugar. Escribí de nuevo o elegí de la lista.',
-          ),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    try {
+      await _selectPrediction(p);
+    } finally {
+      _seleccionEnCurso = false;
+      _overlayInteracting = false;
     }
   }
 
@@ -771,15 +889,22 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
 
     final kbInset = MediaQuery.of(context).viewInsets.bottom;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: kbInset),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CompositedTransformTarget(
-            link: _layerLink,
-            child: TextFormField(
+    return TapRegion(
+        groupId: _tapRegionGroup,
+        onTapOutside: (_) {
+          if (_seleccionEnCurso || _overlayInteracting) return;
+          if (!_focus.hasFocus && _entry == null && !_mostrarRecientes) return;
+          _mostrarRecientes = false;
+          _focus.unfocus();
+          _clearSugsAndOverlay();
+        },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CompositedTransformTarget(
+              link: _layerLink,
+              child: TextFormField(
               key: _fieldKey,
               controller: _controller,
               focusNode: _focus,
@@ -845,6 +970,7 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                               ),
                               onPressed: () {
                                 _controller.clear();
+                                _mostrarRecientes = true;
                                 widget.onTextChanged?.call('');
                                 _clearSugsAndOverlay();
                               },
@@ -873,17 +999,23 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                 }
               },
             ),
-          ),
-          const SizedBox(height: 8),
-          // Las secciones "Lugares populares" y "Buscar por categoría" fueron
-          // eliminadas por UX. Solo se conserva "Recientes" + autocomplete.
-          if (_recientes.isNotEmpty &&
-              _controller.text.isEmpty &&
-              _focus.hasFocus)
-            _buildRecientesSection(),
-        ],
-      ),
-    );
+            ),
+            const SizedBox(height: 8),
+            // Chips dentro del mismo TapRegion: en móvil el tap no pierde
+            // el foco antes de registrar la selección (antes eran "outside").
+            if (_recientes.isNotEmpty &&
+                _controller.text.isEmpty &&
+                _entry == null &&
+                (_mostrarRecientes ||
+                    _seleccionEnCurso ||
+                    _overlayInteracting))
+              _buildRecientesSection(),
+            // Espaciador bajo los chips (no envolver todo el Column): en móvil
+            // el padding del teclado movía los chips y el tap fallaba al cerrarse.
+            if (kbInset > 0) SizedBox(height: kbInset),
+          ],
+        ),
+      );
   }
 
   // Lugares recientes (única sección visible junto al autocomplete).
@@ -927,37 +1059,50 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
                 runSpacing: 6,
                 children: _recientes.map((entry) {
                   final lugar = entry.label;
-                  return InkWell(
-                    onTap: () => _seleccionarReciente(entry),
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: chipBg,
+                  return Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: (_) {
+                      _mostrarRecientes = true;
+                      _overlayInteracting = true;
+                    },
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          unawaited(_seleccionarRecienteChip(entry));
+                        },
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: chipBorder),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.history, color: iconColor, size: 13),
-                          const SizedBox(width: 5),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 160),
-                            child: Text(
-                              lugar.length > 28
-                                  ? '${lugar.substring(0, 26)}…'
-                                  : lugar,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: chipText,
-                                fontSize: 12,
-                              ),
-                            ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: chipBg,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: chipBorder),
                           ),
-                        ],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.history, color: iconColor, size: 13),
+                              const SizedBox(width: 5),
+                              ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 160),
+                                child: Text(
+                                  lugar.length > 28
+                                      ? '${lugar.substring(0, 26)}…'
+                                      : lugar,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: chipText,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   );

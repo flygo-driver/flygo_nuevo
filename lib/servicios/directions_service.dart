@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -72,7 +73,7 @@ class DirectionsService {
       }
 
       final uri = Uri.parse(_base).replace(queryParameters: params);
-      final resp = await http.get(uri);
+      final resp = await http.get(uri).timeout(const Duration(seconds: 12));
       if (resp.statusCode != 200) {
         if (kDebugMode) {
           debugPrint('Directions HTTP ${resp.statusCode}: ${resp.body}');

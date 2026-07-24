@@ -4,10 +4,16 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart' as fm;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart' as ll;
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/widgets/rai_map_vehicle_icons.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_activar_button.dart';
+import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 
 /// Mapa oscuro (Google Maps JSON) para resaltar la ruta blanca estilo RAI.
 const String _kMapStyleBolaRealtimeDark = r'''
@@ -32,6 +38,9 @@ class MapaTiempoReal extends StatefulWidget {
   /// Rutas calculadas fuera (ej. [ViajeEnCursoTaxista] vía Directions). Se fusionan con las del mapa.
   final Set<Polyline>? overlayPolylines;
 
+  /// Marcadores extra (ej. paradas corporativas). No sustituyen origen/destino/taxista.
+  final Set<Marker>? overlayMarkers;
+
   /// Gesto real del usuario en el mapa (no animaciones de cámara del widget). Ej. colapsar hoja inferior.
   final VoidCallback? onUserInteractWithMap;
 
@@ -40,6 +49,9 @@ class MapaTiempoReal extends StatefulWidget {
 
   /// Cuando es true: mapa oscuro + polyline ancho blanco (cliente viendo al taxi hacia el encuentro).
   final bool estiloCalleAnchaBlanca;
+
+  /// El padre (p. ej. viaje en curso) muestra su propio aviso con botón «Activar ubicación».
+  final bool suprimirBannerUbicacionLocal;
 
   const MapaTiempoReal({
     super.key,
@@ -55,9 +67,11 @@ class MapaTiempoReal extends StatefulWidget {
     this.esTaxista = true,
     this.polylinePreviewPoints,
     this.overlayPolylines,
+    this.overlayMarkers,
     this.onUserInteractWithMap,
     this.onUserMapGestureEnd,
     this.estiloCalleAnchaBlanca = false,
+    this.suprimirBannerUbicacionLocal = false,
   });
 
   @override
@@ -66,6 +80,7 @@ class MapaTiempoReal extends StatefulWidget {
 
 class _MapaTiempoRealState extends State<MapaTiempoReal> {
   GoogleMapController? _map;
+  final fm.MapController _fmCtrl = fm.MapController();
   StreamSubscription<Position>? _posSub;
   Timer? _markerRefreshDebounce;
 
@@ -87,15 +102,31 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   LatLng? _lastCameraFollowTarget;
 
   LatLng? _lastLatLng;
+  LatLng? _prevVehicleLatLng;
   double _lastBearing = 0;
 
   LatLng? _destinoSeleccionado; // si el usuario deja presionado
 
   Timer? _mapGestureEndDebounce;
 
+  static bool _coordsValid(LatLng? p) {
+    if (p == null) return false;
+    return p.latitude.isFinite &&
+        p.longitude.isFinite &&
+        !(p.latitude == 0 && p.longitude == 0);
+  }
+
+  bool get _usaUbicacionTaxistaPasiva =>
+      widget.esTaxista &&
+      !widget.mostrarTaxista &&
+      _coordsValid(widget.ubicacionTaxista);
+
   @override
   void initState() {
     super.initState();
+    unawaited(RaiMapVehicleIcons.ensureLoaded().then((_) {
+      if (mounted) _actualizarMarcadores();
+    }));
     _iniciarUbicacion();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _actualizarMarcadores();
@@ -143,7 +174,18 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       }
       return;
     }
-    if (taxiChanged && widget.mostrarTaxista) {
+    if (taxiChanged && (widget.mostrarTaxista || _usaUbicacionTaxistaPasiva)) {
+      final LatLng? nuevo = widget.ubicacionTaxista;
+      if (nuevo != null) {
+        final b = RaiMapVehicleIcons.bearingEntre(_prevVehicleLatLng, nuevo);
+        if (b != null) _lastBearing = b;
+        _prevVehicleLatLng = nuevo;
+      }
+      if (_usaUbicacionTaxistaPasiva) {
+        _lastLatLng = widget.ubicacionTaxista;
+        _myLocEnabled = true;
+        _serviceOn = true;
+      }
       _actualizarMarcadores();
     }
   }
@@ -187,7 +229,8 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   void _centrarEnPuntoImportante() {
-    if (!_mapReady || _map == null) return;
+    if (!_mapReady) return;
+    if (!kIsWeb && _map == null) return;
 
     LatLng target;
 
@@ -214,18 +257,44 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   void _actualizarMarcadores() {
     _markers.clear();
 
-    // Marcador del taxista (para vista de cliente)
+    Marker vehiculoMarker({
+      required String id,
+      required LatLng position,
+      required double bearing,
+      required bool vistaCliente,
+      String title = 'Tu conductor',
+    }) {
+      final BitmapDescriptor? icon = vistaCliente
+          ? RaiMapVehicleIcons.taxiCliente
+          : RaiMapVehicleIcons.taxista;
+      final double rot = vistaCliente
+          ? RaiMapVehicleIcons.rotationTaxiCliente(bearing)
+          : RaiMapVehicleIcons.rotationTaxista(bearing);
+      return Marker(
+        markerId: MarkerId(id),
+        position: position,
+        infoWindow: InfoWindow(title: title),
+        icon: icon ??
+            BitmapDescriptor.defaultMarkerWithHue(
+              vistaCliente
+                  ? BitmapDescriptor.hueYellow
+                  : BitmapDescriptor.hueRed,
+            ),
+        rotation: icon != null ? rot : 0,
+        flat: icon != null,
+        anchor: icon != null ? const Offset(0.5, 0.5) : const Offset(0.5, 1.0),
+        zIndexInt: 9,
+      );
+    }
+
+    // Marcador del taxista (vista cliente)
     if (widget.mostrarTaxista && widget.ubicacionTaxista != null) {
-      _markers.add(Marker(
-        markerId: const MarkerId('taxista'),
+      _markers.add(vehiculoMarker(
+        id: 'taxista',
         position: widget.ubicacionTaxista!,
-        infoWindow: const InfoWindow(title: 'Tu taxista'),
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          widget.estiloCalleAnchaBlanca
-              ? BitmapDescriptor.hueAzure
-              : BitmapDescriptor.hueOrange,
-        ),
-        zIndexInt: 2,
+        bearing: _lastBearing,
+        vistaCliente: true,
+        title: 'Tu taxista',
       ));
     }
 
@@ -259,17 +328,22 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       ));
     }
 
-    // Marcador de ubicación actual del usuario
-    if (_lastLatLng != null) {
+    // Vehículo del taxista en GPS en vivo (o posición pasiva del viaje).
+    if (_lastLatLng != null &&
+        (widget.esTaxista || _usaUbicacionTaxistaPasiva)) {
+      _markers.add(vehiculoMarker(
+        id: 'yo',
+        position: _lastLatLng!,
+        bearing: _lastBearing,
+        vistaCliente: false,
+        title: 'Mi ubicación',
+      ));
+    } else if (_lastLatLng != null && !widget.mostrarTaxista) {
       _markers.add(Marker(
         markerId: const MarkerId('yo'),
         position: _lastLatLng!,
-        infoWindow: InfoWindow(
-          title: widget.esTaxista ? 'Mi ubicación' : 'Mi ubicación',
-        ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(widget.esTaxista
-            ? BitmapDescriptor.hueRed
-            : BitmapDescriptor.hueAzure),
+        infoWindow: const InfoWindow(title: 'Mi ubicación'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
         zIndexInt: 2,
       ));
     }
@@ -320,7 +394,25 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   Future<void> _iniciarUbicacion() async {
-    // Pasivo (widget de mapa): [GpsService] contrato — readNoRequest, nunca checkService aquí.
+    if (_usaUbicacionTaxistaPasiva) {
+      _lastLatLng = widget.ubicacionTaxista;
+      _myLocEnabled = true;
+      _serviceOn = true;
+      if (mounted) {
+        _actualizarMarcadores();
+        if (_mapReady && _lastLatLng != null) {
+          unawaited(_animateTo(_lastLatLng!, zoom: 16));
+        }
+      }
+      return;
+    }
+
+    if (kIsWeb) {
+      await _iniciarUbicacionWeb(pedirPermiso: true);
+      return;
+    }
+
+    // Móvil: pasivo (widget de mapa) — sin diálogo automático.
     final ({bool serviceEnabled, LocationPermission permission}) snap =
         await GpsService.readServiceAndPermissionStabilizedNoRequest();
     _serviceOn = snap.serviceEnabled;
@@ -335,7 +427,6 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     setState(() => _myLocEnabled = !denied);
     if (denied) return;
 
-    // Última posición conocida (para no empezar "frío")
     final last = await Geolocator.getLastKnownPosition();
     if (mounted && last != null) {
       final here = LatLng(last.latitude, last.longitude);
@@ -344,31 +435,83 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       if (last.heading.isFinite) _lastBearing = last.heading;
     }
 
-    // Stream de ubicación en vivo
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 5,
       ),
-    ).listen((pos) {
-      final here = LatLng(pos.latitude, pos.longitude);
-      _lastLatLng = here;
-      _scheduleMarkerRefresh();
+    ).listen(_onPosicionLive, onError: (_) {
+      if (mounted) _snack('No se pudo obtener la ubicación en vivo.');
+    });
+  }
 
-      if (_following && widget.esTaxista) {
-        _animateTo(
-          here,
-          zoom: 17,
-          bearing: (pos.heading.isFinite && pos.speed > 0.5)
-              ? pos.heading
-              : _lastBearing,
-          followMode: true,
+  void _onPosicionLive(Position pos) {
+    final here = LatLng(pos.latitude, pos.longitude);
+    final b = RaiMapVehicleIcons.resolverBearing(
+      actual: here,
+      anterior: _prevVehicleLatLng ?? _lastLatLng,
+      headingGps: pos.heading.isFinite && pos.speed > 0.5 ? pos.heading : null,
+      fallback: _lastBearing,
+    );
+    _prevVehicleLatLng = _lastLatLng;
+    _lastLatLng = here;
+    _lastBearing = b;
+    _scheduleMarkerRefresh();
+
+    if (_following && (widget.esTaxista || kIsWeb)) {
+      _animateTo(
+        here,
+        zoom: 17,
+        bearing: _lastBearing,
+        followMode: true,
+      );
+    }
+  }
+
+  /// Web (PC / laptop / tablet): pide permiso del navegador y centra el mapa.
+  Future<void> _iniciarUbicacionWeb({required bool pedirPermiso}) async {
+    _serviceOn = await GpsService.isServiceEnabled();
+    var perm = await GpsService.checkPermission();
+    if (pedirPermiso && !GpsService.permissionUsable(perm)) {
+      perm = await GpsService.requestPermissionExplicitUser();
+    }
+    if (!mounted) return;
+
+    _serviceOn = await GpsService.isServiceEnabled();
+    final ok =
+        _serviceOn && GpsService.permissionUsable(perm);
+    setState(() => _myLocEnabled = ok);
+    if (!ok) {
+      if (mounted) {
+        _snack(
+          perm == LocationPermission.deniedForever
+              ? 'Ubicación bloqueada en el navegador. Permitila en el candado de la barra de dirección.'
+              : 'Tocá «Permitir ubicación» para ver tu posición en el mapa.',
         );
       }
+      return;
+    }
 
+    final pos = await GpsService.obtenerUbicacionMapaProduccion();
+    if (!mounted) return;
+    if (pos != null) {
+      _lastLatLng = LatLng(pos.latitude, pos.longitude);
       if (pos.heading.isFinite) _lastBearing = pos.heading;
-    }, onError: (_) {
-      if (mounted) _snack('No se pudo obtener la ubicación en vivo.');
+      _following = true;
+      _actualizarMarcadores();
+      if (_mapReady) {
+        await _animateTo(_lastLatLng!, zoom: 16);
+      }
+    }
+
+    await _posSub?.cancel();
+    _posSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 8,
+      ),
+    ).listen(_onPosicionLive, onError: (_) {
+      if (mounted) _snack('No se pudo seguir la ubicación en vivo.');
     });
   }
 
@@ -385,8 +528,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     double? bearing,
     bool followMode = false,
   }) async {
-    final c = _map;
-    if (c == null || !_mapReady) return;
+    if (!_mapReady) return;
 
     final now = DateTime.now();
 
@@ -402,6 +544,18 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
         return;
       }
     }
+
+    if (kIsWeb) {
+      try {
+        _fmCtrl.move(ll.LatLng(p.latitude, p.longitude), zoom ?? 16);
+        _lastAnim = DateTime.now();
+        if (followMode) _lastCameraFollowTarget = p;
+      } catch (_) {}
+      return;
+    }
+
+    final c = _map;
+    if (c == null) return;
 
     _programmaticCameraDepth++;
     try {
@@ -429,8 +583,41 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   Future<void> _fitTo(LatLng a, LatLng b) async {
+    if (!_mapReady) return;
+
+    if (kIsWeb) {
+      try {
+        _fmCtrl.fitCamera(
+          fm.CameraFit.bounds(
+            bounds: fm.LatLngBounds(
+              ll.LatLng(
+                math.min(a.latitude, b.latitude),
+                math.min(a.longitude, b.longitude),
+              ),
+              ll.LatLng(
+                math.max(a.latitude, b.latitude),
+                math.max(a.longitude, b.longitude),
+              ),
+            ),
+            padding: const EdgeInsets.all(80),
+          ),
+        );
+      } catch (_) {
+        try {
+          _fmCtrl.move(
+            ll.LatLng(
+              (a.latitude + b.latitude) / 2,
+              (a.longitude + b.longitude) / 2,
+            ),
+            13,
+          );
+        } catch (_) {}
+      }
+      return;
+    }
+
     final c = _map;
-    if (c == null || !_mapReady) return;
+    if (c == null) return;
     final bounds = _boundsFrom(a, b);
     _programmaticCameraDepth++;
     try {
@@ -529,6 +716,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   Future<void> centrarEnMiUbicacion() async {
+    if (kIsWeb && (_lastLatLng == null || !_myLocEnabled)) {
+      await _iniciarUbicacionWeb(pedirPermiso: true);
+    }
     if (_lastLatLng != null && _mapReady) {
       setState(() => _following = true);
       await _animateTo(_lastLatLng!, zoom: 17);
@@ -536,43 +726,203 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   }
 
   // ====== UI ======
+  Widget _mapaPlataforma() {
+    if (kIsWeb) return _mapaOsmWeb();
+    return GoogleMap(
+      initialCameraPosition:
+          const CameraPosition(target: _fallback, zoom: 12),
+      onMapCreated: (ctrl) async {
+        _map = ctrl;
+        _mapReady = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _centrarEnPuntoImportante();
+        });
+      },
+      style: widget.estiloCalleAnchaBlanca ? _kMapStyleBolaRealtimeDark : null,
+      myLocationEnabled: _myLocEnabled &&
+          !((widget.esTaxista || _usaUbicacionTaxistaPasiva) &&
+              RaiMapVehicleIcons.listo),
+      myLocationButtonEnabled: false,
+      compassEnabled: true,
+      zoomControlsEnabled: false,
+      rotateGesturesEnabled: true,
+      markers: {
+        ..._markers,
+        ...?widget.overlayMarkers,
+      },
+      polylines: {
+        ..._polylines,
+        ...?widget.overlayPolylines,
+      },
+      onLongPress: _onLongPress,
+      onCameraMoveStarted: _onUserGesture,
+      onCameraIdle: _onMapCameraIdle,
+      onTap: _onMapTap,
+      mapToolbarEnabled: false,
+    );
+  }
+
+  ll.LatLng _ll(LatLng p) => ll.LatLng(p.latitude, p.longitude);
+
+  Color _colorMarcador(String id) {
+    if (id == 'origen' ||
+        id == 'pickup' ||
+        id == 'trip_origen' ||
+        id.contains('origen')) {
+      return const Color(0xFF00B0FF);
+    }
+    if (id == 'destino' ||
+        id == 'trip_destino' ||
+        id.startsWith('destino') ||
+        id.contains('destino')) {
+      return const Color(0xFF00C853);
+    }
+    if (id.startsWith('trip_parada') || id.startsWith('parada')) {
+      return Colors.deepOrangeAccent;
+    }
+    switch (id) {
+      case 'taxista':
+        return Colors.orangeAccent;
+      case 'yo':
+      case 'me':
+        return Colors.lightBlueAccent;
+      default:
+        return id.startsWith('pool_')
+            ? Colors.amberAccent
+            : Colors.redAccent;
+    }
+  }
+
+  bool _esPinViajeDestacado(String id) {
+    return id == 'origen' ||
+        id == 'destino' ||
+        id == 'pickup' ||
+        id == 'trip_origen' ||
+        id == 'trip_destino' ||
+        id.startsWith('trip_parada') ||
+        id.startsWith('parada') ||
+        id.startsWith('destino');
+  }
+
+  Widget _mapaOsmWeb() {
+    final LatLng center = _lastLatLng ?? widget.origen ?? _fallback;
+
+    fm.Marker pinOsm(Marker m) {
+      final id = m.markerId.value;
+      if ((id == 'yo' || id == 'taxista') && RaiMapVehicleIcons.listo) {
+        return fm.Marker(
+          point: _ll(m.position),
+          width: 58,
+          height: 58,
+          child: RaiMapVehicleIcons.imagenTaxista(
+            bearing: _lastBearing,
+            vistaCliente: id == 'taxista',
+            size: 54,
+          ),
+        );
+      }
+      final destacado = _esPinViajeDestacado(id);
+      final esDestino = id.contains('destino') || id.startsWith('destino');
+      final esOrigen = id == 'origen' ||
+          id == 'pickup' ||
+          id == 'trip_origen' ||
+          id.contains('origen');
+      final size = destacado ? 56.0 : 42.0;
+      return fm.Marker(
+        point: _ll(m.position),
+        width: size,
+        height: size,
+        child: Icon(
+          esDestino
+              ? Icons.flag
+              : (esOrigen ? Icons.trip_origin : Icons.location_on),
+          color: _colorMarcador(id),
+          size: destacado ? 52 : 38,
+          shadows: const [
+            Shadow(color: Colors.black87, blurRadius: 8, offset: Offset(0, 1)),
+            Shadow(color: Colors.white70, blurRadius: 2),
+          ],
+        ),
+      );
+    }
+
+    final markers = <fm.Marker>[
+      for (final m in _markers) pinOsm(m),
+      if (widget.overlayMarkers != null)
+        for (final m in widget.overlayMarkers!) pinOsm(m),
+    ];
+
+    final polylines = <fm.Polyline>[
+      for (final pl in _polylines)
+        if (pl.points.length >= 2)
+          fm.Polyline(
+            points: pl.points.map(_ll).toList(),
+            color: pl.color,
+            strokeWidth: pl.width.toDouble().clamp(10, 36),
+          ),
+      if (widget.overlayPolylines != null)
+        for (final pl in widget.overlayPolylines!)
+          if (pl.points.length >= 2)
+            fm.Polyline(
+              points: pl.points.map(_ll).toList(),
+              color: pl.color.value == 0xFF49F18B
+                  ? const Color(0xFF0A0A0A)
+                  : pl.color,
+              strokeWidth: pl.width.toDouble().clamp(14, 36),
+            ),
+      if (widget.polylinePreviewPoints != null &&
+          widget.polylinePreviewPoints!.length >= 2)
+        fm.Polyline(
+          points: widget.polylinePreviewPoints!.map(_ll).toList(),
+          color: const Color(0xFF0A0A0A),
+          strokeWidth: widget.estiloCalleAnchaBlanca ? 18 : 16,
+        ),
+    ];
+
+    return fm.FlutterMap(
+      mapController: _fmCtrl,
+      options: fm.MapOptions(
+        initialCenter: _ll(center),
+        initialZoom: 13,
+        onMapReady: () {
+          _mapReady = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _centrarEnPuntoImportante();
+          });
+        },
+        onTap: (tap, p) {
+          _onMapTap(LatLng(p.latitude, p.longitude));
+        },
+        onLongPress: (tap, p) {
+          unawaited(_onLongPress(LatLng(p.latitude, p.longitude)));
+        },
+        onPositionChanged: (pos, hasGesture) {
+          if (hasGesture) _onUserGesture();
+        },
+      ),
+      children: [
+        fm.TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.flygo.rd2',
+        ),
+        fm.PolylineLayer(polylines: polylines),
+        fm.MarkerLayer(markers: markers),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         Positioned.fill(
-          child: GoogleMap(
-            initialCameraPosition:
-                const CameraPosition(target: _fallback, zoom: 12),
-            onMapCreated: (ctrl) async {
-              _map = ctrl;
-              _mapReady = true;
-              // Centrar en el punto importante después de crear el mapa
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _centrarEnPuntoImportante();
-              });
-            },
-            style: widget.estiloCalleAnchaBlanca ? _kMapStyleBolaRealtimeDark : null,
-            myLocationEnabled: _myLocEnabled,
-            myLocationButtonEnabled: false,
-            compassEnabled: true,
-            zoomControlsEnabled: false,
-            rotateGesturesEnabled: true,
-            markers: _markers,
-            polylines: {
-              ..._polylines,
-              ...?widget.overlayPolylines,
-            },
-            onLongPress: _onLongPress,
-            onCameraMoveStarted: _onUserGesture,
-            onCameraIdle: _onMapCameraIdle,
-            onTap: _onMapTap,
-            mapToolbarEnabled: false,
-          ),
+          child: _mapaPlataforma(),
         ),
 
-        // Banner si falta servicio/permisos
-        if (!_serviceOn || !_myLocEnabled)
+        // Banner si falta servicio/permisos (taxista en viaje usa GPS del doc, no del navegador).
+        if (!widget.suprimirBannerUbicacionLocal &&
+            !_usaUbicacionTaxistaPasiva &&
+            (!_serviceOn || !_myLocEnabled))
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
             left: 16,
@@ -585,23 +935,55 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
                 border:
                     Border.fromBorderSide(BorderSide(color: Color(0x5949F18B))),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(
-                      !_serviceOn
-                          ? Icons.location_off
-                          : Icons.privacy_tip_outlined,
-                      color: const Color(0xFF49F18B)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      !_serviceOn
-                          ? 'Activa la ubicación del dispositivo'
-                          : 'Da permiso de ubicación a la app',
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.w700),
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                          !_serviceOn
+                              ? Icons.location_off
+                              : Icons.privacy_tip_outlined,
+                          color: const Color(0xFF49F18B)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          !_serviceOn
+                              ? 'Activa la ubicación del dispositivo'
+                              : (kIsWeb
+                                  ? 'Permití la ubicación en el navegador para ver tu punto en el mapa'
+                                  : 'Da permiso de ubicación a la app'),
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
                   ),
+                  if (kIsWeb) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () =>
+                            unawaited(_iniciarUbicacionWeb(pedirPermiso: true)),
+                        child: const Text(
+                          'Permitir',
+                          style: TextStyle(
+                            color: Color(0xFF49F18B),
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ] else if (widget.esTaxista) ...[
+                    const SizedBox(height: 10),
+                    RaiUbicacionActivarButton(
+                      rol: RaiUbicacionRol.taxista,
+                      mapStyle: true,
+                      minimumSize: const Size(double.infinity, 46),
+                    ),
+                  ],
                 ],
               ),
             ),

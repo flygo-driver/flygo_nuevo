@@ -28,6 +28,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/auto_trip_router.dart';
@@ -1041,17 +1042,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
             context: 'pool_turismo_taxista: marcarNoDisponible post-claim',
           );
         }
-        await fs.FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(taxista.uid)
-            .set(
-          {
-            'siguienteViajeId': '',
-            'updatedAt': fs.FieldValue.serverTimestamp(),
-            'actualizadoEn': fs.FieldValue.serverTimestamp(),
-          },
-          fs.SetOptions(merge: true),
-        );
+        // No borrar siguienteViajeId: claim ya preserva cola corporativa.
 
         if (mounted) {
           messenger.showSnackBar(
@@ -1425,7 +1416,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      DateFormat('EEE d MMM, HH:mm', 'es').format(fecha),
+                      fmtFechaHoraAmPm(fecha, sep: ','),
                       style: TextStyle(color: pal.textFaint, fontSize: 12),
                     ),
                     const SizedBox(height: 10),
@@ -1449,7 +1440,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
                           _chip(
                             context,
                             Icons.schedule,
-                            'Programado ${DateFormat('dd/MM HH:mm').format(fecha)}',
+                            'Programado ${fmtDdMmHoraAmPm(fecha)}',
                           ),
                       ],
                     ),

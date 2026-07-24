@@ -102,6 +102,31 @@ class BolaPuebloRepo {
     return null;
   }
 
+  /// Taxista con acuerdo o viaje en curso (conductor asignado).
+  static bool taxistaTieneBolaActivaEnDoc(Map<String, dynamic> d, String uid) {
+    final String u = uid.trim();
+    if (u.isEmpty) return false;
+    final String estado = (d['estado'] ?? '').toString().trim();
+    if (estado != 'acordada' && estado != 'en_curso') return false;
+    final String uidTx = (d['uidTaxista'] ?? '').toString().trim();
+    return uidTx == u;
+  }
+
+  static Map<String, String>? bolaActivaTaxistaDesdeTablero(
+    QuerySnapshot<Map<String, dynamic>> snap,
+    String uid,
+  ) {
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in snap.docs) {
+      if (taxistaTieneBolaActivaEnDoc(doc.data(), uid)) {
+        return <String, String>{
+          'id': doc.id,
+          'estado': (doc.data()['estado'] ?? '').toString().trim(),
+        };
+      }
+    }
+    return null;
+  }
+
   static Stream<Map<String, String>?> streamBolaActivaCliente(String uid) {
     final String u = uid.trim();
     if (u.isEmpty) return Stream<Map<String, String>?>.value(null);
@@ -504,6 +529,31 @@ class BolaPuebloRepo {
     return _ofertasCol(bolaId)
         .orderBy('createdAt', descending: true)
         .snapshots();
+  }
+
+  /// Oferta/contraoferta propia aún pendiente en una bola abierta.
+  static ({String id, Map<String, dynamic> data})? miOfertaPendienteVigente(
+    QuerySnapshot<Map<String, dynamic>> snap,
+    String uid,
+  ) {
+    final String u = uid.trim();
+    if (u.isEmpty) return null;
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> d in snap.docs) {
+      final Map<String, dynamic> m = d.data();
+      if ((m['fromUid'] ?? '').toString().trim() != u) continue;
+      if ((m['estado'] ?? '').toString().trim() != 'pendiente') continue;
+      return (id: d.id, data: m);
+    }
+    return null;
+  }
+
+  /// Tablero visible para este usuario.
+  static bool visibleEnTableroParaUsuario(
+    Map<String, dynamic> m,
+    String uid, {
+    String? bolaId,
+  }) {
+    return visibleEnTablero(m, uid, bolaId: bolaId);
   }
 
   static Future<void> _marcarOfertasRetiradas(
@@ -953,34 +1003,138 @@ class BolaPuebloRepo {
       debugPrint('[BOLA_AHORRO] cancelarAcuerdo CF error $e, fallback cliente');
     }
 
-    await ref.set(<String, dynamic>{
-      'estado': 'cancelada',
-      'estadoViajeBola': 'cancelada',
-      'canceladaEn': FieldValue.serverTimestamp(),
-      'canceladaPor': actor,
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    await _eliminarBolaYOfertasEnCliente(bolaId);
 
     final String viajeEspejoId = (d['viajeEspejoId'] ?? '').toString().trim();
     if (viajeEspejoId.isNotEmpty) {
       try {
-        if (actor == uidTx) {
-          await ViajesRepo.cancelarPorTaxista(
-            viajeId: viajeEspejoId,
-            uidTaxista: uidTx,
-          );
-        } else if (actor == uidCli) {
-          await ViajesRepo.cancelarPorCliente(
-            viajeId: viajeEspejoId,
-            uidCliente: uidCli,
-          );
-        }
+        await _db.collection('viajes').doc(viajeEspejoId).delete();
       } catch (e, st) {
         debugPrint(
-          '[BOLA_AHORRO] cancelar espejo tras bola falló viaje=$viajeEspejoId $e $st',
+          '[BOLA_AHORRO] eliminar espejo cancelar bola=$viajeEspejoId $e $st',
         );
       }
     }
+    if (uidTx.isNotEmpty) await _limpiarViajeActivoIdUsuario(uidTx);
+    if (uidCli.isNotEmpty) await _limpiarViajeActivoIdUsuario(uidCli);
+    await _limpiarViajeActivoIdUsuario(actor);
+  }
+
+  /// Dueño retira publicación abierta (sin acuerdo): **borra** bola + ofertas en servidor.
+  static Future<void> _eliminarBolaYOfertasEnCliente(String bolaId) async {
+    final String bid = bolaId.trim();
+    if (bid.isEmpty) return;
+    final DocumentReference<Map<String, dynamic>> ref = _col.doc(bid);
+    final QuerySnapshot<Map<String, dynamic>> ofertas =
+        await ref.collection('ofertas').get();
+    WriteBatch batch = _db.batch();
+    int ops = 0;
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> d in ofertas.docs) {
+      batch.delete(d.reference);
+      ops++;
+      if (ops >= 450) {
+        await batch.commit();
+        batch = _db.batch();
+        ops = 0;
+      }
+    }
+    batch.delete(ref);
+    await batch.commit();
+  }
+
+  /// Dueño elimina publicación (abierta, cancelada o finalizada de prueba).
+  static Future<void> eliminarPublicacionBolaDefinitiva({
+    required String bolaId,
+    required String uidActor,
+  }) async {
+    final ref = _col.doc(bolaId.trim());
+    final s = await ref.get();
+    if (!s.exists) return;
+    final d = s.data() ?? <String, dynamic>{};
+    final actor = uidActor.trim();
+    final createdBy = (d['createdByUid'] ?? '').toString();
+    if (actor != createdBy) {
+      throw Exception('Solo quien publicó puede eliminar este viaje.');
+    }
+    final estado = (d['estado'] ?? '').toString();
+    if (estado == 'acordada') {
+      if (puedeCancelarAcuerdo(d)) {
+        await cancelarAcuerdoAntesDeAbordo(bolaId: bolaId, uidActor: actor);
+        return;
+      }
+      throw Exception(
+        'Ya hay un acuerdo en curso. No se puede eliminar desde aquí.',
+      );
+    }
+    if (estado == 'en_curso') {
+      throw Exception('El traslado ya está en curso.');
+    }
+    await retirarPublicacionAbierta(bolaId: bolaId, uidActor: actor);
+  }
+
+  /// Dueño retira publicación abierta (sin acuerdo).
+  static Future<void> retirarPublicacionAbierta({
+    required String bolaId,
+    required String uidActor,
+  }) async {
+    final ref = _col.doc(bolaId.trim());
+    final s = await ref.get();
+    if (!s.exists) throw Exception('Publicación no encontrada');
+    final d = s.data() ?? <String, dynamic>{};
+    final actor = uidActor.trim();
+    final createdBy = (d['createdByUid'] ?? '').toString();
+    if (actor != createdBy) {
+      throw Exception('Solo quien publicó puede retirar la publicación.');
+    }
+    final estado = (d['estado'] ?? '').toString();
+    if (estado != 'abierta' &&
+        estado != 'cancelada' &&
+        estado != 'finalizada') {
+      if (estado == 'acordada') {
+        throw Exception(
+          'Ya hay un acuerdo. Usá «Cancelar acuerdo» si aún no subiste al vehículo.',
+        );
+      }
+      throw Exception('Esta publicación no se puede eliminar desde aquí.');
+    }
+    if (estado == 'abierta') {
+      final uidTx = (d['uidTaxista'] ?? '').toString();
+      final uidCli = (d['uidCliente'] ?? '').toString();
+      if (uidTx.isNotEmpty || uidCli.isNotEmpty) {
+        throw Exception('Hay un acuerdo en curso. No se puede eliminar.');
+      }
+    }
+
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('retirarPublicacionBolaPueblo');
+      await callable.call(<String, dynamic>{'bolaId': bolaId.trim()});
+      return;
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (e.code != 'unavailable' && e.code != 'deadline-exceeded') {
+        throw Exception(msg.isNotEmpty ? msg : e.code);
+      }
+      debugPrint(
+        '[BOLA_AHORRO] retirarPublicacion CF no disponible (${e.code}), fallback',
+      );
+    } catch (e) {
+      debugPrint('[BOLA_AHORRO] retirarPublicacion CF error $e, fallback');
+    }
+
+    await _eliminarBolaYOfertasEnCliente(bolaId);
+
+    final viajeEspejoId = (d['viajeEspejoId'] ?? '').toString().trim();
+    if (viajeEspejoId.isNotEmpty) {
+      try {
+        await _db.collection('viajes').doc(viajeEspejoId).delete();
+      } catch (e, st) {
+        debugPrint(
+          '[BOLA_AHORRO] eliminar espejo falló viaje=$viajeEspejoId $e $st',
+        );
+      }
+    }
+    await _limpiarViajeActivoIdUsuario(actor);
   }
 
   /// Taxista asignado: confirma en Firestore que el cliente ya subió (paso 2 del flujo).

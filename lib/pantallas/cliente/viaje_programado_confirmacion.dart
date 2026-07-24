@@ -10,6 +10,7 @@ import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/widgets/rai_back_button.dart';
 import 'package:flygo_nuevo/widgets/turismo_mensaje_operaciones_panel.dart';
 
@@ -281,12 +282,8 @@ class _ViajeProgramadoConfirmacionState
     return null;
   }
 
-  static double _precioDe(Map<String, dynamic> d) {
-    final dynamic p = d['precioFinal'] ?? d['precio'] ?? d['total'];
-    if (p is num) return p.toDouble();
-    if (p is String) return double.tryParse(p) ?? 0;
-    return 0;
-  }
+  static double _precioDe(Map<String, dynamic> d) =>
+      totalRdDesdeDocViaje(d);
 
   static _FaseReserva _fase(Map<String, dynamic> d, DateTime now) {
     final estado = EstadosViaje.normalizar((d['estado'] ?? '').toString());

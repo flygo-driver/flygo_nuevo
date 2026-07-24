@@ -8,7 +8,10 @@ import 'package:flygo_nuevo/auth/seleccion_usuario.dart';
 import 'package:flygo_nuevo/legal/legal_acceptance_service.dart';
 import 'package:flygo_nuevo/legal/terms_policy_screen.dart';
 import 'package:flygo_nuevo/pantallas/taxista/bloqueado_por_pagos.dart';
+import 'package:flygo_nuevo/pantallas/taxista/completar_registro_organizador_giras.dart';
 import 'package:flygo_nuevo/pantallas/taxista/completar_registro_taxista.dart';
+import 'package:flygo_nuevo/servicios/organizador_giras_perfil_data.dart';
+import 'package:flygo_nuevo/shell/organizador_giras_shell.dart';
 import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
@@ -206,9 +209,11 @@ class _RaiTaxistaAccessGateState extends State<RaiTaxistaAccessGate> {
 class RaiIdentityRouter {
   RaiIdentityRouter._();
 
+  /// App nativa Windows/macOS: solo admin. Web en PC/tablet = cliente corporativo OK.
   static bool get _isDesktop =>
-      defaultTargetPlatform == TargetPlatform.windows ||
-      defaultTargetPlatform == TargetPlatform.macOS;
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   /// Evita parpadeo: el [FutureBuilder] de términos no se recrea en cada
   /// snapshot de `usuarios/{uid}` (p. ej. lastLogin, tienePagoPendiente).
@@ -228,7 +233,8 @@ class RaiIdentityRouter {
   ) {
     final bool esAdmin = rol == 'admin';
 
-    if (_isDesktop && !esAdmin) {
+    // Web (PC/laptop/tablet navegador): empresas y clientes, no muro «solo admin».
+    if (!kIsWeb && _isDesktop && !esAdmin) {
       return const RaiDesktopNonAdminWall();
     }
 
@@ -244,6 +250,14 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'taxista') {
+      if (OrganizadorGirasPerfilData.esOrganizadorGiras(data)) {
+        if (!OrganizadorGirasPerfilData.registroCompleto(data)) {
+          return const CompletarRegistroOrganizadorGiras();
+        }
+        return const VerifyEmailGate(
+          childWhenVerified: OrganizadorGirasShell(),
+        );
+      }
       if (!TaxistaRegistroPerfilData.taxistaRegistroPerfilCompleto(data)) {
         return const CompletarRegistroTaxista();
       }
@@ -293,6 +307,14 @@ class RaiIdentityRouter {
           .doc(user.uid)
           .get();
       final data = uSnap.data() ?? <String, dynamic>{};
+      if (OrganizadorGirasPerfilData.esOrganizadorGiras(data)) {
+        if (!OrganizadorGirasPerfilData.registroCompleto(data)) {
+          return const CompletarRegistroOrganizadorGiras();
+        }
+        return const VerifyEmailGate(
+          childWhenVerified: OrganizadorGirasShell(),
+        );
+      }
       if (!TaxistaRegistroPerfilData.taxistaRegistroPerfilCompleto(data)) {
         return const CompletarRegistroTaxista();
       }

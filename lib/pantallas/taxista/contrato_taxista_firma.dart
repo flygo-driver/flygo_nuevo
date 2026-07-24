@@ -106,13 +106,25 @@ class _ContratoTaxistaFirmaState extends State<ContratoTaxistaFirma> {
       );
     } on FirebaseException catch (e) {
       if (!mounted) return;
+      final msg = e.code == 'permission-denied'
+          ? 'No se pudo firmar el contrato. Verificá que tu cuenta sea de conductor '
+              'y que tengas conexión. Si sigue fallando, contactá a RAI.'
+          : 'No se pudo firmar el contrato. Intentá de nuevo.';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error (${e.code}): ${e.message ?? ''}')),
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: Colors.red.shade800,
+        ),
       );
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo firmar: $e')),
+        SnackBar(
+          content: const Text(
+            'No se pudo firmar el contrato. Revisá tu conexión e intentá de nuevo.',
+          ),
+          backgroundColor: Colors.red.shade800,
+        ),
       );
     } finally {
       if (mounted) setState(() => _guardando = false);

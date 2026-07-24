@@ -34,9 +34,11 @@ class _RaiUbicacionActivarButtonState extends State<RaiUbicacionActivarButton> {
 
   Future<void> _activar() async {
     if (widget.rol == RaiUbicacionRol.cliente) {
-      await RaiUbicacionClienteService.instance.activarUbicacionDesdeApp();
+      await RaiUbicacionClienteService.instance
+          .activarUbicacionDesdeApp(context: context);
     } else {
-      await RaiUbicacionTaxistaService.instance.activarUbicacionDesdeApp();
+      await RaiUbicacionTaxistaService.instance
+          .activarUbicacionDesdeApp(context: context);
     }
   }
 

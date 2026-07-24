@@ -7,6 +7,7 @@ import '../../config/recarga_bancaria_config.dart';
 import '../../servicios/admin_config_service.dart';
 import '../../servicios/app_config_service.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 
@@ -188,6 +189,7 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.configRai,
         title: 'Configuración RAI',
         bottom: TabBar(
           controller: _tabs,

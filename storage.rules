@@ -111,6 +111,46 @@ service firebase.storage {
                       );
     }
 
+    /* ========= Organizador de giras (cédula / pasaporte) =========
+       Ruta: organizadores_giras/{uid}/cedula_*.jpg
+    */
+    match /organizadores_giras/{uid}/{fileName} {
+      allow read: if isOwner(uid);
+      allow write: if isOwner(uid)
+                   && request.resource != null
+                   && request.resource.size > 0
+                   && request.resource.size < 6 * 1024 * 1024
+                   && esImagenOPdfSubida();
+    }
+
+    /* ========= Logo empresa corporativa (encargado web /empresas) =========
+       Ruta: empresas_corporativas/{empresaId}/logo/logo_{ts}.jpg
+    */
+    function isAdminStorage() {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/usuarios/$(request.auth.uid)) &&
+        (
+          firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin' ||
+          firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data.isAdmin == true
+        );
+    }
+
+    function esEncargadoCorporativoStorage(empresaId) {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/empresas_corporativas/$(empresaId)) &&
+        firestore.get(/databases/(default)/documents/empresas_corporativas/$(empresaId)).data.keys().hasAny(['encargadoUids']) &&
+        request.auth.uid in firestore.get(/databases/(default)/documents/empresas_corporativas/$(empresaId)).data.encargadoUids;
+    }
+
+    match /empresas_corporativas/{empresaId}/logo/{fileName} {
+      allow read: if signedIn();
+      allow write: if (esEncargadoCorporativoStorage(empresaId) || isAdminStorage())
+                   && request.resource != null
+                   && request.resource.size > 0
+                   && request.resource.size < 3 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
     /* ========= REPORTES ADMIN EXPORTABLES =========
        Ruta: admin_reports/{adminUid}/{fileName}
        Acceso directo desde cliente: bloqueado (descarga via URL firmada temporal de Cloud Functions).

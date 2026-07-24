@@ -11,6 +11,13 @@ class EstadosViaje {
   static const String cancelado = 'cancelado';
   static const String rechazado = 'rechazado';
 
+  // Corporativo: espera / bloqueo de código en origen
+  static const String enOrigenEsperandoCodigo = 'en_origen_esperando_codigo';
+  static const String esperandoCodigoEncargado = 'esperando_codigo_encargado';
+  static const String pendienteCodigo = 'pendiente_codigo';
+  static const String codigoBloqueado = 'codigo_bloqueado';
+  static const String canceladoPorTiempo = 'cancelado_por_tiempo';
+
   // ====== Compatibilidad con variantes antiguas ======
   static const Set<String> _aliasAceptado = {
     'aceptado',
@@ -107,6 +114,16 @@ class EstadosViaje {
         return cancelado;
       case rechazado:
         return rechazado;
+      case enOrigenEsperandoCodigo:
+        return enOrigenEsperandoCodigo;
+      case esperandoCodigoEncargado:
+        return esperandoCodigoEncargado;
+      case pendienteCodigo:
+        return pendienteCodigo;
+      case codigoBloqueado:
+        return codigoBloqueado;
+      case canceladoPorTiempo:
+        return canceladoPorTiempo;
       default:
         return pendiente;
     }
@@ -125,6 +142,21 @@ class EstadosViaje {
   static bool esEnCaminoPickup(String e) => normalizar(e) == enCaminoPickup;
   static bool esAbordo(String e) => normalizar(e) == aBordo;
   static bool esEnCurso(String e) => normalizar(e) == enCurso;
+
+  /// Corporativo: pantalla de PIN antes de iniciar ruta.
+  static bool esEsperandoCodigoCorporativo(String e) {
+    final n = normalizar(e);
+    return n == aBordo ||
+        n == enOrigenEsperandoCodigo ||
+        n == pendienteCodigo;
+  }
+
+  static bool esCodigoCorpTerminal(String e) {
+    final n = normalizar(e);
+    return n == codigoBloqueado ||
+        n == canceladoPorTiempo ||
+        n == esperandoCodigoEncargado;
+  }
   /// Callable de cierre contable: acepta `en_curso` o `a_bordo` (PIN verificado sin bug de transición).
   static bool taxistaPuedeInvocarFinalizar(String e) =>
       esEnCurso(e) || esAbordo(e);
@@ -154,6 +186,29 @@ class EstadosViaje {
 
   static bool esActivo(String e) => activos.contains(normalizar(e));
   static bool esTerminal(String e) => terminales.contains(normalizar(e));
+
+  /// Turismo/pool: si `aceptado==true` pero el doc aún dice `pendiente_admin`,
+  /// la UI del taxista debe tratarlo como `aceptado`.
+  static String estadoOperativoViaje({
+    required String estadoRaw,
+    required bool aceptado,
+    required bool completado,
+  }) {
+    final String base = normalizar(
+      estadoRaw.isNotEmpty
+          ? estadoRaw
+          : (completado
+              ? EstadosViaje.completado
+              : (aceptado ? EstadosViaje.aceptado : EstadosViaje.pendiente)),
+    );
+    if (aceptado &&
+        (base == pendiente ||
+            base == pendientePago ||
+            estadoRaw.trim().toLowerCase() == 'pendiente_admin')) {
+      return EstadosViaje.aceptado;
+    }
+    return base;
+  }
 
   /// Cliente/taxista vía app: no cancelar tras abordar o en ruta (anti‑fraude).
   static bool esEstadoSinCancelacionApp(String e) {

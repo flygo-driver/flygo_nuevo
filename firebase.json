@@ -99,6 +99,42 @@
         "destination": "/legal/contrato-taxista/index.html"
       },
       {
+        "source": "/legal/contrato-corporativo",
+        "destination": "/legal/contrato-corporativo/index.html"
+      },
+      {
+        "source": "/empresas",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/empresas/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/manifest.json",
+        "destination": "/manifest.json"
+      },
+      {
+        "source": "/corporativo",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/corporativo/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/login/corporativo",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/login/corporativo/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/login",
+        "destination": "/index.html"
+      },
+      {
         "source": "/login_admin",
         "destination": "/index.html"
       },

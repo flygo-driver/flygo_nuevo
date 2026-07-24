@@ -24,6 +24,7 @@ import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/configuracion_bancaria.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_config_panel.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
+import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
 
 String _pctLabel(double p) =>
     p == p.roundToDouble() ? p.round().toString() : p.toStringAsFixed(1);
@@ -35,7 +36,7 @@ String _subtituloRepartoComision(double c) {
 
 String _subtituloGananciasComision(double c) {
   final t = 100.0 - c;
-  return 'Totales y reparto ${_pctLabel(t)}/${_pctLabel(c)}';
+  return 'Calle + corporativo · ${_pctLabel(t)}/${_pctLabel(c)}';
 }
 
 String _textoPerfilTaxista(
@@ -133,15 +134,9 @@ class TaxistaCuentaTab extends StatelessWidget {
     final accent = cs.primary;
     final accentSoft = accent.withValues(alpha: isDark ? 0.18 : 0.12);
 
-    return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0B1020) : const Color(0xFFF4F7FB),
-      appBar: AppBar(
-        title: const Text('Cuenta'),
-        centerTitle: true,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        backgroundColor: Colors.transparent,
-      ),
+    return RaiDriverTabScaffold(
+      title: 'Cuenta',
+      subtitle: 'Perfil, finanzas y ajustes',
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
         children: [
@@ -480,8 +475,8 @@ class _CuentaHeroCard extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: isDark
               ? [
-                  const Color(0xFF132238),
-                  const Color(0xFF0F766E).withValues(alpha: 0.55),
+                  RaiDsColors.card,
+                  RaiDsColors.neon.withValues(alpha: 0.12),
                 ]
               : [
                   Colors.white,
@@ -489,7 +484,9 @@ class _CuentaHeroCard extends StatelessWidget {
                 ],
         ),
         border: Border.all(
-          color: accent.withValues(alpha: isDark ? 0.35 : 0.22),
+          color: isDark
+              ? RaiDsColors.border
+              : accent.withValues(alpha: 0.22),
         ),
         boxShadow: isDark
             ? null

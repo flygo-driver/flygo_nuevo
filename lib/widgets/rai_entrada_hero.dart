@@ -305,18 +305,27 @@ class RaiEntradaRolEtiqueta extends StatelessWidget {
 }
 
 class RaiEntradaRegistroBanner extends StatelessWidget {
-  const RaiEntradaRegistroBanner({super.key, required this.esConductor});
+  const RaiEntradaRegistroBanner({
+    super.key,
+    required this.esConductor,
+    this.esCorporativo = false,
+  });
 
   final bool esConductor;
+  final bool esCorporativo;
 
   @override
   Widget build(BuildContext context) {
     final c = RaiEntradaColores.de(context);
-    final texto = esConductor
-        ? '¿Sos nuevo conductor? Verificá tu teléfono o Google y creamos tu cuenta. '
-            'Después completás vehículo y documentos.'
-        : '¿Primera vez en RAI? Poné tu celular, te mandamos un código y '
-            'tu cuenta queda lista. Si ya tenés cuenta, entrás con el mismo paso.';
+    final texto = esCorporativo
+        ? 'Encargado de empresa: entrá con Google o correo. '
+            'RAI debe habilitar tu cuenta; luego programás rutas y '
+            'compartís el código con tus empleados.'
+        : esConductor
+            ? '¿Sos nuevo conductor? Verificá tu teléfono o Google y creamos tu cuenta. '
+                'Después completás vehículo y documentos.'
+            : '¿Primera vez en RAI? Poné tu celular, te mandamos un código y '
+                'tu cuenta queda lista. Si ya tenés cuenta, entrás con el mismo paso.';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

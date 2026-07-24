@@ -270,6 +270,16 @@ class PagosTaxistaRepo {
 
   /// Viajes RAI estándar (efectivo/transferencia/tarjeta) descuentan comisión del prepago.
   static bool viajeAplicaComisionPrepago(Map<String, dynamic> viajeData) {
+    if (viajeData['corporativo'] == true) return false;
+    if ((viajeData['recaudoDestino'] ?? '').toString() ==
+        'empresa_corporativa') {
+      return false;
+    }
+    if ((viajeData['canalAsignacion'] ?? '').toString() ==
+        'corporativo_fijo') {
+      return false;
+    }
+    if (viajeData['exentoBloqueoPrepago'] == true) return false;
     final String tipo =
         (viajeData['tipoServicio'] ?? 'normal').toString().trim().toLowerCase();
     if (tipo == 'bola_ahorro') return false;

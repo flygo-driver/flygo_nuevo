@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 import '../../utils/calculos/estados.dart';
@@ -197,6 +198,7 @@ class _ViajesTurismoAdminState extends State<ViajesTurismoAdmin> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.viajesTurismo,
         title: 'Viajes Turismo — Asignación',
       ),
       body: Column(

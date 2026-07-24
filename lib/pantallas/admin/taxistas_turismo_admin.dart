@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_chofer_turismo_operativo_utils.dart';
 import 'admin_ui_theme.dart';
@@ -549,6 +550,7 @@ class _TaxistasTurismoAdminState extends State<TaxistasTurismoAdmin> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.choferesTurismo,
         title: 'Choferes turismo — flota',
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(60),

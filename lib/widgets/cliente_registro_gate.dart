@@ -24,12 +24,16 @@ class ClienteRegistroGate extends StatelessWidget {
           .doc(uid)
           .snapshots(),
       builder: (context, userSnap) {
+        // Sin doc / cargando: no flash de “completar perfil” (p. ej. tras cancelar).
         if (userSnap.connectionState == ConnectionState.waiting &&
             !userSnap.hasData) {
           return child;
         }
+        if (!userSnap.hasData || userSnap.data?.exists != true) {
+          return child;
+        }
 
-        final data = userSnap.data?.data() ?? <String, dynamic>{};
+        final data = userSnap.data!.data() ?? <String, dynamic>{};
         final incompleto = ClientePerfilOnboarding.debeCompletarPerfil(data);
         final vid = (data['viajeActivoId'] ?? '').toString().trim();
         final tieneViaje = vid.isNotEmpty ||

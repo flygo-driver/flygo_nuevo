@@ -5,7 +5,12 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+    show
+        FlutterErrorDetails,
+        TargetPlatform,
+        debugPrint,
+        defaultTargetPlatform,
+        kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -18,6 +23,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import 'package:flygo_nuevo/modelo/viaje.dart';
+import 'package:flygo_nuevo/widgets/viaje_overlay_error_shield.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
@@ -38,6 +44,7 @@ import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_live_conductores.dart';
+import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
@@ -58,6 +65,18 @@ bool _isValidCoord(double lat, double lon) =>
     lat <= 90 &&
     lon >= -180 &&
     lon <= 180;
+
+GeoPoint? _geoPointSeguro(Object? raw) {
+  if (raw is GeoPoint) return raw;
+  if (raw is Map) {
+    final lat = raw['latitude'] ?? raw['lat'];
+    final lon = raw['longitude'] ?? raw['lng'] ?? raw['lon'];
+    if (lat is num && lon is num) {
+      return GeoPoint(lat.toDouble(), lon.toDouble());
+    }
+  }
+  return null;
+}
 
 String _safeFecha(DateTime? dt) {
   try {
@@ -137,8 +156,9 @@ double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
 String _viajeDocMapUiSig(DocumentSnapshot<Map<String, dynamic>> ds) {
   if (!ds.exists) return '';
   final Map<String, dynamic> d = ds.data() ?? {};
-  String r6(Object? n) {
-    if (n is num && n.isFinite) return n.toStringAsFixed(6);
+  // ~11 m: marcador del taxista se mueve, pero no reconstruye todo el árbol en cada ping.
+  String r4(Object? n) {
+    if (n is num && n.isFinite) return n.toStringAsFixed(4);
     return 'x';
   }
 
@@ -152,10 +172,10 @@ String _viajeDocMapUiSig(DocumentSnapshot<Map<String, dynamic>> ds) {
   final String codPin = (d['codigoVerificacion'] ?? d['codigo_verificacion'] ?? '')
       .toString();
 
-  // Mayor precisión en coords para mapa en vivo (taxista / cliente).
-  return '${ds.id}|$est|${r6(dLat)}|${r6(dLon)}|${r6(d['latCliente'])}|${r6(d['lonCliente'])}|'
-      '${r6(d['latDestino'])}|${r6(d['lonDestino'])}|$tid|$codigoOk|$completado|'
-      '${d['metodoPago']}|${d['precio']}|$wp|$codPin|${d['multiparadaLegCompletadas']}|${d['multiparadaCompleta']}';
+  return '${ds.id}|$est|${r4(dLat)}|${r4(dLon)}|${r4(d['latCliente'])}|${r4(d['lonCliente'])}|'
+      '${r4(d['latDestino'])}|${r4(d['lonDestino'])}|$tid|$codigoOk|$completado|'
+      '${d['metodoPago']}|${d['precio']}|$wp|$codPin|${d['multiparadaLegCompletadas']}|${d['multiparadaCompleta']}|'
+      '${d['nombreTaxista']}|${d['telefonoTaxista']}|${d['telefono']}';
 }
 
 class ViajeEnCursoCliente extends StatefulWidget {
@@ -187,6 +207,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   String _lastRouteKey = '';
   String _lastBoundsKey = '';
+
+  /// Último snapshot del viaje para no mostrar pantalla negra si el stream reconecta.
+  DocumentSnapshot<Map<String, dynamic>>? _lastViajeUiCache;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeDocSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _bolaPickupSub;
@@ -248,6 +271,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   bool? _lastPickupProximity;
   bool _subiendoComprobanteTransfer = false;
   bool _cancelandoViajeCliente = false;
+  bool _yendoAlInicio = false;
   bool _clienteNavDestinoUsado = false;
   int _clienteNavOrientacionLegDismissed = -1;
 
@@ -270,6 +294,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   /// Tras cancelar desde esta pantalla: no abrir factura/post-viaje (solo completados).
   String? _viajeIdCanceladoPorCliente;
 
+  /// Evita bucle irAlInicio ↔ overlay cuando el taxista cancela.
+  String? _salidaCierreIniciadaParaViajeId;
+  bool _snackCancelConductorMostrado = false;
+
   // 🚀 NUEVO: Conductores disponibles
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _driversSub;
   List<DocumentSnapshot<Map<String, dynamic>>> _driversList = [];
@@ -283,6 +311,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   DateTime? _lastClienteNavResumeSnackAt;
   DateTime? _lastClienteGpsSistemaSnackAt;
 
+  /// Mapa nativo: montar tras el 1.er frame. Si falla (ErrorWidget), UI sin mapa.
+  bool _mapaPermitido = false;
+  bool _mapaDesactivadoPorError = false;
+  ErrorWidgetBuilder? _errorBuilderAnterior;
+
   @override
   void initState() {
     super.initState();
@@ -295,10 +328,51 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       vsync: this,
       duration: const Duration(milliseconds: 2200),
     )..repeat();
+    // Si un hijo (p. ej. GoogleMap) tira, no quedarse en «No pudimos cargar…»:
+    // el próximo frame entra sin mapa pero con teléfono/chat.
+    _errorBuilderAnterior = ErrorWidget.builder;
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      debugPrint(
+        '[VIAJE_ACTIVO] cliente ErrorWidget: ${details.exceptionAsString()}',
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_mapaDesactivadoPorError) return;
+        setState(() {
+          _mapaDesactivadoPorError = true;
+          _mapaPermitido = false;
+        });
+      });
+      return const ColoredBox(
+        color: Color(0xFF0A0A0A),
+        child: Center(
+          child: SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.5,
+              color: Colors.greenAccent,
+            ),
+          ),
+        ),
+      );
+    };
     _enableMyLocation();
     _lastNotifiedState = '';
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => unawaited(_verificarViajeTerminadoAlAbrirCliente()));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // Mapa entra al siguiente frame (evita setState en build). Si el shield
+      // forzó sin mapa o ya falló, la ficha del viaje sigue visible.
+      if (ViajeSinMapaScope.of(context) || _mapaDesactivadoPorError) {
+        setState(() {
+          _mapaDesactivadoPorError = true;
+          _mapaPermitido = false;
+        });
+      } else {
+        setState(() => _mapaPermitido = true);
+      }
+      unawaited(_verificarViajeTerminadoAlAbrirCliente());
+    });
   }
 
   Future<void> _verificarViajeTerminadoAlAbrirCliente() async {
@@ -398,6 +472,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   @override
   void dispose() {
+    if (_errorBuilderAnterior != null) {
+      ErrorWidget.builder = _errorBuilderAnterior!;
+      _errorBuilderAnterior = null;
+    }
     _map?.dispose();
     _routeDebounce?.cancel();
     _disposeDocWatch();
@@ -987,7 +1065,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       final String sig =
           snapshot.docs.map((DocumentSnapshot<Map<String, dynamic>> doc) {
         final Map<String, dynamic>? data = doc.data();
-        final GeoPoint? gp = data?['location'] as GeoPoint?;
+        final GeoPoint? gp = _geoPointSeguro(data?['location']);
         if (gp == null) return doc.id;
         return '${doc.id}:${gp.latitude.toStringAsFixed(4)},${gp.longitude.toStringAsFixed(4)}';
       }).join('|');
@@ -1005,17 +1083,27 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   // 🚀 NUEVO: Detener escucha de conductores
-  void _stopListeningDrivers() {
+  /// No llamar [setState] síncrono desde el builder del StreamBuilder (al aceptar
+  /// el taxista, `esperandoTaxista` pasa a false y esto se invocaba en build → ErrorWidget).
+  void _stopListeningDrivers({bool deferSetState = false}) {
     _fotosDebounce?.cancel();
     _fotosDebounce = null;
     _driversSub?.cancel();
     _driversSub = null;
     _lastDriversPoolSig = '';
-    if (mounted) {
+    void clear() {
+      if (!mounted) return;
       setState(() {
         _driversList = [];
         _driverFotoPorUid = <String, String?>{};
       });
+    }
+
+    if (!mounted) return;
+    if (deferSetState) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => clear());
+    } else {
+      clear();
     }
   }
 
@@ -1060,7 +1148,35 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     setState(() => _driverFotoPorUid = next);
   }
 
-  int get _driversCount => _driversList.length;
+  /// Radio real (km) para “cerca de ti” — no contar todo el país.
+  static const double _kRadioKmConductoresCerca = 20;
+
+  List<DocumentSnapshot<Map<String, dynamic>>> _conductoresCercaPickup(
+    Viaje v,
+  ) {
+    if (!_isValidCoord(v.latCliente, v.lonCliente)) {
+      return const <DocumentSnapshot<Map<String, dynamic>>>[];
+    }
+    final List<DocumentSnapshot<Map<String, dynamic>>> near =
+        <DocumentSnapshot<Map<String, dynamic>>>[];
+    for (final DocumentSnapshot<Map<String, dynamic>> d in _driversList) {
+      final GeoPoint? gp = _geoPointSeguro(d.data()?['location']);
+      if (gp == null) continue;
+      if (!_isValidCoord(gp.latitude, gp.longitude)) continue;
+      final double km = DistanciaService.calcularDistancia(
+        v.latCliente,
+        v.lonCliente,
+        gp.latitude,
+        gp.longitude,
+      );
+      if (km <= _kRadioKmConductoresCerca) near.add(d);
+    }
+    return conductoresOrdenadosPorPickup(
+      near,
+      pickupLat: v.latCliente,
+      pickupLon: v.lonCliente,
+    );
+  }
 
   Widget _radarSearchingOverlay() {
     return IgnorePointer(
@@ -1146,6 +1262,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   Future<bool> _tryLaunch(Uri uri, {bool preferExternalApp = true}) async {
     try {
+      if (kIsWeb) {
+        if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+        return await launchUrl(
+          uri,
+          mode: LaunchMode.externalApplication,
+          webOnlyWindowName: '_blank',
+        );
+      }
       final bool ok1 = await launchUrl(
         uri,
         mode: preferExternalApp
@@ -1172,13 +1296,19 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final String qLabel = (label == null || label.trim().isEmpty)
         ? '$la,$lo'
         : Uri.encodeComponent('$la,$lo($label)');
+    final Uri web = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$la,$lo&travelmode=driving');
+
+    if (kIsWeb) {
+      await _tryLaunch(web);
+      return;
+    }
+
     final Uri navIntent = Uri(
       scheme: 'google.navigation',
       queryParameters: {'q': '$la,$lo', 'mode': 'd'},
     );
     final Uri geoIntent = Uri.parse('geo:$la,$lo?q=$qLabel');
-    final Uri web = Uri.parse(
-        'https://www.google.com/maps/dir/?api=1&destination=$la,$lo&travelmode=driving');
 
     if (await _tryLaunch(navIntent)) return;
     if (await _tryLaunch(geoIntent)) return;
@@ -1187,8 +1317,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   Future<void> _openWazeTo(double lat, double lon) async {
     final String la = _fmtCoord(lat), lo = _fmtCoord(lon);
-    final Uri deep = Uri.parse('waze://?ll=$la,$lo&navigate=yes');
     final Uri web = Uri.parse('https://waze.com/ul?ll=$la,$lo&navigate=yes');
+    if (kIsWeb) {
+      if (await _tryLaunch(web)) return;
+      await _openGoogleMapsTo(lat, lon);
+      return;
+    }
+    final Uri deep = Uri.parse('waze://?ll=$la,$lo&navigate=yes');
     if (await _tryLaunch(deep)) return;
     if (await _tryLaunch(web, preferExternalApp: false)) return;
     await _openGoogleMapsTo(lat, lon);
@@ -1198,10 +1333,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   Future<void> _openGoogleMapsVerUbicacionConductor(
       double lat, double lon) async {
     final String la = _fmtCoord(lat), lo = _fmtCoord(lon);
-    final Uri geoIntent = Uri.parse('geo:$la,$lo');
     final Uri mapsSearch = Uri.parse(
       'https://www.google.com/maps/search/?api=1&query=$la,$lo',
     );
+    if (kIsWeb) {
+      await _tryLaunch(mapsSearch);
+      return;
+    }
+    final Uri geoIntent = Uri.parse('geo:$la,$lo');
     if (await _tryLaunch(geoIntent)) return;
     await _tryLaunch(mapsSearch, preferExternalApp: false);
   }
@@ -1398,7 +1537,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (!ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(viajeData)) {
       if (_bolaPickupWatchId != null) {
         _disposeBolaPickupWatch();
-        if (mounted) setState(() {});
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
       }
       return;
     }
@@ -1407,7 +1548,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (bolaId.isEmpty) {
       if (_bolaPickupWatchId != null) {
         _disposeBolaPickupWatch();
-        if (mounted) setState(() {});
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
       }
       return;
     }
@@ -1453,7 +1596,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(msg), duration: const Duration(seconds: 4)),
           );
-          unawaited(NavigationService.irAlInicioCliente(context: context));
+          unawaited(_irAlInicioSeguro());
         });
         return;
       }
@@ -1832,9 +1975,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               : (v.aceptado ? EstadosViaje.enCurso : EstadosViaje.pendiente)),
     );
 
+    // Conservar polylines actuales hasta tener la nueva (evita mapa en blanco).
     final Map<PolylineId, Polyline> beforePolys =
         Map<PolylineId, Polyline>.from(_polylines);
-    _polylines.clear();
+    final Map<PolylineId, Polyline> nextPolys = <PolylineId, Polyline>{};
 
     if ((estado == EstadosViaje.aceptado ||
             estado == EstadosViaje.enCaminoPickup) &&
@@ -1844,8 +1988,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         _latLng(v.latTaxista, v.lonTaxista),
         _latLng(v.latCliente, v.lonCliente),
         id: 'pickup',
-        color: const Color(0xFF00E5FF),
-        width: 7,
+        into: nextPolys,
       );
     }
 
@@ -1869,6 +2012,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             _latLng(oLat, oLon),
             _latLng(leg.lat, leg.lon),
             id: 'ruta_leg_actual',
+            into: nextPolys,
           );
         }
       } else if (_isValidCoord(v.latCliente, v.lonCliente)) {
@@ -1878,11 +2022,18 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           _latLng(v.latDestino, v.lonDestino),
           id: 'ruta',
           viaIntermediate: vias,
+          into: nextPolys,
         );
       }
     }
 
     if (!mounted) return;
+    if (nextPolys.isNotEmpty) {
+      _polylines
+        ..clear()
+        ..addAll(nextPolys);
+    }
+
     bool changed = beforePolys.length != _polylines.length;
     if (!changed) {
       for (final MapEntry<PolylineId, Polyline> e in _polylines.entries) {
@@ -2006,10 +2157,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     LatLng a,
     LatLng b, {
     required String id,
-    Color color = const Color(0xFF49F18B),
-    int width = 6,
+    Color color = const Color(0xFF0A0A0A),
+    int width = 18,
     List<({double lat, double lon})>? viaIntermediate,
+    Map<PolylineId, Polyline>? into,
   }) async {
+    final Map<PolylineId, Polyline> target = into ?? _polylines;
     try {
       final dynamic dir = await DirectionsService.drivingDistanceKm(
         originLat: a.latitude,
@@ -2048,21 +2201,49 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         }
       } catch (_) {}
 
-      final PolylineId polyId = PolylineId(id);
-      _polylines[polyId] = Polyline(
-        polylineId: polyId,
-        width: width,
-        points: pts.isNotEmpty ? pts : [a, b],
+      final List<LatLng> path = pts.isNotEmpty ? pts : [a, b];
+      // Cinta negra gruesa (glow + núcleo) — misma estética en cliente y taxista.
+      target[PolylineId('${id}_glow')] = Polyline(
+        polylineId: PolylineId('${id}_glow'),
+        width: 30,
+        points: path,
         geodesic: true,
-        color: color,
+        color: const Color(0xB3000000),
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+      );
+      target[PolylineId(id)] = Polyline(
+        polylineId: PolylineId(id),
+        width: width.clamp(16, 22),
+        points: path,
+        geodesic: true,
+        color: const Color(0xFF0A0A0A),
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
       );
     } catch (_) {
-      _polylines[PolylineId(id)] = Polyline(
+      final List<LatLng> path = [a, b];
+      target[PolylineId('${id}_glow')] = Polyline(
+        polylineId: PolylineId('${id}_glow'),
+        width: 30,
+        points: path,
+        geodesic: true,
+        color: const Color(0xB3000000),
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+      );
+      target[PolylineId(id)] = Polyline(
         polylineId: PolylineId(id),
-        width: width.clamp(4, 12),
-        points: [a, b],
+        width: width.clamp(16, 22),
+        points: path,
         geodesic: true,
         color: color,
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
       );
     }
   }
@@ -2137,6 +2318,25 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _viajeCierreFetchKey = null;
   }
 
+  Future<void> _irAlInicioSeguro() async {
+    if (_yendoAlInicio) return;
+    setState(() => _yendoAlInicio = true);
+    _disposeDocWatch();
+    _stopClienteUbicacionEnViaje();
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    try {
+      await NavigationService.irAlInicioCliente(
+        context: context,
+        viajeId: _lastNonEmptyViajeActivoId.isNotEmpty
+            ? _lastNonEmptyViajeActivoId
+            : null,
+        forzarLimpiarViajeActivo: true,
+      ).timeout(const Duration(seconds: 12));
+    } catch (_) {
+      if (mounted) setState(() => _yendoAlInicio = false);
+    }
+  }
+
   Widget _bodySinViajeActivo({required String mensaje}) {
     return Center(
       child: Padding(
@@ -2153,17 +2353,22 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: () => unawaited(
-                  NavigationService.irAlInicioCliente(
-                    context: context,
-                    viajeId: _lastNonEmptyViajeActivoId.isNotEmpty
-                        ? _lastNonEmptyViajeActivoId
-                        : null,
-                    forzarLimpiarViajeActivo: true,
-                  ),
+                onPressed: _yendoAlInicio
+                    ? null
+                    : () => unawaited(_irAlInicioSeguro()),
+                icon: _yendoAlInicio
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.home_rounded, size: 20),
+                label: Text(
+                  _yendoAlInicio ? 'Volviendo…' : 'Volver al inicio',
                 ),
-                icon: const Icon(Icons.home_rounded, size: 20),
-                label: const Text('Volver al inicio'),
                 style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   textStyle: const TextStyle(
@@ -2251,25 +2456,37 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   bool _viajeClienteCanceladoORechazado(Map<String, dynamic> d) {
     final String st =
         EstadosViaje.normalizar((d['estado'] ?? '').toString());
-    return st == EstadosViaje.cancelado || st == EstadosViaje.rechazado;
+    if (st == EstadosViaje.cancelado || st == EstadosViaje.rechazado) {
+      return true;
+    }
+    // Legado: taxista cancelaba republicando a pendiente — igual es cierre.
+    final String canceladoPor = (d['canceladoPor'] ?? '').toString().trim();
+    if (canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado') {
+      return st == EstadosViaje.pendiente || st == 'pendiente_admin';
+    }
+    return false;
   }
 
-  Widget _pantallaTransicionCierre({required String mensaje}) {
+  Widget _pantallaTransicionCierre({
+    required String mensaje,
+    bool mostrarBotonInicio = false,
+  }) {
     return ColoredBox(
       color: const Color(0xFF0A0A0A),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
-              width: 40,
-              height: 40,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: Colors.greenAccent,
+            if (!mostrarBotonInicio)
+              const SizedBox(
+                width: 40,
+                height: 40,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: Colors.greenAccent,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
+            if (!mostrarBotonInicio) const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Text(
@@ -2282,10 +2499,121 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 ),
               ),
             ),
+            if (mostrarBotonInicio) ...[
+              const SizedBox(height: 20),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _yendoAlInicio
+                        ? null
+                        : () => unawaited(_irAlInicioSeguro()),
+                    icon: _yendoAlInicio
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.home_rounded, size: 20),
+                    label: Text(
+                      _yendoAlInicio ? 'Volviendo…' : 'Volver al inicio',
+                    ),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      textStyle: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  /// Una sola salida al inicio tras cancelación (evita pestañeo por streams).
+  Future<void> _iniciarSalidaTrasCancelacion({
+    required String viajeId,
+    required Map<String, dynamic> data,
+    required String origen,
+  }) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return;
+    if (_salidaCierreIniciadaParaViajeId == id) return;
+    _salidaCierreIniciadaParaViajeId = id;
+
+    print('[VIAJE_ACTIVO] cliente $origen: salida única tras cancelación $id');
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    _stopClienteUbicacionEnViaje();
+    _limpiarCacheCierreViaje();
+
+    final String canceladoPor =
+        (data['canceladoPor'] ?? '').toString().trim();
+    final bool porConductor =
+        canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado';
+    final String estN =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    final String uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    // Limpieza en paralelo; no bloquear la navegación.
+    unawaited(() async {
+      if (uid.isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+            'viajeActivoId': '',
+            'siguienteViajeId': '',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true)).timeout(const Duration(seconds: 6));
+        } catch (_) {}
+      }
+      if (porConductor &&
+          (estN == EstadosViaje.pendiente || estN == 'pendiente_admin')) {
+        try {
+          await FirebaseFirestore.instance.collection('viajes').doc(id).set({
+            'estado': EstadosViaje.cancelado,
+            'aceptado': false,
+            'rechazado': true,
+            'activo': false,
+            'republicado': false,
+            'uidTaxista': '',
+            'taxistaId': '',
+            'canceladoPor': 'taxista',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true)).timeout(const Duration(seconds: 6));
+        } catch (_) {}
+      }
+    }());
+
+    if (!mounted) return;
+    if (porConductor && !_snackCancelConductorMostrado) {
+      _snackCancelConductorMostrado = true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('El conductor canceló el viaje.'),
+          backgroundColor: Color(0xFFB45309),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+
+    if (!mounted) return;
+    try {
+      await _irAlInicioSeguro();
+    } catch (_) {}
   }
 
   /// Post-viaje solo si el viaje **completó**. Cancelado → inicio sin factura.
@@ -2309,23 +2637,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       return;
     }
     if (_viajeClienteCanceladoORechazado(data)) {
-      print('[VIAJE_ACTIVO] cliente $origen: viaje cancelado → inicio');
-      final String canceladoPor =
-          (data['canceladoPor'] ?? '').toString().trim();
-      final bool porConductor =
-          canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado';
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (porConductor) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('El conductor canceló el viaje.'),
-              backgroundColor: Color(0xFFB45309),
-              duration: Duration(seconds: 4),
-            ),
-          );
-        }
-        unawaited(NavigationService.irAlInicioCliente(context: context));
+        unawaited(_iniciarSalidaTrasCancelacion(
+          viajeId: viajeId,
+          data: data,
+          origen: origen,
+        ));
       });
     }
   }
@@ -2348,7 +2666,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
-    await NavigationService.irAlInicioCliente(context: context);
+    await _irAlInicioSeguro();
     _viajeIdCanceladoPorCliente = null;
   }
 
@@ -2573,41 +2891,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
     try {
       await _runWithBlocking(() async {
-        final int segundos = await _segundosRestantesBorradoDesdeServidor(v.id);
-        bool deleted = false;
-
-        if (segundos > 0) {
-          try {
-            final ds = await FirebaseFirestore.instance
-                .collection('viajes')
-                .doc(v.id)
-                .get();
-            final d = ds.data() ?? const <String, dynamic>{};
-            final String estado =
-                EstadosViaje.normalizar((d['estado'] ?? '').toString());
-            final String uidTx =
-                (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
-            final bool puedeBorrarRapido = uidTx.isEmpty &&
-                (estado == EstadosViaje.pendiente ||
-                    estado == EstadosViaje.pendientePago ||
-                    estado == 'pendiente_admin');
-            if (puedeBorrarRapido) {
-              await FirebaseFirestore.instance
-                  .collection('viajes')
-                  .doc(v.id)
-                  .delete();
-              deleted = true;
-            }
-          } catch (_) {}
-        }
-
-        if (!deleted) {
-          await ViajesRepo.cancelarPorCliente(
-            viajeId: v.id,
-            uidCliente: uid,
-            motivo: motivo,
-          );
-        }
+        // Siempre cancelar vía CF/repo (delete de viajes está denegado en rules).
+        await ViajesRepo.cancelarPorCliente(
+          viajeId: v.id,
+          uidCliente: uid,
+          motivo: motivo,
+        );
 
         await _limpiarActivoDelUsuario(uid);
       });
@@ -2793,9 +3082,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         }
       }
 
-      // El conductor canceló: en viajes normales el pedido vuelve a "pendiente"
-      // (se busca otro conductor). Avisamos al cliente para que sepa por qué.
-      _avisarSiConductorCancelo(d, estN);
+      // El conductor canceló → mensaje + salir de viaje en curso (no quedarse en pendiente).
+      _avisarSiConductorCancelo(d, estN, viajeId);
 
       // Post-viaje (recibo + calificación): solo desde [_abrirFlujoPostViaje].
       // `_postViajeFlujoIniciadoParaViajeId` evita abrir el flujo dos veces.
@@ -2804,16 +3092,14 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }, onError: (Object _) {});
   }
 
-  /// Avisa al cliente cuando el conductor canceló su viaje.
-  /// - Normal: el pedido vuelve a "pendiente" y buscamos otro conductor.
-  /// - Forzado: el viaje queda "cancelado" (el flujo de salida lo maneja aparte).
-  void _avisarSiConductorCancelo(Map<String, dynamic> d, String estN) {
+  /// Si el conductor cancela: una sola salida (sin bucle de streams).
+  void _avisarSiConductorCancelo(
+    Map<String, dynamic> d,
+    String estN,
+    String viajeIdWatch,
+  ) {
     final String canceladoPor = (d['canceladoPor'] ?? '').toString().trim();
     if (canceladoPor != 'taxista' && canceladoPor != 'taxista_forzado') return;
-
-    // Solo el caso "vuelve a búsqueda"; el "cancelado" total ya se maneja en
-    // _manejarEstadosEspecialesCliente (navega al inicio).
-    if (estN != EstadosViaje.pendiente) return;
 
     final dynamic ts = d['canceladoTaxistaEn'];
     DateTime? cancelTs;
@@ -2821,23 +3107,29 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (ts is DateTime) cancelTs = ts;
     if (cancelTs == null) return;
 
-    // Evita repetir el aviso en cada snapshot (misma marca de tiempo) y avisos viejos.
     final bool reciente =
-        DateTime.now().difference(cancelTs) < const Duration(minutes: 3);
+        DateTime.now().difference(cancelTs) < const Duration(minutes: 5);
     final bool yaAvisado = _cancelacionTaxistaAvisada == cancelTs;
     if (!reciente || yaAvisado) return;
     _cancelacionTaxistaAvisada = cancelTs;
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'El conductor canceló el viaje. Buscando otro conductor para ti…',
-        ),
-        backgroundColor: Color(0xFFB45309),
-        duration: Duration(seconds: 5),
-      ),
-    );
+    final bool salirYa = estN == EstadosViaje.cancelado ||
+        estN == EstadosViaje.pendiente ||
+        estN == 'pendiente_admin' ||
+        estN == EstadosViaje.rechazado;
+    if (!salirYa || !mounted) return;
+
+    final String viajeId = viajeIdWatch.trim();
+    if (viajeId.isEmpty) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_iniciarSalidaTrasCancelacion(
+        viajeId: viajeId,
+        data: d,
+        origen: 'watchDocCancelTaxista',
+      ));
+    });
   }
 
   Widget _buildCodigoVerificacionClienteSection({
@@ -4308,6 +4600,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         );
                         return _pantallaTransicionCierre(
                           mensaje: 'Viaje cancelado. Volviendo al inicio…',
+                          mostrarBotonInicio: true,
                         );
                       }
                     }
@@ -4332,6 +4625,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 if (_lastNonEmptyViajeActivoId.isNotEmpty &&
                     _lastNonEmptyViajeActivoId != activoId) {
                   _navPostViajeParaId = null;
+                  _lastViajeUiCache = null;
                 }
                 _lastNonEmptyViajeActivoId = activoId;
 
@@ -4344,14 +4638,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                               DocumentSnapshot<Map<String, dynamic>> b) =>
                           _viajeDocMapUiSig(a) == _viajeDocMapUiSig(b)),
                   builder: (context, vSnap) {
+                    // Mantener el último frame del viaje (mapa) si el stream reconecta.
                     if (vSnap.connectionState == ConnectionState.waiting &&
                         !vSnap.hasData) {
-                      return _cargaLinealOscura();
+                      if (_lastViajeUiCache != null) {
+                        // cae al flujo normal abajo usando cache — no pantalla negra
+                      } else {
+                        return _cargaLinealOscura();
+                      }
                     }
 
-                    if (vSnap.hasError ||
-                        !vSnap.hasData ||
-                        !vSnap.data!.exists) {
+                    if ((vSnap.hasError ||
+                            !vSnap.hasData ||
+                            !vSnap.data!.exists) &&
+                        _lastViajeUiCache == null) {
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
                         await _limpiarActivoDelUsuario(u.uid);
                       });
@@ -4361,8 +4661,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       );
                     }
 
-                    final Map<String, dynamic> data = vSnap.data!.data() ?? {};
-                    _intentarRedirigirEsperaTurismo(vSnap.data!.id, data);
+                    final DocumentSnapshot<Map<String, dynamic>> docViaje =
+                        (vSnap.hasData &&
+                                vSnap.data != null &&
+                                vSnap.data!.exists)
+                            ? vSnap.data!
+                            : _lastViajeUiCache!;
+                    if (vSnap.hasData &&
+                        vSnap.data != null &&
+                        vSnap.data!.exists) {
+                      _lastViajeUiCache = vSnap.data;
+                    }
+
+                    final Map<String, dynamic> data = docViaje.data() ?? {};
+                    _intentarRedirigirEsperaTurismo(docViaje.id, data);
                     if (ClientePantallaViajeActivo.debeMostrarEsperaTurismo(data)) {
                       return _pantallaTransicionCierre(
                         mensaje: widget.delegarEsperaTurismoAlRouter
@@ -4371,10 +4683,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       );
                     }
 
-                    final Viaje v = Viaje.fromMap(
-                      vSnap.data!.id,
-                      Map<String, dynamic>.from(data),
-                    );
+                    final Viaje v;
+                    try {
+                      v = Viaje.fromMap(
+                        docViaje.id,
+                        Map<String, dynamic>.from(data),
+                      );
+                    } catch (e, st) {
+                      debugPrint(
+                        '[VIAJE_ACTIVO] cliente Viaje.fromMap: $e\n$st',
+                      );
+                      return _cargaLinealOscura(
+                        mensaje:
+                            'Cargando datos del viaje… Si no abre, toca actualizar.',
+                      );
+                    }
 
                     final String uidClienteViaje =
                         ViajesRepo.uidClienteDesdeDocViaje(data);
@@ -4435,6 +4758,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       }
                       return _pantallaTransicionCierre(
                         mensaje: 'Viaje cancelado. Volviendo al inicio…',
+                        mostrarBotonInicio: true,
                       );
                     }
 
@@ -4447,32 +4771,45 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         (estadoBase == EstadosViaje.pendiente ||
                             estadoBase == EstadosViaje.pendientePago);
 
-                    // Iniciar o detener escucha de conductores según corresponda
+                    // Iniciar o detener escucha de conductores según corresponda.
+                    // Nunca setState síncrono aquí: al aceptar el taxista se corta
+                    // el pool y antes crasheaba con ErrorWidget.
                     if (esperandoTaxista && _driversSub == null) {
-                      _startListeningDrivers();
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) _startListeningDrivers();
+                      });
                     } else if (!esperandoTaxista && _driversSub != null) {
-                      _stopListeningDrivers();
+                      _stopListeningDrivers(deferSetState: true);
                     }
 
                     final Set<Marker> markers = <Marker>{
-                      if (_mostrarRutaHaciaDestinoCliente(v) &&
-                          _isValidCoord(v.latDestino, v.lonDestino))
+                      if (_isValidCoord(v.latDestino, v.lonDestino))
                         Marker(
                           markerId: const MarkerId('destino'),
                           position: _latLng(v.latDestino, v.lonDestino),
-                          infoWindow:
-                              InfoWindow(title: 'Destino: ${v.destino}'),
+                          infoWindow: InfoWindow(
+                            title: 'DESTINO',
+                            snippet: v.destino.trim().isEmpty
+                                ? 'Punto de llegada'
+                                : v.destino,
+                          ),
                           icon: BitmapDescriptor.defaultMarkerWithHue(
                               BitmapDescriptor.hueGreen),
+                          zIndexInt: 6,
                         ),
                       if (_isValidCoord(v.latCliente, v.lonCliente))
                         Marker(
                           markerId: const MarkerId('pickup'),
                           position: _latLng(v.latCliente, v.lonCliente),
                           infoWindow: InfoWindow(
-                              title: 'Punto de recogida: ${v.origen}'),
+                            title: 'ORIGEN · Recogida',
+                            snippet: v.origen.trim().isEmpty
+                                ? 'Punto de recogida'
+                                : v.origen,
+                          ),
                           icon: BitmapDescriptor.defaultMarkerWithHue(
                               BitmapDescriptor.hueAzure),
+                          zIndexInt: 5,
                         ),
                       ..._paradasIntermediasResueltas(v).asMap().entries.map(
                         (MapEntry<int, ({double lat, double lon, String label})>
@@ -4481,47 +4818,64 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             markerId: MarkerId('parada_${e.key}'),
                             position: LatLng(e.value.lat, e.value.lon),
                             infoWindow: InfoWindow(
-                              title:
-                                  'Parada ${e.key + 1}: ${e.value.label}',
+                              title: 'PARADA ${e.key + 1}',
+                              snippet: e.value.label,
                             ),
                             icon: BitmapDescriptor.defaultMarkerWithHue(
                               BitmapDescriptor.hueOrange,
                             ),
+                            zIndexInt: 4,
                           );
                         },
                       ),
-                      // Si tenemos taxista, mostrar su marcador
                       if (v.uidTaxista.isNotEmpty &&
                           _isValidCoord(v.latTaxista, v.lonTaxista))
                         Marker(
                           markerId: const MarkerId('taxista'),
                           position: _latLng(v.latTaxista, v.lonTaxista),
-                          infoWindow: const InfoWindow(title: 'Taxista'),
+                          infoWindow: const InfoWindow(title: 'Tu conductor'),
                           icon: BitmapDescriptor.defaultMarkerWithHue(
                             _taxistaHueByEstado(estadoBase),
                           ),
+                          zIndexInt: 8,
                         ),
                     };
-                    final Set<Circle> circles = <Circle>{};
+                    final Set<Circle> circles = <Circle>{
+                      if (_isValidCoord(v.latCliente, v.lonCliente))
+                        Circle(
+                          circleId: const CircleId('halo_origen'),
+                          center: _latLng(v.latCliente, v.lonCliente),
+                          radius: 55,
+                          fillColor: const Color(0x4400B0FF),
+                          strokeColor: const Color(0xFF00B0FF),
+                          strokeWidth: 3,
+                          zIndex: 1,
+                        ),
+                      if (_isValidCoord(v.latDestino, v.lonDestino))
+                        Circle(
+                          circleId: const CircleId('halo_destino'),
+                          center: _latLng(v.latDestino, v.lonDestino),
+                          radius: 55,
+                          fillColor: const Color(0x4400C853),
+                          strokeColor: const Color(0xFF00C853),
+                          strokeWidth: 3,
+                          zIndex: 1,
+                        ),
+                    };
 
-                    // Conductores en pool: orden por cercanía al pickup + marcadores con tono distinto
+                    // Conductores en pool: solo los cerca del pickup (coherente / real).
                     final List<DocumentSnapshot<Map<String, dynamic>>>
                         driversSortedMapa = esperandoTaxista &&
                                 _isValidCoord(v.latCliente, v.lonCliente)
-                            ? conductoresOrdenadosPorPickup(
-                                _driversList,
-                                pickupLat: v.latCliente,
-                                pickupLon: v.lonCliente,
-                              )
-                            : List<DocumentSnapshot<Map<String, dynamic>>>.from(
-                                _driversList);
+                            ? _conductoresCercaPickup(v)
+                            : const <DocumentSnapshot<Map<String, dynamic>>>[];
 
                     if (esperandoTaxista) {
                       for (final DocumentSnapshot<Map<String, dynamic>> doc
                           in driversSortedMapa) {
                         final Map<String, dynamic>? docData = doc.data();
                         final GeoPoint? location =
-                            docData?['location'] as GeoPoint?;
+                            _geoPointSeguro(docData?['location']);
                         if (location != null &&
                             _isValidCoord(
                                 location.latitude, location.longitude)) {
@@ -4582,11 +4936,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                 ? _latLng(v.latDestino, v.lonDestino)
                                 : const LatLng(18.4861, -69.9312));
 
+                    // No incluir GPS del taxista: cada ping redibujaba Directions y vaciaba el mapa.
+                    // Redibuja al aceptar (aparece tid) o al cambiar estado / origen-destino.
+                    final String tidRuta =
+                        (v.uidTaxista.isNotEmpty ? v.uidTaxista : v.taxistaId)
+                            .trim();
                     final String routeKey =
                         '${v.id}|${EstadosViaje.normalizar(v.estado)}|'
-                        '${v.latCliente},${v.lonCliente}|'
-                        '${v.latDestino},${v.lonDestino}|'
-                        '${v.latTaxista},${v.lonTaxista}|'
+                        '${v.latCliente.toStringAsFixed(4)},${v.lonCliente.toStringAsFixed(4)}|'
+                        '${v.latDestino.toStringAsFixed(4)},${v.lonDestino.toStringAsFixed(4)}|'
+                        '${tidRuta.isEmpty ? '0' : '1'}|'
                         '${_firmaWaypointsViaje(v)}|'
                         '${v.multiparadaLegCompletadas}|${v.multiparadaCompleta}';
                     if (routeKey != _lastRouteKey) {
@@ -4680,7 +5039,75 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             fit: StackFit.expand,
                             children: [
                         RepaintBoundary(
-                          child: GoogleMap(
+                          child: (!_mapaPermitido || _mapaDesactivadoPorError)
+                              ? ColoredBox(
+                                  color: const Color(0xFF0A0A0A),
+                                  child: Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(24),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            _mapaDesactivadoPorError
+                                                ? 'Mapa no disponible ahora.\nAbajo tienes llamar, WhatsApp y chat con tu conductor.'
+                                                : 'Cargando mapa…',
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(
+                                              color: Colors.white54,
+                                              height: 1.35,
+                                            ),
+                                          ),
+                                          if (_mapaDesactivadoPorError) ...[
+                                            const SizedBox(height: 16),
+                                            FilledButton.icon(
+                                              onPressed: () {
+                                                setState(() {
+                                                  _mapaDesactivadoPorError =
+                                                      false;
+                                                  _mapaPermitido = true;
+                                                });
+                                              },
+                                              icon: const Icon(Icons.map),
+                                              label: const Text('Reintentar mapa'),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : (kIsWeb
+                              ? MapaTiempoReal(
+                                  key: ValueKey<String>('osm-viaje-${v.id}'),
+                                  origen: _isValidCoord(
+                                          v.latCliente, v.lonCliente)
+                                      ? _latLng(v.latCliente, v.lonCliente)
+                                      : null,
+                                  destino: _isValidCoord(
+                                          v.latDestino, v.lonDestino)
+                                      ? _latLng(v.latDestino, v.lonDestino)
+                                      : null,
+                                  ubicacionTaxista: v.uidTaxista.isNotEmpty &&
+                                          _isValidCoord(
+                                              v.latTaxista, v.lonTaxista)
+                                      ? _latLng(v.latTaxista, v.lonTaxista)
+                                      : null,
+                                  // Pins vienen en overlay (origen/destino/paradas/pool).
+                                  mostrarOrigen: false,
+                                  mostrarDestino: false,
+                                  mostrarTaxista: false,
+                                  esCliente: true,
+                                  esTaxista: false,
+                                  overlayMarkers: markers,
+                                  overlayPolylines:
+                                      Set<Polyline>.of(_polylines.values),
+                                  onUserInteractWithMap: _colapsarSheetPorTapMapa,
+                                  onUserMapGestureEnd: v.esMotor
+                                      ? null
+                                      : _expandirSheetTrasMapaInteract,
+                                )
+                              : GoogleMap(
                             key: ValueKey<String>('gmap-${v.id}'),
                             initialCameraPosition:
                                 CameraPosition(target: initialTarget, zoom: 14),
@@ -4754,7 +5181,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             polylines: Set<Polyline>.of(_polylines.values),
                             compassEnabled: true,
                             mapToolbarEnabled: false,
-                          ),
+                          )),
                         ),
                         // ===== BOTÓN FLOTANTE "VER TAXISTA" (siempre visible) =====
                         if (pulsoTaxistaEnMapa)
@@ -5254,10 +5681,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
-                                            _driversCount > 0
+                                            driversSortedMapa.isNotEmpty
                                                 ? (v.esMotor
-                                                    ? 'Hay motoristas activos en tu zona.'
-                                                    : 'Hay actividad en tu zona en este momento.')
+                                                    ? 'Hay ${driversSortedMapa.length} motorista${driversSortedMapa.length == 1 ? '' : 's'} cerca de ti.'
+                                                    : 'Hay ${driversSortedMapa.length} conductor${driversSortedMapa.length == 1 ? '' : 'es'} cerca de ti.')
                                                 : (v.esMotor
                                                     ? 'Notificando a motoristas en la zona…'
                                                     : 'Notificando a conductores en la zona…'),
@@ -5265,23 +5692,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                                 color: Colors.white60,
                                                 fontSize: 13),
                                           ),
-                                          if (_driversCount > 0) ...[
+                                          if (driversSortedMapa.isNotEmpty) ...[
                                             const SizedBox(height: 14),
                                             ClienteConductoresCercaStrip(
-                                              docsOrdenados: _isValidCoord(
-                                                      v.latCliente,
-                                                      v.lonCliente)
-                                                  ? conductoresOrdenadosPorPickup(
-                                                      _driversList,
-                                                      pickupLat: v.latCliente,
-                                                      pickupLon: v.lonCliente,
-                                                    )
-                                                  : List<
-                                                      DocumentSnapshot<
-                                                          Map<String,
-                                                              dynamic>>>.from(
-                                                      _driversList,
-                                                    ),
+                                              docsOrdenados: driversSortedMapa,
                                               fotoPorUid: _driverFotoPorUid,
                                             ),
                                           ],

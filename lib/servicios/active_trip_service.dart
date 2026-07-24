@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
@@ -25,6 +26,7 @@ class ActiveTripService {
   /// `viajeActivoId` ya se limpió pero aún corre factura / post-viaje.
   static int _mantenerOverlayViajeHastaMs = 0;
   static int _bloquearShellSinViajeHastaMs = 0;
+  static int _forzarInicioClienteHastaMs = 0;
 
   /// Fuerza rebuild de [TaxistaShell] / [ClienteShell] tras aceptar viaje u overlay.
   static final ValueNotifier<int> shellRebuildTick = ValueNotifier<int>(0);
@@ -149,6 +151,27 @@ class ActiveTripService {
     notificarRebuildShell();
   }
 
+  /// Tras «Volver al inicio»: el stream no debe reabrir viaje en curso aunque
+  /// `viajeActivoId` tarde en limpiarse en Firestore.
+  static void forzarInicioClienteShell({
+    Duration duracion = const Duration(seconds: 120),
+  }) {
+    final int hasta = DateTime.now().add(duracion).millisecondsSinceEpoch;
+    if (hasta > _forzarInicioClienteHastaMs) {
+      _forzarInicioClienteHastaMs = hasta;
+    }
+    cancelarMantenimientoOverlayViaje();
+    print(
+        '[VIAJE_ACTIVO] ActiveTripService.forzarInicioClienteShell ${duracion.inSeconds}s');
+  }
+
+  static bool get debeForzarInicioClienteShell =>
+      DateTime.now().millisecondsSinceEpoch < _forzarInicioClienteHastaMs;
+
+  static void cancelarForzarInicioClienteShell() {
+    _forzarInicioClienteHastaMs = 0;
+  }
+
   /// Documento del viaje activo, o `null`.
   static Future<DocumentSnapshot<Map<String, dynamic>>?> obtenerDocumentoViajeActivo(
       String uid) {
@@ -218,7 +241,8 @@ class ActiveTripService {
     final String c2 = (d['clienteId'] ?? '').toString().trim();
     final String t1 = (d['uidTaxista'] ?? '').toString().trim();
     final String t2 = (d['taxistaId'] ?? '').toString().trim();
-    return c1 == u || c2 == u || t1 == u || t2 == u;
+    if (c1 == u || c2 == u || t1 == u || t2 == u) return true;
+    return CorporativoTaxistaService.esViajeCorporativoAsignado(d, u);
   }
 
   /// Cliente con `viajeActivoId` y viaje no terminal (incluye **pendiente** buscando conductor).
@@ -258,6 +282,11 @@ class ActiveTripService {
   static Future<bool> tieneViajeActivo(String uid) async {
     final u = uid.trim();
     if (u.isEmpty) return false;
+    if (debeForzarInicioClienteShell) {
+      print(
+          '[VIAJE_ACTIVO] ActiveTripService.tieneViajeActivo($u) → false (forzar inicio)');
+      return false;
+    }
     final bool ok = await usuarioTieneViajeEnSeguimiento(u);
     print('[VIAJE_ACTIVO] ActiveTripService.tieneViajeActivo($u) → $ok');
     return ok;
@@ -302,13 +331,90 @@ class ActiveTripService {
           };
         });
       },
-    );
+    ).distinct();
   }
 
   static Future<bool> _evalTieneViajeActivoStream(String u) async {
-    if (debeMantenerOverlayViajeEnShell || debeBloquearShellSinViajeTaxista) {
+    if (debeForzarInicioClienteShell) {
       print(
-          '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → true (overlay/bloqueo)');
+          '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → false (forzar inicio)');
+      return false;
+    }
+    if (debeMantenerOverlayViajeEnShell || debeBloquearShellSinViajeTaxista) {
+      try {
+        final uSnap = await _db.collection('usuarios').doc(u).get();
+        final vid =
+            (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+        if (vid.isNotEmpty) {
+          final vSnap = await _db.collection('viajes').doc(vid).get();
+          final d = vSnap.data() ?? <String, dynamic>{};
+          if (CorporativoTaxistaService.corpAsignadoUsaPantallaPropia(d, u)) {
+            cancelarBloqueoShellTaxista();
+            cancelarMantenimientoOverlayViaje();
+            unawaited(RaiLocalReadCache.clearActiveTripId(u));
+            print(
+              '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) '
+              '→ false (corp, sin overlay)',
+            );
+            return false;
+          }
+        }
+      } catch (_) {}
+      final String? corpOp =
+          await CorporativoTaxistaService.idViajeCorporativoOperativoParaChofer(
+        u,
+      );
+      if (corpOp != null && corpOp.isNotEmpty) {
+        cancelarBloqueoShellTaxista();
+        cancelarMantenimientoOverlayViaje();
+        unawaited(RaiLocalReadCache.clearActiveTripId(u));
+        print(
+          '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) '
+          '→ false (corp operativo, sin overlay)',
+        );
+        return false;
+      }
+      final String? corpInfo =
+          await CorporativoTaxistaService.idViajeCorporativoInformativoParaChofer(
+        u,
+      );
+      if (corpInfo != null && corpInfo.isNotEmpty) {
+        cancelarBloqueoShellTaxista();
+        cancelarMantenimientoOverlayViaje();
+        unawaited(RaiLocalReadCache.clearActiveTripId(u));
+        print(
+          '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) '
+          '→ false (corp informativo, sin overlay)',
+        );
+        return false;
+      }
+      final bool pool = await usuarioTieneViajeEnSeguimiento(u);
+      if (!pool) {
+        if (debeBloquearShellSinViajeTaxista) {
+          for (int i = 0; i < 10; i++) {
+            await Future<void>.delayed(
+              Duration(milliseconds: 60 * (i + 1)),
+            );
+            if (await usuarioTieneViajeEnSeguimiento(u)) {
+              print(
+                '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) '
+                '→ true (overlay/bloqueo + pool tras retry)',
+              );
+              return true;
+            }
+          }
+        }
+        cancelarBloqueoShellTaxista();
+        cancelarMantenimientoOverlayViaje();
+        unawaited(RaiLocalReadCache.clearActiveTripId(u));
+        print(
+          '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) '
+          '→ false (overlay/bloqueo sin viaje pool)',
+        );
+        return false;
+      }
+      print(
+          '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) → true (overlay/bloqueo + pool)');
       return true;
     }
     final bool ok = await usuarioTieneViajeEnSeguimiento(u);
@@ -320,7 +426,28 @@ class ActiveTripService {
               .trim() ??
           '';
       if (vid.isNotEmpty) {
-        unawaited(RaiLocalReadCache.rememberActiveTripId(u, vid));
+        try {
+          final vSnap = await _db.collection('viajes').doc(vid).get();
+          final d = vSnap.data() ?? <String, dynamic>{};
+          if (CorporativoTaxistaService.corpAsignadoUsaPantallaPropia(d, u)) {
+            cancelarBloqueoShellTaxista();
+            cancelarMantenimientoOverlayViaje();
+            unawaited(RaiLocalReadCache.clearActiveTripId(u));
+            print(
+              '[VIAJE_ACTIVO] ActiveTripService.streamTieneViajeActivo($u) '
+              '→ false (corp en seguimiento, sin overlay)',
+            );
+            return false;
+          }
+          if (CorporativoTaxistaService.esViajeCorporativoAsignado(d, u) &&
+              CorporativoTaxistaService.esModoInformativo(d)) {
+            unawaited(RaiLocalReadCache.clearActiveTripId(u));
+          } else {
+            unawaited(RaiLocalReadCache.rememberActiveTripId(u, vid));
+          }
+        } catch (_) {
+          unawaited(RaiLocalReadCache.rememberActiveTripId(u, vid));
+        }
       }
     }
     return ok;

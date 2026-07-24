@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../../servicios/wallet_service.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart'; // ⬅️ NUEVO (para cerrar sesión desde el drawer)
 import 'admin_ui_theme.dart';
 
@@ -343,6 +344,7 @@ class _PanelFinanzasAdminState extends State<PanelFinanzasAdmin> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(), // ⬅️ NUEVO (mismo drawer que en AdminHome)
       appBar: AdminAppBar(
+        guiaId: AdminGuiaIds.finanzas,
         title: 'Panel de Finanzas',
         actions: [
           IconButton(

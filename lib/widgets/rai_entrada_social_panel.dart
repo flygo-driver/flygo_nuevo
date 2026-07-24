@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -22,6 +23,9 @@ class RaiEntradaSocialPanel extends StatefulWidget {
     this.titulo,
     this.mostrarCorreo = true,
     this.ocultarTitulo = false,
+    this.postLoginRoute,
+    this.googleSolo = false,
+    this.modoCorporativo = false,
   });
 
   final String entradaRol;
@@ -31,6 +35,10 @@ class RaiEntradaSocialPanel extends StatefulWidget {
   final String? titulo;
   final bool mostrarCorreo;
   final bool ocultarTitulo;
+  final String? postLoginRoute;
+  /// Web corporativo: solo botón Google (sin teléfono ni correo).
+  final bool googleSolo;
+  final bool modoCorporativo;
 
   @override
   State<RaiEntradaSocialPanel> createState() => _RaiEntradaSocialPanelState();
@@ -57,9 +65,22 @@ class _RaiEntradaSocialPanelState extends State<RaiEntradaSocialPanel> {
   String get _rol =>
       widget.entradaRol.trim().toLowerCase() == 'taxista' ? 'taxista' : 'cliente';
 
-  String get _tituloDefault => _rol == 'taxista'
-      ? 'Entrá o registrate como conductor'
-      : 'Entrá o registrate';
+  String get _tituloDefault {
+    if (_esCorporativo) return 'Entrá como encargado corporativo';
+    return _rol == 'taxista'
+        ? 'Entrá o registrate como conductor'
+        : 'Entrá o registrate';
+  }
+
+  bool get _esCorporativo =>
+      widget.modoCorporativo ||
+      (widget.postLoginRoute ?? '').trim() == '/corporativo';
+
+  bool get _soloGoogle => widget.googleSolo;
+
+  bool get _ocultarTelefono => _soloGoogle || _esCorporativo;
+
+  bool get _ocultarCorreo => _soloGoogle;
 
   @override
   void dispose() {
@@ -78,9 +99,9 @@ class _RaiEntradaSocialPanelState extends State<RaiEntradaSocialPanel> {
         _errorDestacarGoogle = mostrarGoogle;
       });
     }
-    if (widget.onError != null && msg.length < 72) {
-      widget.onError!(msg);
-    }
+    // Siempre notificar: si hay role-mismatch se cierra sesión y el panel
+    // se remonta; el padre debe mostrar snack/diálogo con el motivo.
+    widget.onError?.call(msg);
   }
 
   void _limpiarError() {
@@ -225,6 +246,15 @@ class _RaiEntradaSocialPanelState extends State<RaiEntradaSocialPanel> {
         context,
         entradaRol: _rol,
         onMensaje: _error,
+        postLoginRoute: widget.postLoginRoute,
+      ).timeout(
+        const Duration(seconds: 60),
+        onTimeout: () {
+          _error(
+            'Google no respondió. Si cerraste la ventana, tocá de nuevo '
+            '«Entrar con Google».',
+          );
+        },
       );
     } finally {
       if (mounted) setState(() => _cargandoGoogle = false);
@@ -232,7 +262,11 @@ class _RaiEntradaSocialPanelState extends State<RaiEntradaSocialPanel> {
   }
 
   Future<void> _correo() async {
-    await RaiLoginCorreoPage.abrir(context, entradaRol: _rol);
+    await RaiLoginCorreoPage.abrir(
+      context,
+      entradaRol: _rol,
+      postLoginRoute: widget.postLoginRoute,
+    );
   }
 
   Widget _botonLlamativo({
@@ -495,70 +529,105 @@ class _RaiEntradaSocialPanelState extends State<RaiEntradaSocialPanel> {
           ),
         ],
         const SizedBox(height: 24),
-        if (!_codigoEnviado) ...[
-          Container(
-            height: 48,
-            decoration: BoxDecoration(
-              color: campoBg,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: borde, width: 1.2),
-            ),
-            child: Row(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'DO',
-                        style: TextStyle(
-                          color: texto,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
+        if (_soloGoogle) ...[
+          Text(
+            'En el celular salen todas porque están guardadas en el teléfono.\n'
+            'En la laptop Google solo lista las cuentas abiertas en Chrome.\n\n'
+            'Para verlas igual que en el cel: en Chrome (arriba a la derecha) '
+            'toca tu foto → «Agregar otra cuenta» y añade los mismos Gmail. '
+            'Luego «Entrar con Google» y elige con un toque (sin clave).',
+            style: TextStyle(color: hint, fontSize: 14, height: 1.45),
+          ),
+          const SizedBox(height: 20),
+          _botonLlamativo(
+            onPressed: ocupado ? null : _google,
+            icon: _cargandoGoogle
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const _GoogleLogoColores(invertido: true),
+            label: _cargandoGoogle
+                ? 'Abriendo Google…'
+                : 'Entrar con Google',
+            fondo: _googleAzul,
+            texto: Colors.white,
+            elevacion: 3,
+          ),
+          if (_errorMsg != null) ...[
+            const SizedBox(height: 12),
+            _cajaError(),
+          ],
+        ] else if (!_codigoEnviado) ...[
+          if (!_ocultarTelefono) ...[
+            Container(
+              height: 48,
+              decoration: BoxDecoration(
+                color: campoBg,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: borde, width: 1.2),
+              ),
+              child: Row(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'DO',
+                          style: TextStyle(
+                            color: texto,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '+1',
-                        style: TextStyle(
-                          color: texto,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
+                        const SizedBox(width: 6),
+                        Text(
+                          '+1',
+                          style: TextStyle(
+                            color: texto,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
                         ),
-                      ),
-                      Icon(Icons.arrow_drop_down, color: hint, size: 22),
-                    ],
+                        Icon(Icons.arrow_drop_down, color: hint, size: 22),
+                      ],
+                    ),
                   ),
-                ),
-                Container(width: 1, height: 22, color: borde),
-                Expanded(
-                  child: TextField(
-                    controller: _telCtrl,
-                    enabled: !ocupado,
-                    keyboardType: TextInputType.phone,
-                    textInputAction: TextInputAction.done,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(10),
-                    ],
-                    onSubmitted: (_) => _continuarTelefono(),
-                    style: c.estiloCampo,
-                    decoration: InputDecoration(
-                      hintText: 'Número de teléfono',
-                      hintStyle: TextStyle(color: c.campoHint, fontSize: 16),
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 14,
+                  Container(width: 1, height: 22, color: borde),
+                  Expanded(
+                    child: TextField(
+                      controller: _telCtrl,
+                      enabled: !ocupado,
+                      keyboardType: TextInputType.phone,
+                      textInputAction: TextInputAction.done,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(10),
+                      ],
+                      onSubmitted: (_) => _continuarTelefono(),
+                      style: c.estiloCampo,
+                      decoration: InputDecoration(
+                        hintText: 'Número de teléfono',
+                        hintStyle: TextStyle(color: c.campoHint, fontSize: 16),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 14,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ] else ...[
+          ],
+        ] else if (!_ocultarTelefono) ...[
           RaiSmsOtpInput(
             key: ValueKey<int>(_otpSession),
             enabled: !ocupado,
@@ -604,25 +673,16 @@ class _RaiEntradaSocialPanelState extends State<RaiEntradaSocialPanel> {
           else
             _botonContinuarPrincipal(ocupado: ocupado),
         ],
-        if (!_codigoEnviado) ...[
-          const SizedBox(height: 16),
-          _botonContinuarPrincipal(ocupado: ocupado),
+        if (!_soloGoogle && !_codigoEnviado) ...[
+          if (!_ocultarTelefono) ...[
+            const SizedBox(height: 16),
+            _botonContinuarPrincipal(ocupado: ocupado),
+          ],
           if (_errorMsg != null) ...[
             const SizedBox(height: 12),
             _cajaError(),
           ],
           const SizedBox(height: 20),
-          if (widget.mostrarCorreo && _rol == 'cliente') ...[
-            _botonLlamativo(
-              onPressed: ocupado ? null : _correo,
-              icon: const Icon(Icons.mail_rounded, color: Colors.white, size: 24),
-              label: 'Continuar con correo electrónico',
-              fondo: _correoAzul,
-              texto: Colors.white,
-              elevacion: 3,
-            ),
-            const SizedBox(height: 12),
-          ],
           _botonLlamativo(
             onPressed: ocupado ? null : _google,
             icon: _cargandoGoogle
@@ -636,12 +696,23 @@ class _RaiEntradaSocialPanelState extends State<RaiEntradaSocialPanel> {
                   )
                 : const _GoogleLogoColores(invertido: true),
             label: _cargandoGoogle
-                ? 'Conectando con Google...'
+                ? 'Abriendo Google…'
                 : 'Continuar con Google',
             fondo: _googleAzul,
             texto: Colors.white,
             elevacion: 3,
           ),
+          if (!_ocultarCorreo && widget.mostrarCorreo) ...[
+            const SizedBox(height: 12),
+            _botonLlamativo(
+              onPressed: ocupado ? null : _correo,
+              icon: const Icon(Icons.mail_rounded, color: Colors.white, size: 24),
+              label: 'Entrar con correo y contraseña',
+              fondo: _correoAzul,
+              texto: Colors.white,
+              elevacion: 3,
+            ),
+          ],
         ],
         if (_codigoEnviado && _errorMsg != null) ...[
           const SizedBox(height: 12),

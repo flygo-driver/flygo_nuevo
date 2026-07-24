@@ -2,7 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../servicios/admin_usuarios_lista_service.dart';
+import '../../servicios/cliente_verificacion_identidad_service.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import '../../widgets/admin_drawer.dart';
 import 'admin_ui_theme.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
@@ -55,33 +57,92 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     return r;
   }
 
-  /// Escribe rol en `usuarios` y `roles`. Prioridad: que `usuarios` quede bien (es lo que usa la app).
+  String _etiquetaRol(String rol) {
+    switch (_normalizarRolUi(rol)) {
+      case Roles.admin:
+        return 'Admin';
+      case Roles.taxista:
+        return 'Taxista';
+      case Roles.cliente:
+        return 'Cliente';
+      default:
+        return rol.isEmpty ? '—' : rol;
+    }
+  }
+
+  /// Escribe rol canónico en `usuarios` y `roles`, y alinea `isAdmin`/`admin`.
   Future<void> _setRol(String uid, String rol) async {
     if (_uidsProcesando.contains(uid)) return;
-    final canon = rol.trim().toLowerCase();
+    final String canon = _normalizarRolUi(rol);
+    if (canon != Roles.admin &&
+        canon != Roles.taxista &&
+        canon != Roles.cliente) {
+      return;
+    }
+
+    final confirmar = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Cambiar rol'),
+            content: Text(
+              '¿Asignar rol «${_etiquetaRol(canon)}» a este usuario?\n\n'
+              'Se actualiza usuarios y roles (mismo valor). '
+              '${canon == Roles.admin ? 'También marca isAdmin=true.' : 'Si era admin, se quita isAdmin.'}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancelar'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Confirmar'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmar || !mounted) return;
+
     setState(() => _uidsProcesando.add(uid));
     try {
+      final bool esAdmin = canon == Roles.admin;
       final payload = <String, dynamic>{
+        'rol': canon,
+        'isAdmin': esAdmin,
+        'admin': esAdmin,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      };
+      // Cliente no debe quedar “disponible” como chofer.
+      if (canon == Roles.cliente) {
+        payload['disponible'] = false;
+        payload['puedeRecibirViajes'] = false;
+      }
+      // Taxista nuevo: flags seguros si faltan (merge no borra docs ya aprobados).
+      if (canon == Roles.taxista) {
+        payload['disponible'] = false;
+      }
+
+      final uRef = _db.collection('usuarios').doc(uid);
+      final rRef = _db.collection('roles').doc(uid);
+      final rolesPayload = <String, dynamic>{
         'rol': canon,
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
       };
-      final uRef = _db.collection('usuarios').doc(uid);
-      final rRef = _db.collection('roles').doc(uid);
 
-      // 1) Intento atómico (producción: ambos docs coherentes si las reglas lo permiten).
       try {
         final batch = _db.batch();
         batch.set(uRef, payload, SetOptions(merge: true));
-        batch.set(rRef, payload, SetOptions(merge: true));
+        batch.set(rRef, rolesPayload, SetOptions(merge: true));
         await batch.commit();
       } on FirebaseException catch (e, st) {
-        // 2) Batch falla entero si una regla o la red falla: asegurar al menos `usuarios` (fuente principal).
         debugPrint(
             'GestionarUsuarios: batch rol falló (${e.code}), reintento secuencial: $e\n$st');
         await uRef.set(payload, SetOptions(merge: true));
         try {
-          await rRef.set(payload, SetOptions(merge: true));
+          await rRef.set(rolesPayload, SetOptions(merge: true));
         } catch (e2, st2) {
           debugPrint('GestionarUsuarios: sync roles/$uid omitida: $e2\n$st2');
         }
@@ -89,7 +150,10 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Rol actualizado: $canon')),
+        SnackBar(
+          content: Text('Rol actualizado: ${_etiquetaRol(canon)}'),
+          backgroundColor: const Color(0xFF166534),
+        ),
       );
     } on FirebaseException catch (e) {
       if (mounted) {
@@ -614,6 +678,7 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.usuarios,
         title: 'Gestionar Usuarios',
       ),
       body: Column(
@@ -992,6 +1057,9 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     final Color estadoColor = bloqueado || prepagoBloq
         ? Colors.redAccent
         : Colors.greenAccent;
+    final identidadEstado = rol == Roles.cliente
+        ? ClienteVerificacionIdentidadService.estadoDesde(m)
+        : ClienteVerificacionIdentidadEstado.noAplica;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1053,8 +1121,51 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
             ],
           ),
           const SizedBox(height: 10),
-          Text('Rol: ${rol.isEmpty ? "—" : rol}',
-              style: TextStyle(color: AdminUi.secondary(context))),
+          Text(
+            'Rol: ${_etiquetaRol(rol)}'
+            '${(m['isAdmin'] == true || m['admin'] == true) && rol != Roles.admin ? ' · flag isAdmin' : ''}',
+            style: TextStyle(color: AdminUi.secondary(context)),
+          ),
+          if (rol == Roles.cliente &&
+              identidadEstado != ClienteVerificacionIdentidadEstado.noAplica) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: ClienteVerificacionIdentidadService.colorEstado(
+                  identidadEstado,
+                  isDark: Theme.of(context).brightness == Brightness.dark,
+                ).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: ClienteVerificacionIdentidadService.colorEstado(
+                    identidadEstado,
+                    isDark: Theme.of(context).brightness == Brightness.dark,
+                  ).withValues(alpha: 0.35),
+                ),
+              ),
+              child: Text(
+                'Selfie: ${ClienteVerificacionIdentidadService.etiquetaEstado(identidadEstado)} · '
+                '${ClienteVerificacionIdentidadService.detalleEstadoParaAdmin(m)}',
+                style: TextStyle(
+                  color: AdminUi.onCard(context),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          Text(
+            'Cambiar rol (cliente / taxista / admin)',
+            style: TextStyle(
+              color: AdminUi.muted(context),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           if (rol == Roles.taxista && prepagoBloq) ...[
             const SizedBox(height: 8),
             Container(
@@ -1091,9 +1202,9 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                   icon: const Icon(Icons.sync, size: 16),
                   label: const Text('Sync bloqueo'),
                 ),
-              _rolBtn(uid, 'cliente', rol, procesando),
-              _rolBtn(uid, 'taxista', rol, procesando),
-              _rolBtn(uid, 'admin', rol, procesando),
+              _rolBtn(uid, Roles.cliente, rol, procesando),
+              _rolBtn(uid, Roles.taxista, rol, procesando),
+              _rolBtn(uid, Roles.admin, rol, procesando),
               _bloqueoBtn(uid, bloqueado, procesando),
               if (rol == Roles.taxista)
                 _liquidarComisionBtn(
@@ -1125,17 +1236,23 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     final selected = rolActual == target;
     final cs = Theme.of(context).colorScheme;
     return InkWell(
-      onTap: deshabilitado ? null : () => _setRol(uid, target),
+      onTap: deshabilitado || selected
+          ? null
+          : () => _setRol(uid, target),
       borderRadius: BorderRadius.circular(999),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
           color: selected ? cs.primary : AdminUi.card(context),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: AdminUi.borderSubtle(context)),
+          border: Border.all(
+            color: selected
+                ? cs.primary
+                : AdminUi.borderSubtle(context),
+          ),
         ),
         child: Text(
-          target,
+          _etiquetaRol(target),
           style: TextStyle(
             color: selected ? cs.onPrimary : AdminUi.onCard(context),
             fontWeight: FontWeight.w800,

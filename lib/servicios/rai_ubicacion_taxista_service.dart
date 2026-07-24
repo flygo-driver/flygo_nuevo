@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -48,6 +49,7 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
 
   StreamSubscription<ServiceStatus>? _gpsSub;
   Timer? _refreshDebounce;
+  DateTime _ultimoRefresco = DateTime.fromMillisecondsSinceEpoch(0);
   bool _started = false;
 
   bool get ubicacionLista => modo.value == RaiUbicacionTaxistaModo.listo;
@@ -145,6 +147,12 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
   }
 
   Future<void> refrescar() async {
+    final DateTime ahora = DateTime.now();
+    if (ahora.difference(_ultimoRefresco) < const Duration(seconds: 2)) {
+      return;
+    }
+    _ultimoRefresco = ahora;
+
     final bool yaConcedio = await prefsIndicaListoAntes();
     final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest(
       extendedAfterPriorGrant: yaConcedio,
@@ -194,7 +202,7 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
     RaiUbicacionTaxistaModo modoActual,
   ) async {
     if (modoActual == RaiUbicacionTaxistaModo.permisoBloqueado) {
-      feedbackSinUbicacion.value = RaiUbicacionUiConstants.msgIrAjustesManual;
+      feedbackSinUbicacion.value = RaiUbicacionUiConstants.msgIrAjustesManualPlataforma;
       return;
     }
     if (modoActual == RaiUbicacionTaxistaModo.gpsApagado &&
@@ -220,7 +228,7 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
     return LocationPermissionService.ubicacionConcedidaAntesEnPrefs();
   }
 
-  Future<void> activarUbicacionDesdeApp() async {
+  Future<void> activarUbicacionDesdeApp({BuildContext? context}) async {
     if (solicitudEnCurso.value) return;
     await LocationPermissionService.marcarActivacionDesdeAppRai();
     solicitudEnCurso.value = true;
@@ -229,6 +237,7 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
         bannerEnAlertaRoja: bannerEnAlertaRoja,
         modoPermisoBloqueado:
             modo.value == RaiUbicacionTaxistaModo.permisoBloqueado,
+        context: context,
       );
 
       if (r.concedido) {
@@ -247,14 +256,16 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
 
       if (r.permission == LocationPermission.deniedForever) {
         await _registrarIntentoFallido(
-          RaiUbicacionUiConstants.msgIrAjustesManual,
+          RaiUbicacionUiConstants.msgIrAjustesManualPlataforma,
         );
         modo.value = RaiUbicacionTaxistaModo.permisoBloqueado;
         return;
       }
 
       if (r.abrioAjustesApp) {
-        await _registrarIntentoFallido(RaiUbicacionUiConstants.msgIrAjustesManual);
+        await _registrarIntentoFallido(
+          RaiUbicacionUiConstants.msgIrAjustesManualPlataforma,
+        );
         modo.value = RaiUbicacionTaxistaModo.permisoPendiente;
       } else {
         await _registrarIntentoFallido(kMsgAunSinUbicacion);
@@ -297,12 +308,20 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
   String get mensajeBanner {
     switch (modo.value) {
       case RaiUbicacionTaxistaModo.gpsApagado:
-        return 'Enciende el GPS del teléfono. Toca «Activar ubicación» y RAI te lleva ahí.';
+        return kIsWeb
+            ? 'Activa la ubicación del equipo o permite ubicación en el navegador. '
+                'Toca «Activar ubicación».'
+            : 'Enciende el GPS del teléfono. Toca «Activar ubicación» y RAI te lleva ahí.';
       case RaiUbicacionTaxistaModo.permisoPendiente:
-        return 'Para recibir viajes y navegar, toca «Activar ubicación». '
-            'Elige «Al usar la app» en el cuadro del teléfono.';
+        return kIsWeb
+            ? 'Para recibir viajes y navegar, toca «Activar ubicación». '
+                'Elige «Permitir» en el cuadro del navegador.'
+            : 'Para recibir viajes y navegar, toca «Activar ubicación». '
+                'Elige «Al usar la app» en el cuadro del teléfono.';
       case RaiUbicacionTaxistaModo.permisoBloqueado:
-        return 'Toca «Abrir ajustes» o ve a Cuenta → Ubicación para permitir ubicación.';
+        return kIsWeb
+            ? RaiUbicacionUiConstants.msgIrAjustesManualWeb
+            : 'Toca «Abrir ajustes» o ve a Cuenta → Ubicación para permitir ubicación.';
       case RaiUbicacionTaxistaModo.listo:
         return '';
     }

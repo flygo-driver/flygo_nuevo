@@ -1,11 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/pantallas/servicios_extras/pool_gira_ticket_page.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_detalle.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 
 /// Historial global de reservas del cliente en giras por cupos.
@@ -73,7 +73,6 @@ class _PoolsClienteMisGirasState extends State<PoolsClienteMisGiras> {
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    final df = DateFormat('EEE d MMM yyyy · HH:mm', 'es');
     final cs = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = isDark ? Colors.white : const Color(0xFF101828);
@@ -226,7 +225,7 @@ class _PoolsClienteMisGirasState extends State<PoolsClienteMisGiras> {
                               const SizedBox(height: 4),
                               Text(
                                 salida.year > 2000
-                                    ? df.format(salida)
+                                    ? fmtFechaHoraAmPm(salida, conAnio: true)
                                     : 'Fecha por confirmar',
                                 style: TextStyle(color: textMuted, fontSize: 13),
                               ),

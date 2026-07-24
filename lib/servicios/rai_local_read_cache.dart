@@ -24,6 +24,13 @@ class RaiLocalReadCache {
     return p.getString('$_kViaje$u');
   }
 
+  static Future<void> clearActiveTripId(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    await p.remove('$_kViaje$u');
+  }
+
   static Future<void> rememberSaldoPrepago(String uid, double saldoRd) async {
     final u = uid.trim();
     if (u.isEmpty) return;

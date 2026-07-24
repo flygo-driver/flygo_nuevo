@@ -1,4 +1,4 @@
-// Centro de operaciones ADM: cola de trabajo diaria con contadores en vivo.
+﻿// Centro de operaciones ADM: cola de trabajo diaria con contadores en vivo.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +8,7 @@ import '../../servicios/pool_repo.dart';
 import '../../servicios/turismo_control_adm_repo.dart';
 import '../../widgets/admin_drawer.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import 'admin_expediente_chofer_utils.dart';
 import 'admin_alertas.dart';
 import 'admin_bola_pueblo_ops.dart';
@@ -30,6 +31,7 @@ class AdminCentroOperaciones extends StatelessWidget {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.centro,
         title: 'Centro de operaciones',
       ),
       body: ListView(

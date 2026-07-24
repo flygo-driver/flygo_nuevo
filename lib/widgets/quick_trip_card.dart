@@ -1,11 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
-import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
 
 class QuickTripCard extends StatelessWidget {
   const QuickTripCard({super.key});
@@ -73,10 +75,9 @@ class QuickTripCard extends StatelessWidget {
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ViajeEnCursoCliente(),
+                      unawaited(
+                        NavigationService.clearAndGoViajeEnCursoCliente(
+                          preNav: Navigator.of(context, rootNavigator: true),
                         ),
                       );
                     },

@@ -61,33 +61,48 @@ String? viajeFlujoOrientacionMensajeTaxista({
   required bool codigoVerificado,
   required bool esMultiparada,
   required bool multiparadaRutaCompleta,
+  bool esCorporativo = false,
 }) {
   if (EstadosViaje.esAceptado(estadoBase) ||
       EstadosViaje.esEnCaminoPickup(estadoBase)) {
     if (!navegacionPickupIniciada) {
-      return 'Desliza la hoja hacia arriba y toca «Navegar hacia el cliente».';
+      return esCorporativo
+          ? 'Desliza la hoja y toca Waze/Maps para ir a la empresa (recogida del grupo).'
+          : 'Desliza la hoja hacia arriba y toca «Navegar hacia el cliente».';
     }
-    return 'Toca «Cliente a bordo» cuando el pasajero suba al vehículo.';
+    return esCorporativo
+        ? 'En la empresa: toca «Cliente a bordo» y pide el código al encargado.'
+        : 'Toca «Cliente a bordo» cuando el pasajero suba al vehículo.';
   }
 
   if (EstadosViaje.esAbordo(estadoBase)) {
     if (!codigoVerificado) {
-      return 'Toca «Verificar e iniciar ruta» e ingresa el PIN del cliente.';
+      return esCorporativo
+          ? 'Toca «Verificar e iniciar ruta» e ingresa el código del período (dicta el encargado).'
+          : 'Toca «Verificar e iniciar ruta» e ingresa el PIN del cliente.';
     }
     if (!EstadosViaje.esEnCurso(estadoBase)) {
-      return 'Toca «Iniciar ruta al destino» para comenzar el trayecto.';
+      return esCorporativo
+          ? 'Toca «Iniciar ruta al destino» para empezar a dejar pasajeros.'
+          : 'Toca «Iniciar ruta al destino» para comenzar el trayecto.';
     }
   }
 
   if (EstadosViaje.esEnCurso(estadoBase)) {
     if (esMultiparada && !multiparadaRutaCompleta) {
       if (!navegacionDestinoIniciada) {
-        return 'Desliza la hoja y toca «Navegar a la parada» o «Navegar al destino final».';
+        return esCorporativo
+            ? 'Toca «Navegar a la parada» para cada pasajero en el orden de la ruta.'
+            : 'Desliza la hoja y toca «Navegar a la parada» o «Navegar al destino final».';
       }
-      return 'Confirma cada parada con «Llegué — siguiente destino» antes de finalizar.';
+      return esCorporativo
+          ? 'En cada parada: toca «Llegué — siguiente destino» al dejar al pasajero.'
+          : 'Confirma cada parada con «Llegué — siguiente destino» antes de finalizar.';
     }
     if (!navegacionDestinoIniciada) {
-      return 'Desliza la hoja hacia arriba y toca «Navegar al destino».';
+      return esCorporativo
+          ? 'Toca «Navegar al destino» para la dejada del pasajero.'
+          : 'Desliza la hoja hacia arriba y toca «Navegar al destino».';
     }
     return 'Al llegar al destino, toca «Finalizar viaje».';
   }

@@ -1,22 +1,26 @@
 // lib/pantallas/taxista/pools_taxista_crear.dart
 import 'dart:async';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:intl/intl.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
 import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
+import 'package:flygo_nuevo/servicios/organizador_giras_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
+import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/utils/bancos_rd.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
@@ -50,21 +54,21 @@ extension _PoolsTaxistaCrearPaletteX on BuildContext {
     final isDark = Theme.of(this).brightness == Brightness.dark;
     return (
       isDark: isDark,
-      scaffoldBg: isDark ? const Color(0xFF0B1020) : const Color(0xFFF1F5F9),
-      appBarBg: isDark ? const Color(0xFF0B1020) : Colors.white,
+      scaffoldBg: isDark ? RaiDsColors.bg : const Color(0xFFF1F5F9),
+      appBarBg: isDark ? RaiDsColors.bg : Colors.white,
       foreground: isDark ? Colors.white : const Color(0xFF101828),
       accent: isDark ? const Color(0xFF6FFFE9) : const Color(0xFF0D9488),
       accentSoft: isDark ? const Color(0xFFBEE9E8) : const Color(0xFF0F766E),
-      fieldFill: isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF8FAFC),
+      fieldFill: isDark ? RaiDsColors.cardElevated : const Color(0xFFF8FAFC),
       inputText: isDark ? Colors.white : const Color(0xFF101828),
-      subtitleMuted: isDark ? Colors.white60 : const Color(0xFF667085),
+      subtitleMuted: isDark ? RaiDsColors.textMuted : const Color(0xFF667085),
       labelMuted: isDark ? Colors.white70 : const Color(0xFF475467),
-      cardGradA: isDark ? const Color(0xFF1C2541) : const Color(0xFFE0F2FE),
-      cardGradB: isDark ? const Color(0xFF3A506B) : const Color(0xFFF0F9FF),
+      cardGradA: isDark ? RaiDsColors.card : const Color(0xFFE0F2FE),
+      cardGradB: isDark ? RaiDsColors.cardElevated : const Color(0xFFF0F9FF),
       cardBorder: isDark
-          ? const Color(0xFF5BC0BE).withValues(alpha: 0.35)
+          ? RaiDsColors.border
           : const Color(0xFF0D9488).withValues(alpha: 0.35),
-      chipBg: isDark ? Colors.white10 : const Color(0xFFE2E8F0),
+      chipBg: isDark ? RaiDsColors.cardElevated : const Color(0xFFE2E8F0),
       chipSelectedTint: isDark
           ? const Color(0xFF6FFFE9).withValues(alpha: 0.25)
           : const Color(0xFF0D9488).withValues(alpha: 0.22),
@@ -72,7 +76,7 @@ extension _PoolsTaxistaCrearPaletteX on BuildContext {
       tealBtnBg: const Color(0xFF5BC0BE),
       tealBtnFg: isDark ? const Color(0xFF0B1020) : const Color(0xFF042F2E),
       placeholderBox:
-          isDark ? const Color(0xFF1A1A1A) : const Color(0xFFE2E8F0),
+          isDark ? RaiDsColors.cardElevated : const Color(0xFFE2E8F0),
       faintIcon: isDark ? Colors.white38 : const Color(0xFF98A2B3),
     );
   }
@@ -152,12 +156,77 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
 
   bool _loading = false;
   bool _recaudoCentral = false;
+  bool _agenciaDesdePerfil = false;
 
   @override
   void initState() {
     super.initState();
     unawaited(ComisionViajePctService.refresh(force: true));
     unawaited(_cargarFlagRecaudoCentral());
+    unawaited(_cargarPerfilPublicador());
+  }
+
+  Future<void> _cargarPerfilPublicador() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final snap =
+          await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
+      final d = snap.data() ?? <String, dynamic>{};
+      if (!mounted) return;
+      setState(() => _aplicarDatosPerfil(d));
+    } catch (e) {
+      if (kDebugMode) debugPrint('pools_taxista_crear perfil: $e');
+    }
+  }
+
+  void _aplicarDatosPerfil(Map<String, dynamic> d) {
+    final esOrganizador = OrganizadorGirasPerfilData.esOrganizadorGiras(d);
+
+    final agencia = (d['agenciaNombre'] ?? '').toString().trim();
+    if (agencia.isNotEmpty && _agenciaNombre.isEmpty) {
+      _agenciaNombre = agencia;
+      _agenciaCtrl.text = agencia;
+      _agenciaDesdePerfil = true;
+    }
+
+    if (!esOrganizador) return;
+
+    if (_agenciaLogoUrl.isEmpty) {
+      final logo = (d['agenciaLogoUrl'] ?? '').toString().trim();
+      final foto = (d['fotoUrl'] ?? '').toString().trim();
+      _agenciaLogoUrl = logo.isNotEmpty ? logo : foto;
+    }
+
+    final tel = (d['telefono'] ?? '').toString().trim();
+    if (_choferTelefono.isEmpty && tel.isNotEmpty) {
+      _choferTelefono = tel;
+      _telCtrl.text = tel;
+    }
+    final wa = (d['whatsapp'] ?? d['telefono'] ?? '').toString().trim();
+    if (_choferWhatsApp.isEmpty && wa.isNotEmpty) {
+      _choferWhatsApp = wa;
+      _waCtrl.text = wa;
+    }
+
+    final banco = (d['bancoNombre'] ?? '').toString().trim();
+    if (_bancoNombre.isEmpty && banco.isNotEmpty) {
+      _bancoNombre = banco;
+    }
+    final cuenta = (d['bancoCuenta'] ?? '').toString().trim();
+    if (_bancoCuenta.isEmpty && cuenta.isNotEmpty) {
+      _bancoCuenta = cuenta;
+      _bancoCuentaCtrl.text = cuenta;
+    }
+    final tipo = (d['bancoTipoCuenta'] ?? '').toString().trim();
+    if (_bancoTipoCuenta.isEmpty && tipo.isNotEmpty) {
+      _bancoTipoCuenta = tipo;
+    }
+    final titular = (d['bancoTitular'] ?? '').toString().trim();
+    if (_bancoTitular.isEmpty && titular.isNotEmpty) {
+      _bancoTitular = titular;
+      _bancoTitularCtrl.text = titular;
+    }
   }
 
   Future<void> _cargarFlagRecaudoCentral() async {
@@ -199,6 +268,25 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
+  /// Tras publicar: volver a «Mis salidas» sin romper el shell en celular.
+  /// - Organizador (navigator raíz): solo pop → el tab «Mis giras» ya lista.
+  /// - Conductor (navigator anidado en Servicios): pop al tab y abrir Mis salidas.
+  void _irAMisSalidasTrasPublicar() {
+    if (!mounted) return;
+    final nav = Navigator.of(context);
+    final rootNav = Navigator.of(context, rootNavigator: true);
+
+    if (identical(nav, rootNav)) {
+      if (nav.canPop()) nav.pop();
+      return;
+    }
+
+    nav.popUntil((route) => route.isFirst);
+    nav.push<void>(
+      MaterialPageRoute<void>(builder: (_) => const PoolsTaxistaLista()),
+    );
+  }
+
   double _prepagoApartadoEstimadoRd() {
     final cap = _capacidad;
     final minC = _minConf;
@@ -228,9 +316,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     );
     if (!mounted || d == null) return;
 
-    final TimeOfDay? t = await showTimePicker(
-      context: context,
-      initialTime: const TimeOfDay(hour: 7, minute: 0),
+    final TimeOfDay? t = await elegirHoraAmPm(
+      context,
+      initial: const TimeOfDay(hour: 7, minute: 0),
     );
     if (!mounted || t == null) return;
 
@@ -436,10 +524,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       _snack(
         'Para cancelar si hace falta: ${PoolsProductoCopy.salidasMis} → Cancelar salida.',
       );
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const PoolsTaxistaLista()),
-        (route) => false,
-      );
+      _irAMisSalidasTrasPublicar();
     } on PoolGiraAbusoBloqueo catch (b) {
       if (!mounted) return;
       final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -501,27 +586,22 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   @override
   Widget build(BuildContext context) {
     final p = context._poolsCrearPalette;
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
 
     return Scaffold(
       backgroundColor: p.scaffoldBg,
-      appBar: AppBar(
-        backgroundColor: p.appBarBg,
-        foregroundColor: p.foreground,
-        elevation: p.isDark ? 0 : 0.5,
-        title: Text(
-          PoolsProductoCopy.publicarTitulo,
-          style: TextStyle(
-            color: p.accent,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
+      appBar: RaiAppBar(
+        title: PoolsProductoCopy.publicarTitulo,
+        showBackWhenCanPop: true,
         centerTitle: true,
       ),
-      body: Form(
-        key: _form,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
+      body: SafeArea(
+        child: Form(
+          key: _form,
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            children: [
             _heroBanner(),
             const SizedBox(height: 12),
             _infoPanel(
@@ -569,9 +649,17 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                     left: _puebloOrigenDropdown(),
                     right: _textFieldCtrl(
                       controller: _agenciaCtrl,
-                      label: 'Agencia (opcional)',
+                      label: 'Agencia / operador',
                       hint: 'Tours RD, Mi Agencia…',
-                      onChanged: (v) => _agenciaNombre = v.trim(),
+                      helperText: _agenciaDesdePerfil
+                          ? 'Cargado desde tu perfil — puedes editarlo'
+                          : null,
+                      onChanged: (v) {
+                        _agenciaNombre = v.trim();
+                        if (_agenciaDesdePerfil) {
+                          setState(() => _agenciaDesdePerfil = false);
+                        }
+                      },
                     ),
                   ),
                   _textFieldCtrl(
@@ -1018,14 +1106,23 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFFFC857),
                   foregroundColor: const Color(0xFF1C1F2A),
+                  minimumSize: const Size.fromHeight(52),
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                  textStyle: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
               ),
             ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -1398,6 +1495,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     required TextEditingController controller,
     required String label,
     String? hint,
+    String? helperText,
     int maxLines = 1,
     ValueChanged<String>? onChanged,
   }) {
@@ -1409,6 +1507,12 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
+        helperText: helperText,
+        helperStyle: TextStyle(
+          color: p.subtitleMuted,
+          fontSize: 11,
+          height: 1.2,
+        ),
         labelStyle: TextStyle(color: p.labelMuted),
         hintStyle: TextStyle(color: p.subtitleMuted),
         filled: true,
@@ -1545,11 +1649,7 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     );
   }
 
-  String _formatFechaHora(DateTime dt) {
-    final fFecha = DateFormat('EEE d MMM yyyy', 'es');
-    final fHora = DateFormat('HH:mm');
-    return '${fFecha.format(dt)} · ${fHora.format(dt)}';
-  }
+  String _formatFechaHora(DateTime dt) => fmtFechaHoraAmPm(dt, conAnio: true);
 
   Widget _agenciaLogoPicker() {
     final p = context._poolsCrearPalette;

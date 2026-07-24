@@ -17,6 +17,7 @@ import '../../servicios/viajes_repo.dart';
 import '../../modelo/pago_taxista.dart';
 import '../../widgets/admin_drawer.dart';
 import '../../widgets/admin_app_bar.dart';
+import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import 'admin_ui_theme.dart';
 import 'admin_pool_recaudo_central_panel.dart';
 
@@ -1003,6 +1004,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
       backgroundColor: AdminUi.scaffold(context),
       drawer: const AdminDrawer(),
       appBar: const AdminAppBar(
+        guiaId: AdminGuiaIds.verificarPagos,
         title: 'Verificar Pagos',
       ),
       body: Column(

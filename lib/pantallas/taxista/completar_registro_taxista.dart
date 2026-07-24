@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 
 import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
+import 'package:flygo_nuevo/pantallas/taxista/completar_registro_organizador_giras.dart';
+import 'package:flygo_nuevo/servicios/organizador_giras_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/widgets/taxista_onboarding_acciones_footer.dart';
 
@@ -92,6 +95,19 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
           .doc(u.uid)
           .get();
       final d = snap.data() ?? {};
+      if (OrganizadorGirasPerfilData.esOrganizadorGiras(d)) {
+        if (mounted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute<void>(
+                builder: (_) => const CompletarRegistroOrganizadorGiras(),
+              ),
+            );
+          });
+        }
+        return;
+      }
       _nombre.text = (d['nombre'] ?? u.displayName ?? '').toString().trim();
       _telefono.text = (d['telefono'] ?? '').toString();
       _placa.text = (d['placa'] ?? '').toString();
@@ -214,6 +230,7 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
   Widget build(BuildContext context) {
     if (_cargando) {
       return const Scaffold(
+        backgroundColor: RaiDsColors.bg,
         body: Center(child: CircularProgressIndicator()),
       );
     }
@@ -226,6 +243,7 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
         if (!didPop) _bloquearSalida();
       },
       child: Scaffold(
+        backgroundColor: RaiDsColors.bg,
         appBar: const RaiAppBar(title: 'Completa tu registro de conductor'),
         body: SafeArea(
           bottom: false,
@@ -240,6 +258,53 @@ class _CompletarRegistroTaxistaState extends State<CompletarRegistroTaxista> {
               ),
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               children: [
+                Card(
+                  color: cs.primaryContainer.withValues(alpha: 0.35),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.tour, color: cs.primary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '¿Solo publicas giras y excursiones?',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Si contratas guagua con chofer y no manejas, '
+                          'usa el registro corto (sin licencia ni matrícula).',
+                          style: TextStyle(
+                            color: cs.onSurface.withValues(alpha: 0.75),
+                            height: 1.3,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton.tonalIcon(
+                          onPressed: () => Navigator.of(context).pushReplacement(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  const CompletarRegistroOrganizadorGiras(),
+                            ),
+                          ),
+                          icon: const Icon(Icons.storefront_outlined),
+                          label: const Text('Registro organizador de giras'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 Text(
                   'RAI necesita tus datos y tu vehículo. Al guardar, '
                   'continuás con licencia, matrícula, seguro, foto del vehículo '

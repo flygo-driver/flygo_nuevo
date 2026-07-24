@@ -7,6 +7,7 @@ import 'package:flygo_nuevo/config/recarga_bancaria_config.dart';
 import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
+import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
@@ -15,7 +16,6 @@ import 'package:flygo_nuevo/widgets/pool_gira_contenido_panel.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
 import 'package:flygo_nuevo/widgets/pool_reserva_bauche_uploader.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pool_gira_ticket_page.dart';
-import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -123,7 +123,7 @@ class _PoolsClienteDetalleState extends State<PoolsClienteDetalle>
     required List<String> pickupPoints,
     required String poolId,
   }) {
-    final fechaTxt = DateFormat('EEE d MMM • HH:mm', 'es').format(fecha);
+    final fechaTxt = fmtFechaHoraAmPm(fecha, sep: '•');
     final paradasTxt = pickupPoints.isEmpty
         ? 'Sin paradas publicadas'
         : pickupPoints.join(' | ');
@@ -357,9 +357,9 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
           final sentido =
               (d['sentido'] ?? 'ida').toString(); // ida | vuelta | ida_y_vuelta
 
-          final cap = (d['capacidad'] ?? 0) as int;
-          final occ = (d['asientosReservados'] ?? 0) as int;
-          final minConf = (d['minParaConfirmar'] ?? 0) as int;
+          final cap = ((d['capacidad'] ?? 0) as num?)?.toInt() ?? 0;
+          final occ = ((d['asientosReservados'] ?? 0) as num?)?.toInt() ?? 0;
+          final minConf = ((d['minParaConfirmar'] ?? 0) as num?)?.toInt() ?? 0;
           final estado = (d['estado'] ?? 'abierto').toString();
           // estadoL ya calculado arriba (reutilizar para reservable / mensajes)
           final left = (cap - occ).clamp(0, cap);
@@ -446,8 +446,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
             pool: d,
             totalReserva: total,
           );
-          final fechaAnuncio =
-              DateFormat('d MMM yyyy, h:mm a', 'es').format(fecha);
+          final fechaAnuncio = fmtFechaHoraAmPm(fecha, conAnio: true, sep: ',');
           final publicadoPor =
               agenciaNombre.isNotEmpty ? agenciaNombre : ownerLabel;
           final anuncioTexto =
