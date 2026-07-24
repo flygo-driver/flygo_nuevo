@@ -167,7 +167,11 @@ class _ViajeProgramadoConfirmacionState
           backgroundColor: Color(0xFF2E7D32),
         ),
       );
-      unawaited(NavigationService.irAlInicioCliente(context: context));
+      unawaited(NavigationService.irAlInicioCliente(
+        context: context,
+        viajeId: widget.viajeId,
+        forzarLimpiarViajeActivo: true,
+      ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -215,6 +219,15 @@ class _ViajeProgramadoConfirmacionState
 
   /// Turismo programado: al abrir ventana (`publishAt`), auto-asignar o liberar al pool (callable).
   void _syncTurismoProgramadoAlPool(Map<String, dynamic> data) {
+    final String estado =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    if (data['completado'] == true ||
+        EstadosViaje.esCancelado(estado) ||
+        EstadosViaje.esCompletado(estado)) {
+      _stopTurismoProgramadoPoolTimer();
+      return;
+    }
+
     if (!_esViajeTurismoProgramado(data)) {
       _stopTurismoProgramadoPoolTimer();
       return;
@@ -363,10 +376,15 @@ class _ViajeProgramadoConfirmacionState
         final bool turismoEnPoolPublico =
             esTurismo && AsignacionTurismoRepo.viajeEnPoolTurismoPublico(data);
 
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          _syncTurismoProgramadoAlPool(data);
-        });
+        if (fase != _FaseReserva.cancelado &&
+            fase != _FaseReserva.completado) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _syncTurismoProgramadoAlPool(data);
+          });
+        } else {
+          _stopTurismoProgramadoPoolTimer();
+        }
 
         if (fase == _FaseReserva.conductorAsignado) {
           _irAViajeEnCursoOnce();
@@ -398,7 +416,14 @@ class _ViajeProgramadoConfirmacionState
               ),
               onPressed: () {
                 unawaited(
-                    NavigationService.irAlInicioCliente(context: context));
+                  NavigationService.irAlInicioCliente(
+                    context: context,
+                    viajeId: widget.viajeId,
+                    forzarLimpiarViajeActivo:
+                        fase == _FaseReserva.cancelado ||
+                        fase == _FaseReserva.completado,
+                  ),
+                );
               },
             ),
           ),
@@ -613,8 +638,15 @@ class _ViajeProgramadoConfirmacionState
                   onPressed: _cancelando
                       ? null
                       : () {
-                          unawaited(NavigationService.irAlInicioCliente(
-                              context: context));
+                          unawaited(
+                            NavigationService.irAlInicioCliente(
+                              context: context,
+                              viajeId: widget.viajeId,
+                              forzarLimpiarViajeActivo:
+                                  fase == _FaseReserva.cancelado ||
+                                  fase == _FaseReserva.completado,
+                            ),
+                          );
                         },
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),

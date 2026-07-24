@@ -36,6 +36,7 @@ class SelectorDestinosTuristicos extends StatefulWidget {
   final double? latOrigen;
   final double? lonOrigen;
   final String? tipoVehiculoInicial;
+  final bool esViajeProgramado;
 
   const SelectorDestinosTuristicos({
     super.key,
@@ -43,6 +44,7 @@ class SelectorDestinosTuristicos extends StatefulWidget {
     this.latOrigen,
     this.lonOrigen,
     this.tipoVehiculoInicial,
+    this.esViajeProgramado = false,
   });
 
   @override
@@ -620,6 +622,40 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
                           fontWeight: FontWeight.bold),
                     ),
                   ),
+                  if (widget.esViajeProgramado)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: accent.withValues(alpha: 0.4),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.info_outline_rounded,
+                                color: accent, size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Reserva programada: aquí eliges destino y vehículo. '
+                                'Después definirás fecha, hora e ida y vuelta en el formulario.',
+                                style: TextStyle(
+                                  color: textMuted,
+                                  fontSize: 12.5,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
 
                   // Selector de tipo de vehículo (chips). Las opciones AHORA
                   // son visibles sobre cualquier fondo: el fondo del chip

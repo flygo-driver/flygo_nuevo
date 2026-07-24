@@ -2154,7 +2154,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               width: double.infinity,
               child: FilledButton.icon(
                 onPressed: () => unawaited(
-                  NavigationService.irAlInicioCliente(context: context),
+                  NavigationService.irAlInicioCliente(
+                    context: context,
+                    viajeId: _lastNonEmptyViajeActivoId.isNotEmpty
+                        ? _lastNonEmptyViajeActivoId
+                        : null,
+                    forzarLimpiarViajeActivo: true,
+                  ),
                 ),
                 icon: const Icon(Icons.home_rounded, size: 20),
                 label: const Text('Volver al inicio'),

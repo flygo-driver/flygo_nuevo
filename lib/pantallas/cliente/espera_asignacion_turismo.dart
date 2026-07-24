@@ -1297,7 +1297,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     _postCompletadoEnCurso = true;
     if (mounted) setState(() {});
 
-    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 90));
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
 
     if (!mounted) return;
 
@@ -1345,10 +1345,13 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: () {
-                  if (context.mounted) {
-                    Navigator.of(context)
-                        .popUntil((Route<dynamic> r) => r.isFirst);
-                  }
+                  unawaited(
+                    NavigationService.irAlInicioCliente(
+                      context: context,
+                      viajeId: widget.viajeId,
+                      forzarLimpiarViajeActivo: true,
+                    ),
+                  );
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
@@ -1764,7 +1767,25 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        unawaited(
+                          NavigationService.irAlInicioCliente(context: context),
+                        );
+                      },
+                      icon: const Icon(Icons.home_rounded, size: 20),
+                      label: const Text('Volver al inicio'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        side: const BorderSide(color: Colors.white38),
+                        minimumSize: const Size(double.infinity, 48),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(

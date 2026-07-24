@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/app_flavor.dart';
@@ -389,8 +390,24 @@ class NavigationService {
   /// Home del cliente tras cancelar / sin viaje activo (multiparadas, en curso, etc.).
   /// No usar [intentarSalirAlGate] aquí: con navigator anidado o una sola ruta en la pila
   /// no vuelve al [ClienteShell].
-  static Future<void> irAlInicioCliente({BuildContext? context}) async {
-    ActiveTripService.cancelarMantenimientoOverlayViaje();
+  ///
+  /// [forzarLimpiarViajeActivo]: tras post-viaje o cierre turismo; evita que el shell
+  /// reabra espera turismo con `viajeActivoId` obsoleto.
+  static Future<void> irAlInicioCliente({
+    BuildContext? context,
+    String? viajeId,
+    bool forzarLimpiarViajeActivo = false,
+  }) async {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && uid.trim().isNotEmpty) {
+      await ActiveTripService.prepararSalidaClienteAlInicio(
+        uid: uid,
+        viajeId: viajeId,
+        forzarLimpieza: forzarLimpiarViajeActivo,
+      );
+    } else {
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+    }
     NavigatorState? nav = navigatorKey.currentState;
     if ((nav == null || !nav.mounted) &&
         context != null &&

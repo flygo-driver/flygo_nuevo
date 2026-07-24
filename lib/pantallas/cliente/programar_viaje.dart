@@ -562,11 +562,30 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   }
 
   bool get _mostrarResumenCotizacion =>
+      !_esTurismoProgramado &&
       _vistaResumenCotizada &&
       ubicacionObtenida &&
       precioCalculado > 0 &&
       !_cargando &&
       (tipoServicio != 'turismo' || _destinoTurismoSeleccionado != null);
+
+  /// Turismo programado: tras cotizar desde catálogo no saltamos al resumen
+  /// compacto (oculta fecha, vehículo e ida y vuelta).
+  bool get _esTurismoProgramado =>
+      widget.tipoServicio == 'turismo' && !widget.modoAhora;
+
+  bool get _debeAutoMostrarResumenTrasCotizar => !_esTurismoProgramado;
+
+  void _trasCotizarTurismoProgramado() {
+    if (!_esTurismoProgramado || precioCalculado <= 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _expandToMax();
+      _snack(
+        'Destino listo. Elige fecha y hora, vehículo e ida y vuelta abajo.',
+      );
+    });
+  }
 
   void _animarSheetParaResumenCotizado() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1329,11 +1348,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         }
 
         _cargando = false;
-        // Siempre mostramos resumen al terminar una cotización para priorizar precio + confirmar.
-        _vistaResumenCotizada = true;
+        // Turismo programado: mantener formulario (fecha, vehículo, ida y vuelta).
+        _vistaResumenCotizada = _debeAutoMostrarResumenTrasCotizar;
       });
 
-      _animarSheetParaResumenCotizado();
+      if (_debeAutoMostrarResumenTrasCotizar) {
+        _animarSheetParaResumenCotizado();
+      } else {
+        _trasCotizarTurismoProgramado();
+      }
 
       if (_map != null && runId == _cotizacionSeq) {
         if (routeLatLng.length >= 2) {
@@ -1779,7 +1802,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           gananciaTaxistaCalculada = precioCalculado - comisionCalculada;
           ubicacionObtenida = true;
           _cargando = false;
-          _vistaResumenCotizada = precioCalculado > 0;
+          _vistaResumenCotizada =
+              precioCalculado > 0 && _debeAutoMostrarResumenTrasCotizar;
         });
 
         await _dibujarRutaReal(
@@ -1791,7 +1815,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         );
 
         if (precioCalculado > 0) {
-          _animarSheetParaResumenCotizado();
+          if (_debeAutoMostrarResumenTrasCotizar) {
+            _animarSheetParaResumenCotizado();
+          } else {
+            _trasCotizarTurismoProgramado();
+          }
         }
       }().timeout(
         const Duration(seconds: 15),
@@ -1877,6 +1905,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             ),
             body: TurismoDestinosSheetHost(
               showFloatingBack: false,
+              esViajeProgramado: !widget.modoAhora,
               seedLat: latCliente ?? _origenMap?.latitude,
               seedLon: lonCliente ?? _origenMap?.longitude,
               tipoVehiculoInicial: _tipoVehiculoTurismo,
@@ -2895,24 +2924,36 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                   ),
                 if (!widget.modoAhora) ...[
                   const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.event_rounded,
-                            size: 18, color: textSecondary),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                color: textSecondary,
-                                fontWeight: FontWeight.w600),
-                          ),
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _seleccionarFechaHora,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.event_rounded,
+                                size: 18, color: textSecondary),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                DateFormat('dd/MM/yyyy - HH:mm')
+                                    .format(fechaHora),
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: textSecondary,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(Icons.edit_calendar_outlined,
+                                size: 16, color: accent),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ],
@@ -2988,11 +3029,14 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     ),
                   ),
                 ),
+                const SizedBox(height: 10),
+                _botonVolverInicioProgramar(foreground: accent),
               ],
             ),
           ),
           const SizedBox(height: 12),
-          Material(
+          if (tipoServicio != 'turismo')
+            Material(
             color: mapFloating
                 ? const Color(0xFF0F172A).withValues(alpha: 0.92)
                 : (fondoClaro
@@ -3190,10 +3234,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     return const SizedBox.shrink();
   }
 
-  // 🔥 Selector de tipo de vehículo para turismo con valores únicos.
-  // Los colores del label, dropdown y panel desplegable se derivan del
-  // color de fondo personalizado para que las opciones siempre sean
-  // legibles sobre cualquier fondo (blanco, agua, amarillo, morado…).
   Widget _buildTurismoVehiculoSelector({
     required bool mapFloating,
     required Color chromeToneRef,
@@ -3256,6 +3296,142 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             _intentarCalculoTrasOrigenListo();
           },
         ),
+      ),
+    );
+  }
+
+  void _salirAlInicioDesdeProgramar() {
+    unawaited(NavigationService.irAlInicioCliente(context: context));
+  }
+
+  Widget _selectorFechaHoraProgramado({
+    required Color textPrimary,
+    required Color textSecondary,
+    required bool isDark,
+    required bool sheetStrongChrome,
+    required Color accent,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 10),
+        Text(
+          'Fecha y hora de recogida',
+          style: TextStyle(
+            color: textPrimary,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 8),
+        ElevatedButton.icon(
+          onPressed: _seleccionarFechaHora,
+          icon: const Icon(Icons.calendar_today),
+          label: const Text('Seleccionar fecha y hora'),
+          style: _botonEstilo(context, sheetStrongChrome: sheetStrongChrome),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Programado para: ${DateFormat('dd/MM/yyyy - HH:mm').format(fechaHora)}',
+          style: TextStyle(
+            color: sheetStrongChrome
+                ? const Color(0xFF065F46)
+                : (isDark ? Colors.greenAccent : const Color(0xFF0F9D58)),
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Podés cambiar la hora antes de confirmar la reserva.',
+          style: TextStyle(color: textSecondary, fontSize: 12, height: 1.3),
+        ),
+      ],
+    );
+  }
+
+  Widget _botonVolverInicioProgramar({
+    Color? foreground,
+    bool outlined = true,
+  }) {
+    final Widget btn = outlined
+        ? OutlinedButton.icon(
+            onPressed: _salirAlInicioDesdeProgramar,
+            icon: const Icon(Icons.home_rounded, size: 20),
+            label: const Text('Volver al inicio'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: foreground,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          )
+        : TextButton.icon(
+            onPressed: _salirAlInicioDesdeProgramar,
+            icon: const Icon(Icons.home_rounded, size: 20),
+            label: const Text('Volver al inicio'),
+          );
+    return SizedBox(width: double.infinity, child: btn);
+  }
+
+  /// Tras elegir destino del catálogo en turismo programado: guía al cliente
+  /// hacia fecha, vehículo e ida y vuelta (antes quedaban ocultos en el resumen).
+  Widget _bannerCompletarTurismoProgramado({
+    required Color textPrimary,
+    required Color textSecondary,
+    required bool mapFloating,
+  }) {
+    if (!_esTurismoProgramado ||
+        _destinoTurismoSeleccionado == null ||
+        precioCalculado <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    final Color accent = mapFloating
+        ? const Color(0xFFD8B4FE)
+        : (Theme.of(context).brightness == Brightness.dark
+            ? Colors.greenAccent
+            : const Color(0xFF0F9D58));
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: mapFloating ? 0.14 : 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: accent.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.event_available_rounded, color: accent, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Completa tu reserva',
+                  style: TextStyle(
+                    color: textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Destino: ${_destinoTurismoSeleccionado!.nombre}. '
+            'Ahora elige fecha y hora, confirma el vehículo '
+            '(${_mapTipoVehiculoTurismo(_tipoVehiculoTurismo)}) '
+            'y activa ida y vuelta si la necesitas.',
+            style: TextStyle(
+              color: textSecondary,
+              fontSize: 13,
+              height: 1.38,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3624,7 +3800,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                             tipoServicio == 'turismo'
                                                 ? (_destinoTurismoSeleccionado !=
                                                         null
-                                                    ? 'Desliza para ver precio y confirmar'
+                                                    ? (_esTurismoProgramado
+                                                        ? 'Destino listo · elige fecha y opciones abajo'
+                                                        : 'Desliza para ver precio y confirmar')
                                                     : 'Busca un destino o abre el catálogo abajo')
                                                 : (_mostrarResumenCotizacion
                                                     ? 'Toca “Cambiar ruta” abajo para el buscador y opciones'
@@ -4725,6 +4903,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                           },
                                                         ),
                                                       ),
+                                                      if (!widget.modoAhora)
+                                                        _selectorFechaHoraProgramado(
+                                                          textPrimary:
+                                                              textPrimary,
+                                                          textSecondary:
+                                                              textSecondary,
+                                                          isDark: isDark,
+                                                          sheetStrongChrome:
+                                                              sheetStrongChrome,
+                                                          accent: pRuta
+                                                              .destinoAccent,
+                                                        ),
                                                       TextButton.icon(
                                                         onPressed: () {
                                                           setState(() {
@@ -4759,7 +4949,8 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                       ),
                                       const SizedBox(height: 8),
                                     ],
-                                    if (!widget.modoAhora) ...[
+                                    if (!widget.modoAhora &&
+                                        tipoServicio != 'turismo') ...[
                                       const SizedBox(height: 10),
                                       const ProgramarViajeFuturoAnimation(),
                                       const SizedBox(height: 12),
@@ -4806,6 +4997,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                         ),
                                       ),
                                       const SizedBox(height: 8),
+                                    ],
+                                    if (!widget.modoAhora &&
+                                        tipoServicio == 'turismo' &&
+                                        _destinoTurismoSeleccionado == null) ...[
+                                      _bannerCompletarTurismoProgramado(
+                                        textPrimary: textPrimary,
+                                        textSecondary: textSecondary,
+                                        mapFloating: mapFloating,
+                                      ),
                                     ],
                                     const SizedBox(height: 14),
                                     Padding(
@@ -5280,6 +5480,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 );
                                               },
                                             ),
+                                            if (tipoServicio == 'turismo') ...[
+                                              const SizedBox(height: 12),
+                                              _botonVolverInicioProgramar(
+                                                foreground: _colorServicio,
+                                              ),
+                                            ],
                                           ],
                                         ),
                                       )

@@ -12,7 +12,6 @@ import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/reportar_viaje.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
-import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
@@ -447,6 +446,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   }
 
   Future<void> _irInicio() async {
+    if (!mounted) return;
     final String? uid = _uidClienteEfectivo();
     if (uid != null && uid.isNotEmpty) {
       unawaited(
@@ -457,23 +457,11 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       );
     }
 
-    try {
-      ActiveTripService.cancelarMantenimientoOverlayViaje();
-    } catch (_) {}
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      final NavigatorState? nav =
-          NavigationService.navigatorKey.currentState;
-      if (nav != null) {
-        await NavigationService.clearAndGo(const ClienteShellWithDeepLink());
-        return;
-      }
-      await Navigator.of(context, rootNavigator: true).pushAndRemoveUntil<void>(
-        MaterialPageRoute<void>(builder: (_) => const ClienteShellWithDeepLink()),
-        (Route<dynamic> r) => false,
-      );
-    });
+    await NavigationService.irAlInicioCliente(
+      context: context,
+      viajeId: widget.viajeId,
+      forzarLimpiarViajeActivo: true,
+    );
   }
 
   Widget _stepResumen({

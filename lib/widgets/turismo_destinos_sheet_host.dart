@@ -19,6 +19,7 @@ class TurismoDestinosSheetHost extends StatefulWidget {
     this.seedLat,
     this.seedLon,
     this.showFloatingBack = true,
+    this.esViajeProgramado = false,
   });
 
   final void Function(DestinoSeleccionado seleccion) onDestinoSeleccionado;
@@ -27,6 +28,8 @@ class TurismoDestinosSheetHost extends StatefulWidget {
   final double? seedLon;
   /// En pantalla completa con AppBar, usar `false`.
   final bool showFloatingBack;
+  /// Si es reserva programada: aviso de que fecha/hora se eligen después.
+  final bool esViajeProgramado;
 
   @override
   State<TurismoDestinosSheetHost> createState() =>
@@ -115,6 +118,7 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
           latOrigen: _lat,
           lonOrigen: _lon,
           tipoVehiculoInicial: widget.tipoVehiculoInicial,
+          esViajeProgramado: widget.esViajeProgramado,
           onDestinoSeleccionado: widget.onDestinoSeleccionado,
         ),
         if (widget.showFloatingBack)

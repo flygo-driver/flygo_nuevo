@@ -77,6 +77,78 @@ class ActiveTripService {
     notificarRebuildShell();
   }
 
+  static Future<void> _limpiarViajeActivoFirestore(String uid) async {
+    final String u = uid.trim();
+    if (u.isEmpty) return;
+    try {
+      await _db.collection('usuarios').doc(u).set({
+        'viajeActivoId': '',
+        'siguienteViajeId': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print('[VIAJE_ACTIVO] limpiar viajeActivoId error: $e');
+    }
+  }
+
+  /// Antes de [NavigationService.irAlInicioCliente]: quita overlay y, si corresponde,
+  /// limpia `viajeActivoId` para que el shell no vuelva a abrir turismo / viaje en curso.
+  static Future<void> prepararSalidaClienteAlInicio({
+    required String uid,
+    String? viajeId,
+    bool forzarLimpieza = false,
+  }) async {
+    cancelarMantenimientoOverlayViaje();
+    final String u = uid.trim();
+    if (u.isEmpty) {
+      notificarRebuildShell();
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> userSnap =
+          await _db.collection('usuarios').doc(u).get();
+      final String activo =
+          (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (activo.isEmpty) {
+        notificarRebuildShell();
+        return;
+      }
+
+      final String? vid = viajeId?.trim();
+      if (!forzarLimpieza &&
+          vid != null &&
+          vid.isNotEmpty &&
+          activo != vid) {
+        notificarRebuildShell();
+        return;
+      }
+
+      bool debeLimpiar = forzarLimpieza;
+      if (!debeLimpiar) {
+        final DocumentSnapshot<Map<String, dynamic>> vSnap =
+            await _db.collection('viajes').doc(activo).get();
+        if (!vSnap.exists) {
+          debeLimpiar = true;
+        } else {
+          final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
+          final String st =
+              EstadosViaje.normalizar((d['estado'] ?? '').toString());
+          debeLimpiar =
+              d['completado'] == true || EstadosViaje.esTerminal(st);
+        }
+      }
+
+      if (debeLimpiar) {
+        await _limpiarViajeActivoFirestore(u);
+      }
+    } catch (e) {
+      print('[VIAJE_ACTIVO] prepararSalidaClienteAlInicio error: $e');
+    }
+    notificarRebuildShell();
+  }
+
   /// Documento del viaje activo, o `null`.
   static Future<DocumentSnapshot<Map<String, dynamic>>?> obtenerDocumentoViajeActivo(
       String uid) {

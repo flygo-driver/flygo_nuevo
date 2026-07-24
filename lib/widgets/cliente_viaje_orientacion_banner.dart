@@ -68,8 +68,8 @@ abstract final class ClienteViajeOrientacionCopy {
         return modoAhora
             ? 'Deslizá la hoja hacia arriba, buscá aeropuerto, hotel o destino turístico '
                 '(o abrí el catálogo) y confirmá cuando veas el precio.'
-            : 'Deslizá la hoja, elegí destino turístico, fecha y hora de recogida, '
-                'y confirmá el traslado cuando aparezca el precio.';
+            : 'Elegí destino en el catálogo o buscador. Después definí fecha y hora, '
+                'vehículo e ida y vuelta antes de confirmar la reserva.';
       case 'motor':
         return 'Deslizá la hoja hacia arriba, escribí a dónde vas en motor y '
             'confirmá el viaje cuando veas el precio en pantalla.';
