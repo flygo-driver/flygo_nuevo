@@ -2820,6 +2820,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       if (!mounted) return;
       unawaited(_limpiarCorpDeViajeEnCursoAlEntrar());
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null && uid.isNotEmpty) {
+        unawaited(ViajesRepo.ensureSiguienteCoherente(uid));
+      }
+    });
     _scheduleSyncEsperaCargaViaje(true);
   }
 

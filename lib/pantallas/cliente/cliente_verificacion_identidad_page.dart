@@ -27,6 +27,7 @@ class _ClienteVerificacionIdentidadPageState
     if (uid == null) return;
 
     setState(() => _subiendo = true);
+    Reference? storageRef;
     try {
       final picked = await _picker.pickImage(
         source: ImageSource.camera,
@@ -36,6 +37,12 @@ class _ClienteVerificacionIdentidadPageState
         maxHeight: 1024,
       );
       if (picked == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No se tomó la foto. Podés intentar de nuevo.'),
+          ),
+        );
         return;
       }
 
@@ -54,6 +61,7 @@ class _ClienteVerificacionIdentidadPageState
           .child('perfiles')
           .child(uid)
           .child('verificacion_$ts.jpg');
+      storageRef = ref;
 
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
 
@@ -94,6 +102,11 @@ class _ClienteVerificacionIdentidadPageState
       Navigator.of(context).pop(true);
     } on FirebaseException catch (e) {
       if (!mounted) return;
+      if (storageRef != null) {
+        try {
+          await storageRef.delete();
+        } catch (_) {}
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error al subir: ${e.message ?? e.code}')),
       );

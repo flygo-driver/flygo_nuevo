@@ -146,9 +146,9 @@ abstract final class ClienteVerificacionIdentidadService {
       return DateTime.now().difference(ultima) >= intervalo;
     }
 
-    // Sin selfie previa: gracia desde el registro (entra fácil; no en cada viaje).
+    // Sin selfie previa: gracia desde el registro; sin fecha → exigir (cuentas legacy).
     final registro = _fechaRegistroDesde(data);
-    if (registro == null) return false;
+    if (registro == null) return true;
     return DateTime.now().difference(registro) >= intervalo;
   }
 
@@ -172,7 +172,12 @@ abstract final class ClienteVerificacionIdentidadService {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return true;
 
-    final data = await _datosUsuario(uid);
+    Map<String, dynamic> data;
+    try {
+      data = await _datosUsuario(uid);
+    } catch (_) {
+      rethrow;
+    }
     if (!debeVerificarAhora(data)) return true;
     if (!context.mounted) return false;
 
@@ -182,7 +187,13 @@ abstract final class ClienteVerificacionIdentidadService {
         builder: (_) => const ClienteVerificacionIdentidadPage(),
       ),
     );
-    return ok == true;
+    if (ok != true) return false;
+    try {
+      data = await _datosUsuario(uid);
+    } catch (_) {
+      return true;
+    }
+    return !debeVerificarAhora(data);
   }
 
   /// Backend en repos: lanza si falta verificación vigente.

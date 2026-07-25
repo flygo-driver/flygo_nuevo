@@ -741,6 +741,15 @@ class ViajesRepo {
               },
               SetOptions(merge: true));
         });
+        await uRef.collection('cola_viajes').doc(nextId).set(
+          {
+            'estado': 'invalidado',
+            'motivo': 'reserva_invalida',
+            'invalidadoEn': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
       }
       _viajesRepoDebugLog('✅ ensureSiguienteCoherente - OK');
     } catch (e) {

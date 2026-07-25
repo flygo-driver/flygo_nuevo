@@ -266,6 +266,18 @@ async function tryPromoteOne(
         },
         { merge: true },
       );
+      const userPatch: AnyMap = {};
+      if (toStr(uData.siguienteViajeId) === viajeId) {
+        userPatch.siguienteViajeId = "";
+      }
+      if (toStr(uData.viajeEncoladoId) === viajeId) {
+        userPatch.viajeEncoladoId = "";
+      }
+      if (Object.keys(userPatch).length > 0) {
+        userPatch.updatedAt = FieldValue.serverTimestamp();
+        userPatch.actualizadoEn = FieldValue.serverTimestamp();
+        tx.set(uRef, userPatch, { merge: true });
+      }
       if (toStr(v.reservadoPor) === uidTaxista) {
         tx.update(vRef, {
           reservadoPor: "",

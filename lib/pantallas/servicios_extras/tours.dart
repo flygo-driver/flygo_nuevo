@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
+import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 
 class ToursTuristicosScreen extends StatelessWidget {
   const ToursTuristicosScreen({super.key});
@@ -72,7 +73,11 @@ class ToursTuristicosScreen extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: () {
+              onPressed: () async {
+                final ok =
+                    await ClienteVerificacionIdentidadService
+                        .ensureVerificadoOMostrar(context);
+                if (!ok || !context.mounted) return;
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -92,7 +97,11 @@ class ToursTuristicosScreen extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () {
+              onPressed: () async {
+                final ok =
+                    await ClienteVerificacionIdentidadService
+                        .ensureVerificadoOMostrar(context);
+                if (!ok || !context.mounted) return;
                 Navigator.push(
                   context,
                   MaterialPageRoute(

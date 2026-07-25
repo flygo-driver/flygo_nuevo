@@ -183,6 +183,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
       .limit(400);
 
     const snaps = await q.get();
+    const liberadas: Array<{ viajeId: string; taxistaUid: string }> = [];
     if (!snaps.empty) {
       let batch = db().batch();
       let writes = 0;
@@ -199,6 +200,7 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
           updatedAt: svNow(),
           actualizadoEn: svNow(),
         });
+        liberadas.push({ viajeId: doc.id, taxistaUid: reservadoPor });
         writes++;
 
         if (writes >= 450) {
@@ -208,7 +210,38 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
         }
       }
       if (writes > 0) await batch.commit();
-      logger.info(`publish: liberadas ${snaps.size} reservas vencidas.`);
+      logger.info(`publish: liberadas ${liberadas.length} reservas vencidas.`);
+
+      for (const item of liberadas) {
+        try {
+          const uRef = db().collection("usuarios").doc(item.taxistaUid);
+          const uSnap = await uRef.get();
+          const u = uSnap.data() ?? {};
+          const patch: Record<string, unknown> = {};
+          if (String(u.siguienteViajeId ?? "").trim() === item.viajeId) {
+            patch.siguienteViajeId = "";
+          }
+          if (String(u.viajeEncoladoId ?? "").trim() === item.viajeId) {
+            patch.viajeEncoladoId = "";
+          }
+          if (Object.keys(patch).length > 0) {
+            patch.updatedAt = svNow();
+            patch.actualizadoEn = svNow();
+            await uRef.set(patch, { merge: true });
+          }
+          await uRef.collection("cola_viajes").doc(item.viajeId).set(
+            {
+              estado: "invalidado",
+              invalidadoEn: svNow(),
+              motivo: "reserva_vencida",
+              updatedAt: svNow(),
+            },
+            { merge: true },
+          );
+        } catch (e) {
+          logger.warn("publish: limpiar cola tras reserva vencida", { item, e });
+        }
+      }
     }
   }
 

@@ -103,8 +103,8 @@ class _ViajesCercanosTaxistaLayerState
   final Set<String> _prevCercanosIds = <String>{};
   bool _cercanosPrimeraEmision = true;
 
-  static const int _kQueryLimit = 40;
-  static const int _kMostrarMax = 12;
+  static const int _kQueryLimit = 100;
+  static const int _kMostrarMax = 15;
 
   /// Mismos estados que [ViajesRepo.reservarComoSiguiente] admite (sin taxista asignado en documento).
   static const List<String> _kEstadosReservablesSiguiente = <String>[

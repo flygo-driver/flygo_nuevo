@@ -5,6 +5,7 @@ import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/solicitar_motor_rai.dart';
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
+import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/rai_asistente_destino_pendiente.dart';
@@ -29,12 +30,24 @@ class RaiAsistenteLauncher {
 
     switch (action) {
       case RaiAsistenteAction.openMotor:
+        if (!await ClienteVerificacionIdentidadService.ensureVerificadoOMostrar(
+          context,
+        )) {
+          return;
+        }
+        if (!context.mounted) return;
         await NavigationService.pushEnTabShell(
           context,
           const SolicitarMotorRai(),
         );
         break;
       case RaiAsistenteAction.openTaxi:
+        if (!await ClienteVerificacionIdentidadService.ensureVerificadoOMostrar(
+          context,
+        )) {
+          return;
+        }
+        if (!context.mounted) return;
         await NavigationService.pushEnTabShell(
           context,
           ProgramarViaje(
@@ -46,6 +59,12 @@ class RaiAsistenteLauncher {
         );
         break;
       case RaiAsistenteAction.openTurismo:
+        if (!await ClienteVerificacionIdentidadService.ensureVerificadoOMostrar(
+          context,
+        )) {
+          return;
+        }
+        if (!context.mounted) return;
         await NavigationService.pushEnTabShell(
           context,
           const ProgramarViaje(
@@ -71,6 +90,12 @@ class RaiAsistenteLauncher {
         break;
       case RaiAsistenteAction.none:
         if (destino != null) {
+          if (!await ClienteVerificacionIdentidadService.ensureVerificadoOMostrar(
+            context,
+          )) {
+            return;
+          }
+          if (!context.mounted) return;
           await NavigationService.pushEnTabShell(
             context,
             ProgramarViaje(

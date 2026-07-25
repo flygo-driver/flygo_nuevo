@@ -890,7 +890,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       final fs.Query<Map<String, dynamic>> q = _usarFallbackSinIndiceAhora
           ? _qFallbackBase()
           : _qPoolAhora();
-      _streamPoolAhora = q.limit(120).snapshots();
+      _streamPoolAhora = q.limit(200).snapshots();
     }
     if (_streamPoolProg == null ||
         _streamPoolProgFallback != _usarFallbackSinIndiceProg) {
@@ -925,7 +925,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     // Mismos límites que los streams de la lista (AHORA 120, PROGRAMADOS 200).
     // Con 60/80 el timbre no veía viajes que sí aparecían en pantalla.
-    _subTimbreAhora = qA.limit(120).snapshots().listen((snap) async {
+    _subTimbreAhora = qA.limit(200).snapshots().listen((snap) async {
       _snapTimbreAhora = snap;
       _refrescarListaPoolUi();
       if (!_appEnForeground) return;

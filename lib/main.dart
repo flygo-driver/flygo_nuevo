@@ -59,6 +59,7 @@ import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_web_entry.dart';
 import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
+import 'package:flygo_nuevo/widgets/cliente_verificacion_identidad_gate.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/historial_viajes_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/metodos_pago.dart';
@@ -662,13 +663,19 @@ class _RaiAppState extends State<RaiApp> {
           // Cliente
           '/cliente_home': (_) => const ClienteShellWithDeepLink(),
           '/solicitar_viaje_ahora': (_) => const ClienteBloqueoGate(
-                child: ProgramarViaje(modoAhora: true),
+                child: ClienteVerificacionIdentidadGate(
+                  child: ProgramarViaje(modoAhora: true),
+                ),
               ),
           '/programar_viaje': (_) => const ClienteBloqueoGate(
-                child: ProgramarViaje(modoAhora: false),
+                child: ClienteVerificacionIdentidadGate(
+                  child: ProgramarViaje(modoAhora: false),
+                ),
               ),
           '/programar_viaje_multi': (_) => const ClienteBloqueoGate(
-                child: ProgramarViajeMulti(),
+                child: ClienteVerificacionIdentidadGate(
+                  child: ProgramarViajeMulti(),
+                ),
               ),
           '/corporativo': (_) => const CorporativoWebEntry(),
           '/empresas': (_) => const CorporativoWebEntry(),

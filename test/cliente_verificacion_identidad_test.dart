@@ -4,6 +4,13 @@ import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dar
 void main() {
   const cliente = <String, dynamic>{'rol': 'cliente'};
 
+  test('usuario legacy sin fecha de registro exige selfie', () {
+    expect(
+      ClienteVerificacionIdentidadService.debeVerificarAhora(cliente),
+      true,
+    );
+  });
+
   test('usuario nuevo no pide selfie en cada viaje', () {
     final data = <String, dynamic>{
       ...cliente,
