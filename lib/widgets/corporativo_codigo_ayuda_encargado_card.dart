@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_chat_encargado_page.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_ui.dart';
 import 'package:flygo_nuevo/servicios/corporativo_fase_a_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 
 /// Alerta al encargado cuando el chofer necesita el código o el viaje quedó bloqueado.
@@ -83,21 +84,42 @@ class CorporativoCodigoAyudaEncargadoCard extends StatelessWidget {
                 runSpacing: 8,
                 children: [
                   OutlinedButton.icon(
-                    onPressed: choferUid.isEmpty
-                        ? null
-                        : () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute<void>(
-                                builder: (_) => CorporativoChatEncargadoPage(
-                                  viajeId: viajeId,
-                                  choferUid: choferUid,
-                                  choferNombre: choferNombre,
-                                  empresaNombre: empresaNombre,
-                                ),
-                              ),
-                            );
-                          },
+                    onPressed: () {
+                      final operativo =
+                          CorporativoTaxistaService
+                              .choferOperativoUidViajeCorporativo(d);
+                      final uid = operativo.isNotEmpty
+                          ? operativo
+                          : choferUid;
+                      if (uid.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Aún no hay chofer asignado a este viaje.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      final nombre =
+                          (d['nombreTaxista'] ??
+                                  d['corporativoChoferNombre'] ??
+                                  choferNombre)
+                              .toString()
+                              .trim();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => CorporativoChatEncargadoPage(
+                            viajeId: viajeId,
+                            choferUid: uid,
+                            choferNombre:
+                                nombre.isNotEmpty ? nombre : choferNombre,
+                            empresaNombre: empresaNombre,
+                          ),
+                        ),
+                      );
+                    },
                     icon: const Icon(Icons.chat, size: 18),
                     label: const Text('Chat chofer'),
                   ),

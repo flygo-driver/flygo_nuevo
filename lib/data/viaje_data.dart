@@ -17,6 +17,7 @@ import 'package:flygo_nuevo/servicios/taxista_historial_repo.dart';
 import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 /// Sesión local nula o el callable no recibió identidad (p. ej. token caducado).
@@ -109,6 +110,11 @@ class ViajeData {
       'latTaxista': r6(data['latTaxista']),
       'lonTaxista': r6(data['lonTaxista']),
     };
+  }
+
+  /// Rutas corporativas B2B no pertenecen al historial ni flujos de la app cliente.
+  static bool _viajeVisibleEnAppCliente(Map<String, dynamic> raw) {
+    return !CorporativoTaxistaService.debeOcultarEnAppCliente(_normalize(raw));
   }
 
   static int _toCents(num v) => (v * 100).round();
@@ -557,6 +563,7 @@ class ViajeData {
     return _viajes.where('clienteId', isEqualTo: uidCliente).snapshots().map(
       (QuerySnapshot<Map<String, dynamic>> s) {
         final List<Viaje> list = s.docs
+            .where((d) => _viajeVisibleEnAppCliente(d.data()))
             .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
             .toList();
         list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
@@ -571,8 +578,10 @@ class ViajeData {
         .where('completado', isEqualTo: true)
         .snapshots()
         .map((QuerySnapshot<Map<String, dynamic>> s) {
-      final List<Viaje> list =
-          s.docs.map((d) => Viaje.fromMap(d.id, _normalize(d.data()))).toList();
+      final List<Viaje> list = s.docs
+          .where((d) => _viajeVisibleEnAppCliente(d.data()))
+          .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
+          .toList();
       list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
       return list;
     });
@@ -583,6 +592,7 @@ class ViajeData {
     return _viajes.where('clienteId', isEqualTo: clienteId).snapshots().map(
       (QuerySnapshot<Map<String, dynamic>> s) {
         final List<Viaje> list = s.docs
+            .where((d) => _viajeVisibleEnAppCliente(d.data()))
             .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
             .toList();
         list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
@@ -610,6 +620,7 @@ class ViajeData {
     final QuerySnapshot<Map<String, dynamic>> snapshot =
         await _viajes.where('clienteId', isEqualTo: clienteId).get();
     final List<Viaje> list = snapshot.docs
+        .where((d) => _viajeVisibleEnAppCliente(d.data()))
         .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
         .toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));
@@ -622,6 +633,7 @@ class ViajeData {
         .where('completado', isEqualTo: true)
         .get();
     final List<Viaje> list = snapshot.docs
+        .where((d) => _viajeVisibleEnAppCliente(d.data()))
         .map((d) => Viaje.fromMap(d.id, _normalize(d.data())))
         .toList();
     list.sort((a, b) => b.fechaHora.compareTo(a.fechaHora));

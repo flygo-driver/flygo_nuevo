@@ -10,6 +10,7 @@ import 'package:flutter/scheduler.dart';
 
 import 'package:flygo_nuevo/navegacion/post_viaje_cliente_nav.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
@@ -150,6 +151,14 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
     String id,
     Map<String, dynamic> d,
   ) async {
+    if (CorporativoTaxistaService.debeOcultarEnAppCliente(d)) {
+      final String? uid = FirebaseAuth.instance.currentUser?.uid;
+      await ClientePostViajeReopenGuard.markCompleted(
+        viajeId: id,
+        uidCliente: uid,
+      );
+      return;
+    }
     if (await ClientePostViajeReopenGuard.shouldSuppressAsync(id, viajeData: d)) {
       return;
     }

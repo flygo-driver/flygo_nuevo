@@ -33,26 +33,54 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  late final String miUid;
-  late String chatId;
+  String miUid = '';
+  String chatId = '';
   final TextEditingController _ctrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
   bool _chatReady = false;
+  bool _chatError = false;
+  String? _chatErrorMsg;
   bool _sending = false;
   int _lastDocCount = 0;
+  StreamSubscription<User?>? _authSub;
 
   void _onCtrlChanged() => setState(() {});
 
   @override
   void initState() {
     super.initState();
-    final curr = FirebaseAuth.instance.currentUser;
-    miUid = curr?.uid ?? '';
+    miUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _ctrl.addListener(_onCtrlChanged);
-    _prepare();
+    if (miUid.isNotEmpty) {
+      unawaited(_prepare());
+    } else {
+      _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+        if (!mounted || _chatReady || _chatError) return;
+        final uid = user?.uid ?? '';
+        if (uid.isEmpty) return;
+        miUid = uid;
+        unawaited(_prepare());
+      });
+    }
   }
 
   Future<void> _prepare() async {
+    if (miUid.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _chatError = true;
+        _chatErrorMsg = 'Iniciá sesión para usar el chat.';
+      });
+      return;
+    }
+    if (widget.otroUid.trim().isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _chatError = true;
+        _chatErrorMsg = 'No hay otro participante para este chat.';
+      });
+      return;
+    }
     try {
       final cid = await ChatRepo.resolveOrCreateChatId(
         uidA: miUid,
@@ -63,6 +91,8 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         chatId = cid;
         _chatReady = true;
+        _chatError = false;
+        _chatErrorMsg = null;
       });
     } catch (e, st) {
       uxLog('CHAT', 'prepare falló', e);
@@ -70,14 +100,16 @@ class _ChatScreenState extends State<ChatScreen> {
         debugPrintStack(stackTrace: st);
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo preparar el chat: $e')),
-      );
+      setState(() {
+        _chatError = true;
+        _chatErrorMsg = 'No se pudo preparar el chat: $e';
+      });
     }
   }
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _ctrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -211,7 +243,38 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: !_chatReady
+            child: _chatError
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.chat_bubble_outline,
+                              size: 48, color: cs.error),
+                          const SizedBox(height: 16),
+                          Text(
+                            _chatErrorMsg ?? 'No se pudo abrir el chat.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: cs.error, height: 1.4),
+                          ),
+                          const SizedBox(height: 20),
+                          FilledButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                _chatError = false;
+                                _chatErrorMsg = null;
+                              });
+                              unawaited(_prepare());
+                            },
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('Reintentar'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : !_chatReady
                 ? Center(child: CircularProgressIndicator(color: cs.primary))
                 : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: ChatRepo.streamMensajes(chatId),

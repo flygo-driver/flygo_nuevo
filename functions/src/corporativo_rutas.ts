@@ -2367,6 +2367,48 @@ export async function refrescarChoferOperacionCorporativa(
         }
       }
 
+      if (!viajeHoyId && ventanaPublicacionCorporativoAbierta(d, ahora)) {
+        try {
+          const empData =
+            empDataCache.get(empresaId) ??
+            ((await db()
+              .collection("empresas_corporativas")
+              .doc(empresaId)
+              .get()).data() ?? {}) as AnyMap;
+          empDataCache.set(empresaId, empData);
+          const empresaNombre =
+            empCache.get(empresaId) ||
+            str(empData.nombre) ||
+            str(empData.nombreComercial) ||
+            "Empresa";
+          empCache.set(empresaId, empresaNombre);
+          const nuevoId = await asegurarViajeHoyDesdePlantilla({
+            empresaId,
+            plantillaId,
+            plantilla: d,
+            empresaNombre,
+            empresaData: empData,
+            encargadoUid: resolverUidEncargadoOperacion({
+              empresaData: empData,
+              choferUid: uid,
+            }),
+            choferUid: uid,
+            plRef: plDoc.ref,
+            forzarRecogidaHoy: true,
+          });
+          if (nuevoId) {
+            viajeHoyId = nuevoId;
+            const vSnap = await db().collection("viajes").doc(nuevoId).get();
+            if (vSnap.exists) vData = (vSnap.data() ?? {}) as AnyMap;
+          }
+        } catch (e) {
+          logger.warn("chofer_operacion asegurar viaje ventana", {
+            plantillaId,
+            e,
+          });
+        }
+      }
+
       await pushEntradaOperacionChofer({
         choferUid: uid,
         empresaId,
@@ -4163,14 +4205,11 @@ export const encargadoPublicarRutaCorporativaAhora = onCall(
       );
     }
 
-    const horaPublicada = horaHmEnZonaRd(fechaRecogida);
     const pubKey = `${hoyKey(now)}_pub`;
     await plRef.set(
       {
         ultimoViajeId: viajeId,
         ultimaPublicacionFijaKey: pubKey,
-        horaRecogidaGrupo: horaPublicada,
-        horaRecogida: horaPublicada,
         ultimoErrorPublicacion: FieldValue.delete(),
         ultimoErrorPublicacionEn: FieldValue.delete(),
         ...camposLimpiarRecogidaPerdida(diaCalendarioRdCorp(now)),
@@ -5383,6 +5422,101 @@ export const encargadoDarDeBajaEmpresaCorporativa = onCall(
       motivo: str(request.data?.motivo),
       canceladoPor: "encargado",
     });
+  },
+);
+
+/** Chofer: publica (si hace falta) y devuelve el viaje de hoy de una plantilla. */
+export const taxistaAsegurarViajeRutaCorporativa = onCall(
+  { region: "us-central1", memory: "512MiB", timeoutSeconds: 90 },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "No autenticado");
+    }
+    const choferUid = request.auth.uid;
+    const empresaId = str(request.data?.empresaId);
+    const plantillaId = str(request.data?.plantillaId);
+    if (!empresaId || !plantillaId) {
+      throw new HttpsError("invalid-argument", "Faltan empresaId o plantillaId");
+    }
+
+    const empRef = db().collection("empresas_corporativas").doc(empresaId);
+    const plRef = empRef.collection("plantillas_ruta").doc(plantillaId);
+    const plSnap = await plRef.get();
+    if (!plSnap.exists) {
+      throw new HttpsError("not-found", "Ruta no encontrada");
+    }
+    const d = (plSnap.data() ?? {}) as AnyMap;
+    const preferido = str(d.choferPreferidoUid);
+    if (preferido && preferido !== choferUid) {
+      throw new HttpsError(
+        "permission-denied",
+        "Esta ruta no está asignada a tu cuenta",
+      );
+    }
+
+    const ed = ((await empRef.get()).data() ?? {}) as AnyMap;
+    const empresaNombre =
+      str(ed.nombre) || str(ed.nombreComercial) || "Empresa";
+
+    const keyHoy = hoyKey(new Date());
+    if (str(d[`choferConfirmado_${keyHoy}`]) !== choferUid) {
+      await plRef.set(
+        {
+          [`choferConfirmado_${keyHoy}`]: choferUid,
+          choferConfirmadoEn: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
+    let viajeId = "";
+    const ultimoId = str(d.ultimoViajeId);
+    if (ultimoId) {
+      try {
+        const vSnap = await db().collection("viajes").doc(ultimoId).get();
+        if (vSnap.exists) {
+          const v = (vSnap.data() ?? {}) as AnyMap;
+          if (v.completado !== true && viajeCorpReutilizableHoy(v)) {
+            viajeId = ultimoId;
+          }
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
+    if (!viajeId) {
+      viajeId = await asegurarViajeHoyDesdePlantilla({
+        empresaId,
+        plantillaId,
+        plantilla: d,
+        empresaNombre,
+        empresaData: ed,
+        encargadoUid: resolverUidEncargadoOperacion({
+          empresaData: ed,
+          choferUid,
+        }),
+        choferUid,
+        plRef,
+        forzarRecogidaHoy: true,
+      });
+    }
+
+    if (viajeId) {
+      try {
+        await repararChoferViajeCorporativoSiHaceFalta(viajeId);
+      } catch (e) {
+        logger.warn("taxistaAsegurarViaje reparar chofer", { viajeId, e });
+      }
+    }
+
+    await refrescarChoferOperacionCorporativa(choferUid);
+
+    return {
+      ok: true,
+      viajeId,
+      listoParaAbrir: viajeId.length > 0,
+    };
   },
 );
 

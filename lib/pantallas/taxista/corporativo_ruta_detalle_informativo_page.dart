@@ -11,11 +11,13 @@ import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/chat_repo.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/corporativo_hora_encargado.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/widgets/corporativo_pasajeros_chofer_card.dart';
+import 'package:flygo_nuevo/widgets/rai_back_button.dart';
 
 /// Ruta corporativa estilo «Elige tu destino»: tarjetas → Maps (sin PIN).
 class CorporativoRutaDetalleInformativoPage extends StatefulWidget {
@@ -192,6 +194,14 @@ class _CorporativoRutaDetalleInformativoPageState
     });
   }
 
+  Future<void> _volverAMisRutasCorporativas() async {
+    await _alSalirDeRuta();
+    if (!mounted) return;
+    await NavigationService.irAMisRutasCorporativasTrasCierre(
+      context: context,
+    );
+  }
+
   Future<void> _salirViajeCerrado({bool verFactura = false}) async {
     await _alSalirDeRuta();
     if (!mounted) return;
@@ -205,10 +215,12 @@ class _CorporativoRutaDetalleInformativoPageState
             : null,
         evitarOverlayViajeEnCurso: true,
       );
+      return;
     }
     if (!mounted) return;
-    final nav = Navigator.of(context);
-    if (nav.canPop()) nav.pop();
+    await NavigationService.irAMisRutasCorporativasTrasCierre(
+      context: context,
+    );
   }
 
   Future<void> _run(Future<void> Function() fn) async {
@@ -302,11 +314,6 @@ class _CorporativoRutaDetalleInformativoPageState
             : null,
         evitarOverlayViajeEnCurso: true,
       );
-      if (!mounted) return;
-      final nav = Navigator.of(context);
-      if (nav.canPop()) {
-        nav.pop();
-      }
     } catch (e) {
       _errorFinalizar = _mensajeErrorCorp(e, 'finalizar la ruta');
       ActiveTripService.cancelarMantenimientoOverlayViaje();
@@ -737,8 +744,11 @@ class _CorporativoRutaDetalleInformativoPageState
         backgroundColor: _fondo,
         foregroundColor: Colors.white,
         elevation: 0,
+        leading: RaiBackButton(
+          color: RaiBackButton.resolveColor(context, superficie: _fondo),
+        ),
+        automaticallyImplyLeading: false,
         title: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
               width: 32,
@@ -758,19 +768,24 @@ class _CorporativoRutaDetalleInformativoPageState
               ),
             ),
             const SizedBox(width: 8),
-            const Text(
-              'RAI DRIVER',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.5,
-                fontSize: 16,
+            const Flexible(
+              child: Text(
+                'RAI DRIVER',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5,
+                  fontSize: 16,
+                ),
               ),
             ),
           ],
         ),
         actions: [
           if (_viajeCache?['completado'] != true)
-            TextButton(
+            IconButton(
+              tooltip: 'Dejar ruta',
               onPressed: _busy || _finalizando
                   ? null
                   : () {
@@ -779,12 +794,9 @@ class _CorporativoRutaDetalleInformativoPageState
                         unawaited(_dejarRutaYContactarRai(d));
                       }
                     },
-              child: Text(
-                'Dejar ruta',
-                style: TextStyle(
-                  color: Colors.red.shade300,
-                  fontWeight: FontWeight.w700,
-                ),
+              icon: Icon(
+                Icons.logout_rounded,
+                color: Colors.red.shade300,
               ),
             ),
           Builder(
@@ -960,7 +972,11 @@ class _CorporativoRutaDetalleInformativoPageState
                     ),
                     const SizedBox(height: 20),
                     FilledButton(
-                      onPressed: () => Navigator.maybePop(context),
+                      onPressed: () => unawaited(
+                        NavigationService.irAMisRutasCorporativasTrasCierre(
+                          context: context,
+                        ),
+                      ),
                       child: const Text('Volver a Mis rutas'),
                     ),
                   ],
@@ -1566,11 +1582,7 @@ class _CorporativoRutaDetalleInformativoPageState
         child: OutlinedButton.icon(
           onPressed: _finalizando
               ? null
-              : () async {
-                  await _alSalirDeRuta();
-                  if (!context.mounted) return;
-                  Navigator.of(context).pop();
-                },
+              : () => unawaited(_volverAMisRutasCorporativas()),
           style: OutlinedButton.styleFrom(
             foregroundColor: Colors.white,
             side: const BorderSide(color: Colors.white38),

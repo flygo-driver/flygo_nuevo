@@ -32,6 +32,7 @@ import 'package:flygo_nuevo/utils/release_build_flags.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -2394,6 +2395,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     required String uid,
     Map<String, dynamic>? viajeDataSemilla,
   }) async {
+    if (await CorporativoTaxistaService.debeOcultarEnAppClientePorId(
+      viajeId,
+      semilla: viajeDataSemilla,
+    )) {
+      await ClientePostViajeReopenGuard.markCompleted(
+        viajeId: viajeId,
+        uidCliente: uid.trim().isEmpty ? null : uid,
+      );
+      return;
+    }
     try {
       // Sin tope, un `set` colgado (offline / red inestable) dejaba al usuario
       // en pantalla de carga o factura sin avanzar nunca.

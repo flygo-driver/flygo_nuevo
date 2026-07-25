@@ -323,6 +323,44 @@ abstract final class CorporativoTaxistaService {
         .call();
   }
 
+  /// Publica (si falta) el viaje de hoy y confirma al chofer en una sola llamada.
+  static Future<String?> asegurarViajeRutaFijaParaChofer({
+    required String uidTaxista,
+    required String empresaId,
+    required String plantillaId,
+  }) async {
+    final uid = uidTaxista.trim();
+    final emp = empresaId.trim();
+    final pl = plantillaId.trim();
+    if (uid.isEmpty || emp.isEmpty || pl.isEmpty) return null;
+
+    try {
+      final res = await FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('taxistaAsegurarViajeRutaCorporativa')
+          .call(<String, dynamic>{
+        'empresaId': emp,
+        'plantillaId': pl,
+      });
+      final data = Map<String, dynamic>.from(
+        (res.data as Map?)?.cast<String, dynamic>() ?? const {},
+      );
+      final id = (data['viajeId'] ?? '').toString().trim();
+      if (id.isNotEmpty) return id;
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint(
+        '[CORP] taxistaAsegurarViajeRutaCorporativa ${e.code}: ${e.message}',
+      );
+      if (e.code != 'not-found' && e.code != 'unavailable') {
+        rethrow;
+      }
+    } catch (e) {
+      debugPrint('[CORP] asegurarViajeRutaFija: $e');
+    }
+
+    await refrescarOperacionChofer(uid);
+    return resolverViajeHoyPorPlantilla(empresaId: emp, plantillaId: pl);
+  }
+
   static String mensajeGeneralOperacion(Map<String, dynamic>? operacion) {
     if (operacion == null) return '';
     return (operacion['mensajeGeneral'] ?? '').toString().trim();
@@ -362,12 +400,13 @@ abstract final class CorporativoTaxistaService {
         .trim();
   }
 
-  /// Chofer que opera el viaje publicado (no solo preferido de plantilla).
+  /// Chofer que opera el viaje publicado (asignado > preferido de plantilla).
   static String choferOperativoUidViajeCorporativo(Map<String, dynamic> data) {
     for (final key in [
       'uidTaxista',
       'taxistaId',
       'corporativoChoferAsignadoUid',
+      'corporativoChoferPreferidoUid',
     ]) {
       final s = (data[key] ?? '').toString().trim();
       if (s.isNotEmpty) return s;
@@ -623,6 +662,101 @@ abstract final class CorporativoTaxistaService {
       return true;
     }
     return false;
+  }
+
+  /// Rutas corporativas B2B: la app cliente no muestra factura, post-viaje ni historial.
+  static bool debeOcultarEnAppCliente(Map<String, dynamic> data) {
+    return esViajeCorporativoDoc(data);
+  }
+
+  /// Comprueba por semilla o lectura puntual del doc `viajes/{id}`.
+  static Future<bool> debeOcultarEnAppClientePorId(
+    String viajeId, {
+    Map<String, dynamic>? semilla,
+  }) async {
+    if (semilla != null &&
+        semilla.isNotEmpty &&
+        esViajeCorporativoDoc(semilla)) {
+      return true;
+    }
+    final String id = viajeId.trim();
+    if (id.isEmpty) return false;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance.collection('viajes').doc(id).get();
+      final Map<String, dynamic>? d = snap.data();
+      return d != null && esViajeCorporativoDoc(d);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Ventana operativa del chofer (~90 min antes de la recogida, mismo día RD).
+  static bool ventanaRutaFijaAbiertaParaChofer({
+    required String horaRaw,
+    bool completadoHoy = false,
+    bool recogidaPerdida = false,
+  }) {
+    if (recogidaPerdida || completadoHoy) return false;
+    final recogida = proximaRecogidaDesdeHora(horaRaw);
+    if (recogida == null) return false;
+    final ahora = DateTime.now();
+    if (!_esRecogidaMismoDiaLocal(recogida, ahora)) return false;
+    final minParaRecogida = recogida.difference(ahora).inMinutes;
+    final minPub = CorporativoVentanasConstants.minutosPublicarAntesDefault;
+    final ventanaMin =
+        (minPub + CorporativoVentanasConstants.ventanaToleranciaMin).clamp(20, 180);
+    return minParaRecogida <= ventanaMin && minParaRecogida >= -90;
+  }
+
+  /// Busca el viaje operativo de hoy para una plantilla (ultimoViajeId o query).
+  static Future<String?> resolverViajeHoyPorPlantilla({
+    required String empresaId,
+    required String plantillaId,
+  }) async {
+    final emp = empresaId.trim();
+    final pl = plantillaId.trim();
+    if (emp.isEmpty || pl.isEmpty) return null;
+    try {
+      final plSnap = await _db
+          .collection('empresas_corporativas')
+          .doc(emp)
+          .collection('plantillas_ruta')
+          .doc(pl)
+          .get();
+      if (plSnap.exists) {
+        final ultimo =
+            (plSnap.data()?['ultimoViajeId'] ?? '').toString().trim();
+        if (ultimo.isNotEmpty) {
+          final vSnap = await _db.collection('viajes').doc(ultimo).get();
+          if (vSnap.exists && vSnap.data()?['completado'] != true) {
+            return ultimo;
+          }
+        }
+      }
+      final q = await _db
+          .collection('viajes')
+          .where('corporativoPlantillaId', isEqualTo: pl)
+          .where('corporativoEmpresaId', isEqualTo: emp)
+          .limit(8)
+          .get();
+      final ahora = DateTime.now();
+      for (final doc in q.docs) {
+        final v = doc.data();
+        if (v['completado'] == true) continue;
+        if (!esViajeCorporativoDoc(v)) continue;
+        final fh = v['fechaHora'];
+        DateTime? dt;
+        if (fh is Timestamp) dt = fh.toDate();
+        if (dt == null) continue;
+        if (dt.year == ahora.year &&
+            dt.month == ahora.month &&
+            dt.day == ahora.day) {
+          return doc.id;
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Sin tarjeta desplegable ni PIN del período (flujo «Elige tu destino»).
@@ -888,6 +1022,8 @@ abstract final class CorporativoTaxistaService {
   static Future<String?> resolverViajeCorporativoParaChofer({
     required String uidTaxista,
     String? viajeIdPreferido,
+    String? empresaId,
+    String? plantillaId,
   }) async {
     final uid = uidTaxista.trim();
     final pref = (viajeIdPreferido ?? '').trim();
@@ -896,13 +1032,24 @@ abstract final class CorporativoTaxistaService {
         final snap = await _db.collection('viajes').doc(pref).get();
         if (snap.exists) {
           final d = snap.data() ?? <String, dynamic>{};
+          if (esViajeCorporativoAsignado(d, uid) &&
+              !viajeCorporativoDebeExpulsarPantallaChofer(d, uid)) {
+            return pref;
+          }
           if (await viajeCorporativoAbribleParaChofer(d, uid)) {
             return pref;
           }
         }
       } catch (_) {}
     }
-    return idViajeCorporativoPendiente(uid);
+    final cola = await idViajeCorporativoPendiente(uid);
+    if (cola != null && cola.isNotEmpty) return cola;
+    final emp = (empresaId ?? '').trim();
+    final pl = (plantillaId ?? '').trim();
+    if (emp.isNotEmpty && pl.isNotEmpty) {
+      return resolverViajeHoyPorPlantilla(empresaId: emp, plantillaId: pl);
+    }
+    return null;
   }
 
   static String textoCopiarPasajero(CorporativoPasajero p) {
@@ -2545,9 +2692,14 @@ abstract final class CorporativoTaxistaService {
             if ((m['estadoOperacion'] ?? '').toString() == 'completado') {
               continue;
             }
-            if (m['listoParaAbrir'] != true) continue;
             final id = (m['viajeHoyId'] ?? '').toString().trim();
             if (id.isEmpty) continue;
+            if (m['listoParaAbrir'] != true) {
+              final hora = (m['hora'] ?? '').toString();
+              if (!ventanaRutaFijaAbiertaParaChofer(horaRaw: hora)) {
+                continue;
+              }
+            }
             if (rutaCorpInformativaDismissedRecientemente(id)) continue;
             final vSnap = await _db.collection('viajes').doc(id).get();
             if (!vSnap.exists) continue;

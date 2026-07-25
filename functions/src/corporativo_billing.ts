@@ -14,6 +14,7 @@ import {
   obtenerDiasPausaEmpresa,
   repararPeriodoSinRotarCodigo,
 } from "./corporativo_periodo.js";
+import { liquidacionCentsCorporativoDesdeViaje } from "./corporativo_tarifa_config.js";
 import { esCorporativoModoInformativo } from "./multiparada.js";
 
 type AnyMap = Record<string, unknown>;
@@ -202,13 +203,32 @@ export async function acumularViajeCorporativoEnPeriodo(
   const histRef = empresaRef.collection("historial").doc(viajeId);
 
   const monto = round2(num(d.precio ?? d.precioFinal ?? d.total ?? 0));
-  const montoChofer = round2(
+  let montoChofer = round2(
     num(d.gananciaTaxista) ||
       (typeof d.ganancia_cents === "number"
         ? num(d.ganancia_cents) / 100
         : 0) ||
-      monto,
+      0,
   );
+  if (montoChofer <= 0) {
+    const estimado = round2(num(d.corporativoPagoChoferEstimadoRd));
+    if (estimado > 0) montoChofer = estimado;
+  }
+  if (montoChofer <= 0) {
+    const corpLiq = liquidacionCentsCorporativoDesdeViaje(
+      d as Record<string, unknown>,
+      10,
+    );
+    if (corpLiq && corpLiq.gananciaCents > 0) {
+      montoChofer = round2(corpLiq.gananciaCents / 100);
+    }
+  }
+  if (montoChofer <= 0) {
+    logger.warn("corporativo acumular: monto chofer no resuelto", {
+      viajeId,
+      empresaId,
+    });
+  }
   const choferUid = str(
     d.uidTaxista ??
       d.taxistaId ??
@@ -344,6 +364,7 @@ function revertirPeriodoSiContabilizado(
   monto: number,
   choferUid: string,
   estabaContabilizado: boolean,
+  montoChofer?: number,
 ): void {
   if (!estabaContabilizado || !eFresh.exists) return;
   const ed2 = (eFresh.data() ?? {}) as AnyMap;
@@ -351,10 +372,13 @@ function revertirPeriodoSiContabilizado(
   const viajesCount = Math.max(0, Math.trunc(num(periodo.viajesCount)) - 1);
   const montoTotalRd = Math.max(0, round2(num(periodo.montoTotalRd) - monto));
   const porChofer = { ...((periodo.porChofer ?? {}) as AnyMap) };
+  const montoChoferRev = round2(
+    montoChofer != null && montoChofer > 0 ? montoChofer : monto,
+  );
   if (choferUid && porChofer[choferUid]) {
     const prev = (porChofer[choferUid] ?? {}) as AnyMap;
     const vCh = Math.max(0, Math.trunc(num(prev.viajes)) - 1);
-    const mCh = Math.max(0, round2(num(prev.montoRd) - monto));
+    const mCh = Math.max(0, round2(num(prev.montoRd) - montoChoferRev));
     if (vCh <= 0 && mCh <= 0) {
       delete porChofer[choferUid];
     } else {
@@ -406,6 +430,13 @@ function aplicarAnulacionDefinitiva(opts: {
     aprobadoPorUid,
   } = opts;
   const monto = round2(num(vd.precio ?? vd.precioFinal ?? hd.monto ?? 0));
+  const montoChofer = round2(
+    num(vd.gananciaTaxista) ||
+      (typeof vd.ganancia_cents === "number"
+        ? num(vd.ganancia_cents) / 100
+        : 0) ||
+      monto,
+  );
   const choferUid = str(
     vd.uidTaxista ?? vd.taxistaId ?? vd.corporativoChoferAsignadoUid,
   );
@@ -418,6 +449,7 @@ function aplicarAnulacionDefinitiva(opts: {
     monto,
     choferUid,
     estabaContabilizado,
+    montoChofer,
   );
 
   tx.set(

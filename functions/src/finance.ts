@@ -13,7 +13,7 @@ import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
 import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
-import { getComisionCorporativoPorcentajeCached } from "./corporativo_tarifa_config.js";
+import { getComisionCorporativoPorcentajeCached, liquidacionCentsCorporativoDesdeViaje } from "./corporativo_tarifa_config.js";
 import {
   aplicarIncentivoComisionEnFinalizar,
   getComisionIncentivosTaxistaConfigCached,
@@ -1073,14 +1073,25 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     }
 
     // Tras `pagoRegistrado`, conservar partidas ya cerradas (idempotencia).
-    const comisionCents =
+    let comisionCents =
       pagoRegistrado && comisionCentsDb !== null && comisionCentsDb >= 0
         ? comisionCentsDb
         : comisionCentsDesdePrecioCents(precioCents, comisionPctAplicada);
-    const gananciaCents =
+    let gananciaCents =
       pagoRegistrado && gananciaCentsDb !== null && gananciaCentsDb >= 0
         ? gananciaCentsDb
         : Math.max(0, precioCents - comisionCents);
+
+    if (!pagoRegistrado && esCorporativoEmpresa) {
+      const corpLiq = liquidacionCentsCorporativoDesdeViaje(
+        d as Record<string, unknown>,
+        comisionPctAplicada,
+      );
+      if (corpLiq) {
+        comisionCents = corpLiq.comisionCents;
+        gananciaCents = corpLiq.gananciaCents;
+      }
+    }
 
     const uData = (uSnap.data() ?? {}) as AnyMap;
     const perfilFacturaSnap = snapshotPerfilTaxistaParaFactura(uData);

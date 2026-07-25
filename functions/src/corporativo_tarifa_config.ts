@@ -660,6 +660,46 @@ export function liquidarPrecioBaseCorporativo(
 
 
 
+/** Comisión RAI y pago chofer corporativo desde desglose (Ley 30-26: % sobre Precio_Base). */
+export function liquidacionCentsCorporativoDesdeViaje(
+  d: Record<string, unknown>,
+  comisionPctFallback: number,
+): { comisionCents: number; gananciaCents: number } | null {
+  const num = (v: unknown): number => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const ex = (
+    d.extras && typeof d.extras === "object" ? d.extras : {}
+  ) as Record<string, unknown>;
+  const desglose = (
+    ex.corporativoTarifaDesglose ?? d.corporativoTarifaDesglose ?? {}
+  ) as Record<string, unknown>;
+  const baseRd = num(
+    desglose.precioBaseServicioRd ?? desglose.subtotalFacturaRd,
+  );
+  let pagoChoferRd = num(
+    desglose.pagoChoferRd ?? d.corporativoPagoChoferEstimadoRd,
+  );
+  let comisionRd = num(
+    desglose.comisionPlataformaRd ?? desglose.cargoCompaniaRd,
+  );
+  const pct = Number.isFinite(comisionPctFallback) ? comisionPctFallback : 10;
+  if (pagoChoferRd <= 0 && baseRd > 0) {
+    pagoChoferRd = Math.round(baseRd * ((100 - pct) / 100));
+  }
+  if (comisionRd <= 0 && baseRd > 0) {
+    comisionRd = Math.round(baseRd * (pct / 100));
+  }
+  if (pagoChoferRd <= 0) return null;
+  return {
+    gananciaCents: Math.round(pagoChoferRd * 100),
+    comisionCents: Math.max(0, Math.round(comisionRd * 100)),
+  };
+}
+
+
+
 /** Desglose unificado: tarifa contratada, plantilla o cálculo automático RD. */
 export function construirDesgloseTarifaCorporativoViaje(args: {
   kmLineaRecta: number;

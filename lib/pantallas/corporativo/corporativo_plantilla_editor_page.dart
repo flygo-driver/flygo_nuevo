@@ -646,7 +646,9 @@ class _CorporativoPlantillaEditorPageState
       backgroundColor: p.card,
       builder: (ctx) => _PasajeroFormSheet(
         titulo: 'Agregar pasajero',
-        orden: _pasajeros.length + 1,
+        orden: _pasajeros.fold<int>(
+              0, (m, p) => p.orden > m ? p.orden : m) +
+            1,
       ),
     );
     if (result == null) return;
@@ -666,7 +668,7 @@ class _CorporativoPlantillaEditorPageState
       builder: (ctx) => _PasajeroFormSheet(
         titulo: 'Editar pasajero',
         inicial: actual,
-        orden: index + 1,
+        orden: actual.orden > 0 ? actual.orden : index + 1,
       ),
     );
     if (result == null || !mounted) return;

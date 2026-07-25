@@ -18,6 +18,8 @@ class AppServiceCard extends StatelessWidget {
     this.statusLabel,
     this.enabled = true,
     this.onTap,
+    /// Solo informativo (p. ej. «Pool corporativo activo»): sin candado de bloqueo.
+    this.soloEstado = false,
   });
 
   final IconData icon;
@@ -28,6 +30,13 @@ class AppServiceCard extends StatelessWidget {
   final String? statusLabel;
   final bool enabled;
   final VoidCallback? onTap;
+  final bool soloEstado;
+
+  IconData get _trailingIcon {
+    if (soloEstado) return Icons.verified_outlined;
+    if (enabled) return Icons.chevron_right_rounded;
+    return Icons.lock_outline;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -113,11 +122,13 @@ class AppServiceCard extends StatelessWidget {
                   ),
                 ),
                 Icon(
-                  enabled ? Icons.chevron_right_rounded : Icons.lock_outline,
-                  color: enabled
-                      ? RaiDsColors.textSecondary(context)
-                          .withValues(alpha: 0.75)
-                      : RaiDsColors.textSecondary(context),
+                  _trailingIcon,
+                  color: soloEstado
+                      ? accent.withValues(alpha: 0.85)
+                      : enabled
+                          ? RaiDsColors.textSecondary(context)
+                              .withValues(alpha: 0.75)
+                          : RaiDsColors.textSecondary(context),
                 ),
               ],
             ),

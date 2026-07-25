@@ -246,6 +246,17 @@ class _MisRutasCorporativasPageState extends State<MisRutasCorporativasPage>
                               .isNotEmpty,
                     ) ||
                         viajesOp.isNotEmpty;
+                    final fijasEnVentanaApertura = fijasActivas.any((a) {
+                      return CorporativoTaxistaService
+                          .ventanaRutaFijaAbiertaParaChofer(
+                        horaRaw: (a['hora'] ?? '').toString(),
+                        recogidaPerdida:
+                            a['recogidaPerdidaHoy'] == true ||
+                                (a['estadoOperacion'] ?? '').toString() ==
+                                    'recogida_perdida',
+                        completadoHoy: a['completadoHoy'] == true,
+                      );
+                    });
 
                     final horaPorRuta =
                         CorporativoTaxistaService.horaFijaPorRuta(fijasActivas);
@@ -358,6 +369,7 @@ class _MisRutasCorporativasPageState extends State<MisRutasCorporativasPage>
                             hoyPool.isEmpty &&
                             hoyEspera.isEmpty &&
                             !fijasConViajeHoy &&
+                            !fijasEnVentanaApertura &&
                             fijasRecogidaPerdida.isEmpty) ...[
                           const SizedBox(height: 12),
                           Container(
@@ -371,12 +383,11 @@ class _MisRutasCorporativasPageState extends State<MisRutasCorporativasPage>
                               ),
                             ),
                             child: Text(
-                              'Tu empresa te tiene amarrado, pero el viaje de hoy '
-                              'aún no aparece.\n\n'
-                              'Pedile al encargado que guarde la ruta con la hora '
-                              'correcta (se publica sola) o que toque «Enviar ahora».\n\n'
-                              'Cuando esté listo verás «Hoy · viaje(s) publicados» '
-                              'con el botón Abrir ruta.',
+                              'Tu empresa te tiene amarrado. Cuando falten ~90 min '
+                              'para la recogida, tocá la tarjeta de tu ruta o '
+                              '«Abrir ruta» (RAI publica el viaje al instante).\n\n'
+                              'Si no abre, pedile al encargado que guarde la ruta '
+                              'con la hora correcta o que toque «Enviar ahora».',
                               style: TextStyle(
                                 color: cs.onSurfaceVariant,
                                 fontSize: 12,
@@ -569,6 +580,7 @@ class _AsignacionFijaCard extends StatefulWidget {
 
 class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
   bool _confirmando = false;
+  bool _abriendoRuta = false;
 
   String get _empresaId =>
       (widget.data['empresaId'] ?? '').toString().trim();
@@ -603,6 +615,75 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
     }
   }
 
+  Future<void> _abrirRutaFija({
+    required BuildContext context,
+    required String uid,
+    required String horaRaw,
+    required String viajeIdInicial,
+    required bool listo,
+    required bool enCurso,
+    required bool enVentana,
+  }) async {
+    if (_abriendoRuta) return;
+    if (_empresaId.isEmpty || _plantillaId.isEmpty) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ruta sin datos completos. Deslizá para actualizar.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _abriendoRuta = true);
+    try {
+      String viajeId = viajeIdInicial.trim();
+      try {
+        final asegurado =
+            await CorporativoTaxistaService.asegurarViajeRutaFijaParaChofer(
+          uidTaxista: uid,
+          empresaId: _empresaId,
+          plantillaId: _plantillaId,
+        );
+        if ((asegurado ?? '').isNotEmpty) viajeId = asegurado!.trim();
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'No se pudo preparar la ruta: $e\n'
+              'Reintentá en unos segundos.',
+            ),
+            backgroundColor: Colors.red.shade800,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+        return;
+      }
+
+      if (viajeId.isEmpty) {
+        viajeId = (await CorporativoTaxistaService.resolverViajeHoyPorPlantilla(
+              empresaId: _empresaId,
+              plantillaId: _plantillaId,
+            )) ??
+            '';
+      }
+
+      if (!context.mounted) return;
+      await NavigationService.abrirViajeCorporativoTaxista(
+        uidTaxista: uid,
+        viajeId: viajeId.isEmpty ? null : viajeId,
+        empresaId: _empresaId,
+        plantillaId: _plantillaId,
+        snackContext: context,
+        quedarseEnPantalla: true,
+        listoSegunOperacion: listo || enCurso || enVentana,
+        forzarApertura: true,
+      );
+    } finally {
+      if (mounted) setState(() => _abriendoRuta = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -632,17 +713,37 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
     );
     final enCurso = estadoOp == 'en_curso';
     final cancelado = estadoOp == 'cancelado';
-    final puedeAbrir = !recogidaPerdida &&
+    final enVentana = CorporativoTaxistaService.ventanaRutaFijaAbiertaParaChofer(
+      horaRaw: horaRaw,
+      completadoHoy: completadoHoy,
+      recogidaPerdida: recogidaPerdida,
+    );
+    final puedeAbrirDirecto = !recogidaPerdida &&
         !completadoHoy &&
         viajeId.isNotEmpty &&
         !cancelado &&
         (listo || enCurso);
+    final puedeAbrirEnVentana = !recogidaPerdida &&
+        !completadoHoy &&
+        !cancelado &&
+        enVentana;
+    final puedeTocarAbrir = puedeAbrirDirecto || puedeAbrirEnVentana;
+
+    Future<void> onAbrirRuta() => _abrirRutaFija(
+          context: context,
+          uid: uid,
+          horaRaw: horaRaw,
+          viajeIdInicial: viajeId,
+          listo: listo,
+          enCurso: enCurso,
+          enVentana: enVentana,
+        );
 
     Widget cardBody({
       required bool confirmado,
       required bool requiereConfirmacion,
     }) {
-      return Card(
+      final card = Card(
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
@@ -672,7 +773,7 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
                     const SizedBox(width: 8),
                     CorporativoRecogidaCountdown(
                       horaHHmm: horaRaw,
-                      permitirAhora: !recogidaPerdida && (listo || viajeId.isNotEmpty),
+                      permitirAhora: !recogidaPerdida && (listo || viajeId.isNotEmpty || enVentana),
                     ),
                   ],
                 ],
@@ -694,9 +795,9 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
               if (estadoOp.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Text(
-                  _etiquetaEstadoOperacion(estadoOp, listo),
+                  _etiquetaEstadoOperacion(estadoOp, listo || enVentana),
                   style: TextStyle(
-                    color: listo ? cs.primary : cs.onSurfaceVariant,
+                    color: (listo || enVentana) ? cs.primary : cs.onSurfaceVariant,
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                   ),
@@ -715,7 +816,7 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
               ] else if (requiereConfirmacion) ...[
                 const SizedBox(height: 6),
                 Text(
-                  'Confirmá que harás esta ruta para que RAI no la reasigne.',
+                  'Podés abrir la ruta directo; confirmar ayuda a que RAI no la reasigne.',
                   style: TextStyle(
                     color: Colors.orange.shade800,
                     fontSize: 12,
@@ -726,7 +827,9 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
               if (mensaje.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
-                  mensaje,
+                  enVentana && !viajePublicado
+                      ? 'Tocá la tarjeta para abrir la ruta · recogida $hora.'
+                      : mensaje,
                   style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
                 ),
               ],
@@ -749,31 +852,48 @@ class _AsignacionFijaCardState extends State<_AsignacionFijaCard> {
                   ),
                 ),
               ],
-              if (puedeAbrir) ...[
+              if (puedeTocarAbrir) ...[
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: () async {
-                      await NavigationService.abrirViajeCorporativoTaxista(
-                        uidTaxista: uid,
-                        viajeId: viajeId,
-                        snackContext: context,
-                        quedarseEnPantalla: true,
-                        listoSegunOperacion: listo,
-                      );
-                    },
-                    icon: Icon(
-                      enCurso
-                          ? Icons.navigation_rounded
-                          : Icons.play_arrow_rounded,
+                    onPressed: _abriendoRuta ? null : onAbrirRuta,
+                    icon: _abriendoRuta
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Icon(
+                            enCurso
+                                ? Icons.navigation_rounded
+                                : Icons.play_arrow_rounded,
+                          ),
+                    label: Text(
+                      _abriendoRuta
+                          ? 'Abriendo…'
+                          : enCurso
+                              ? 'Continuar ruta'
+                              : 'Abrir ruta',
                     ),
-                    label: Text(enCurso ? 'Continuar ruta' : 'Abrir ruta'),
                   ),
                 ),
               ],
             ],
           ),
+        ),
+      );
+
+      if (!puedeTocarAbrir) return card;
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _abriendoRuta ? null : onAbrirRuta,
+          borderRadius: BorderRadius.circular(14),
+          child: card,
         ),
       );
     }

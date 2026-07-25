@@ -56,8 +56,21 @@ class FacturaViaje extends StatelessWidget {
     required String viajeId,
     String role = 'cliente',
     bool autoCerrarAlContinuar = false,
-  }) {
-    return Navigator.of(context, rootNavigator: true).push(
+  }) async {
+    if (role == 'cliente') {
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(viajeId.trim())
+            .get();
+        final d = snap.data();
+        if (d != null && CorporativoTaxistaService.debeOcultarEnAppCliente(d)) {
+          return;
+        }
+      } catch (_) {}
+    }
+    if (!context.mounted) return;
+    await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<void>(
         builder: (_) => FacturaViaje(
           viajeId: viajeId,
@@ -131,6 +144,15 @@ class FacturaViaje extends StatelessWidget {
             );
           }
           final data = snap.data!.data() ?? <String, dynamic>{};
+          if (role == 'cliente' &&
+              CorporativoTaxistaService.debeOcultarEnAppCliente(data)) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) {
+                Navigator.of(context, rootNavigator: true).maybePop();
+              }
+            });
+            return const SizedBox.shrink();
+          }
             return _FacturaContent(
               viajeId: viajeId,
               data: data,

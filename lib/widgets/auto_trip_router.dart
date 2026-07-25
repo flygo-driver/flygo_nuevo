@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
@@ -41,6 +42,8 @@ bool _estadoClienteEsActivo(String estado) {
 }
 
 bool _clienteDebeEntrarViajeEnCurso(Map<String, dynamic> v) {
+  if (CorporativoTaxistaService.debeOcultarEnAppCliente(v)) return false;
+
   final String canceladoPor = (v['canceladoPor'] ?? '').toString().trim();
   // Taxista canceló (total o legado republicado a pendiente): no reabrir viaje en curso.
   if (canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado') {

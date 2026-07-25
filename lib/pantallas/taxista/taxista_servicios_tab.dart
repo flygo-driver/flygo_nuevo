@@ -284,11 +284,14 @@ class _CorporativoServiciosSection extends StatelessWidget {
             AppServiceCard(
               icon: PhosphorIconsFill.sealCheck,
               title: 'Pool corporativo activo',
-              subtitle: 'RAI te asignará rutas fijas de empresas.',
+              subtitle:
+                  'Estás habilitado. RAI y la empresa te asignan rutas fijas; '
+                  'abrí «Agenda corporativa» abajo o la pestaña Trabajo.',
               accent: RaiDsColors.blue,
               status: AppServiceStatus.activo,
               statusLabel: 'Activo',
               enabled: false,
+              soloEstado: true,
             ),
           );
           children.add(
@@ -318,9 +321,9 @@ class _CorporativoServiciosSection extends StatelessWidget {
                       icon: PhosphorIconsFill.path,
                       title: 'Agenda corporativa',
                       subtitle: listo
-                          ? 'Ruta lista · abrila desde Mi trabajo'
+                          ? 'Ruta lista · tocá aquí o en Trabajo → Mis rutas'
                           : (n > 0
-                              ? 'Rutas fijas · horarios y estado'
+                              ? 'Rutas fijas · horarios y Abrir ruta'
                               : 'Sin rutas asignadas aún'),
                       accent: RaiDsColors.blue,
                       status: n > 0 ? AppServiceStatus.activo : null,

@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/reportar_viaje.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
@@ -88,6 +89,19 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       return;
     }
     setState(() => _uidCliente = user.uid);
+    if (await CorporativoTaxistaService.debeOcultarEnAppClientePorId(
+      widget.viajeId,
+      semilla: widget.viajeDataSemilla ?? _viajeDatosUi,
+    )) {
+      await ClientePostViajeReopenGuard.markCompleted(
+        viajeId: widget.viajeId,
+        uidCliente: user.uid,
+      );
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).maybePop();
+      }
+      return;
+    }
     unawaited(_bootstrapViajeDoc());
     unawaited(_publicarBanderaCalificacionMutua());
   }

@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_confirmacion.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/pantallas/taxista/corporativo_ruta_detalle_informativo_page.dart';
+import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
@@ -228,6 +229,35 @@ class NavigationService {
       return;
     }
     rootNav.pop();
+  }
+
+  /// Tras cerrar ruta corporativa (factura / cierre): tab Trabajo + Mis rutas.
+  static Future<void> irAMisRutasCorporativasTrasCierre({
+    BuildContext? context,
+  }) async {
+    ShellTabController.taxistaIrATrabajo();
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    ActiveTripService.cancelarBloqueoShellTaxista();
+    NavigatorState? nav = navigatorKey.currentState;
+    if ((nav == null || !nav.mounted) &&
+        context != null &&
+        context.mounted) {
+      nav = Navigator.of(context, rootNavigator: true);
+    }
+    if (nav == null || !nav.mounted) return;
+    await nav.pushAndRemoveUntil<void>(
+      MaterialPageRoute<void>(builder: (_) => const TaxistaShell()),
+      (Route<dynamic> r) => false,
+    );
+    final NavigatorState? nav2 = navigatorKey.currentState;
+    if (nav2 != null && nav2.mounted) {
+      await nav2.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const MisRutasCorporativasPage(),
+        ),
+      );
+    }
+    ActiveTripService.notificarRebuildShell();
   }
 
   /// Home del taxista tras cerrar viaje Bola / factura / modo mapa.
@@ -712,10 +742,13 @@ class NavigationService {
   static Future<void> abrirViajeCorporativoTaxista({
     required String uidTaxista,
     String? viajeId,
+    String? empresaId,
+    String? plantillaId,
     NavigatorState? preNav,
     BuildContext? snackContext,
     bool quedarseEnPantalla = false,
     bool listoSegunOperacion = false,
+    bool forzarApertura = false,
   }) async {
     final uid = uidTaxista.trim();
     if (uid.isEmpty) return;
@@ -723,21 +756,30 @@ class NavigationService {
     final id = await CorporativoTaxistaService.resolverViajeCorporativoParaChofer(
       uidTaxista: uid,
       viajeIdPreferido: viajeId,
+      empresaId: empresaId,
+      plantillaId: plantillaId,
     );
     if (id == null || id.trim().isEmpty) {
       _snackCorporativo(
-        'No hay ruta corporativa asignada para abrir. '
-        'Revisá «Mis rutas corporativas».',
+        'Aún no hay viaje publicado para hoy. '
+        'Tocá Abrir ruta de nuevo en unos segundos o pedile al encargado «Enviar ahora».',
         backgroundColor: Colors.orange.shade800,
         context: snackContext,
       );
       return;
     }
 
+    final String viajeIdResuelto = id.trim();
+    if (forzarApertura) {
+      CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(
+        viajeIdResuelto,
+      );
+    }
+
     try {
       final snap = await FirebaseFirestore.instance
           .collection('viajes')
-          .doc(id.trim())
+          .doc(viajeIdResuelto)
           .get();
       if (!snap.exists) {
         _snackCorporativo(
@@ -789,11 +831,16 @@ class NavigationService {
       }
       if (quedarseEnPantalla &&
           CorporativoTaxistaService.viajeCorporativoEnCursoReal(d)) {
-        CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(id.trim());
-      } else if (CorporativoTaxistaService.rutaCorpInformativaDismissedRecientemente(
-        id.trim(),
-      )) {
-        return;
+        CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(
+          viajeIdResuelto,
+        );
+      } else if (!forzarApertura &&
+          CorporativoTaxistaService.rutaCorpInformativaDismissedRecientemente(
+            viajeIdResuelto,
+          )) {
+        CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(
+          viajeIdResuelto,
+        );
       }
       if (!CorporativoTaxistaService.corporativoListoParaAbrirEnCurso(
         d,
@@ -807,10 +854,10 @@ class NavigationService {
         return;
       }
       if (await CorporativoTaxistaService
-          .taxistaTieneViajeNoCorporativoBloqueante(uid, exceptViajeId: id.trim())) {
+          .taxistaTieneViajeNoCorporativoBloqueante(uid, exceptViajeId: viajeIdResuelto)) {
         await CorporativoTaxistaService.encolarViajeCorporativoInformativo(
           uidTaxista: uid,
-          viajeId: id.trim(),
+          viajeId: viajeIdResuelto,
         );
         _snackCorporativo(
           'Tenés un viaje en curso. La ruta corporativa quedó en cola.',
@@ -835,7 +882,7 @@ class NavigationService {
 
     await push(
       CorporativoRutaDetalleInformativoPage(
-        viajeId: id.trim(),
+        viajeId: viajeIdResuelto,
         uidTaxista: uid,
       ),
     );

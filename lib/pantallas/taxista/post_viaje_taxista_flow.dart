@@ -482,11 +482,14 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
   }
 
   Widget _stepCierre() {
-    final String subtitulo = _salioDeCalificacion
-        ? 'Tu calificación fue registrada. Volviendo al inicio…'
-        : _omitioCalificacionPorThrottle
-            ? 'Listo para seguir recibiendo viajes. Volviendo al inicio…'
-            : 'Volviendo al inicio…';
+    final bool corp = widget.regresarAlPoolNormal;
+    final String subtitulo = corp
+        ? 'Ruta cerrada. Volviendo a Mis rutas corporativas…'
+        : _salioDeCalificacion
+            ? 'Tu calificación fue registrada. Volviendo al inicio…'
+            : _omitioCalificacionPorThrottle
+                ? 'Listo para seguir recibiendo viajes. Volviendo al inicio…'
+                : 'Volviendo al inicio…';
     if (!_regresoColaProgramado) {
       _programarRegresoCola();
     }
@@ -523,10 +526,10 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
           const SizedBox(height: 24),
           FilledButton.icon(
             onPressed: () => unawaited(_finalizarFlujo()),
-            icon: const Icon(Icons.local_taxi_rounded),
-            label: const Text(
-              'Volver a recibir viajes',
-              style: TextStyle(fontWeight: FontWeight.w800),
+            icon: Icon(corp ? Icons.route_rounded : Icons.local_taxi_rounded),
+            label: Text(
+              corp ? 'Volver a Mis rutas' : 'Volver a recibir viajes',
+              style: const TextStyle(fontWeight: FontWeight.w800),
             ),
             style: FilledButton.styleFrom(
               backgroundColor: Colors.greenAccent,

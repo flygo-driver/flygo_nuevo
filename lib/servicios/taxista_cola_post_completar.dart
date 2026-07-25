@@ -90,7 +90,7 @@ class TaxistaColaPostCompletar {
 
     final buf = StringBuffer(
       regresarAlPoolNormal
-          ? '🏁 Ruta corporativa completada. Estás en el pool de viajes.'
+          ? '🏁 Ruta corporativa completada. Volviendo a Mis rutas…'
           : '🏁 Viaje marcado como completado. Estás disponible en el mapa.',
     );
     if (outcome.code == 'bloqueado_operativo') {
@@ -126,11 +126,19 @@ class TaxistaColaPostCompletar {
     unawaited(NotificationService.I.stopTimbre());
     PoolTimbreReentradaGuard.marcarTrasFinalizarViaje();
     if (regresarAlPoolNormal) {
-      ShellTabController.taxistaIrARecibir();
+      ShellTabController.taxistaIrATrabajo();
       ActiveTripService.cancelarBloqueoShellTaxista();
       unawaited(
         CorporativoTaxistaService.refrescarOperacionChofer(uidTaxista),
       );
+      if (context != null && context.mounted) {
+        await NavigationService.irAMisRutasCorporativasTrasCierre(
+          context: context,
+        );
+      } else {
+        await NavigationService.irAMisRutasCorporativasTrasCierre();
+      }
+      return;
     }
     if (context != null && context.mounted) {
       await NavigationService.irAlInicioTaxista(context: context);

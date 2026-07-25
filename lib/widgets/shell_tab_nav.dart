@@ -42,6 +42,9 @@ class ShellTabController {
   static void taxistaIrAServicios() =>
       taxistaIndex.value = taxistaTabServicios;
 
+  static void taxistaIrATrabajo() =>
+      taxistaIndex.value = taxistaTabTrabajo;
+
   static void clienteIrAInicio() => clienteIndex.value = 0;
 }
 

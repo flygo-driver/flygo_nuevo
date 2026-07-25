@@ -100,7 +100,11 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
   }
 
   InputDecoration _fieldDecoration(
-      BuildContext context, String label, String hint) {
+    BuildContext context,
+    String label, {
+    String? hint,
+    String? helper,
+  }) {
     final cs = Theme.of(context).colorScheme;
     final border = OutlineInputBorder(
       borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.65)),
@@ -108,6 +112,9 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
     return InputDecoration(
       labelText: label,
       hintText: hint,
+      helperText: helper,
+      helperMaxLines: 3,
+      alignLabelWithHint: true,
       labelStyle: TextStyle(color: cs.onSurfaceVariant),
       hintStyle: TextStyle(color: cs.onSurfaceVariant.withValues(alpha: 0.85)),
       enabledBorder: border,
@@ -120,6 +127,15 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
       focusedErrorBorder: OutlineInputBorder(
         borderSide: BorderSide(color: cs.error, width: 2),
       ),
+    );
+  }
+
+  Widget _dropdownItemText(String text, TextStyle style) {
+    return Text(
+      text,
+      style: style,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 
@@ -158,7 +174,7 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
                 decoration: _fieldDecoration(
                   context,
                   'Banco',
-                  'Ej: Banco Popular',
+                  hint: 'Ej: Banco Popular',
                 ),
                 validator: (v) =>
                     v == null || v.isEmpty ? 'Campo requerido' : null,
@@ -171,7 +187,7 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
                 decoration: _fieldDecoration(
                   context,
                   'Número de cuenta',
-                  'Ej: 123456789',
+                  hint: 'Ej: 123456789',
                 ),
                 validator: (v) =>
                     v == null || v.isEmpty ? 'Campo requerido' : null,
@@ -184,7 +200,7 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
                 decoration: _fieldDecoration(
                   context,
                   'Nombre del titular',
-                  'Ej: Juan Pérez',
+                  hint: 'Ej: Juan Pérez',
                 ),
                 validator: (v) =>
                     v == null || v.trim().isEmpty ? 'Campo requerido' : null,
@@ -198,24 +214,31 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
                 decoration: _fieldDecoration(
                   context,
                   'Cédula (C.I.)',
-                  'Opcional; aparece en comprobantes de viaje',
+                  hint: 'Opcional',
+                  helper: 'Aparece en comprobantes de viaje si la indicas.',
                 ),
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 // ignore: deprecated_member_use
                 value: _tipoCuenta,
+                isExpanded: true,
                 style: textStyle,
                 decoration: _fieldDecoration(
                   context,
                   'Tipo de cuenta',
-                  'Selecciona Ahorros, Corriente o Cheques',
                 ),
+                hint: _dropdownItemText('Elige tipo', textStyle),
                 items: _tiposCuentaPermitidos
-                    .map((t) => DropdownMenuItem<String>(
-                          value: t,
-                          child: Text(t, style: textStyle),
-                        ))
+                    .map(
+                      (t) => DropdownMenuItem<String>(
+                        value: t,
+                        child: _dropdownItemText(t, textStyle),
+                      ),
+                    )
+                    .toList(),
+                selectedItemBuilder: (context) => _tiposCuentaPermitidos
+                    .map((t) => _dropdownItemText(t, textStyle))
                     .toList(),
                 onChanged: (v) => setState(() => _tipoCuenta = v),
                 validator: (v) => (v == null || v.isEmpty)

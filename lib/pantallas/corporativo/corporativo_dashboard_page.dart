@@ -10,6 +10,7 @@ import 'package:flygo_nuevo/utils/corporativo_ciclo_facturacion.dart';
 import 'package:flygo_nuevo/utils/feriados_republica_dominicana.dart';
 import 'package:flygo_nuevo/widgets/corporativo_proximo_pago_anillo.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_chat_encargado_page.dart';
+import 'package:flygo_nuevo/pantallas/corporativo/corporativo_plantilla_editor_page.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_gestion_ruta_page.dart';
 import 'package:flygo_nuevo/servicios/corporativo_chofer_perfil_service.dart';
 import 'package:flygo_nuevo/widgets/corporativo_abordaje_encargado_card.dart';
@@ -235,6 +236,25 @@ class CorporativoDashboardPage extends StatelessWidget {
                                       context,
                                       MaterialPageRoute<void>(
                                         builder: (_) =>
+                                            CorporativoPlantillaEditorPage(
+                                          empresaId: empresaId,
+                                          empresaNombre: empresa.nombre,
+                                          empresa: empresa,
+                                          plantilla: pl,
+                                          numeroRuta: numeroRuta,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.edit_road, size: 18),
+                                  label: const Text('Editar ruta'),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute<void>(
+                                        builder: (_) =>
                                             CorporativoGestionRutaPage(
                                           empresaId: empresaId,
                                           empresaNombre: empresa.nombre,
@@ -244,8 +264,8 @@ class CorporativoDashboardPage extends StatelessWidget {
                                       ),
                                     );
                                   },
-                                  icon: const Icon(Icons.edit_road, size: 18),
-                                  label: const Text('Editar ruta'),
+                                  icon: const Icon(Icons.tune_rounded, size: 18),
+                                  label: const Text('Gestionar'),
                                 ),
                               ],
                             ),
