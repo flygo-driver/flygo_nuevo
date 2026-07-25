@@ -99,6 +99,7 @@ async function transaccionAsignarTurismoAutomatico(args: {
   minimoPrepagoRd: number;
   /** Misma regla que claim pool / aceptarViajeSeguro. */
   globalComisionPct: number;
+  permitirViajeConPrepagoParcial?: boolean;
 }): Promise<boolean> {
   const vRef = db().collection("viajes").doc(args.viajeId);
   const cRef = db().collection("choferes_turismo").doc(args.uidChofer);
@@ -143,7 +144,13 @@ async function transaccionAsignarTurismoAutomatico(args: {
 
       const bSnap = await tx.get(db().collection("billeteras_taxista").doc(args.uidChofer));
       const billeData = bSnap.data() as AnyMap | undefined;
-      if (!taxistaSinBloqueoPrepagoOperativo(uData, billeData, args.minimoPrepagoRd)) {
+      const partial = args.permitirViajeConPrepagoParcial === true;
+      if (!taxistaSinBloqueoPrepagoOperativo(
+        uData,
+        billeData,
+        args.minimoPrepagoRd,
+        partial,
+      )) {
         return;
       }
       // Paridad claim: no asignar si el prepago libre no cubre la comisión de ESTE viaje.
@@ -152,6 +159,7 @@ async function transaccionAsignarTurismoAutomatico(args: {
           billeData,
           viajeData: d,
           globalComisionPct: args.globalComisionPct,
+          permitirViajeConPrepagoParcial: partial,
         })
       ) {
         return;

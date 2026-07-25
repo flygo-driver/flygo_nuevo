@@ -11,6 +11,8 @@ class ComisionPrepagoConfigService {
 
   static double minimoOperativoRd = _defaultMinimoOperativoRd;
   static double umbralPreventivoRd = _defaultUmbralPreventivoRd;
+  /// Permite aceptar viaje aunque el prepago no cubra toda la comisión (deuda al finalizar).
+  static bool permitirViajeConPrepagoParcial = true;
 
   static StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
   static bool _started = false;
@@ -42,6 +44,8 @@ class ComisionPrepagoConfigService {
     if (umbral is num && umbral.isFinite && umbral > 0) {
       umbralPreventivoRd = umbral.toDouble();
     }
+    permitirViajeConPrepagoParcial =
+        data['permitirViajeConPrepagoParcial'] != false;
   }
 
   static void disposeService() {

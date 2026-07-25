@@ -215,6 +215,7 @@ async function tryPromoteOne(
   slot: number,
   minimoOperativoRd: number,
   globalComisionPct: number,
+  permitirViajeConPrepagoParcial: boolean,
 ): Promise<string | null | typeof TX_BLOCKED> {
   const uRef = usuarios().doc(uidTaxista);
   const vRef = viajes().doc(viajeId);
@@ -224,7 +225,12 @@ async function tryPromoteOne(
     const uSnap = await tx.get(uRef);
     const bSnap = await tx.get(billeteras().doc(uidTaxista));
     const uData = (uSnap.data() ?? {}) as AnyMap;
-    if (!taxistaSinBloqueoPrepagoOperativo(uData, bSnap.data() as AnyMap | undefined, minimoOperativoRd)) {
+    if (!taxistaSinBloqueoPrepagoOperativo(
+      uData,
+      bSnap.data() as AnyMap | undefined,
+      minimoOperativoRd,
+      permitirViajeConPrepagoParcial,
+    )) {
       return TX_BLOCKED;
     }
 
@@ -243,6 +249,7 @@ async function tryPromoteOne(
       billeData: bSnap.data() as AnyMap | undefined,
       viajeData: v,
       globalComisionPct,
+      permitirViajeConPrepagoParcial,
     })) {
       return TX_BLOCKED;
     }
@@ -315,6 +322,7 @@ export type PromoverSiguienteViajeResult = {
 export async function ejecutarPromoverSiguienteViaje(uidTaxista: string): Promise<PromoverSiguienteViajeResult> {
   const prepagoCfg = await getComisionPrepagoConfig();
   const minimoOperativoRd = prepagoCfg.minimoOperativoRd;
+  const permitirViajeConPrepagoParcial = prepagoCfg.permitirViajeConPrepagoParcial;
   const globalComisionPct = await getComisionViajePorcentajeCached();
 
   const uRef = usuarios().doc(uidTaxista);
@@ -322,7 +330,12 @@ export async function ejecutarPromoverSiguienteViaje(uidTaxista: string): Promis
   const uData = (uSnap.data() ?? {}) as AnyMap;
   const bSnap = await billeteras().doc(uidTaxista).get();
 
-  if (!taxistaSinBloqueoPrepagoOperativo(uData, bSnap.data() as AnyMap | undefined, minimoOperativoRd)) {
+  if (!taxistaSinBloqueoPrepagoOperativo(
+    uData,
+    bSnap.data() as AnyMap | undefined,
+    minimoOperativoRd,
+    permitirViajeConPrepagoParcial,
+  )) {
     return {
       ok: false,
       promotedViajeId: null,
@@ -349,7 +362,14 @@ export async function ejecutarPromoverSiguienteViaje(uidTaxista: string): Promis
   keys.sort(sortColaCandidates);
 
   for (const k of keys) {
-    const promoted = await tryPromoteOne(uidTaxista, k.id, k.slot, minimoOperativoRd, globalComisionPct);
+    const promoted = await tryPromoteOne(
+      uidTaxista,
+      k.id,
+      k.slot,
+      minimoOperativoRd,
+      globalComisionPct,
+      permitirViajeConPrepagoParcial,
+    );
     if (promoted === TX_BLOCKED) {
       return {
         ok: false,

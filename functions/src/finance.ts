@@ -54,6 +54,7 @@ let _cfgCache: {
   loadedAt: number;
   minimoOperativoRd: number;
   umbralPreventivoRd: number;
+  permitirViajeConPrepagoParcial: boolean;
 } | null = null;
 
 /** Tras cambio admin en config/comision_prepago (config_admin.ts). */
@@ -236,12 +237,17 @@ async function assertLegacyPagosTaxistasFlowsDisabled(): Promise<void> {
   }
 }
 
-export async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: number; umbralPreventivoRd: number }> {
+export async function getComisionPrepagoConfig(): Promise<{
+  minimoOperativoRd: number;
+  umbralPreventivoRd: number;
+  permitirViajeConPrepagoParcial: boolean;
+}> {
   const now = Date.now();
   if (_cfgCache && now - _cfgCache.loadedAt < COMISION_PREPAGO_CONFIG_TTL_MS) {
     return {
       minimoOperativoRd: _cfgCache.minimoOperativoRd,
       umbralPreventivoRd: _cfgCache.umbralPreventivoRd,
+      permitirViajeConPrepagoParcial: _cfgCache.permitirViajeConPrepagoParcial,
     };
   }
   try {
@@ -249,34 +255,43 @@ export async function getComisionPrepagoConfig(): Promise<{ minimoOperativoRd: n
     const data = (snap.data() ?? {}) as AnyMap;
     const minimoOperativoRd = numOr(data.minimoOperativoRd, MIN_SALDO_PREPAGO_COMISION_RD);
     const umbralPreventivoRd = numOr(data.umbralPreventivoRd, UMBRAL_AVISO_PREVENTIVO_PREPAGO_RD);
+    const permitirViajeConPrepagoParcial = data.permitirViajeConPrepagoParcial !== false;
     _cfgCache = {
       loadedAt: now,
       minimoOperativoRd,
       umbralPreventivoRd,
+      permitirViajeConPrepagoParcial,
     };
-    return { minimoOperativoRd, umbralPreventivoRd };
+    return { minimoOperativoRd, umbralPreventivoRd, permitirViajeConPrepagoParcial };
   } catch (e) {
     console.error("[getComisionPrepagoConfig]", e);
     return {
       minimoOperativoRd: MIN_SALDO_PREPAGO_COMISION_RD,
       umbralPreventivoRd: UMBRAL_AVISO_PREVENTIVO_PREPAGO_RD,
+      permitirViajeConPrepagoParcial: true,
     };
   }
 }
 
 /**
- * Pool / aceptar viaje: bloqueo estricto (modelo empresarial).
- * - Cualquier `comisionPendiente` > 0 → bloqueo inmediato (sin zona gris 0–500).
- * - Tras el 1.er viaje gratis: saldo prepago disponible < mínimo operativo → bloqueo.
+ * Pool / aceptar viaje: bloqueo operativo prepago.
+ * - Cualquier `comisionPendiente` > 0 → bloqueo inmediato.
+ * - Modo estricto: saldo < mínimo operativo (RD$200) → bloqueo.
+ * - Modo parcial (`permitirViajeConPrepagoParcial`): solo bloquea si saldo disponible = 0.
  */
 function bloqueoOperativoPrepago(
   data: AnyMap | undefined,
   minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
+  permitirViajeConPrepagoParcial: boolean = false,
 ): boolean {
   const pend = comisionPendienteRdFromBilletera(data);
   if (pend > 1e-6) return true;
   if (data?.primerViajeComisionGratisConsumido !== true) return false;
-  return saldoDisponiblePrepagoRdFromBilletera(data) + 1e-9 < minimoOperativoRd;
+  const disp = saldoDisponiblePrepagoRdFromBilletera(data);
+  if (permitirViajeConPrepagoParcial) {
+    return disp <= 1e-9;
+  }
+  return disp + 1e-9 < minimoOperativoRd;
 }
 
 function comisionPendienteDesdeSnap(snap: DocumentSnapshot | undefined): number {
@@ -488,6 +503,7 @@ async function syncTienePagoPendiente(uidTaxista: string): Promise<boolean> {
   const bloqueoComision = bloqueoOperativoPrepago(
     billeSnap.data() as AnyMap | undefined,
     prepagoCfg.minimoOperativoRd,
+    prepagoCfg.permitirViajeConPrepagoParcial,
   );
   // Deuda de pool pendiente de validación admin (acumulada por taxista).
   let deudaPoolPendienteRd = 0;
@@ -1841,13 +1857,18 @@ export const aceptarViajeSeguro = onCall(async (request) => {
       throw new HttpsError("failed-precondition", "bloqueado-pago-semanal");
     }
     const billeSnap = await tx.get(db().collection("billeteras_taxista").doc(uidActor));
-    if (bloqueoOperativoPrepago(billeSnap.data() as AnyMap | undefined, prepagoCfg.minimoOperativoRd)) {
+    if (bloqueoOperativoPrepago(
+      billeSnap.data() as AnyMap | undefined,
+      prepagoCfg.minimoOperativoRd,
+      prepagoCfg.permitirViajeConPrepagoParcial,
+    )) {
       throw new HttpsError("failed-precondition", "bloqueado-comision-efectivo");
     }
     if (prepagoInsuficienteParaViajeEfectivo({
       billeData: billeSnap.data() as AnyMap | undefined,
       viajeData: d,
       globalComisionPct: comisionPctGlobal,
+      permitirViajeConPrepagoParcial: prepagoCfg.permitirViajeConPrepagoParcial,
     })) {
       throw new HttpsError("failed-precondition", PREPAGO_INSUFICIENTE_COMISION_VIAJE);
     }
@@ -2040,25 +2061,46 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
     const viajeActivoId = String(uData.viajeActivoId ?? "").trim();
     const esViajeActivoDelUsuario = viajeActivoId === viajeId;
 
-    // Autoriza: admin, chofer del doc, o taxista con este viajeActivoId
-    // (cubre docs con uidTaxista vacío/desfasado).
+    const choferTurismoRef = db().collection("choferes_turismo").doc(uidActor);
+    const choferTurismoSnap = await tx.get(choferTurismoRef);
+    const choferTurismoData = (choferTurismoSnap.data() ?? {}) as AnyMap;
+    const esChoferTurismoEnViaje =
+      choferTurismoSnap.exists &&
+      String(choferTurismoData.viajeActualId ?? "").trim() === viajeId;
+
+    // Autoriza: admin, chofer del doc, viajeActivoId del usuario o chofer turismo activo.
+    // Sin exigir rol taxista (choferes turismo pueden no tener rol en usuarios/).
     const autorizado =
       role === "admin" ||
       esChoferDelViaje ||
-      ((role === "taxista" || role === "driver") && esViajeActivoDelUsuario);
+      esViajeActivoDelUsuario ||
+      esChoferTurismoEnViaje;
 
     if (!autorizado) {
       throw new HttpsError(
         "permission-denied",
-        esChoferDelViaje
-          ? "No autorizado para este viaje"
-          : "No autorizado para cancelar este viaje (no eres el conductor asignado).",
+        "No autorizado para cancelar este viaje (no eres el conductor asignado).",
       );
     }
 
     const estadoNorm = normalizeEstadoViajeDoc(d.estado);
+    if (estadoNorm === "completado" || estadoNorm === "cancelado") {
+      throw new HttpsError("failed-precondition", "El viaje ya está cerrado");
+    }
+    if (estadoNorm === "a_bordo" || estadoNorm === "en_curso") {
+      throw new HttpsError(
+        "failed-precondition",
+        "No se puede cancelar después de abordar o con el viaje en curso",
+      );
+    }
     const cancelable =
-      estadoNorm === "aceptado" || estadoNorm === "en_camino_pickup";
+      estadoNorm === "pendiente" ||
+      estadoNorm === "pendiente_pago" ||
+      estadoNorm === "pendiente_admin" ||
+      estadoNorm === "buscando" ||
+      estadoNorm === "disponible" ||
+      estadoNorm === "aceptado" ||
+      estadoNorm === "en_camino_pickup";
     if (!cancelable) {
       throw new HttpsError("failed-precondition", "No se puede cancelar en este estado");
     }

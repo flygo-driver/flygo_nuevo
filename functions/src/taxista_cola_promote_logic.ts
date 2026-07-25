@@ -51,20 +51,28 @@ export function saldoDisponiblePrepagoRdFromBilletera(data: AnyMap | undefined):
 export function bloqueoOperativoPorComisionEfectivo(
   billeData: AnyMap | undefined,
   minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
+  permitirViajeConPrepagoParcial: boolean = false,
 ): boolean {
   const pend = comisionPendienteRdFromBilletera(billeData);
   if (pend > 1e-6) return true;
   if (billeData?.primerViajeComisionGratisConsumido !== true) return false;
-  return saldoDisponiblePrepagoRdFromBilletera(billeData) + 1e-9 < minimoOperativoRd;
+  const disp = saldoDisponiblePrepagoRdFromBilletera(billeData);
+  if (permitirViajeConPrepagoParcial) {
+    return disp <= 1e-9;
+  }
+  return disp + 1e-9 < minimoOperativoRd;
 }
 
 export function taxistaSinBloqueoPrepagoOperativo(
   uData: AnyMap | undefined,
   billeData: AnyMap | undefined,
   minimoOperativoRd: number = MIN_SALDO_PREPAGO_COMISION_RD,
+  permitirViajeConPrepagoParcial: boolean = false,
 ): boolean {
   if (uData?.tienePagoPendiente === true) return false;
-  if (bloqueoOperativoPorComisionEfectivo(billeData, minimoOperativoRd)) return false;
+  if (bloqueoOperativoPorComisionEfectivo(billeData, minimoOperativoRd, permitirViajeConPrepagoParcial)) {
+    return false;
+  }
   return true;
 }
 

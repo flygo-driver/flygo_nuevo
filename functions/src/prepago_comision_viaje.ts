@@ -107,7 +107,10 @@ export function prepagoInsuficienteParaViajeEfectivo(args: {
   billeData: AnyMap | undefined;
   viajeData: AnyMap;
   globalComisionPct: number;
+  /** Si true: permite aceptar aunque el prepago no cubra toda la comisión (deuda al finalizar). */
+  permitirViajeConPrepagoParcial?: boolean;
 }): boolean {
+  if (args.permitirViajeConPrepagoParcial === true) return false;
   if (!viajeAplicaComisionPrepago(args.viajeData)) return false;
 
   const bData = args.billeData ?? {};

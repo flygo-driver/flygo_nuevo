@@ -49,6 +49,24 @@ test("prepago insuficiente: comisión mayor que saldo", () => {
   );
 });
 
+test("prepago parcial permitido: no bloquea aunque comisión > saldo", () => {
+  const viaje = { metodoPago: "Efectivo", precio: 2000 };
+  const bille = {
+    primerViajeComisionGratisConsumido: true,
+    saldoPrepagoComisionRd: 200,
+    comisionPendiente: 0,
+  };
+  assert.equal(
+    prepagoInsuficienteParaViajeEfectivo({
+      billeData: bille,
+      viajeData: viaje,
+      globalComisionPct: 18,
+      permitirViajeConPrepagoParcial: true,
+    }),
+    false,
+  );
+});
+
 test("primer viaje gratis: no exige prepago por comisión", () => {
   const viaje = { metodoPago: "Efectivo", precio: 2000 };
   const bille = { saldoPrepagoComisionRd: 0, comisionPendiente: 0 };

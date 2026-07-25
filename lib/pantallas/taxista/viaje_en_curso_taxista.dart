@@ -4686,16 +4686,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     final messenger = ScaffoldMessenger.of(context);
 
     final String estado = EstadosViaje.normalizar(v.estado);
-    final bool cancelable = estado == EstadosViaje.aceptado ||
-        estado == EstadosViaje.enCaminoPickup;
-    if (!cancelable) {
+    if (!EstadosViaje.taxistaPuedeCancelarViajeDesdeApp(estado)) {
       _actionBusy = false;
       if (mounted) {
         messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Solo puedes cancelar antes de que el cliente esté a bordo.',
-            ),
+          SnackBar(
+            content: Text(EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp),
           ),
         );
       }

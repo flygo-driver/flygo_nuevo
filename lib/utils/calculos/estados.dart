@@ -223,6 +223,11 @@ class EstadosViaje {
     return !esEstadoSinCancelacionApp(n);
   }
 
+  /// Taxista/chofer turismo: misma regla que el cliente (solo antes de abordar).
+  static bool taxistaPuedeCancelarViajeDesdeApp(String estadoRaw) {
+    return clientePuedeCancelarViajeDesdeApp(estadoRaw);
+  }
+
   static const String mensajeNoCancelarViajeTrasAbordarApp =
       'Una vez el cliente está a bordo o el viaje está en curso, no se puede cancelar desde la app. '
       'Si hay una emergencia o un incidente grave, contacta a soporte de la plataforma.';

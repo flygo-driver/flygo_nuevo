@@ -255,17 +255,23 @@ class PagosTaxistaRepo {
     return true;
   }
 
-  /// Misma regla que `bloqueoOperativoPrepago` en Cloud Functions (bloqueo estricto).
+  /// Misma regla que `bloqueoOperativoPrepago` en Cloud Functions.
   static bool bloqueoOperativoPorComisionEfectivo(
     Map<String, dynamic>? billeData, {
     double? minimoOperativoRd,
+    bool? permitirViajeConPrepagoParcial,
   }) {
     final pend = comisionPendienteDesdeBilletera(billeData);
     if (pend > 1e-6) return true;
     if (!primerViajeComisionGratisConsumido(billeData)) return false;
+    final disp = saldoDisponiblePrepagoComisionDesdeBilletera(billeData);
+    final partial = permitirViajeConPrepagoParcial ??
+        ComisionPrepagoConfigService.permitirViajeConPrepagoParcial;
+    if (partial) {
+      return disp <= 1e-9;
+    }
     final minimo = minimoOperativoRd ?? minSaldoPrepagoComisionRd;
-    return saldoDisponiblePrepagoComisionDesdeBilletera(billeData) + 1e-9 <
-        minimo;
+    return disp + 1e-9 < minimo;
   }
 
   /// Viajes RAI estándar (efectivo/transferencia/tarjeta) descuentan comisión del prepago.
@@ -391,6 +397,9 @@ class PagosTaxistaRepo {
     required Map<String, dynamic> viajeData,
     double? pctComision,
   }) {
+    if (ComisionPrepagoConfigService.permitirViajeConPrepagoParcial) {
+      return null;
+    }
     if (!viajeAplicaComisionPrepago(viajeData)) return null;
     final double pend = comisionPendienteDesdeBilletera(billeData);
     if (!primerViajeComisionGratisConsumido(billeData) && pend <= 1e-6) {
