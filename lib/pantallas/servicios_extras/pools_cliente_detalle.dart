@@ -12,6 +12,7 @@ import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
+import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/widgets/pool_gira_contenido_panel.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
 import 'package:flygo_nuevo/widgets/pool_reserva_bauche_uploader.dart';
@@ -62,37 +63,22 @@ class _PoolsClienteDetalleState extends State<PoolsClienteDetalle>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
-  String _cleanPhone(String raw) {
-    final v = raw.replaceAll(RegExp(r'[^0-9]'), '');
-    if (v.startsWith('1') && v.length == 11) return v;
-    if (v.length == 10) return '1$v';
-    return v;
-  }
-
   Future<void> _openCall(String phone) async {
-    final p = _cleanPhone(phone);
-    if (p.isEmpty) {
+    if (!telefonoContactoValidoRd(phone)) {
       _snack('Telefono no disponible.');
       return;
     }
-    final uri = Uri.parse('tel:+$p');
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    final ok = await telefonoAbrirLlamada(phone);
     if (!ok) _snack('No se pudo abrir llamada.');
   }
 
   Future<void> _openWhatsApp(String phone, String message) async {
-    final p = _cleanPhone(phone);
-    if (p.isEmpty) {
+    if (!telefonoContactoValidoRd(phone)) {
       _snack('WhatsApp no disponible.');
       return;
     }
-    final msg = Uri.encodeComponent(message);
-    final waApp = Uri.parse('whatsapp://send?phone=%2B$p&text=$msg');
-    final waWeb = Uri.parse('https://wa.me/$p?text=$msg');
-    final ok1 = await launchUrl(waApp, mode: LaunchMode.externalApplication);
-    if (ok1) return;
-    final ok2 = await launchUrl(waWeb, mode: LaunchMode.externalApplication);
-    if (!ok2) _snack('No se pudo abrir WhatsApp.');
+    final ok = await telefonoAbrirWhatsApp(phone, mensaje: message);
+    if (!ok) _snack('No se pudo abrir WhatsApp.');
   }
 
   DateTime _dateFromAny(dynamic raw) {
@@ -398,6 +384,12 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
           final bannerVideoUrl = (d['bannerVideoUrl'] ?? '').toString().trim();
           final choferTelefono = (d['choferTelefono'] ?? '').toString().trim();
           final choferWhatsApp = (d['choferWhatsApp'] ?? '').toString().trim();
+          final choferWaContacto =
+              telefonoChoferGiraWhatsApp(choferTelefono, choferWhatsApp);
+          final choferTelContacto =
+              telefonoChoferGiraLlamada(choferTelefono, choferWhatsApp);
+          final bool choferContactoVisible =
+              choferTelContacto.isNotEmpty || choferWaContacto.isNotEmpty;
           final bancoNombre = (d['bancoNombre'] ?? '').toString().trim();
           final bancoCuenta = (d['bancoCuenta'] ?? '').toString().trim();
           final bancoTipoCuenta =
@@ -587,23 +579,22 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         ),
                       ),
                     ],
-                    if (choferTelefono.isNotEmpty ||
-                        choferWhatsApp.isNotEmpty) ...[
+                    if (choferContactoVisible) ...[
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
                         runSpacing: 6,
                         children: [
-                          if (choferTelefono.isNotEmpty)
+                          if (telefonoContactoValidoRd(choferTelContacto))
                             OutlinedButton.icon(
-                              onPressed: () => _openCall(choferTelefono),
+                              onPressed: () => _openCall(choferTelContacto),
                               icon: const Icon(Icons.call, size: 16),
                               label: const Text('Llamar chofer'),
                             ),
-                          if (choferWhatsApp.isNotEmpty)
+                          if (telefonoContactoValidoRd(choferWaContacto))
                             ElevatedButton.icon(
                               onPressed: () => _openWhatsApp(
-                                choferWhatsApp,
+                                choferWaContacto,
                                 'Hola, vi tu salida por cupos ($origen → $destino) y quiero confirmar detalles.',
                               ),
                               icon: const Icon(Icons.chat, size: 16),
@@ -931,23 +922,10 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                           spacing: 8,
                           runSpacing: 6,
                           children: [
-                            if (choferWhatsApp.isNotEmpty)
+                            if (telefonoContactoValidoRd(choferWaContacto))
                               ElevatedButton.icon(
                                 onPressed: () => _openWhatsApp(
-                                  choferWhatsApp,
-                                  'Hola, quiero confirmar pago/depósito de mi cupo para $origen -> $destino.',
-                                ),
-                                icon: const Icon(Icons.chat, size: 16),
-                                label: const Text('WhatsApp dueño del viaje'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green,
-                                  foregroundColor: Colors.white,
-                                ),
-                              )
-                            else if (choferTelefono.isNotEmpty)
-                              ElevatedButton.icon(
-                                onPressed: () => _openWhatsApp(
-                                  choferTelefono,
+                                  choferWaContacto,
                                   'Hola, quiero confirmar pago/depósito de mi cupo para $origen -> $destino.',
                                 ),
                                 icon: const Icon(Icons.chat, size: 16),
@@ -1003,7 +981,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                             metodo: esCentral ? 'transferencia' : _metodo,
                             origen: origen,
                             destino: destino,
-                            choferWhatsApp: choferWhatsApp,
+                            choferWhatsApp: choferWaContacto,
                             bancoNombre: bancoNombre,
                             bancoCuenta: bancoCuenta,
                             bancoTipoCuenta: bancoTipoCuenta,
@@ -1266,7 +1244,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     reservaId: reservaId,
                   ),
                   const SizedBox(height: 12),
-                  if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
+                  if (!recaudoCentral &&
+                      telefonoContactoValidoRd(choferWhatsApp))
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
@@ -1285,7 +1264,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                         ),
                       ),
                     ),
-                  if (!recaudoCentral && choferWhatsApp.trim().isNotEmpty)
+                  if (!recaudoCentral &&
+                      telefonoContactoValidoRd(choferWhatsApp))
                     const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,

@@ -24,9 +24,9 @@ import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
+import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/widgets/pool_gira_contenido_form.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 extension _PoolsTaxistaCrearPaletteX on BuildContext {
   ({
@@ -344,6 +344,17 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     return _contenidoExtra;
   }
 
+  void _syncChoferContactoDesdeControllers() {
+    _choferTelefono = _telCtrl.text.trim();
+    _choferWhatsApp = _waCtrl.text.trim();
+  }
+
+  String _choferWhatsAppParaGuardar() {
+    _syncChoferContactoDesdeControllers();
+    if (_choferWhatsApp.isNotEmpty) return _choferWhatsApp;
+    return _choferTelefono;
+  }
+
   Future<void> _crear() async {
     if (_origenTown.trim().isEmpty) {
       _snack('Selecciona el pueblo de origen.');
@@ -368,8 +379,9 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
       _snack('Agrega al menos una parada para el tour/excursión.');
       return;
     }
-    if (_cleanPhone(_choferTelefono).isEmpty &&
-        _cleanPhone(_choferWhatsApp).isEmpty) {
+    _syncChoferContactoDesdeControllers();
+    if (!telefonoContactoValidoRd(_choferTelefono) &&
+        !telefonoContactoValidoRd(_choferWhatsApp)) {
       _snack('Agrega al menos teléfono o WhatsApp del chofer.');
       return;
     }
@@ -495,8 +507,10 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
         destinoLon: _destinoLon,
         choferTelefono:
             _choferTelefono.trim().isEmpty ? null : _choferTelefono.trim(),
-        choferWhatsApp:
-            _choferWhatsApp.trim().isEmpty ? null : _choferWhatsApp.trim(),
+        choferWhatsApp: () {
+          final wa = _choferWhatsAppParaGuardar().trim();
+          return wa.isEmpty ? null : wa;
+        }(),
         bancoNombre: _bancoNombre.trim().isEmpty ? null : _bancoNombre.trim(),
         bancoCuenta: _bancoCuenta.trim().isEmpty ? null : _bancoCuenta.trim(),
         bancoTipoCuenta:
@@ -735,7 +749,18 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
                       controller: _telCtrl,
                       label: 'Telefono chofer',
                       hint: '8091234567',
-                      onChanged: (v) => _choferTelefono = v.trim(),
+                      onChanged: (v) {
+                        final nuevo = v.trim();
+                        final anterior = _choferTelefono;
+                        _choferTelefono = nuevo;
+                        if (_choferWhatsApp.isEmpty ||
+                            _choferWhatsApp == anterior) {
+                          _choferWhatsApp = nuevo;
+                          if (_waCtrl.text.trim() != nuevo) {
+                            _waCtrl.text = nuevo;
+                          }
+                        }
+                      },
                     ),
                     right: _textFieldCtrl(
                       controller: _waCtrl,
@@ -1524,39 +1549,26 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
     );
   }
 
-  String _cleanPhone(String raw) {
-    final v = raw.replaceAll(RegExp(r'[^0-9]'), '');
-    if (v.startsWith('1') && v.length == 11) return v;
-    if (v.length == 10) return '1$v';
-    return '';
-  }
-
   Future<void> _abrirLlamadaChofer() async {
-    final p = _cleanPhone(_choferTelefono);
-    if (p.isEmpty) {
+    _syncChoferContactoDesdeControllers();
+    final raw = telefonoChoferGiraLlamada(_choferTelefono, _choferWhatsApp);
+    if (!telefonoContactoValidoRd(raw)) {
       _snack('Ingresa un telefono valido del chofer.');
       return;
     }
-    final ok = await launchUrl(
-      Uri.parse('tel:+$p'),
-      mode: LaunchMode.externalApplication,
-    );
+    final ok = await telefonoAbrirLlamada(raw);
     if (!ok) _snack('No se pudo abrir llamada.');
   }
 
   Future<void> _abrirWhatsAppChofer() async {
-    final p = _cleanPhone(
-        _choferWhatsApp.isNotEmpty ? _choferWhatsApp : _choferTelefono);
-    if (p.isEmpty) {
+    _syncChoferContactoDesdeControllers();
+    final raw = telefonoChoferGiraWhatsApp(_choferTelefono, _choferWhatsApp);
+    if (!telefonoContactoValidoRd(raw)) {
       _snack('Ingresa un WhatsApp/telefono valido del chofer.');
       return;
     }
-    final waApp = Uri.parse('whatsapp://send?phone=%2B$p&text=');
-    final waWeb = Uri.parse('https://wa.me/$p');
-    final ok1 = await launchUrl(waApp, mode: LaunchMode.externalApplication);
-    if (ok1) return;
-    final ok2 = await launchUrl(waWeb, mode: LaunchMode.externalApplication);
-    if (!ok2) _snack('No se pudo abrir WhatsApp.');
+    final ok = await telefonoAbrirWhatsApp(raw);
+    if (!ok) _snack('No se pudo abrir WhatsApp.');
   }
 
   Widget _num({

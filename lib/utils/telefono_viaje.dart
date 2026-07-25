@@ -6,9 +6,32 @@ import 'package:url_launcher/url_launcher.dart';
 String telefonoNormalizarDigitos(String raw) {
   final String onlyDigits = raw.replaceAll(RegExp(r'\D+'), '');
   if (onlyDigits.isEmpty) return '';
-  if (onlyDigits.startsWith('1')) return onlyDigits;
+  if (onlyDigits.startsWith('1') && onlyDigits.length == 11) return onlyDigits;
   if (onlyDigits.length == 10) return '1$onlyDigits';
+  if (onlyDigits.startsWith('1') && onlyDigits.length > 11) {
+    return onlyDigits.substring(0, 11);
+  }
   return onlyDigits;
+}
+
+/// Número RD listo para wa.me / tel: (11 dígitos con prefijo país 1).
+bool telefonoContactoValidoRd(String raw) {
+  final d = telefonoNormalizarDigitos(raw);
+  return d.length == 11 && d.startsWith('1');
+}
+
+/// WhatsApp publicado en giras: prioriza campo WhatsApp, si no el teléfono.
+String telefonoChoferGiraWhatsApp(String telefono, String whatsapp) {
+  final wa = whatsapp.trim();
+  if (wa.isNotEmpty) return wa;
+  return telefono.trim();
+}
+
+/// Llamada al chofer de gira: prioriza teléfono, si no WhatsApp.
+String telefonoChoferGiraLlamada(String telefono, String whatsapp) {
+  final tel = telefono.trim();
+  if (tel.isNotEmpty) return tel;
+  return whatsapp.trim();
 }
 
 /// Primer valor no vacío entre claves habituales en `usuarios` / viajes (evita botones inactivos si el campo no se llama `telefono`).
@@ -66,4 +89,22 @@ Future<bool> telefonoLaunchUri(Uri uri) async {
     }
   } catch (_) {}
   return false;
+}
+
+Future<bool> telefonoAbrirLlamada(String raw) async {
+  final d = telefonoNormalizarDigitos(raw);
+  if (!telefonoContactoValidoRd(raw)) return false;
+  return telefonoLaunchUri(telefonoUriLlamada(d));
+}
+
+Future<bool> telefonoAbrirWhatsApp(
+  String raw, {
+  String mensaje = '',
+}) async {
+  final d = telefonoNormalizarDigitos(raw);
+  if (!telefonoContactoValidoRd(raw)) return false;
+  if (await telefonoLaunchUri(telefonoUriWhatsAppApp(d, mensaje))) {
+    return true;
+  }
+  return telefonoLaunchUri(telefonoUriWhatsAppWeb(d, mensaje));
 }
