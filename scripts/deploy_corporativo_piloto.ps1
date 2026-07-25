@@ -27,6 +27,7 @@ $funcs = @(
   "propagarCambioHoraCorporativa",
   "taxistaRefrescarOperacionCorporativa",
   "onViajeCorporativoOperacionRefresh",
+  "onCorporativoPlantillaRutaSinChoferAlert",
   "adminActualizarHoraPlantillaCorporativa",
   "adminDistribuirCodigoCorporativo",
   "adminPublicarFeriadosRdAno",
