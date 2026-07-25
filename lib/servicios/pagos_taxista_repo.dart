@@ -464,7 +464,8 @@ class PagosTaxistaRepo {
     return tieneBloqueoComisionEfectivo(uidTaxista);
   }
 
-  /// Sincroniza `usuarios.tienePagoPendiente` y pools (Cloud Function; fallback escritura admin).
+  /// Sincroniza `usuarios.tienePagoPendiente` y pools vía Cloud Function (Admin SDK).
+  /// No hay fallback en cliente: Firestore rules no permiten escribir esa bandera.
   static Future<void> sincronizarBloqueoOperativo(String uidTaxista) async {
     final uid = uidTaxista.trim();
     if (uid.isEmpty) return;
@@ -474,17 +475,11 @@ class PagosTaxistaRepo {
         <String, dynamic>{'uidTaxista': uid},
       );
     } on FirebaseFunctionsException catch (e) {
-      if (e.code == 'not-found' || e.code == 'unimplemented') {
-        await _sincronizarBanderaPendiente(uid);
-        return;
-      }
       debugPrint(
         '[PagosTaxistaRepo] sincronizarBloqueoOperativo CF ${e.code}: ${e.message}',
       );
-      await _sincronizarBanderaPendiente(uid);
     } catch (e) {
       debugPrint('[PagosTaxistaRepo] sincronizarBloqueoOperativo: $e');
-      await _sincronizarBanderaPendiente(uid);
     }
   }
 
@@ -570,6 +565,8 @@ class PagosTaxistaRepo {
     }
   }
 
+  /// Fallback local si la CF no está disponible. **Solo funciona con Admin SDK**:
+  /// las reglas de Firestore no permiten que el taxista escriba `tienePagoPendiente`.
   static Future<void> _sincronizarBanderaPendiente(String uidTaxista) async {
     if (uidTaxista.trim().isEmpty) return;
     final bille =

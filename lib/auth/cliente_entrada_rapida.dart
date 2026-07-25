@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/servicios/google_auth.dart';
 import 'package:flygo_nuevo/servicios/post_auth_navigation.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -69,10 +70,15 @@ abstract final class ClienteEntradaRapida {
           patch['nombre'] = nombre.trim();
           if (proveedorGoogle) patch['registroClienteCompleto'] = true;
         }
-        final r = (existing?['rol'] ?? '').toString().trim();
-        if (r.isEmpty) {
-          patch['rol'] = 'cliente';
-          patch['registroClienteCompleto'] = false;
+        final rolSeguro = CuentaRolPerfilGuard.rolClienteSeguroDesdeUsuario(
+          existing ?? <String, dynamic>{},
+        );
+        if (rolSeguro != null) {
+          final r = (existing?['rol'] ?? '').toString().trim();
+          if (r.isEmpty) {
+            patch['rol'] = rolSeguro;
+            patch['registroClienteCompleto'] = false;
+          }
         }
         await ref.set(patch, SetOptions(merge: true));
       }

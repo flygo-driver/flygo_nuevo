@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 
@@ -106,11 +107,18 @@ abstract final class RaiPhoneAuthSync {
       'actualizadoEn': nowTs,
     };
     if (rolActual.isEmpty) {
-      patch['rol'] = rolEntrada;
-      if (rolEntrada == 'cliente') {
-        patch['registroClienteCompleto'] = false;
-      } else {
+      final existing = snap.data() ?? <String, dynamic>{};
+      if (rolEntrada == 'cliente' &&
+          CuentaRolPerfilGuard.cuentaPareceTaxista(existing)) {
+        patch['rol'] = 'taxista';
         patch['registroTaxistaCompleto'] = false;
+      } else {
+        patch['rol'] = rolEntrada;
+        if (rolEntrada == 'cliente') {
+          patch['registroClienteCompleto'] = false;
+        } else {
+          patch['registroTaxistaCompleto'] = false;
+        }
       }
     }
     await ref.set(patch, SetOptions(merge: true));

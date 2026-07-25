@@ -9,6 +9,7 @@
  *   node functions/scripts/auditar-prepago-comision-taxista.mjs <uidTaxista> --viaje <viajeId>
  *   node functions/scripts/auditar-prepago-comision-taxista.mjs --list [--limit 15]
  *   node functions/scripts/auditar-prepago-comision-taxista.mjs --config
+ *   node functions/scripts/auditar-prepago-comision-taxista.mjs <uid> --repair
  *
  * Tests unitarios (lógica pura, sin Firestore):
  *   cd functions && npm test
@@ -28,6 +29,7 @@ const UMBRAL_COMISION_LEGACY_RD = 500;
 const args = process.argv.slice(2);
 const listMode = args.includes("--list");
 const configOnly = args.includes("--config");
+const repairMode = args.includes("--repair");
 const viajeIdx = args.indexOf("--viaje");
 const viajeIdArg = viajeIdx >= 0 ? args[viajeIdx + 1] : null;
 const limitIdx = args.indexOf("--limit");
@@ -453,6 +455,31 @@ if (fallos.length === 0) {
   console.log(
     `  ESTADO: ${fallos.length} desalineación(es) en flags — ejecutá sincronizarBloqueoOperativoTaxista o revisá ADM.`,
   );
+  if (repairMode) {
+    try {
+      const mod = await import("../lib/finance.js");
+      const syncFn = mod.syncTaxistaBloqueoOperativo;
+      if (typeof syncFn !== "function") throw new Error("syncTaxistaBloqueoOperativo no exportado");
+      const tiene = await syncFn(uidTaxista);
+      console.log(`\n  REPARACIÓN: syncTaxistaBloqueoOperativo → tienePagoPendiente=${tiene}`);
+      const u2 = (await db.collection("usuarios").doc(uidTaxista).get()).data() ?? {};
+      const okRepair = (u2.tienePagoPendiente === true) === tienePagoEsperado;
+      console.log(
+        okRepair
+          ? "  REPARACIÓN: CUADRADO ✓"
+          : "  REPARACIÓN: revisar manualmente (sync no alineó)",
+      );
+    } catch (e) {
+      console.error(
+        `\n  REPARACIÓN falló: ${e.message ?? e}\n  Ejecutá: cd functions && npm run build`,
+      );
+      process.exit(1);
+    }
+  } else {
+    console.log(
+      "  Para reparar este taxista: node functions/scripts/auditar-prepago-comision-taxista.mjs <uid> --repair",
+    );
+  }
 }
 if (comisionPendienteRd(bille) >= UMBRAL_COMISION_LEGACY_RD) {
   console.log(

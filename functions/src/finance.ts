@@ -9,6 +9,7 @@ import type { DocumentSnapshot, Transaction } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions";
 
 import { logAdminAudit } from "./audit.js";
@@ -508,23 +509,8 @@ async function syncTienePagoPendiente(uidTaxista: string): Promise<boolean> {
   // Deuda de pool pendiente de validación admin (acumulada por taxista).
   let deudaPoolPendienteRd = 0;
   try {
-    const poolsPendSnap = await db()
-      .collection("viajes_pool")
-      .where("ownerTaxistaId", "==", uid)
-      .where("comisionPendientePagoAdmin", "==", true)
-      .limit(500)
-      .get();
-    for (const doc of poolsPendSnap.docs) {
-      const d = (doc.data() ?? {}) as AnyMap;
-      const v = d.montoComisionPendienteAdmin ?? d.montoComision;
-      if (typeof v === "number" && Number.isFinite(v)) deudaPoolPendienteRd += v;
-      else if (typeof v === "string") {
-        const n = Number(v);
-        if (Number.isFinite(n)) deudaPoolPendienteRd += n;
-      }
-    }
+    deudaPoolPendienteRd = await sumarDeudaPoolPendienteRd(uid);
   } catch (e) {
-    // Índice compuesto faltante u otro error: no bloquear finalización de viaje.
     logger.warn("[syncTienePagoPendiente] consulta pool omitida", { uid, err: e });
   }
   const bloqueoPool = deudaPoolPendienteRd + 1e-9 >= UMBRAL_DEUDA_POOL_RD;
@@ -680,6 +666,59 @@ export async function syncTaxistaBloqueoOperativo(uidTaxista: string): Promise<b
   const tienePagoPendiente = await syncTienePagoPendiente(uid);
   await syncPoolsPorPagoSemanal(uid, tienePagoPendiente);
   return tienePagoPendiente;
+}
+
+async function sumarDeudaPoolPendienteRd(uidTaxista: string): Promise<number> {
+  const uid = uidTaxista.trim();
+  if (!uid) return 0;
+  let deudaPoolPendienteRd = 0;
+  try {
+    const poolsPendSnap = await db()
+      .collection("viajes_pool")
+      .where("ownerTaxistaId", "==", uid)
+      .where("comisionPendientePagoAdmin", "==", true)
+      .limit(500)
+      .get();
+    for (const doc of poolsPendSnap.docs) {
+      const d = (doc.data() ?? {}) as AnyMap;
+      const v = d.montoComisionPendienteAdmin ?? d.montoComision;
+      if (typeof v === "number" && Number.isFinite(v)) deudaPoolPendienteRd += v;
+      else if (typeof v === "string") {
+        const n = Number(v);
+        if (Number.isFinite(n)) deudaPoolPendienteRd += n;
+      }
+    }
+  } catch (e) {
+    logger.warn("[deudaPoolPendienteRd] consulta pool omitida", { uid, err: e });
+  }
+  return Number(deudaPoolPendienteRd.toFixed(2));
+}
+
+/** `true` si `usuarios.tienePagoPendiente` / deuda pool no coincide con billetera + pools. */
+async function taxistaBloqueoPrepagoDesalineado(uidTaxista: string): Promise<boolean> {
+  const uid = uidTaxista.trim();
+  if (!uid) return false;
+  const [uSnap, prepagoCfg] = await Promise.all([
+    db().collection("usuarios").doc(uid).get(),
+    getComisionPrepagoConfig(),
+  ]);
+  const u = (uSnap.data() ?? {}) as AnyMap;
+  const actualFlag = u.tienePagoPendiente === true;
+  const actualDeuda = typeof u.deudaPoolPendienteRd === "number" && Number.isFinite(u.deudaPoolPendienteRd)
+    ? Number(u.deudaPoolPendienteRd.toFixed(2))
+    : 0;
+  const billeSnap = await db().collection("billeteras_taxista").doc(uid).get();
+  const bloqueoComision = bloqueoOperativoPrepago(
+    billeSnap.data() as AnyMap | undefined,
+    prepagoCfg.minimoOperativoRd,
+    prepagoCfg.permitirViajeConPrepagoParcial,
+  );
+  const deudaPool = await sumarDeudaPoolPendienteRd(uid);
+  const bloqueoPool = deudaPool + 1e-9 >= UMBRAL_DEUDA_POOL_RD;
+  const esperadoFlag = bloqueoComision || bloqueoPool;
+  if (actualFlag !== esperadoFlag) return true;
+  if (Math.abs(actualDeuda - deudaPool) > 0.02) return true;
+  return false;
 }
 
 async function getRole(uid: string): Promise<string> {
@@ -2674,3 +2713,34 @@ export const onViajeCanceladoPorCliente = onDocumentWritten("viajes/{viajeId}", 
 
 /** Alias HTTPS: misma implementación que `finalizarViajeSeguro` (callable `completarViajePorTaxista` en cliente). */
 export const completarViajePorTaxista = finalizarViajeSeguro;
+
+/** Red de seguridad: corrige desalineaciones `tienePagoPendiente` / deuda pool (p. ej. CF caída). */
+export const scheduledReconcileBloqueoPrepagoTaxistas = onSchedule(
+  {
+    schedule: "every 6 hours",
+    timeZone: "America/Santo_Domingo",
+  },
+  async () => {
+    const uids = new Set<string>();
+    const [billeSnap, blockedSnap] = await Promise.all([
+      db().collection("billeteras_taxista").where("comisionPendiente", ">", 0).limit(200).get(),
+      db().collection("usuarios").where("tienePagoPendiente", "==", true).limit(200).get(),
+    ]);
+    for (const d of billeSnap.docs) uids.add(d.id);
+    for (const d of blockedSnap.docs) uids.add(d.id);
+
+    let revisados = 0;
+    let corregidos = 0;
+    for (const uid of uids) {
+      revisados += 1;
+      try {
+        if (!(await taxistaBloqueoPrepagoDesalineado(uid))) continue;
+        await syncTaxistaBloqueoOperativo(uid);
+        corregidos += 1;
+      } catch (e) {
+        logger.error("[scheduledReconcileBloqueoPrepago] sync falló", { uid, e });
+      }
+    }
+    logger.info("[scheduledReconcileBloqueoPrepago] listo", { revisados, corregidos });
+  },
+);

@@ -4,6 +4,7 @@
  *   node functions/scripts/auditar-modelo-negocio.mjs --config
  *   node functions/scripts/auditar-modelo-negocio.mjs --uid <taxistaUid> [--viaje <viajeId>]
  *   node functions/scripts/auditar-modelo-negocio.mjs --corporativo <viajeId>
+ *   node functions/scripts/auditar-modelo-negocio.mjs --repair-bloqueo [--apply]
  *   node functions/scripts/auditar-modelo-negocio.mjs --unit-tests
  *
  * Ejecuta en orden:
@@ -30,6 +31,8 @@ const viajeIdx = args.indexOf("--viaje");
 const viaje = viajeIdx >= 0 ? args[viajeIdx + 1] : null;
 const corpIdx = args.indexOf("--corporativo");
 const corpViaje = corpIdx >= 0 ? args[corpIdx + 1] : null;
+const repairBloqueo = args.includes("--repair-bloqueo");
+const repairApply = args.includes("--apply");
 const projectIdx = args.indexOf("--project");
 const project = projectIdx >= 0 ? args[projectIdx + 1] : "flygo-rd";
 const projectArgs = ["--project", project];
@@ -51,7 +54,8 @@ if (
   !runTests &&
   !configOnly &&
   !uid &&
-  !corpViaje
+  !corpViaje &&
+  !repairBloqueo
 ) {
   console.log(
     "Auditoría modelo de negocio RAI — uso:\n\n" +
@@ -59,7 +63,8 @@ if (
       "  node functions/scripts/auditar-modelo-negocio.mjs --unit-tests\n" +
       "  node functions/scripts/auditar-modelo-negocio.mjs --config\n" +
       "  node functions/scripts/auditar-modelo-negocio.mjs --uid <taxistaUid> [--viaje <id>]\n" +
-      "  node functions/scripts/auditar-modelo-negocio.mjs --corporativo <viajeId>\n",
+      "  node functions/scripts/auditar-modelo-negocio.mjs --corporativo <viajeId>\n" +
+      "  node functions/scripts/auditar-modelo-negocio.mjs --repair-bloqueo [--apply]\n",
   );
   process.exit(1);
 }
@@ -97,6 +102,15 @@ if (corpViaje) {
     join("functions", "scripts", "auditar-viaje-corporativo.mjs"),
     [corpViaje, ...projectArgs],
     `Corporativo viaje ${corpViaje}`,
+  );
+}
+
+if (repairBloqueo) {
+  const repairArgs = repairApply ? ["--apply"] : ["--dry-run"];
+  run(
+    join("functions", "scripts", "reparar-bloqueo-prepago-taxistas.mjs"),
+    [...repairArgs, ...projectArgs],
+    repairApply ? "Reparar bloqueo prepago (aplicar)" : "Reparar bloqueo prepago (dry-run)",
   );
 }
 

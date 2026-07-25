@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 
 /// Perfil mínimo pasajero tras teléfono/Google (nombre + teléfono RD).
@@ -78,15 +79,21 @@ abstract final class ClientePerfilOnboarding {
     required String telefono,
   }) async {
     final telNorm = _normalizarTelRd(telefono);
-    await FirebaseFirestore.instance.collection('usuarios').doc(uid).set({
+    final ref = FirebaseFirestore.instance.collection('usuarios').doc(uid);
+    final existing = (await ref.get()).data() ?? <String, dynamic>{};
+    final patch = <String, dynamic>{
       'uid': uid,
-      'rol': 'cliente',
       'nombre': nombre.trim(),
       'telefono': telNorm,
-      'registroClienteCompleto': true,
       'actualizadoEn': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    };
+    final rolSeguro = CuentaRolPerfilGuard.rolClienteSeguroDesdeUsuario(existing);
+    if (rolSeguro != null) {
+      patch['rol'] = rolSeguro;
+      patch['registroClienteCompleto'] = true;
+    }
+    await ref.set(patch, SetOptions(merge: true));
     final user = FirebaseAuth.instance.currentUser;
     if (user != null && user.uid == uid) {
       try {

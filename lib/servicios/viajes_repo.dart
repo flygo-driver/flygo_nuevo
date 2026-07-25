@@ -17,6 +17,7 @@ import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
@@ -183,11 +184,13 @@ class ViajesRepo {
       );
     }
     if ((data['rol'] ?? '').toString().trim().isEmpty) {
-      await ref.set(<String, dynamic>{
-        'rol': 'cliente',
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      if (!CuentaRolPerfilGuard.cuentaPareceTaxista(data)) {
+        await ref.set(<String, dynamic>{
+          'rol': 'cliente',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
     }
   }
 

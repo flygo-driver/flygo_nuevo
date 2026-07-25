@@ -16,6 +16,7 @@ import 'package:flygo_nuevo/pantallas/taxista/entry_taxista.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
@@ -167,6 +168,7 @@ class _RaiTaxistaAccessGateState extends State<RaiTaxistaAccessGate> {
     final u = (uid ?? '').trim();
     if (u.isEmpty) return false;
     try {
+      await ViajesRepo.limpiarViajeActivoSiNoOperativo(u);
       await PagosTaxistaRepo.sincronizarBloqueoOperativo(u);
       return await PagosTaxistaRepo.puedeTrabajar(u);
     } catch (e) {

@@ -7,6 +7,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flygo_nuevo/keys.dart';
+import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
@@ -538,8 +539,13 @@ class GoogleAuthService {
     }
 
     if (!esAdmin && rolActual.isEmpty) {
+      final rolInicial =
+          rolEfectivo == 'cliente' &&
+                  CuentaRolPerfilGuard.cuentaPareceTaxista(dataUsuario)
+              ? 'taxista'
+              : rolEfectivo;
       await refUsuario.set(
-        {'rol': rolEfectivo, 'updatedAt': nowTs, 'actualizadoEn': nowTs},
+        {'rol': rolInicial, 'updatedAt': nowTs, 'actualizadoEn': nowTs},
         SetOptions(merge: true),
       );
     }
