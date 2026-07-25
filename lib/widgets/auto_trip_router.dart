@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
@@ -140,9 +140,10 @@ class _TaxistaTripRouterState extends State<TaxistaTripRouter> {
       }
       if (ViajePoolTaxistaGate.debeUsarFlujoBolaPuebloEnLugarDeViajeEnCurso(v)) return;
       _goOnce(() async {
-        await Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const ViajeEnCursoTaxista()),
+        ActiveTripService.bloquearShellTaxistaTrasAceptar(
+          const Duration(minutes: 3),
         );
+        await NavigationService.clearAndGoViajeEnCursoTaxista();
       });
     }, onError: (_) {
       // Silencioso: no rompemos el home si hay error transitorio

@@ -98,13 +98,7 @@ class FacturaViaje extends StatelessWidget {
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
           tooltip: 'Cerrar',
-          onPressed: () {
-            final NavigatorState rootNav =
-                Navigator.of(context, rootNavigator: true);
-            if (rootNav.canPop()) {
-              rootNav.pop();
-            }
-          },
+          onPressed: () => _popFacturaNavigator(context),
         ),
       ),
       body: SafeArea(
@@ -142,6 +136,21 @@ class FacturaViaje extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Cierra la ruta de factura: navigator local y luego root si hace falta.
+bool _popFacturaNavigator(BuildContext context) {
+  final NavigatorState nav = Navigator.of(context);
+  if (nav.canPop()) {
+    nav.pop();
+    return true;
+  }
+  final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
+  if (rootNav.canPop()) {
+    rootNav.pop();
+    return true;
+  }
+  return false;
 }
 
 /// Post-viaje: cuándo puede cerrarse la factura y seguir (recibo/cola/inicio).
@@ -227,17 +236,10 @@ class _FacturaContentState extends State<_FacturaContent> {
       );
     }
     _facturaCerrada = true;
-    final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
-    if (rootNav.canPop()) {
-      rootNav.pop();
-      return;
+    // Ruta local primero (modal de esta pantalla); luego root por si el shell anidó otro navigator.
+    if (!_popFacturaNavigator(context)) {
+      _facturaCerrada = false;
     }
-    final NavigatorState? localNav = Navigator.maybeOf(context);
-    if (localNav != null && localNav.canPop()) {
-      localNav.pop();
-      return;
-    }
-    _facturaCerrada = false;
   }
 
   void _revisarAutoCierre() {

@@ -55,6 +55,49 @@ class NavigationService {
     return push<T>(page);
   }
 
+  /// Sale de cotización / programar sin crear viaje. Pop del tab activo → inicio.
+  /// No limpia [viajeActivoId] (a diferencia de [irAlInicioCliente] tras viaje).
+  static Future<void> salirProgramarViajeSinConfirmar({
+    BuildContext? context,
+  }) async {
+    ShellTabController.clienteIrAInicio();
+
+    if (context != null && context.mounted) {
+      final NavigatorState tabNav = Navigator.of(context);
+      final NavigatorState rootNav =
+          Navigator.of(context, rootNavigator: true);
+      if (!identical(tabNav, rootNav) && tabNav.mounted) {
+        while (tabNav.canPop()) {
+          tabNav.pop();
+        }
+        ActiveTripService.notificarRebuildShell();
+        return;
+      }
+      if (rootNav.mounted && rootNav.canPop()) {
+        while (rootNav.canPop()) {
+          rootNav.pop();
+        }
+        ActiveTripService.notificarRebuildShell();
+        return;
+      }
+    }
+
+    final NavigatorState? nav = navigatorKey.currentState;
+    if (nav != null && nav.mounted) {
+      if (!nav.canPop()) {
+        ActiveTripService.notificarRebuildShell();
+        return;
+      }
+      await nav.pushAndRemoveUntil<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const ClienteShellWithDeepLink(),
+        ),
+        (Route<dynamic> r) => false,
+      );
+      ActiveTripService.notificarRebuildShell();
+    }
+  }
+
   static Future<T?> replaceWith<T>(Widget page) {
     final nav = navigatorKey.currentState;
     if (nav == null) return Future.value(null);

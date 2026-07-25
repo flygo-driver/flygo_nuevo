@@ -563,332 +563,358 @@ class _SelectorDestinosTuristicosState extends State<SelectorDestinosTuristicos>
     return null;
   }
 
+  double _alturaSheetTurismo(BuildContext context, BoxConstraints constraints) {
+    final MediaQueryData media = MediaQuery.of(context);
+    final double bottomInset = media.viewInsets.bottom;
+    final double screenH = media.size.height;
+    final double topPad = media.padding.top;
+    final bool parentBounded = constraints.maxHeight.isFinite;
+    final double preferredModal = screenH * 0.85;
+    double sheetH = parentBounded ? constraints.maxHeight : preferredModal;
+    if (bottomInset > 0) {
+      final double conTeclado = screenH - bottomInset - topPad - 8;
+      sheetH = conTeclado.clamp(220.0, sheetH);
+    } else if (!parentBounded) {
+      sheetH = preferredModal;
+    }
+    return sheetH;
+  }
+
+  Widget _buildCabeceraCatalogo({
+    required Color textPrimary,
+    required Color textMuted,
+    required Color textSubtle,
+    required Color borderSoft,
+    required Color surfaceRaised,
+    required Color accent,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(top: 12),
+          width: 40,
+          height: 4,
+          alignment: Alignment.center,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: textSubtle.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'Destinos Turísticos',
+            style: TextStyle(
+              color: textPrimary,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        if (widget.esViajeProgramado)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: accent.withValues(alpha: 0.4),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline_rounded, color: accent, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Reserva programada: aquí eliges destino y vehículo. '
+                      'Después definirás fecha, hora e ida y vuelta en el formulario.',
+                      style: TextStyle(
+                        color: textMuted,
+                        fontSize: 12.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Tipo de vehículo:',
+                style: TextStyle(color: textMuted, fontSize: 14),
+              ),
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: _opcionesVehiculo.map((opcion) {
+                    final isSelected =
+                        _tipoVehiculoSeleccionado == opcion['value'];
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: FilterChip(
+                        label: Text(
+                          opcion['label'] as String,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        avatar: Text(opcion['icon'] as String),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setState(() {
+                              _tipoVehiculoSeleccionado = opcion['value'];
+                              if (_pasajeros > opcion['maxPasajeros']) {
+                                _pasajeros = opcion['maxPasajeros'];
+                              }
+                            });
+                          }
+                        },
+                        backgroundColor: surfaceRaised,
+                        selectedColor: accent.withAlpha(77),
+                        checkmarkColor: accent,
+                        side: BorderSide(
+                          color: isSelected
+                              ? accent.withValues(alpha: 0.7)
+                              : borderSoft,
+                          width: isSelected ? 1.4 : 0.8,
+                        ),
+                        labelStyle: TextStyle(
+                          color: isSelected ? accent : textPrimary,
+                          fontWeight:
+                              isSelected ? FontWeight.bold : FontWeight.w500,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Text(
+                'Pasajeros:',
+                style: TextStyle(color: textMuted, fontSize: 14),
+              ),
+              const SizedBox(width: 16),
+              Container(
+                decoration: BoxDecoration(
+                  color: surfaceRaised,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: borderSoft),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.remove, color: textPrimary),
+                      onPressed: () {
+                        if (_pasajeros > 1) {
+                          setState(() => _pasajeros--);
+                        }
+                      },
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        '$_pasajeros',
+                        style: TextStyle(color: textPrimary, fontSize: 16),
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.add, color: textPrimary),
+                      onPressed: () {
+                        if (_pasajeros < _maxPasajerosParaVehiculoActual) {
+                          setState(() => _pasajeros++);
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Máximo $_maxPasajerosParaVehiculoActual pasajeros',
+                              ),
+                              backgroundColor: Colors.orange,
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: TextField(
+            controller: _searchCtrl,
+            style: TextStyle(color: textPrimary),
+            scrollPadding: EdgeInsets.fromLTRB(
+              0,
+              0,
+              0,
+              120 + MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            decoration: InputDecoration(
+              hintText: 'Buscar cualquier lugar en RD...',
+              hintStyle: TextStyle(color: textSubtle),
+              prefixIcon: Icon(Icons.search, color: textSubtle),
+              suffixIcon: _buscandoGoogle || _resolviendoDestino
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: _escuchando
+                              ? 'Detener dictado'
+                              : 'Dictar destino',
+                          icon: Icon(
+                            _escuchando
+                                ? Icons.mic_rounded
+                                : Icons.mic_none_rounded,
+                            color: _escuchando ? Colors.redAccent : accent,
+                            size: 22,
+                          ),
+                          onPressed: _toggleVoz,
+                        ),
+                        IconButton(
+                          tooltip: 'Búsqueda inteligente RAI',
+                          icon: Icon(
+                            Icons.auto_awesome_rounded,
+                            color: accent,
+                            size: 22,
+                          ),
+                          onPressed: _abrirBusquedaRai,
+                        ),
+                        if (_searchQuery.isNotEmpty)
+                          IconButton(
+                            icon: Icon(Icons.clear, color: textSubtle),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              _onSearchChanged('');
+                              FocusScope.of(context).unfocus();
+                            },
+                          ),
+                      ],
+                    ),
+              filled: true,
+              fillColor: surfaceRaised,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: borderSoft),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: accent.withValues(alpha: 0.6)),
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: borderSoft),
+              ),
+            ),
+            onChanged: _onSearchChanged,
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    // Tematización del sheet basada en el color de fondo personalizado
-    // del cliente (CustomThemeService). Antes el sheet era 100% negro y
-    // chocaba con cualquier color elegido (blanco, agua, rosado, amarillo).
-    // Ahora el fondo del sheet usa cardOn(themedBg) y todos los textos /
-    // bordes / chips se calculan por contraste WCAG sobre ese fondo, así
-    // las opciones SIEMPRE son legibles. El púrpura se mantiene como
-    // identidad visual de "Turismo".
     final Color themedBg = Theme.of(context).scaffoldBackgroundColor;
     final Color sheetBg = CustomThemeService.cardOn(themedBg);
     final Color textPrimary = CustomThemeService.textOn(sheetBg);
     final Color textMuted = CustomThemeService.textMutedOn(sheetBg);
     final Color textSubtle = CustomThemeService.textSubtleOn(sheetBg);
     final Color borderSoft = CustomThemeService.borderOn(sheetBg);
-    // Superficie ligeramente elevada (chips, input, cards de resultados).
     final bool sheetIsDark =
         ThemeData.estimateBrightnessForColor(sheetBg) == Brightness.dark;
     final Color surfaceRaised = sheetIsDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.05);
     const Color accent = Colors.purple;
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomInset),
-      child: Container(
-        height: MediaQuery.sizeOf(context).height * 0.85,
-        decoration: BoxDecoration(
-          color: sheetBg,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border.all(color: borderSoft, width: 0.5),
-        ),
-        child: ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Column(
-                children: [
-                  // Handle
-                  Container(
-                    margin: const EdgeInsets.only(top: 12),
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: textSubtle.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      'Destinos Turísticos',
-                      style: TextStyle(
-                          color: textPrimary,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  if (widget.esViajeProgramado)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: accent.withValues(alpha: 0.4),
-                          ),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(Icons.info_outline_rounded,
-                                color: accent, size: 20),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Reserva programada: aquí eliges destino y vehículo. '
-                                'Después definirás fecha, hora e ida y vuelta en el formulario.',
-                                style: TextStyle(
-                                  color: textMuted,
-                                  fontSize: 12.5,
-                                  height: 1.35,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
 
-                  // Selector de tipo de vehículo (chips). Las opciones AHORA
-                  // son visibles sobre cualquier fondo: el fondo del chip
-                  // usa surfaceRaised derivado del sheet, el texto usa
-                  // textPrimary calculado por contraste WCAG.
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Tipo de vehículo:',
-                            style:
-                                TextStyle(color: textMuted, fontSize: 14)),
-                        const SizedBox(height: 8),
-                        SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: _opcionesVehiculo.map((opcion) {
-                              final isSelected =
-                                  _tipoVehiculoSeleccionado == opcion['value'];
-                              return Padding(
-                                padding: const EdgeInsets.only(right: 8),
-                                child: FilterChip(
-                                  label: Text(
-                                    opcion['label'] as String,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  avatar: Text(opcion['icon'] as String),
-                                  selected: isSelected,
-                                  onSelected: (selected) {
-                                    if (selected) {
-                                      setState(() {
-                                        _tipoVehiculoSeleccionado =
-                                            opcion['value'];
-                                        if (_pasajeros >
-                                            opcion['maxPasajeros']) {
-                                          _pasajeros = opcion['maxPasajeros'];
-                                        }
-                                      });
-                                    }
-                                  },
-                                  backgroundColor: surfaceRaised,
-                                  selectedColor: accent.withAlpha(77),
-                                  checkmarkColor: accent,
-                                  side: BorderSide(
-                                    color: isSelected
-                                        ? accent.withValues(alpha: 0.7)
-                                        : borderSoft,
-                                    width: isSelected ? 1.4 : 0.8,
-                                  ),
-                                  labelStyle: TextStyle(
-                                    color: isSelected ? accent : textPrimary,
-                                    fontWeight: isSelected
-                                        ? FontWeight.bold
-                                        : FontWeight.w500,
-                                  ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double sheetH = _alturaSheetTurismo(context, constraints);
+        final bool parentBounded = constraints.maxHeight.isFinite;
 
-                  const SizedBox(height: 12),
-
-                  // Selector de pasajeros
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        Text('Pasajeros:',
-                            style:
-                                TextStyle(color: textMuted, fontSize: 14)),
-                        const SizedBox(width: 16),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: surfaceRaised,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: borderSoft),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: Icon(Icons.remove,
-                                    color: textPrimary),
-                                onPressed: () {
-                                  if (_pasajeros > 1) {
-                                    setState(() => _pasajeros--);
-                                  }
-                                },
-                              ),
-                              Container(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 16),
-                                child: Text(
-                                  '$_pasajeros',
-                                  style: TextStyle(
-                                      color: textPrimary, fontSize: 16),
-                                ),
-                              ),
-                              IconButton(
-                                icon:
-                                    Icon(Icons.add, color: textPrimary),
-                                onPressed: () {
-                                  if (_pasajeros <
-                                      _maxPasajerosParaVehiculoActual) {
-                                    setState(() => _pasajeros++);
-                                  } else {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                            'Máximo $_maxPasajerosParaVehiculoActual pasajeros'),
-                                        backgroundColor: Colors.orange,
-                                      ),
-                                    );
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Barra de búsqueda. Texto/hint/icons derivados del fondo
-                  // del sheet para garantizar contraste con cualquier color.
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TextField(
-                      controller: _searchCtrl,
-                      style: TextStyle(color: textPrimary),
-                      scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 280),
-                      decoration: InputDecoration(
-                        hintText: 'Buscar cualquier lugar en RD...',
-                        hintStyle: TextStyle(color: textSubtle),
-                        prefixIcon:
-                            Icon(Icons.search, color: textSubtle),
-                        suffixIcon: _buscandoGoogle || _resolviendoDestino
-                            ? const Padding(
-                                padding: EdgeInsets.all(12),
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                              )
-                            : Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    tooltip: _escuchando
-                                        ? 'Detener dictado'
-                                        : 'Dictar destino',
-                                    icon: Icon(
-                                      _escuchando
-                                          ? Icons.mic_rounded
-                                          : Icons.mic_none_rounded,
-                                      color: _escuchando
-                                          ? Colors.redAccent
-                                          : accent,
-                                      size: 22,
-                                    ),
-                                    onPressed: _toggleVoz,
-                                  ),
-                                  IconButton(
-                                    tooltip: 'Búsqueda inteligente RAI',
-                                    icon: const Icon(
-                                      Icons.auto_awesome_rounded,
-                                      color: accent,
-                                      size: 22,
-                                    ),
-                                    onPressed: _abrirBusquedaRai,
-                                  ),
-                                  if (_searchQuery.isNotEmpty)
-                                    IconButton(
-                                      icon: Icon(Icons.clear,
-                                          color: textSubtle),
-                                      onPressed: () {
-                                        _searchCtrl.clear();
-                                        _onSearchChanged('');
-                                        FocusScope.of(context).unfocus();
-                                      },
-                                    ),
-                                ],
-                              ),
-                        filled: true,
-                        fillColor: surfaceRaised,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: borderSoft),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide:
-                              BorderSide(color: accent.withValues(alpha: 0.6)),
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: borderSoft),
-                        ),
-                      ),
-                      onChanged: _onSearchChanged,
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Resultados
-                  Expanded(
-                    child: _buildResultados(
-                      sheetBg: sheetBg,
-                      surfaceRaised: surfaceRaised,
+        final Widget sheet = Container(
+          height: sheetH,
+          decoration: BoxDecoration(
+            color: sheetBg,
+            borderRadius: parentBounded
+                ? BorderRadius.zero
+                : const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border.all(color: borderSoft, width: 0.5),
+          ),
+          child: ClipRRect(
+            borderRadius: parentBounded
+                ? BorderRadius.zero
+                : const BorderRadius.vertical(top: Radius.circular(20)),
+            child: Column(
+              children: [
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: SingleChildScrollView(
+                    physics: const ClampingScrollPhysics(),
+                    child: _buildCabeceraCatalogo(
                       textPrimary: textPrimary,
                       textMuted: textMuted,
                       textSubtle: textSubtle,
                       borderSoft: borderSoft,
+                      surfaceRaised: surfaceRaised,
                       accent: accent,
                     ),
                   ),
-                ],
-              ),
-            ],
+                ),
+                Expanded(
+                  child: _buildResultados(
+                    sheetBg: sheetBg,
+                    surfaceRaised: surfaceRaised,
+                    textPrimary: textPrimary,
+                    textMuted: textMuted,
+                    textSubtle: textSubtle,
+                    borderSoft: borderSoft,
+                    accent: accent,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+
+        if (parentBounded) return sheet;
+        return Align(alignment: Alignment.bottomCenter, child: sheet);
+      },
     );
   }
 

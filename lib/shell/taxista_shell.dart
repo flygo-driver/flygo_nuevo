@@ -448,6 +448,44 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
               await ActiveTripService.usuarioTieneViajeEnSeguimiento(uid);
           if (!mounted) return;
           if (!pool) {
+            if (ActiveTripService.debeBloquearShellSinViajeTaxista ||
+                ActiveTripService.debeMantenerOverlayViajeEnShell) {
+              for (int i = 0; i < 10; i++) {
+                await Future<void>.delayed(
+                  Duration(milliseconds: 60 * (i + 1)),
+                );
+                if (!mounted) return;
+                if (await ActiveTripService.usuarioTieneViajeEnSeguimiento(
+                  uid,
+                )) {
+                  if (_viajeActivoShell != true) {
+                    print(
+                      '[VIAJE_ACTIVO] taxista_shell rebuild tick → overlay '
+                      'tras retry claim',
+                    );
+                    setState(() {
+                      _viajeActivoShell = true;
+                      _mostroViajeAlgunaVez = true;
+                    });
+                  }
+                  return;
+                }
+              }
+              if (ActiveTripService.debeBloquearShellSinViajeTaxista ||
+                  ActiveTripService.debeMantenerOverlayViajeEnShell) {
+                if (_viajeActivoShell != true) {
+                  print(
+                    '[VIAJE_ACTIVO] taxista_shell rebuild tick → overlay '
+                    'optimista (claim en curso)',
+                  );
+                  setState(() {
+                    _viajeActivoShell = true;
+                    _mostroViajeAlgunaVez = true;
+                  });
+                }
+                return;
+              }
+            }
             await _aplicarSinOverlayViajePool();
             return;
           }

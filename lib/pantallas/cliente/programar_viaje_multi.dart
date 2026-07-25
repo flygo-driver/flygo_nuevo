@@ -1365,7 +1365,9 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }
 
   void _volverAlInicioSinConfirmar() {
-    intentarSalirAlGate(context);
+    unawaited(
+      NavigationService.salirProgramarViajeSinConfirmar(context: context),
+    );
   }
 
   Widget _botonVolverSinConfirmar() {

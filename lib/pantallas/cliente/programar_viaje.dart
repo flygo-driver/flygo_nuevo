@@ -1899,6 +1899,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       MaterialPageRoute<void>(
         builder: (BuildContext ctx) {
           return Scaffold(
+            resizeToAvoidBottomInset: true,
             appBar: AppBar(
               title: const Text('Catálogo turístico'),
               centerTitle: true,
@@ -3301,7 +3302,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   }
 
   void _salirAlInicioDesdeProgramar() {
-    unawaited(NavigationService.irAlInicioCliente(context: context));
+    unawaited(
+      NavigationService.salirProgramarViajeSinConfirmar(context: context),
+    );
   }
 
   Widget _selectorFechaHoraProgramado({
@@ -5480,12 +5483,10 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                 );
                                               },
                                             ),
-                                            if (tipoServicio == 'turismo') ...[
-                                              const SizedBox(height: 12),
-                                              _botonVolverInicioProgramar(
-                                                foreground: _colorServicio,
-                                              ),
-                                            ],
+                                            const SizedBox(height: 12),
+                                            _botonVolverInicioProgramar(
+                                              foreground: _colorServicio,
+                                            ),
                                           ],
                                         ),
                                       )

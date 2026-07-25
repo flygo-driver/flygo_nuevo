@@ -251,6 +251,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   Timer? _cargaViajeRescueTimer;
   Timer? _cargaViajeTickTimer;
   bool _cargaViajeExpirada = false;
+  int _cargaViajeRescateIntentos = 0;
+  bool _sinViajeConfirmadoParaUi = false;
   String? _corporativoAunNoHoraMsg;
   String? _chatAseguradoParaViajeId;
 
@@ -693,8 +695,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   void _aplicarViajeRescatadoEnCache(Viaje viaje) {
     setState(() {
       _cachedViaje = viaje;
-      _cargaViajeExpirada = false;
-      _corporativoAunNoHoraMsg = null;
+      _limpiarEstadoCargaViajePendiente();
     });
     _syncEsperaCargaViaje(false);
   }
@@ -1611,8 +1612,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       if (!ViajesRepo.viajeVisibleEnCursoTaxista(d, uid)) return;
       setState(() {
         _cachedViaje = Viaje.fromMap(vs.id, d);
-        _cargaViajeExpirada = false;
-        _corporativoAunNoHoraMsg = null;
+        _limpiarEstadoCargaViajePendiente();
       });
       _syncEsperaCargaViaje(false);
     } catch (e) {
@@ -3261,6 +3261,104 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
+  void _limpiarEstadoCargaViajePendiente() {
+    _cargaViajeExpirada = false;
+    _corporativoAunNoHoraMsg = null;
+    _cargaViajeRescateIntentos = 0;
+    _sinViajeConfirmadoParaUi = false;
+  }
+
+  Future<void> _confirmarSinViajeAntesDeMostrarVacio() async {
+    if (ActiveTripService.debeBloquearShellSinViajeTaxista ||
+        ActiveTripService.debeMantenerOverlayViajeEnShell) {
+      return;
+    }
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && uid.isNotEmpty) {
+      for (int i = 0; i < 10; i++) {
+        if (!mounted) return;
+        if (await ActiveTripService.usuarioTieneViajeEnSeguimiento(uid)) {
+          ActiveTripService.notificarRebuildShell();
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    }
+    if (!mounted) return;
+    setState(() => _sinViajeConfirmadoParaUi = true);
+  }
+
+  Widget _buildPanelSinViajeEnCurso() {
+    return Column(
+      children: [
+        Expanded(
+          flex: RaiViajeEnCursoUi.mapFlex,
+          child: RepaintBoundary(
+            child: _mapaOPlaceholder(
+              mapa: const MapaTiempoReal(
+                key: ValueKey<String>('mapa-sin-viaje'),
+                esTaxista: true,
+                esCliente: false,
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          flex: RaiViajeEnCursoUi.panelFlex,
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.taxi_alert,
+                    color: Colors.greenAccent,
+                    size: 60,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'No tienes viaje en curso',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Puedes buscar viajes disponibles\nen el botón verde',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      ActiveTripService.cancelarMantenimientoOverlayViaje();
+                      Navigator.of(context, rootNavigator: true)
+                          .pushAndRemoveUntil(
+                        MaterialPageRoute<void>(
+                            builder: (_) => const TaxistaShell()),
+                        (route) => false,
+                      );
+                    },
+                    icon: const Icon(Icons.search),
+                    label: const Text('Buscar viajes'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.greenAccent,
+                      foregroundColor: Colors.black,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   void _syncEsperaCargaViaje(bool esperando) {
     if (!esperando) {
       _cargaViajeTimer?.cancel();
@@ -3272,8 +3370,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       if (_cargaViajeSegundosN.value != 0) {
         _cargaViajeSegundosN.value = 0;
       }
-      if (_cargaViajeExpirada && mounted) {
-        setState(() => _cargaViajeExpirada = false);
+      if ((_cargaViajeExpirada || _cargaViajeRescateIntentos > 0) && mounted) {
+        setState(_limpiarEstadoCargaViajePendiente);
       }
       return;
     }
@@ -3297,9 +3395,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) return;
 
-    // Turismo: nunca revertir promoción corporativa ni mostrar «Aún no es hora».
+    // Turismo: el claim puede tardar unos segundos; reintentar sin flash de error.
     if (await _viajeActivoEsTurismo(uid)) {
       if (!mounted) return;
+      if (_cargaViajeRescateIntentos < 5) {
+        _cargaViajeRescateIntentos++;
+        unawaited(_intentarRescateViajeAtascado());
+        _cargaViajeTimer = Timer(const Duration(seconds: 4), () {
+          unawaited(_manejarTimeoutCargaViaje());
+        });
+        return;
+      }
       setState(() {
         _cargaViajeExpirada = true;
         _corporativoAunNoHoraMsg = null;
@@ -4686,16 +4792,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     final messenger = ScaffoldMessenger.of(context);
 
     final String estado = EstadosViaje.normalizar(v.estado);
-    final bool cancelable = estado == EstadosViaje.aceptado ||
-        estado == EstadosViaje.enCaminoPickup;
-    if (!cancelable) {
+    if (!EstadosViaje.taxistaPuedeCancelarViajeDesdeApp(estado)) {
       _actionBusy = false;
       if (mounted) {
         messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Solo puedes cancelar antes de que el cliente esté a bordo.',
-            ),
+          SnackBar(
+            content: Text(EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp),
           ),
         );
       }
@@ -6120,6 +6222,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                     _scheduleSyncEsperaCargaViaje(true);
                     return _buildCargandoViajeOError();
                   }
+                  if (!_sinViajeConfirmadoParaUi) {
+                    _scheduleSyncEsperaCargaViaje(true);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) {
+                        unawaited(_confirmarSinViajeAntesDeMostrarVacio());
+                      }
+                    });
+                    return _buildCargandoViajeOError();
+                  }
                   _cachedViaje = null;
                   _scheduleSyncEsperaCargaViaje(false);
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -6127,78 +6238,20 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                     ActiveTripService.cancelarBloqueoShellTaxista();
                     ActiveTripService.notificarRebuildShell();
                   });
-                  return Column(
-                    children: [
-                      Expanded(
-                        flex: RaiViajeEnCursoUi.mapFlex,
-                        child: RepaintBoundary(
-                          child: _mapaOPlaceholder(
-                            mapa: const MapaTiempoReal(
-                              key: ValueKey<String>('mapa-sin-viaje'),
-                              esTaxista: true,
-                              esCliente: false,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        flex: RaiViajeEnCursoUi.panelFlex,
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(
-                                  Icons.taxi_alert,
-                                  color: Colors.greenAccent,
-                                  size: 60,
-                                ),
-                                const SizedBox(height: 16),
-                                const Text(
-                                  'No tienes viaje en curso',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                const Text(
-                                  'Puedes buscar viajes disponibles\nen el botón verde',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: Colors.white70),
-                                ),
-                                const SizedBox(height: 20),
-                                ElevatedButton.icon(
-                                  onPressed: () {
-                                    ActiveTripService
-                                        .cancelarMantenimientoOverlayViaje();
-                                    Navigator.of(context, rootNavigator: true)
-                                        .pushAndRemoveUntil(
-                                      MaterialPageRoute<void>(
-                                          builder: (_) => const TaxistaShell()),
-                                      (route) => false,
-                                    );
-                                  },
-                                  icon: const Icon(Icons.search),
-                                  label: const Text('Buscar viajes'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.greenAccent,
-                                    foregroundColor: Colors.black,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
+                  return _buildPanelSinViajeEnCurso();
                 }
+
+                _sinViajeConfirmadoParaUi = false;
 
                 _cancelarDebounceViajeNull();
                 _scheduleSyncEsperaCargaViaje(false);
+
+                if (_cargaViajeExpirada || _cargaViajeRescateIntentos > 0) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    setState(_limpiarEstadoCargaViajePendiente);
+                  });
+                }
 
                 if (_esCorpInformativoExcluido(v)) {
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -7203,7 +7256,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
-            onPressed: _corpEnFasePickup(v, estadoBase) ? () => _cancelarPorTaxista(v) : null,
+            onPressed: EstadosViaje.taxistaPuedeCancelarViajeDesdeApp(estadoBase)
+                ? () => _cancelarPorTaxista(v)
+                : null,
             icon: const Icon(Icons.cancel_outlined, size: 20),
             label: const Text('Cancelar viaje', style: TextStyle(fontSize: 15)),
             style: OutlinedButton.styleFrom(
@@ -7595,13 +7650,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 : () => _contactarCliente(
                     uidCliente: uidCli, viajeId: v.id, viaje: v),
           ),
-        ] else
-          _btnPeligro(
-            icon: const Icon(Icons.cancel_outlined, size: 20),
-            label: const Text('Salir a disponibilidad',
-                style: TextStyle(fontSize: 15)),
-            onPressed: () => _cancelarPorTaxista(v),
+        ] else ...[
+          const SizedBox(height: 8),
+          const Text(
+            'Cancelación bloqueada: el cliente ya está a bordo.',
+            style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
           ),
+        ],
       ];
     }
 

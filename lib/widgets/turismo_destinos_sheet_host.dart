@@ -112,14 +112,16 @@ class _TurismoDestinosSheetHostState extends State<TurismoDestinosSheetHost> {
         : Colors.black.withValues(alpha: 0.07);
 
     return Stack(
-      fit: StackFit.passthrough,
+      fit: StackFit.expand,
       children: [
-        SelectorDestinosTuristicos(
+        Positioned.fill(
+          child: SelectorDestinosTuristicos(
           latOrigen: _lat,
           lonOrigen: _lon,
           tipoVehiculoInicial: widget.tipoVehiculoInicial,
           esViajeProgramado: widget.esViajeProgramado,
           onDestinoSeleccionado: widget.onDestinoSeleccionado,
+          ),
         ),
         if (widget.showFloatingBack)
           Positioned(

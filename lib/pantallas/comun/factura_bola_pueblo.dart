@@ -3,6 +3,8 @@
 // Comprobante digital RAI — Bola Ahorro (`bolas_pueblo/{id}`) tras
 // `finalizarBolaPueblo`. Solo lectura; alinea tono y estructura a operadora formal.
 
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +19,20 @@ import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
+
+bool _popFacturaNavigator(BuildContext context) {
+  final NavigatorState nav = Navigator.of(context);
+  if (nav.canPop()) {
+    nav.pop();
+    return true;
+  }
+  final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
+  if (rootNav.canPop()) {
+    rootNav.pop();
+    return true;
+  }
+  return false;
+}
 
 double _pctComisionDesdeDoc(Map<String, dynamic> data) {
   final raw = data['comisionPct'];
@@ -375,19 +391,19 @@ class _FacturaBolaContent extends StatelessWidget {
         ),
         const SizedBox(height: 20),
         FilledButton.icon(
-          onPressed: () async {
+          onPressed: () {
             final String? uid = FirebaseAuth.instance.currentUser?.uid;
-            await BolaPostFacturaReopenGuard.markCompleted(
-              bolaId: bolaId,
-              role: role,
-              uid: uid,
+            if (!_popFacturaNavigator(context)) return;
+            unawaited(
+              BolaPostFacturaReopenGuard.markCompleted(
+                bolaId: bolaId,
+                role: role,
+                uid: uid,
+              ),
             );
-            if (context.mounted) {
-              Navigator.of(context).pop();
-            }
           },
           icon: const Icon(Icons.check_circle_outline_rounded),
-          label: const Text('Entendido, cerrar comprobante'),
+          label: const Text('Continuar'),
           style: FilledButton.styleFrom(
             minimumSize: const Size.fromHeight(52),
             backgroundColor: cs.primary,

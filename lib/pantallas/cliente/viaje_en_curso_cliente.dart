@@ -2739,6 +2739,17 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final String uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     if (uid.isEmpty) return;
 
+    final String estadoBase = EstadosViaje.normalizar(v.estado);
+    if (!EstadosViaje.clientePuedeCancelarViajeDesdeApp(estadoBase)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(EstadosViaje.mensajeNoCancelarViajeTrasAbordarApp),
+        ),
+      );
+      return;
+    }
+
     final TextEditingController motivoCtrl = TextEditingController();
     String? errorMotivo;
     String? motivo;
