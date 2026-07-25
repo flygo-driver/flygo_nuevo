@@ -128,19 +128,29 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
     final cs = Theme.of(context).colorScheme;
     final textStyle = TextStyle(color: cs.onSurface);
 
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+
     return Scaffold(
       appBar: const RaiAppBar(
         title: 'Configuración bancaria',
         centerTitle: true,
         showBackWhenCanPop: true,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            16 + bottomInset + keyboardInset,
+          ),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
               TextFormField(
                 controller: _bancoCtrl,
                 style: textStyle,
@@ -234,7 +244,8 @@ class _ConfiguracionBancariaState extends State<ConfiguracionBancaria> {
                       : const Text('GUARDAR'),
                 ),
               ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

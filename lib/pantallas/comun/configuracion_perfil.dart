@@ -330,8 +330,18 @@ class _ConfiguracionPerfilState extends State<ConfiguracionPerfil> {
             _telefonoCtrl.text = telefono;
           }
 
+          final bottomInset = MediaQuery.paddingOf(context).bottom;
+          final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+
           return ListView(
-            padding: const EdgeInsets.all(20),
+            padding: EdgeInsets.fromLTRB(
+              20,
+              20,
+              20,
+              20 + bottomInset + keyboardInset + 24,
+            ),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            physics: const AlwaysScrollableScrollPhysics(),
             children: [
               Text(
                 'Tu foto y datos son opcionales: puedes pedir viajes sin completar esta pantalla.',
