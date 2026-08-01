@@ -328,6 +328,12 @@ export const crearViajePendienteCliente = onCall(async (request) => {
   await db().runTransaction(async (tx) => {
     const userSnap = await tx.get(userRef);
     const userData = (userSnap.data() ?? {}) as AnyMap;
+    if (userData.tieneCobroViajePendiente === true) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Tienes un viaje sin pagar con RAI. Abre tu factura pendiente o contacta soporte para regularizar antes de pedir otro.",
+      );
+    }
     const vid = trimOrEmpty(userData.viajeActivoId);
     let viajeActivoDoc: AnyMap | null = null;
     if (vid) {

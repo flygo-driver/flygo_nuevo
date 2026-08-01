@@ -27,6 +27,8 @@ class ActiveTripService {
   static int _mantenerOverlayViajeHastaMs = 0;
   static int _bloquearShellSinViajeHastaMs = 0;
   static int _forzarInicioClienteHastaMs = 0;
+  static int _forzarInicioTaxistaBolaHastaMs = 0;
+  static String _bolaIdTaxistaPausado = '';
 
   /// Fuerza rebuild de [TaxistaShell] / [ClienteShell] tras aceptar viaje u overlay.
   static final ValueNotifier<int> shellRebuildTick = ValueNotifier<int>(0);
@@ -170,6 +172,36 @@ class ActiveTripService {
 
   static void cancelarForzarInicioClienteShell() {
     _forzarInicioClienteHastaMs = 0;
+  }
+
+  /// Tras salir del tablero Bola con viaje operativo (acordada/en_curso): tabs
+  /// visibles y banner «Retomar» — sin overlay de viaje pool normal.
+  static void forzarInicioTaxistaShellBola({
+    required String bolaId,
+    Duration duracion = const Duration(hours: 24),
+  }) {
+    final int hasta = DateTime.now().add(duracion).millisecondsSinceEpoch;
+    if (hasta > _forzarInicioTaxistaBolaHastaMs) {
+      _forzarInicioTaxistaBolaHastaMs = hasta;
+    }
+    _bolaIdTaxistaPausado = bolaId.trim();
+    cancelarMantenimientoOverlayViaje();
+    cancelarBloqueoShellTaxista();
+    print(
+      '[VIAJE_ACTIVO] ActiveTripService.forzarInicioTaxistaShellBola '
+      'bola=$bolaId ${duracion.inSeconds}s',
+    );
+    notificarRebuildShell();
+  }
+
+  static bool get debeForzarInicioTaxistaShellBola =>
+      DateTime.now().millisecondsSinceEpoch < _forzarInicioTaxistaBolaHastaMs;
+
+  static String get bolaIdTaxistaPausado => _bolaIdTaxistaPausado;
+
+  static void cancelarForzarInicioTaxistaShellBola() {
+    _forzarInicioTaxistaBolaHastaMs = 0;
+    _bolaIdTaxistaPausado = '';
   }
 
   /// Documento del viaje activo, o `null`.

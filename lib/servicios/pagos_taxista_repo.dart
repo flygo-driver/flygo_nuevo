@@ -274,7 +274,7 @@ class PagosTaxistaRepo {
     return disp + 1e-9 < minimo;
   }
 
-  /// Viajes RAI estándar (efectivo/transferencia/tarjeta) descuentan comisión del prepago.
+  /// Solo **efectivo**: comisión RAI desde prepago. Digital → liquidación semanal.
   static bool viajeAplicaComisionPrepago(Map<String, dynamic> viajeData) {
     if (viajeData['corporativo'] == true) return false;
     if ((viajeData['recaudoDestino'] ?? '').toString() ==
@@ -291,8 +291,6 @@ class PagosTaxistaRepo {
     if (tipo == 'bola_ahorro') return false;
     final String? metodo = viajeData['metodoPago']?.toString();
     if (MetodoPagoViaje.esEfectivo(metodo)) return true;
-    if (MetodoPagoViaje.esTransferencia(metodo)) return true;
-    if (MetodoPagoViaje.esTarjeta(metodo)) return true;
     return (metodo ?? '').trim().isEmpty;
   }
 
@@ -649,14 +647,18 @@ class PagosTaxistaRepo {
     }
     final abierta = await _recargasCol
         .where('uidTaxista', isEqualTo: uid)
-        .where('estado', isEqualTo: 'pendiente_verificacion')
+        .where('estado', whereIn: ['pendiente_verificacion', 'pendiente_pago_azul'])
         .limit(1)
         .get();
     if (abierta.docs.isNotEmpty) {
+      final estado = (abierta.docs.first.data()['estado'] ?? '').toString();
       print(
-          '[PagosTaxistaRepo] taxistaEnviarRecargaComisionEfectivo rechazado: ya hay recarga pendiente_verificacion');
+          '[PagosTaxistaRepo] taxistaEnviarRecargaComisionEfectivo rechazado: recarga abierta estado=$estado');
       throw Exception(
-          'Ya tienes una recarga en revisión. Espera a que el administrador la verifique.');
+        estado == 'pendiente_pago_azul'
+            ? 'Ya tienes una recarga con tarjeta en curso. Complétala en AZUL o esperá.'
+            : 'Ya tienes una recarga en revisión. Espera a que el administrador la verifique.',
+      );
     }
     final b = await _db.collection('billeteras_taxista').doc(uid).get();
     final bill = b.data();

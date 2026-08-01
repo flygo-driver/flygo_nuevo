@@ -112,9 +112,73 @@ export function buildAzulOrderIdDeterministic(viajeId: string, montoCents: numbe
   return `AZUL-${slug}-${hash}`;
 }
 
+/** Order id estable por recarga prepago taxista. */
+export function buildAzulOrderIdRecargaTaxista(
+  recargaId: string,
+  montoCents: number,
+  useStub: boolean,
+): string {
+  const slug = recargaId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20) || "REC";
+  if (useStub) return `STUB-REC-${slug}`;
+  const hash = createHash("sha256")
+    .update(`recarga|${recargaId}|${montoCents}`)
+    .digest("hex")
+    .slice(0, 16)
+    .toUpperCase();
+  return `AZUL-REC-${slug}-${hash}`;
+}
+
 export function sesionAzulReutilizable(estado: unknown): boolean {
   const raw = String(estado ?? "").trim().toLowerCase();
   if (raw === "pending_configuration") return true;
   const e = normalizarEstadoAzul(estado);
   return e === "pending" || e === "authorized";
+}
+
+/** Metadatos de recibo desde respuesta / webhook AZUL (sin PAN ni CVV). */
+export type AzulReciboMetadatos = {
+  authorizationCode: string | null;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  rrn: string | null;
+  responseCode: string | null;
+};
+
+function strOrNull(raw: unknown): string | null {
+  const s = String(raw ?? "").trim();
+  return s.length > 0 ? s : null;
+}
+
+export function extraerMetadatosReciboAzul(body: AnyMap): AzulReciboMetadatos {
+  const authorizationCode = strOrNull(
+    body.AuthorizationCode ??
+      body.authorizationCode ??
+      body.AuthCode ??
+      body.authCode ??
+      body.ApprovalCode ??
+      body.approvalCode,
+  );
+  const cardBrand = strOrNull(
+    body.CardBrand ?? body.cardBrand ?? body.Brand ?? body.brand ?? body.IssuerName,
+  );
+  const lastRaw = strOrNull(
+    body.CardNumber ??
+      body.cardNumber ??
+      body.MaskedPan ??
+      body.maskedPan ??
+      body.Last4 ??
+      body.last4 ??
+      body.lastFour,
+  );
+  let cardLast4: string | null = null;
+  if (lastRaw) {
+    const digits = lastRaw.replace(/\D/g, "");
+    if (digits.length >= 4) cardLast4 = digits.slice(-4);
+    else if (lastRaw.length === 4 && /^\d{4}$/.test(lastRaw)) cardLast4 = lastRaw;
+  }
+  const rrn = strOrNull(body.RRN ?? body.rrn ?? body.RetrievalReferenceNumber);
+  const responseCode = strOrNull(
+    body.ResponseCode ?? body.responseCode ?? body.IsoCode ?? body.isoCode,
+  );
+  return { authorizationCode, cardBrand, cardLast4, rrn, responseCode };
 }

@@ -2,7 +2,7 @@
  * Fase 6 — AZUL E-Commerce (cableado; credenciales en Secret Manager / config).
  * Sin credenciales: callables responden AZUL_NOT_CONFIGURED (flags OFF = omitido).
  */
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore, type Transaction } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { onRequest } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
@@ -12,6 +12,7 @@ import {
   debeAplicarTransicionAzul,
   extraerAzulEventId,
   extraerAzulOrderId,
+  extraerMetadatosReciboAzul,
   normalizarEstadoAzul,
   sanitizeEventId,
   sesionAzulReutilizable,
@@ -23,8 +24,34 @@ import {
   metodoPagoNormalizadoDesde,
 } from "./liquidacion_semanal_viaje.js";
 import { precioCentsViaje } from "./conciliacion.js";
+import { buildAzulPaymentLaunchUrl } from "./azul_payment_page.js";
+import {
+  aplicarCapturaAzulRecargaTaxista,
+  aplicarFalloAzulRecargaTaxista,
+  esPagoAzulRecargaTaxista,
+} from "./azul_recarga_taxista.js";
+import { azulRuntimeSecrets } from "./azul_secrets.js";
+import {
+  AZUL_DEMO_CERT_URL,
+  buildAzulCertificationInfoHtml,
+} from "./azul_certification_page.js";
 
 type AnyMap = Record<string, unknown>;
+
+function bolaIdDesdeViajeDoc(v: AnyMap): string {
+  if (String(v.tipoServicio ?? "").trim() !== "bola_ahorro") return "";
+  return String(v.bolaPuebloId ?? v.bolaId ?? "").trim();
+}
+
+function patchBolaMetodoPagoEnTx(
+  tx: Transaction,
+  v: AnyMap,
+  patch: Record<string, unknown>,
+): void {
+  const bolaId = bolaIdDesdeViajeDoc(v);
+  if (!bolaId) return;
+  tx.set(getFirestore().collection("bolas_pueblo").doc(bolaId), patch, { merge: true });
+}
 
 const db = () => getFirestore();
 
@@ -75,9 +102,60 @@ function metodoEsTarjeta(metodoPago: unknown): boolean {
   return m.includes("tarjeta") || m.includes("card");
 }
 
-function paymentPageUrlForOrder(azulOrderId: string, useStub: boolean): string {
-  if (!useStub || !azulOrderId) return "";
-  return `https://pruebas.azul.com.do/PaymentPage/?order=${encodeURIComponent(azulOrderId)}`;
+/** Alineado con EstadosViaje.normalizar (Flutter). */
+function normalizeEstadoViajeDoc(raw: unknown): string {
+  const s = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+  if (s === "encurso" || s === "en_curso" || s === "en_curzo") return "en_curso";
+  if (
+    s === "a_bordo" ||
+    s === "abordo" ||
+    s === "a_bordo_pickup" ||
+    s === "cliente_a_bordo"
+  ) {
+    return "a_bordo";
+  }
+  if (
+    s === "en_camino_pickup" ||
+    s === "en_camino" ||
+    s === "encaminopickup" ||
+    s === "encamino_pickup" ||
+    s === "encamino"
+  ) {
+    return "en_camino_pickup";
+  }
+  if (s === "finalizado" || s === "completado") return "completado";
+  if (s === "cancelado" || s === "cancelled") return "cancelado";
+  return s;
+}
+
+function estadoPermiteCambioTarjetaAEfectivo(estadoNorm: string, completado: boolean): boolean {
+  if (completado || estadoNorm === "completado") return true;
+  return (
+    estadoNorm === "aceptado" ||
+    estadoNorm === "en_camino_pickup" ||
+    estadoNorm === "a_bordo" ||
+    estadoNorm === "en_curso"
+  );
+}
+
+function viajeTarjetaSinCobrar(d: AnyMap): boolean {
+  const ep = String(d.estadoPago ?? "").trim().toLowerCase();
+  const paymentObj = (d.payment ?? {}) as AnyMap;
+  const ps = String(paymentObj.status ?? "").trim().toLowerCase();
+  return ep !== "verificado" && ps !== "captured";
+}
+
+function paymentUrlsForOrder(
+  azulOrderId: string,
+  azul: AzulRuntimeConfig,
+): { paymentPageUrl: string; paymentLaunchUrl: string } {
+  if (!azulOrderId) return { paymentPageUrl: "", paymentLaunchUrl: "" };
+  if (azul.useStub) {
+    const stub = `https://pruebas.azul.com.do/PaymentPage/?order=${encodeURIComponent(azulOrderId)}`;
+    return { paymentPageUrl: stub, paymentLaunchUrl: stub };
+  }
+  const launch = buildAzulPaymentLaunchUrl(azulOrderId);
+  return { paymentPageUrl: launch, paymentLaunchUrl: launch };
 }
 
 async function buscarPagoAzulPorOrderId(azulOrderId: string): Promise<{
@@ -114,7 +192,7 @@ function sanitizeWebhookBody(body: AnyMap): AnyMap {
 }
 
 /** Cliente: inicia sesión de pago AZUL (hosted page / API). */
-export const azulCreatePaymentSession = onCall(async (request) => {
+export const azulCreatePaymentSession = onCall({ secrets: azulRuntimeSecrets }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uid = request.auth.uid;
   const viajeId =
@@ -173,6 +251,7 @@ export const azulCreatePaymentSession = onCall(async (request) => {
           azulOrderId,
           estado: estadoPago,
         });
+        const urls = paymentUrlsForOrder(azulOrderId, azul);
         return {
           ok: true,
           wired: true,
@@ -181,7 +260,8 @@ export const azulCreatePaymentSession = onCall(async (request) => {
           pagoAzulId,
           azulOrderId,
           montoCents: Number(p.montoCents ?? montoCents),
-          paymentPageUrl: paymentPageUrlForOrder(azulOrderId, azul.useStub),
+          paymentPageUrl: urls.paymentPageUrl,
+          paymentLaunchUrl: urls.paymentLaunchUrl,
           useStub: azul.useStub,
         };
       }
@@ -190,7 +270,7 @@ export const azulCreatePaymentSession = onCall(async (request) => {
 
   const now = FieldValue.serverTimestamp();
   const azulOrderId = buildAzulOrderIdDeterministic(viajeId, montoCents, azul.useStub);
-  const paymentPageUrl = paymentPageUrlForOrder(azulOrderId, azul.useStub);
+  const urls = paymentUrlsForOrder(azulOrderId, azul);
 
   await pagoRef.set(
     {
@@ -199,7 +279,7 @@ export const azulCreatePaymentSession = onCall(async (request) => {
       azulOrderId,
       montoCents,
       moneda: "DOP",
-      estado: azul.useStub ? "pending" : "pending_configuration",
+      estado: "pending",
       environment: azul.environment,
       provider: "azul",
       wiredStub: azul.useStub,
@@ -234,16 +314,17 @@ export const azulCreatePaymentSession = onCall(async (request) => {
     pagoAzulId,
     azulOrderId,
     montoCents,
-    paymentPageUrl,
+    paymentPageUrl: urls.paymentPageUrl,
+    paymentLaunchUrl: urls.paymentLaunchUrl,
     useStub: azul.useStub,
     message: azul.useStub
-      ? "Sesión stub AZUL (staging). Conecte API real en azul.ts."
-      : "Pendiente integración API AZUL en servidor.",
+      ? "Sesión stub AZUL (staging)."
+      : "Abrí el navegador para completar el pago en AZUL.",
   };
 });
 
 /** Poll estado pago AZUL (cliente o admin). */
-export const azulVerifyPayment = onCall(async (request) => {
+export const azulVerifyPayment = onCall({ secrets: azulRuntimeSecrets }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const viajeId =
     typeof request.data?.viajeId === "string" ? request.data.viajeId.trim() : "";
@@ -271,14 +352,44 @@ export const azulVerifyPayment = onCall(async (request) => {
   }
   const pagoSnap = await db().collection("pagos_azul").doc(pagoAzulId).get();
   const p = (pagoSnap.data() ?? {}) as AnyMap;
+  const pEstado = normalizarEstadoAzul(p.estado);
+  let estadoPago = String(v.estadoPago ?? "").trim().toLowerCase();
+  let captured = estadoPago === "verificado";
+  let reconciled = false;
+
+  if (!captured && pEstado === "captured") {
+    try {
+      await aplicarCapturaAzulEnViaje({
+        viajeId,
+        pagoAzulId,
+        azulOrderId: String(p.azulOrderId ?? ""),
+        actorUid: uid,
+      });
+      reconciled = true;
+      captured = true;
+    } catch (e) {
+      logger.warn("[azulVerifyPayment] reconcile captured→verificado falló", {
+        viajeId,
+        err: e,
+      });
+    }
+  }
+
+  const vFresh = await db().collection("viajes").doc(viajeId).get();
+  const vf = (vFresh.data() ?? {}) as AnyMap;
+  estadoPago = String(vf.estadoPago ?? estadoPago).trim().toLowerCase();
+  captured = captured || estadoPago === "verificado";
+
   return {
     ok: true,
     viajeId,
     pagoAzulId,
     estado: String(p.estado ?? "unknown"),
     azulOrderId: String(p.azulOrderId ?? ""),
-    paymentStatus: String(((v.payment ?? {}) as AnyMap).status ?? ""),
-    estadoPago: String(v.estadoPago ?? ""),
+    paymentStatus: String(((vf.payment ?? {}) as AnyMap).status ?? ""),
+    estadoPago: String(vf.estadoPago ?? ""),
+    captured,
+    reconciled,
   };
 });
 
@@ -312,11 +423,12 @@ async function registrarEventoWebhookAzul(input: {
     );
 }
 
-async function aplicarEstadoIntermedioAzul(input: {
+export async function aplicarEstadoIntermedioAzul(input: {
   viajeId: string;
   pagoAzulId: string;
   azulOrderId: string;
   estadoNuevo: AzulPagoEstado;
+  lastError?: string;
 }): Promise<void> {
   const viajeRef = db().collection("viajes").doc(input.viajeId);
   const pagoRef = db().collection("pagos_azul").doc(input.pagoAzulId);
@@ -326,6 +438,9 @@ async function aplicarEstadoIntermedioAzul(input: {
     const vSnap = await tx.get(viajeRef);
     const pSnap = await tx.get(pagoRef);
     if (!vSnap.exists || !pSnap.exists) return;
+
+    const v = (vSnap.data() ?? {}) as AnyMap;
+    if (metodoPagoNormalizadoDesde(v) !== "tarjeta") return;
 
     const p = (pSnap.data() ?? {}) as AnyMap;
     const trans = debeAplicarTransicionAzul(p.estado, input.estadoNuevo);
@@ -338,6 +453,10 @@ async function aplicarEstadoIntermedioAzul(input: {
     if (input.estadoNuevo === "authorized") pagoPatch.authorizedAt = now;
     if (input.estadoNuevo === "refunded") pagoPatch.refundedAt = now;
     if (input.estadoNuevo === "failed") pagoPatch.failedAt = now;
+    const err = String(input.lastError ?? "").trim();
+    if (input.estadoNuevo === "failed" && err) {
+      pagoPatch.lastError = err.slice(0, 500);
+    }
 
     tx.update(pagoRef, pagoPatch);
 
@@ -352,18 +471,35 @@ async function aplicarEstadoIntermedioAzul(input: {
     if (input.estadoNuevo === "refunded") {
       viajePatch["payment.refundedAt"] = now;
     }
+    if (input.estadoNuevo === "failed" && err) {
+      viajePatch["payment.azulLastError"] = err.slice(0, 500);
+    }
     tx.update(viajeRef, viajePatch);
   });
 }
 
 /** Webhook AZUL (HTTPS). Validar firma cuando haya credenciales reales. */
-export const azulWebhook = onRequest(async (req, res) => {
+export const azulWebhook = onRequest({ secrets: azulRuntimeSecrets }, async (req, res) => {
   if (req.method !== "POST") {
-    res.status(405).send("Method Not Allowed");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.status(200).send(
+      buildAzulCertificationInfoHtml({
+        titulo: "Webhook AZUL",
+        endpoint: "https://us-central1-flygo-rd.cloudfunctions.net/azulWebhook",
+        metodo: "POST (servidor-a-servidor desde AZUL)",
+        uso: "AZUL notifica captura/estado del pago. No es para abrir en navegador.",
+        nota: "Ver GET en navegador es solo verificación de que el endpoint existe. Las notificaciones reales llegan por POST.",
+        demoUrl: AZUL_DEMO_CERT_URL,
+        estado: "ok",
+      }),
+    );
     return;
   }
   const financeCfg = await getFinanceConfig();
-  if (!financeCfg.pagosConTarjetaAzulHabilitados) {
+  if (
+    !financeCfg.pagosConTarjetaAzulHabilitados &&
+    !financeCfg.recargaPrepagoAzulHabilitados
+  ) {
     res.status(200).json({ ok: true, omitido: true });
     return;
   }
@@ -427,7 +563,38 @@ export const azulWebhook = onRequest(async (req, res) => {
   }
 
   const viajeId = String(pago.data.viajeId ?? "").trim();
+  const recargaId = String(pago.data.recargaId ?? "").trim();
+  const esRecarga = esPagoAzulRecargaTaxista(pago.data);
   const pagoAzulId = pago.pagoAzulId;
+
+  if (esRecarga && !financeCfg.recargaPrepagoAzulHabilitados) {
+    await registrarEventoWebhookAzul({
+      eventId,
+      azulOrderId,
+      estado: estadoNuevo,
+      motivo: "recarga_prepago_azul_off",
+      applied: false,
+      body,
+      pagoAzulId,
+      viajeId: recargaId,
+    });
+    res.status(200).json({ ok: true, ignored: true, motivo: "recarga_prepago_azul_off" });
+    return;
+  }
+  if (!esRecarga && !financeCfg.pagosConTarjetaAzulHabilitados) {
+    await registrarEventoWebhookAzul({
+      eventId,
+      azulOrderId,
+      estado: estadoNuevo,
+      motivo: "pagos_tarjeta_azul_off",
+      applied: false,
+      body,
+      pagoAzulId,
+      viajeId,
+    });
+    res.status(200).json({ ok: true, ignored: true, motivo: "pagos_tarjeta_azul_off" });
+    return;
+  }
   const trans = debeAplicarTransicionAzul(pago.data.estado, estadoNuevo);
 
   if (!trans.aplicar) {
@@ -452,13 +619,29 @@ export const azulWebhook = onRequest(async (req, res) => {
     return;
   }
 
-  if (estadoNuevo === "captured" && viajeId) {
-    await aplicarCapturaAzulEnViaje({
-      viajeId,
-      pagoAzulId,
-      azulOrderId,
-      actorUid: "azul_webhook",
-    });
+  if (estadoNuevo === "captured") {
+    const reciboMeta = extraerMetadatosReciboAzul(body);
+    if (esRecarga && recargaId) {
+      await aplicarCapturaAzulRecargaTaxista({
+        recargaId,
+        pagoAzulId,
+        azulOrderId,
+        actorUid: "azul_webhook",
+        reciboMeta,
+      });
+    } else if (viajeId) {
+      await aplicarCapturaAzulEnViaje({
+        viajeId,
+        pagoAzulId,
+        azulOrderId,
+        actorUid: "azul_webhook",
+        reciboMeta,
+      });
+    }
+  } else if (esRecarga && recargaId) {
+    if (estadoNuevo === "failed") {
+      await aplicarFalloAzulRecargaTaxista({ recargaId, pagoAzulId, azulOrderId });
+    }
   } else if (viajeId) {
     await aplicarEstadoIntermedioAzul({
       viajeId,
@@ -489,6 +672,7 @@ export async function aplicarCapturaAzulEnViaje(input: {
   pagoAzulId: string;
   azulOrderId: string;
   actorUid: string;
+  reciboMeta?: import("./azul_webhook_logic.js").AzulReciboMetadatos;
 }): Promise<void> {
   const viajeRef = db().collection("viajes").doc(input.viajeId);
   const pagoRef = db().collection("pagos_azul").doc(input.pagoAzulId);
@@ -505,12 +689,29 @@ export async function aplicarCapturaAzulEnViaje(input: {
     const ep = String(v.estadoPago ?? "").trim().toLowerCase();
     if (ep === "verificado") return;
 
+    const metodoNorm = metodoPagoNormalizadoDesde(v);
+    if (metodoNorm !== "tarjeta") {
+      logger.warn("[aplicarCapturaAzulEnViaje] ignorado: viaje ya no es tarjeta", {
+        viajeId: input.viajeId,
+        metodoNorm,
+      });
+      return;
+    }
+
     const trans = debeAplicarTransicionAzul(p.estado, "captured");
     if (!trans.aplicar && normalizarEstadoAzul(p.estado) !== "captured") return;
+
+    const uidCliente = String(v.uidCliente ?? v.clienteId ?? "").trim();
+    const montoDeuda =
+      typeof v.cobroClienteMontoRd === "number" && Number.isFinite(v.cobroClienteMontoRd)
+        ? Number(v.cobroClienteMontoRd)
+        : precioCentsViaje(v) / 100;
 
     const patchViaje: AnyMap = {
       estadoPago: "verificado",
       pagoAzulId: input.pagoAzulId,
+      cobroClientePendiente: false,
+      cobroClienteEstado: "pagado",
       "payment.provider": "azul",
       "payment.status": "captured",
       "payment.azulOrderId": input.azulOrderId,
@@ -519,7 +720,23 @@ export async function aplicarCapturaAzulEnViaje(input: {
       updatedAt: now,
       actualizadoEn: now,
     };
-    const metodoNorm = metodoPagoNormalizadoDesde(v);
+    const meta = input.reciboMeta;
+    if (meta?.authorizationCode) patchViaje["payment.azulAuthCode"] = meta.authorizationCode;
+    if (meta?.cardBrand) patchViaje["payment.azulCardBrand"] = meta.cardBrand;
+    if (meta?.cardLast4) patchViaje["payment.azulCardLast4"] = meta.cardLast4;
+    if (meta?.rrn) patchViaje["payment.azulRrn"] = meta.rrn;
+    if (meta?.responseCode) patchViaje["payment.azulResponseCode"] = meta.responseCode;
+
+    const pagoPatch: AnyMap = {
+      estado: "captured",
+      capturedAt: now,
+      updatedAt: now,
+    };
+    if (meta?.authorizationCode) pagoPatch.authorizationCode = meta.authorizationCode;
+    if (meta?.cardBrand) pagoPatch.cardBrand = meta.cardBrand;
+    if (meta?.cardLast4) pagoPatch.cardLast4 = meta.cardLast4;
+    if (meta?.rrn) pagoPatch.rrn = meta.rrn;
+    if (meta?.responseCode) pagoPatch.responseCode = meta.responseCode;
     if (metodoNorm === "tarjeta" || metodoNorm === "transferencia") {
       patchViaje.elegibleLiquidacionSemanal = elegibleLiquidacionSemanalCache({
         ...v,
@@ -528,17 +745,30 @@ export async function aplicarCapturaAzulEnViaje(input: {
       });
     }
 
+    if (uidCliente && v.cobroClientePendiente === true) {
+      tx.set(
+        db().collection("usuarios").doc(uidCliente),
+        {
+          tieneCobroViajePendiente: false,
+          deudaViajesClienteRd: FieldValue.increment(-montoDeuda),
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+    }
+
     tx.update(viajeRef, patchViaje);
-    tx.update(pagoRef, {
-      estado: "captured",
-      capturedAt: now,
+    tx.update(pagoRef, pagoPatch);
+    patchBolaMetodoPagoEnTx(tx, v, {
+      metodoPago: "tarjeta",
+      estadoPago: "verificado",
       updatedAt: now,
     });
   });
 }
 
 /** Staging: simula captura AZUL tras pago stub (solo admin o AZUL_USE_STUB). */
-export const azulSimularCapturaStub = onCall(async (request) => {
+export const azulSimularCapturaStub = onCall({ secrets: azulRuntimeSecrets }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const role = await getRole(request.auth.uid);
   if (role !== "admin") throw new HttpsError("permission-denied", "Solo admin");
@@ -564,7 +794,106 @@ export const azulSimularCapturaStub = onCall(async (request) => {
     pagoAzulId,
     azulOrderId,
     actorUid: request.auth.uid,
+    reciboMeta: {
+      authorizationCode: "OK-STUB",
+      cardBrand: "Visa",
+      cardLast4: "4242",
+      rrn: `STUB-${Date.now()}`,
+      responseCode: "00",
+    },
   });
 
   return { ok: true, viajeId, estado: "captured" };
+});
+
+/**
+ * Cliente: tarjeta sin cobrar → cambia a efectivo (estilo Uber/DiDi).
+ * El conductor ve el monto a cobrar en mano; AZUL tardío no pisa el cambio.
+ */
+export const cambiarTarjetaAEfectivoViaje = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uid = request.auth.uid;
+  const viajeId =
+    typeof request.data?.viajeId === "string" ? request.data.viajeId.trim() : "";
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  const viaje = await assertClienteDuenoViaje(uid, viajeId);
+
+  if (!metodoEsTarjeta(viaje.metodoPago)) {
+    throw new HttpsError("failed-precondition", "El viaje no está en método Tarjeta");
+  }
+  if (!viajeTarjetaSinCobrar(viaje)) {
+    throw new HttpsError("failed-precondition", "La tarjeta ya fue cobrada por AZUL");
+  }
+
+  const completado = viaje.completado === true;
+  const estadoNorm = normalizeEstadoViajeDoc(viaje.estado);
+  if (estadoNorm === "cancelado") {
+    throw new HttpsError("failed-precondition", "El viaje está cancelado");
+  }
+  if (!estadoPermiteCambioTarjetaAEfectivo(estadoNorm, completado)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Solo podés cambiar a efectivo con el viaje activo o en la factura pendiente.",
+    );
+  }
+
+  const uidTaxista = String(viaje.uidTaxista ?? viaje.taxistaId ?? "").trim();
+  if (!uidTaxista && !completado) {
+    throw new HttpsError("failed-precondition", "Aún no hay conductor asignado");
+  }
+
+  const pagoAzulId = String(viaje.pagoAzulId ?? `azul_${viajeId}`).trim();
+  const pagoRef = db().collection("pagos_azul").doc(pagoAzulId);
+  const now = FieldValue.serverTimestamp();
+
+  await db().runTransaction(async (tx) => {
+    const vSnap = await tx.get(viajeRef);
+    if (!vSnap.exists) throw new HttpsError("not-found", "Viaje no encontrado");
+    const v = (vSnap.data() ?? {}) as AnyMap;
+
+    const uidCliente = String(v.uidCliente ?? v.clienteId ?? "").trim();
+    if (uidCliente !== uid) {
+      throw new HttpsError("permission-denied", "No autorizado para este viaje");
+    }
+    if (!metodoEsTarjeta(v.metodoPago) || !viajeTarjetaSinCobrar(v)) {
+      throw new HttpsError("failed-precondition", "El pago con tarjeta ya no está pendiente");
+    }
+
+    const patchViaje: AnyMap = {
+      metodoPago: "Efectivo",
+      metodoPagoNormalizado: "efectivo",
+      metodoPagoAnterior: "tarjeta",
+      tarjetaCambioEfectivoEn: now,
+      metodoPagoUpdatedBy: uid,
+      metodoPagoUpdatedAt: now,
+      "payment.supersededByEfectivo": true,
+      "payment.supersededAt": now,
+      "payment.updatedAt": now,
+      updatedAt: now,
+      actualizadoEn: now,
+    };
+    tx.update(viajeRef, patchViaje);
+
+    const pSnap = await tx.get(pagoRef);
+    if (pSnap.exists) {
+      tx.update(pagoRef, {
+        estado: "failed",
+        supersededByEfectivo: true,
+        supersededAt: now,
+        lastError: "Cliente cambió a pago en efectivo",
+        updatedAt: now,
+      });
+    }
+    patchBolaMetodoPagoEnTx(tx, v, {
+      metodoPago: "efectivo",
+      metodoPagoUpdatedBy: uid,
+      metodoPagoUpdatedAt: now,
+      updatedAt: now,
+    });
+  });
+
+  logger.info("[cambiarTarjetaAEfectivoViaje] ok", { viajeId, uid });
+  return { ok: true, viajeId, metodoPago: "Efectivo" };
 });

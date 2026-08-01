@@ -20,6 +20,7 @@ import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/widgets/bola_cancelacion_listener.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
 import 'package:flygo_nuevo/widgets/corporativo_auto_abrir_watcher.dart';
@@ -27,19 +28,32 @@ import 'package:flygo_nuevo/widgets/taxista_post_viaje_listener.dart';
 import 'package:flygo_nuevo/widgets/viaje_overlay_error_shield.dart';
 import 'package:flygo_nuevo/widgets/taxista_registro_gate.dart';
 import 'package:flygo_nuevo/widgets/taxista_documentos_gate.dart';
+import 'package:flygo_nuevo/widgets/taxista_bola_viaje_retomar_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_taxista_banner.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
 /// Shell del taxista: una barra inferior fija; cada pestaña usa un [Navigator] anidado.
-class TaxistaShell extends StatelessWidget {
+class TaxistaShell extends StatefulWidget {
   const TaxistaShell({super.key, this.openDocumentosOnLaunch = false});
 
   /// Abre Cuenta y apila [DocumentosTaxista] (documentos pendientes al entrar).
   final bool openDocumentosOnLaunch;
+
+  @override
+  State<TaxistaShell> createState() => _TaxistaShellState();
+}
+
+class _TaxistaShellState extends State<TaxistaShell> {
+  @override
+  void initState() {
+    super.initState();
+    PoolTimbreSessionGuard.activarSesionConductor();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,7 +64,7 @@ class TaxistaShell extends StatelessWidget {
             child: BolaPostFacturaListener(
               child: TaxistaPostViajeListener(
                 child: _TaxistaShellScaffold(
-                  openDocumentosOnLaunch: openDocumentosOnLaunch,
+                  openDocumentosOnLaunch: widget.openDocumentosOnLaunch,
                 ),
               ),
             ),
@@ -114,6 +128,17 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
   void _aplicarViajeActivoDesdeStream(bool ok) {
     if (!mounted) return;
     _bootstrapViajeTimeout?.cancel();
+
+    if (ActiveTripService.debeForzarInicioTaxistaShellBola) {
+      _viajeOffDebounce?.cancel();
+      if (_viajeActivoShell != false) {
+        print('[VIAJE_ACTIVO] taxista_shell forzar bola → tabs');
+        setState(() {
+          _viajeActivoShell = false;
+        });
+      }
+      return;
+    }
 
     if (ok) {
       _viajeOffDebounce?.cancel();
@@ -296,6 +321,8 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
     unawaited(ComisionPrepagoConfigService.ensureStarted());
     unawaited(FinanceConfigService.ensureStarted());
     unawaited(RaiUbicacionTaxistaService.instance.ensureStarted());
+    RaiUbicacionTaxistaService.instance.modo.addListener(_onUbicacionTaxistaListo);
+    _onUbicacionTaxistaListo();
 
     if (widget.openDocumentosOnLaunch) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -380,6 +407,12 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
 
       _shellRebuildListener = () {
         if (!mounted) return;
+        if (ActiveTripService.debeForzarInicioTaxistaShellBola) {
+          if (_viajeActivoShell != false) {
+            setState(() => _viajeActivoShell = false);
+          }
+          return;
+        }
         if (!ActiveTripService.debeBloquearShellSinViajeTaxista &&
             !ActiveTripService.debeMantenerOverlayViajeEnShell) {
           return;
@@ -510,9 +543,18 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
     });
   }
 
+  void _onUbicacionTaxistaListo() {
+    if (RaiUbicacionTaxistaService.instance.modo.value ==
+        RaiUbicacionTaxistaModo.listo) {
+      UbicacionTaxista.iniciarActualizacion();
+    }
+  }
+
   @override
   void dispose() {
     ShellTabController.taxistaIndex.removeListener(_onShellTabController);
+    RaiUbicacionTaxistaService.instance.modo
+        .removeListener(_onUbicacionTaxistaListo);
     _bootstrapViajeTimeout?.cancel();
     _viajeOffDebounce?.cancel();
     if (_offlineListener != null) {
@@ -552,8 +594,10 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
   @override
   Widget build(BuildContext context) {
     final String? uidOffline = FirebaseAuth.instance.currentUser?.uid;
-    final bool pantallaViajeEnCurso =
-        !_corpExcluyeOverlayViajeEnCurso && _viajeActivoShell == true;
+    final bool forzarBola = ActiveTripService.debeForzarInicioTaxistaShellBola;
+    final bool pantallaViajeEnCurso = !forzarBola &&
+        !_corpExcluyeOverlayViajeEnCurso &&
+        _viajeActivoShell == true;
     if (pantallaViajeEnCurso) {
       print(
           '[VIAJE_ACTIVO] taxista_shell: pantalla completa ViajeEnCursoTaxista (sin tabs)');
@@ -589,6 +633,8 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
         children: [
           RaiOfflineBanner(uid: uidOffline),
           const RaiUbicacionTaxistaBanner(),
+          if (uidOffline != null && uidOffline.isNotEmpty)
+            TaxistaBolaViajeRetomarBanner(uid: uidOffline),
           Expanded(
             child: IndexedStack(
               index: _index,

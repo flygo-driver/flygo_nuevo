@@ -30,6 +30,9 @@ class FinanceConfigService {
   /// Fase 6: tarjeta AZUL en UI + callables (default off).
   static bool pagosConTarjetaAzulHabilitados = false;
 
+  /// Fase 6b: taxista recarga prepago con tarjeta débito AZUL (default off).
+  static bool recargaPrepagoAzulHabilitados = false;
+
   /// Giras por cupos: cliente transfiere 100% a cuenta RAI (nuevas giras `recaudoModelo: central`).
   static bool poolRecaudoCentralHabilitado = false;
 
@@ -74,6 +77,8 @@ class FinanceConfigService {
         _boolOr(data['qrRecaudoPopularHabilitado'], false);
     pagosConTarjetaAzulHabilitados =
         _boolOr(data['pagosConTarjetaAzulHabilitados'], false);
+    recargaPrepagoAzulHabilitados =
+        _boolOr(data['recargaPrepagoAzulHabilitados'], false);
     poolRecaudoCentralHabilitado =
         _boolOr(data['poolRecaudoCentralHabilitado'], false);
     poolRecaudoAutoVerificarConciliacion =

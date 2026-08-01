@@ -6,6 +6,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 
 /// Notificaciones locales con sonido + anti-spam (dedupe + debounce).
 /// Requisitos:
@@ -31,6 +32,12 @@ class NotificationService {
   AudioPlayer? _timbrePlayer;
   int _lastPoolOfferSoundMs = 0;
   static const int _poolOfferSoundDebounceMs = 480;
+
+  /// Viajes que el pasajero acaba de crear: nunca timbre en su dispositivo.
+  final Set<String> _viajesPropiosSinTimbreMem = <String>{};
+
+  /// Ventana corta tras confirmar pedido (app unificada: evita timbre del pool propio).
+  int _suprimirTimbreClienteHastaMs = 0;
 
   // 🔔 CANALES ANDROID ACTUALIZADOS (SIN RASTRO DE FLYGO)
   static const String _channelId = 'rai_driver_offers_v1'; // ✅ NUEVO ID
@@ -129,8 +136,8 @@ class NotificationService {
     }
   }
 
-  /// Timbre de ofertas del pool: conductor o Play unificada (nunca APK solo pasajero).
-  static bool get _timbrePoolPermitido => isTaxistaCapableFlavor;
+  /// Timbre de ofertas del pool: solo APK conductor o sesión taxista explícita.
+  static bool get _timbrePoolPermitido => PoolTimbreSessionGuard.timbrePoolPermitido;
 
   /// Timbre / bandeja Giras por cupos: pasajero o Play unificada.
   static bool get _girasClientePermitido => isPasajeroCapableFlavor;
@@ -140,6 +147,7 @@ class NotificationService {
   Future<void> marcarViajePropioSinTimbre(String viajeId) async {
     final String id = viajeId.trim();
     if (id.isEmpty) return;
+    _viajesPropiosSinTimbreMem.add(id);
     await ensureInited();
     final prefs = await SharedPreferences.getInstance();
     final ids = prefs.getStringList(_kSeenIds) ?? <String>[];
@@ -152,8 +160,41 @@ class NotificationService {
     );
   }
 
+  /// Antes de escribir en Firestore: el ID ya está reservado; evita carrera con el pool.
+  Future<void> prepararViajeClienteSinTimbre(String viajeId) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return;
+    _viajesPropiosSinTimbreMem.add(id);
+    suprimirTimbrePoolCliente();
+    await marcarViajePropioSinTimbre(id);
+    await stopTimbre();
+  }
+
+  /// Silencia timbre de pool en el dispositivo del pasajero (p. ej. al confirmar viaje).
+  void suprimirTimbrePoolCliente({
+    Duration duracion = const Duration(seconds: 45),
+  }) {
+    final int hasta =
+        DateTime.now().add(duracion).millisecondsSinceEpoch;
+    if (hasta > _suprimirTimbreClienteHastaMs) {
+      _suprimirTimbreClienteHastaMs = hasta;
+    }
+  }
+
+  bool _esViajePropioSinTimbre(String viajeId) {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return false;
+    return _viajesPropiosSinTimbreMem.contains(id);
+  }
+
+  bool _debeSuprimirTimbreComoCliente() {
+    if (PoolTimbreSessionGuard.debeSuprimirPoolTimbre) return true;
+    return DateTime.now().millisecondsSinceEpoch < _suprimirTimbreClienteHastaMs;
+  }
+
   /// Timbre inmediato (app abierta) con el mismo WAV que el canal Android.
-  Future<void> _playTimbreAsset() async {
+  Future<void> _playTimbreAsset({bool pool = false}) async {
+    if (pool && !_timbrePoolPermitido) return;
     try {
       _timbrePlayer ??= AudioPlayer();
       await _timbrePlayer!.stop();
@@ -237,12 +278,13 @@ class NotificationService {
   /// con `_vistosParaTimbre`.
   Future<void> playPoolOfferSoundInApp() async {
     if (!_timbrePoolPermitido) return;
+    if (_debeSuprimirTimbreComoCliente()) return;
     try {
       final int now = DateTime.now().millisecondsSinceEpoch;
       if (now - _lastPoolOfferSoundMs < _poolOfferSoundDebounceMs) return;
       _lastPoolOfferSoundMs = now;
       await ensureInited();
-      await _playTimbreAsset();
+      await _playTimbreAsset(pool: true);
     } catch (e, st) {
       debugPrint('playPoolOfferSoundInApp: $e');
       debugPrint(st.toString());
@@ -383,6 +425,10 @@ class NotificationService {
     bool skipSound = false,
   }) async {
     if (!_timbrePoolPermitido) return;
+    if (_esViajePropioSinTimbre(viajeId)) return;
+    if (_debeSuprimirTimbreComoCliente()) {
+      skipSound = true;
+    }
     await ensureInited();
 
     final prefs = await SharedPreferences.getInstance();
@@ -393,7 +439,13 @@ class NotificationService {
 
     // Timbre al instante (primer plano); el debounce solo limita la tarjeta en bandeja.
     if (!skipSound) {
-      await _playTimbreAsset();
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastPoolOfferSoundMs < 1500) {
+        skipSound = true;
+      }
+    }
+    if (!skipSound) {
+      await _playTimbreAsset(pool: true);
     }
 
     // Debounce temporal (solo notificación visual; el sonido ya sonó arriba)

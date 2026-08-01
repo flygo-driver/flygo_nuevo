@@ -1,19 +1,28 @@
 // lib/servicios/ubicacion_taxista.dart
 import 'dart:async';
-import 'package:geolocator/geolocator.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:geolocator/geolocator.dart';
+
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
+import 'package:flygo_nuevo/utils/rai_geohash.dart';
+import 'package:flygo_nuevo/utils/rai_region_operativa.dart';
 
-/// Publicación de ubicación del taxista. Lectura de permiso: **pasiva**
-/// ([readServiceAndPermissionStabilizedNoRequest] en obtenerUbicacionActual).
+/// Publicación de ubicación del taxista en `drivers_location` (mapa cliente en vivo).
 class UbicacionTaxista {
   static StreamSubscription<Position>? _subscription;
   static bool _isActive = false;
   static bool _syncUbicacionTurismo = false;
   static String? _uidTurismoSync;
+  static double? _ultimaLat;
+  static double? _ultimaLon;
+  static String? _viajeActivoCache;
+  static String? _clienteActivoCache;
+  static DateTime _ultimaLecturaViajeActivo =
+      DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Activa publicación en `choferes_turismo` (auto-asignación turismo).
   static Future<void> habilitarSyncChoferTurismo(String uid) async {
@@ -27,10 +36,7 @@ class UbicacionTaxista {
     _uidTurismoSync = null;
   }
 
-  /// Inicia la escucha de la ubicación en tiempo real.
-  /// Si `soloCuandoDisponible` es true (por defecto), solo publicará la ubicación
-  /// si el taxista está disponible (sin viaje activo). Debe llamarse en la pantalla
-  /// de viajes disponibles (cuando el taxista está disponible).
+  /// Inicia GPS en tiempo real → `taxistas` + `drivers_location` (`tracking: true`).
   static void iniciarActualizacion({bool soloCuandoDisponible = true}) {
     if (_isActive) return;
 
@@ -39,40 +45,16 @@ class UbicacionTaxista {
 
     const LocationSettings settings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 10,
+      distanceFilter: 6,
     );
 
     _subscription = Geolocator.getPositionStream(locationSettings: settings)
         .listen((Position pos) async {
-      // Siempre actualizar la colección taxistas (para administración)
-      await FirebaseFirestore.instance
-          .collection('taxistas')
-          .doc(user.uid)
-          .set({
-        'ubicacion': GeoPoint(pos.latitude, pos.longitude),
-        'ultimaActualizacion': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      // ✅ Determinar si el taxista tiene viaje activo
-      bool tieneViajeActivo = false;
-      if (soloCuandoDisponible) {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(user.uid)
-            .get();
-        tieneViajeActivo =
-            (userDoc.data()?['viajeActivoId'] as String?)?.isNotEmpty == true;
-      }
-
-      // ✅ Siempre publicar en drivers_location con online = !tieneViajeActivo
-      await FirebaseFirestore.instance
-          .collection('drivers_location')
-          .doc(user.uid)
-          .set({
-        'location': GeoPoint(pos.latitude, pos.longitude),
-        'online': !tieneViajeActivo, // true si libre, false si ocupado
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await _publicarPosicionTaxista(
+        uid: user.uid,
+        pos: pos,
+        soloCuandoDisponible: soloCuandoDisponible,
+      );
 
       if (_syncUbicacionTurismo && _uidTurismoSync == user.uid) {
         unawaited(
@@ -88,30 +70,165 @@ class UbicacionTaxista {
     _isActive = true;
   }
 
-  /// Detiene la escucha de ubicación y elimina el registro de drivers_location
-  /// (para que el taxista desaparezca del mapa de clientes).
+  /// Ping desde viaje activo (GPS de navegación) — mantiene `drivers_location` al día.
+  static Future<void> publicarPingDesdeViajeActivo({
+    required String uid,
+    required double lat,
+    required double lon,
+    required String viajeId,
+    String? clienteId,
+    double? heading,
+  }) async {
+    final Position pos = Position(
+      latitude: lat,
+      longitude: lon,
+      timestamp: DateTime.now(),
+      accuracy: 0,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: heading ?? -1,
+      headingAccuracy: 0,
+      speed: 0,
+      speedAccuracy: 0,
+    );
+    _viajeActivoCache = viajeId;
+    _clienteActivoCache = clienteId;
+    await _publicarPosicionTaxista(
+      uid: uid,
+      pos: pos,
+      soloCuandoDisponible: true,
+      viajeIdForzado: viajeId,
+      clienteIdForzado: clienteId,
+    );
+  }
+
+  static Future<void> _publicarPosicionTaxista({
+    required String uid,
+    required Position pos,
+    required bool soloCuandoDisponible,
+    String? viajeIdForzado,
+    String? clienteIdForzado,
+  }) async {
+    await FirebaseFirestore.instance.collection('taxistas').doc(uid).set({
+      'ubicacion': GeoPoint(pos.latitude, pos.longitude),
+      'ultimaActualizacion': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    String? viajeActivoId = viajeIdForzado;
+    String? clienteId = clienteIdForzado;
+
+    if (soloCuandoDisponible &&
+        viajeActivoId == null &&
+        DateTime.now().difference(_ultimaLecturaViajeActivo) >
+            const Duration(seconds: 12)) {
+      final DocumentSnapshot<Map<String, dynamic>> userDoc =
+          await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
+      viajeActivoId = (userDoc.data()?['viajeActivoId'] as String?)?.trim();
+      if (viajeActivoId != null && viajeActivoId.isEmpty) {
+        viajeActivoId = null;
+      }
+      _viajeActivoCache = viajeActivoId;
+      _ultimaLecturaViajeActivo = DateTime.now();
+
+      if (viajeActivoId != null && clienteId == null) {
+        final DocumentSnapshot<Map<String, dynamic>> vDoc =
+            await FirebaseFirestore.instance
+                .collection('viajes')
+                .doc(viajeActivoId)
+                .get();
+        clienteId = (vDoc.data()?['uidCliente'] ?? vDoc.data()?['clienteId'])
+            ?.toString()
+            .trim();
+        if (clienteId != null && clienteId.isEmpty) clienteId = null;
+        _clienteActivoCache = clienteId;
+      }
+    } else {
+      viajeActivoId ??= _viajeActivoCache;
+      clienteId ??= _clienteActivoCache;
+    }
+
+    final bool tieneViajeActivo = viajeActivoId != null && viajeActivoId.isNotEmpty;
+    final double? bearing = _resolverBearing(pos);
+
+    final Map<String, dynamic> payload = <String, dynamic>{
+      'location': GeoPoint(pos.latitude, pos.longitude),
+      'geohash': RaiGeohash.encode(pos.latitude, pos.longitude, precision: 7),
+      'region': RaiRegionOperativa.resolver(pos.latitude, pos.longitude),
+      'tracking': true,
+      'online': !tieneViajeActivo,
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (bearing != null) 'heading': bearing,
+    };
+
+    if (tieneViajeActivo) {
+      payload['viajeId'] = viajeActivoId;
+      if (clienteId != null && clienteId.isNotEmpty) {
+        payload['clienteId'] = clienteId;
+      }
+    } else {
+      payload['viajeId'] = FieldValue.delete();
+      payload['clienteId'] = FieldValue.delete();
+      _viajeActivoCache = null;
+      _clienteActivoCache = null;
+    }
+
+    await FirebaseFirestore.instance
+        .collection('drivers_location')
+        .doc(uid)
+        .set(payload, SetOptions(merge: true));
+
+    _ultimaLat = pos.latitude;
+    _ultimaLon = pos.longitude;
+  }
+
+  static double? _resolverBearing(Position pos) {
+    if (pos.heading.isFinite && pos.heading >= 0 && pos.heading <= 360) {
+      return pos.heading;
+    }
+    if (_ultimaLat != null && _ultimaLon != null) {
+      final double d = Geolocator.distanceBetween(
+        _ultimaLat!,
+        _ultimaLon!,
+        pos.latitude,
+        pos.longitude,
+      );
+      if (d >= 4) {
+        return Geolocator.bearingBetween(
+          _ultimaLat!,
+          _ultimaLon!,
+          pos.latitude,
+          pos.longitude,
+        );
+      }
+    }
+    return null;
+  }
+
+  /// Detiene GPS y oculta al taxista del mapa cliente.
   static Future<void> detenerActualizacion() async {
     if (_subscription != null) {
       await _subscription!.cancel();
       _subscription = null;
     }
     _isActive = false;
+    _viajeActivoCache = null;
+    _clienteActivoCache = null;
 
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      // Marcar como offline en drivers_location
       await FirebaseFirestore.instance
           .collection('drivers_location')
           .doc(user.uid)
           .set({
         'online': false,
+        'tracking': false,
+        'viajeId': FieldValue.delete(),
+        'clienteId': FieldValue.delete(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
   }
 
-  /// Marca al taxista como "no disponible" (oculta del mapa de clientes)
-  /// sin detener la escucha de ubicación.
   static Future<void> marcarNoDisponible() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
@@ -125,7 +242,6 @@ class UbicacionTaxista {
     }
   }
 
-  /// Marca al taxista como "disponible" (visible en el mapa de clientes)
   static Future<void> marcarDisponible() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
@@ -134,12 +250,12 @@ class UbicacionTaxista {
           .doc(user.uid)
           .set({
         'online': true,
+        'tracking': true,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
   }
 
-  /// Obtiene la ubicación actual una sola vez.
   static Future<Position> obtenerUbicacionActual() async {
     final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest();
     if (!snap.serviceEnabled) {
@@ -161,14 +277,13 @@ class UbicacionTaxista {
       throw Exception('Permisos de ubicación denegados permanentemente');
     }
 
-    return await Geolocator.getCurrentPosition();
+    return Geolocator.getCurrentPosition();
   }
 
-  /// Stream de la ubicación actual (solo datos, sin actualizar Firestore).
   static Stream<Position> obtenerStreamUbicacion() {
     const LocationSettings settings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 10,
+      distanceFilter: 8,
     );
     return Geolocator.getPositionStream(locationSettings: settings);
   }

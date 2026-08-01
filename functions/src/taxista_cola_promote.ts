@@ -53,6 +53,8 @@ function assignViajeAAceptadoEnTx(
     marca: string;
     modelo: string;
     color: string;
+    /** Viaje promovido desde cola tras finalizar el anterior (encadenamiento). */
+    desdeCola?: boolean;
   },
 ): void {
   const tipoServicio = toStr(params.v.tipoServicio) || "normal";
@@ -84,6 +86,12 @@ function assignViajeAAceptadoEnTx(
     reservadoPor: "",
     reservadoHasta: null,
     ignoradosPor: FieldValue.delete(),
+    ...(params.desdeCola
+      ? {
+          promovidoDesdeCola: true,
+          promovidoColaEn: FieldValue.serverTimestamp(),
+        }
+      : {}),
   });
 
   if (uidCliente) {
@@ -309,6 +317,7 @@ async function tryPromoteOne(
       marca,
       modelo,
       color,
+      desdeCola: true,
     });
 
     tx.set(

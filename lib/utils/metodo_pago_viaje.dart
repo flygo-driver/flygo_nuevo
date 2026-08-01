@@ -41,4 +41,75 @@ class MetodoPagoViaje {
     if (esTransferencia(metodoPago)) return 'Transferencia';
     return 'Tarjeta';
   }
+
+  /// AZUL capturó el cobro (solo servidor / webhook escribe estos campos).
+  static bool tarjetaPagadoVerificado(Map<String, dynamic> data) {
+    final ep =
+        (data['estadoPago'] ?? '').toString().trim().toLowerCase();
+    final ps = (data['payment'] is Map)
+        ? (data['payment'] as Map)['status']?.toString().trim().toLowerCase()
+        : '';
+    return ep == 'verificado' || ps == 'captured';
+  }
+
+  /// Intento de cobro rechazado por AZUL/banco (sin fondos, declinada, etc.).
+  static bool tarjetaPagoFallido(Map<String, dynamic> data) {
+    if (tarjetaPagadoVerificado(data)) return false;
+    final ps = (data['payment'] is Map)
+        ? (data['payment'] as Map)['status']?.toString().trim().toLowerCase()
+        : '';
+    return ps == 'failed';
+  }
+
+  static String? tarjetaUltimoErrorAzul(Map<String, dynamic> data) {
+    if (data['payment'] is! Map) return null;
+    final err = (data['payment'] as Map)['azulLastError']?.toString().trim();
+    if (err == null || err.isEmpty) return null;
+    return err;
+  }
+
+  /// Cliente cambió de tarjeta a efectivo (callable servidor).
+  static bool cambioDesdeTarjetaAEfectivo(Map<String, dynamic> data) {
+    if (!esEfectivo(data['metodoPago']?.toString())) return false;
+    final anterior =
+        (data['metodoPagoAnterior'] ?? '').toString().toLowerCase().trim();
+    if (anterior.contains('tarjeta') || anterior.contains('card')) return true;
+    return data['tarjetaCambioEfectivoEn'] != null;
+  }
+
+  /// Tarjeta sin cobrar: pendiente o rechazada (ofrecer efectivo).
+  static bool tarjetaPendienteOCobroFallido(Map<String, dynamic> data) {
+    if (!esTarjeta(data['metodoPago']?.toString())) return false;
+    return !tarjetaPagadoVerificado(data);
+  }
+
+  /// Cliente debe pagar o regularizar antes de seguir (bloqueo estricto en factura).
+  static bool cobroClienteBloqueaApp(Map<String, dynamic> data) {
+    if (tarjetaPagadoVerificado(data)) return false;
+    final estado =
+        (data['cobroClienteEstado'] ?? '').toString().trim().toLowerCase();
+    if (estado == 'pagado' || estado == 'regularizado') return false;
+    if (data['cobroClientePendiente'] == true) return true;
+    if (esTarjeta(data['metodoPago']?.toString()) &&
+        !tarjetaPagadoVerificado(data)) {
+      return true;
+    }
+    return false;
+  }
+
+  static bool impagoRegistrado(Map<String, dynamic> data) {
+    return (data['cobroClienteEstado'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase() ==
+        'impago_registrado';
+  }
+
+  static double cobroClienteMontoRd(Map<String, dynamic> data) {
+    final v = data['cobroClienteMontoRd'];
+    if (v is num) return v.toDouble();
+    final precio = data['precio'];
+    if (precio is num) return precio.toDouble();
+    return 0;
+  }
 }

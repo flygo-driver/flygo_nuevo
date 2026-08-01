@@ -40,10 +40,10 @@ class TaxistaColaPostCompletar {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           const SnackBar(
             content: Text(
-              '🏁 Viaje completado. Conectando con tu siguiente recogida…',
+              '🏁 Viaje completado. Siguiente recogida: revisá forma de pago y PIN en la pantalla.',
             ),
             backgroundColor: Colors.blue,
-            duration: Duration(seconds: 3),
+            duration: Duration(seconds: 4),
           ),
         );
       }

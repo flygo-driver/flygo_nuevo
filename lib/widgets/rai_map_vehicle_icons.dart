@@ -1,6 +1,8 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -17,11 +19,14 @@ abstract final class RaiMapVehicleIcons {
 
   static BitmapDescriptor? _taxista;
   static BitmapDescriptor? _taxiCliente;
+  static BitmapDescriptor? _taxiClienteAsignado;
   static Future<void>? _loading;
 
   static BitmapDescriptor? get taxista => _taxista;
   static BitmapDescriptor? get taxiCliente => _taxiCliente;
-  static bool get listo => _taxista != null && _taxiCliente != null;
+  static BitmapDescriptor? get taxiClienteAsignado => _taxiClienteAsignado;
+  static bool get listo =>
+      _taxista != null && _taxiCliente != null && _taxiClienteAsignado != null;
 
   static Future<void> ensureLoaded() {
     return _loading ??= _load();
@@ -35,9 +40,36 @@ abstract final class RaiMapVehicleIcons {
     final results = await Future.wait([
       BitmapDescriptor.asset(config, assetTaxista),
       BitmapDescriptor.asset(config, assetTaxiCliente),
+      _tintedAssetIcon(assetTaxiCliente, const Color(0xFFE53935)),
     ]);
     _taxista = results[0];
     _taxiCliente = results[1];
+    _taxiClienteAsignado = results[2];
+  }
+
+  static Future<BitmapDescriptor> _tintedAssetIcon(
+    String assetPath,
+    Color tint,
+  ) async {
+    final ByteData data = await rootBundle.load(assetPath);
+    final ui.Codec codec = await ui.instantiateImageCodec(
+      data.buffer.asUint8List(),
+      targetWidth: 144,
+    );
+    final ui.FrameInfo frame = await codec.getNextFrame();
+    final ui.Image image = frame.image;
+
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(recorder);
+    final Paint paint = Paint()
+      ..colorFilter = ColorFilter.mode(tint, BlendMode.srcIn);
+    canvas.drawImage(image, Offset.zero, paint);
+    final ui.Image tinted = await recorder
+        .endRecording()
+        .toImage(image.width, image.height);
+    final ByteData? bytes =
+        await tinted.toByteData(format: ui.ImageByteFormat.png);
+    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
   }
 
   static double rotationTaxista(double bearing) =>
@@ -88,20 +120,28 @@ abstract final class RaiMapVehicleIcons {
     required double bearing,
     double size = 52,
     bool vistaCliente = false,
+    bool asignado = false,
   }) {
     final asset = vistaCliente ? assetTaxiCliente : assetTaxista;
     final rot = vistaCliente
         ? rotationTaxiCliente(bearing)
         : rotationTaxista(bearing);
+    Widget img = Image.asset(
+      asset,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.medium,
+    );
+    if (asignado && vistaCliente) {
+      img = ColorFiltered(
+        colorFilter: const ColorFilter.mode(Color(0xFFE53935), BlendMode.srcIn),
+        child: img,
+      );
+    }
     return Transform.rotate(
       angle: rot * math.pi / 180,
-      child: Image.asset(
-        asset,
-        width: size,
-        height: size,
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-      ),
+      child: img,
     );
   }
 }

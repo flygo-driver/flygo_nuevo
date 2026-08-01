@@ -3,6 +3,7 @@
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node --test test/*.test.mjs",
+    "preview:azul-post": "npm run build && node scripts/generate-azul-preview-post.mjs",
     "serve": "firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions",
     "lint": "eslint --ext .ts src"

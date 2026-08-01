@@ -6,6 +6,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 
@@ -114,6 +115,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
 
   Future<void> _confirmar() async {
     if (_cargando) return;
+    PoolTimbreSessionGuard.activarSesionPasajero();
 
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) {

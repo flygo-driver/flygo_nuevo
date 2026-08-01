@@ -2219,6 +2219,7 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
     this.compact = false,
     this.confirmar = true,
     this.faseViaje,
+    this.bolaId,
   });
 
   final bool esTaxista;
@@ -2227,6 +2228,7 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
 
   /// `abierta` = esperando en tablero; `acordada` / `en_curso` = viaje operativo.
   final String? faseViaje;
+  final String? bolaId;
 
   static bool _viajeOperativo(String? fase) {
     return fase == 'acordada' || fase == 'en_curso';
@@ -2238,10 +2240,10 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
   }) {
     if (_viajeOperativo(faseViaje)) {
       return esTaxista
-          ? 'Tu viaje con el pasajero sigue activo. Podés volver a Mi trabajo '
-              'y retomarlo desde Bola Ahorro cuando quieras.'
+          ? 'Tu viaje con el pasajero sigue activo. Podés volver a recibir '
+              'viajes y retomarlo desde el banner azul en la pantalla principal.'
           : 'Tu viaje sigue activo. Podés volver al inicio y retomarlo '
-              'desde Bola Ahorro cuando quieras.';
+              'desde el banner en Inicio.';
     }
     return esTaxista
         ? 'Tu publicación u oferta siguen en el tablero. Volvé a la pantalla '
@@ -2252,9 +2254,12 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
 
   static String _ayudaDebajo({
     required String? faseViaje,
+    required bool esTaxista,
   }) {
     if (_viajeOperativo(faseViaje)) {
-      return 'El viaje sigue activo. Podés retomarlo desde Bola Ahorro.';
+      return esTaxista
+          ? 'El viaje Bola sigue activo. Retómalo con el banner azul.'
+          : 'El viaje sigue activo. Retómalo desde el banner en Inicio.';
     }
     if (faseViaje == 'abierta') {
       return 'Tu oferta o publicación sigue activa en el tablero.';
@@ -2267,6 +2272,7 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
     required bool esTaxista,
     bool confirmar = true,
     String? faseViaje,
+    String? bolaId,
   }) async {
     if (confirmar) {
       final ok = await showDialog<bool>(
@@ -2310,6 +2316,7 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
       await NavigationService.salirVistaBolaTaxista(
         context,
         faseViaje: faseViaje,
+        bolaId: bolaId,
       );
       return;
     }
@@ -2321,6 +2328,7 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
         esTaxista: esTaxista,
         confirmar: confirmar,
         faseViaje: faseViaje,
+        bolaId: bolaId,
       );
 
   @override
@@ -2346,7 +2354,7 @@ class BolaBoardVolverInicioButton extends StatelessWidget {
           if (!compact) ...[
             const SizedBox(height: 6),
             Text(
-              _ayudaDebajo(faseViaje: faseViaje),
+              _ayudaDebajo(faseViaje: faseViaje, esTaxista: esTaxista),
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: c.onMuted,
@@ -2586,6 +2594,7 @@ class BolaClientePedirPedidoPanel extends StatelessWidget {
               esTaxista: rol == 'taxista' || rol == 'driver',
               compact: true,
               faseViaje: estado,
+              bolaId: id,
           ),
         ],
       );
@@ -4349,6 +4358,7 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                     esTaxista: esTaxistaRol,
                     compact: true,
                     faseViaje: estado,
+                    bolaId: docId,
                   ),
                 ],
               ],
@@ -4441,6 +4451,7 @@ class _BolaPuebloPublicacionCardState extends State<BolaPuebloPublicacionCard> {
                 esTaxista: soyTaxistaAsignado,
                 compact: true,
                 faseViaje: estado,
+                bolaId: docId,
               ),
               const SizedBox(height: 12),
             ],

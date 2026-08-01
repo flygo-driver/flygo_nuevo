@@ -31,6 +31,7 @@ import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 
 /// Diagnóstico solo en debug: en release no expone UIDs ni estado interno por logcat.
 void _viajesRepoDebugLog(String message) {
@@ -140,6 +141,51 @@ class ViajesRepo {
     if (!la.isFinite || !lo.isFinite) return null;
     if (la.abs() < 1e-6 && lo.abs() < 1e-6) return null;
     return (la, lo);
+  }
+
+  static int _multiparadaLegCompletadasDesdeDoc(Map<String, dynamic> m) {
+    final dynamic v = m['multiparadaLegCompletadas'];
+    if (v is num) return v.toInt().clamp(0, 999);
+    return 0;
+  }
+
+  static bool _multiparadaRutaCompletaDesdeDoc(Map<String, dynamic> m) {
+    if (m['multiparadaCompleta'] == true) return true;
+    final dynamic wpsRaw = m['waypoints'];
+    if (wpsRaw is! List || wpsRaw.isEmpty) return true;
+    final int total = m['multiparadaLegsTotal'] is num
+        ? (m['multiparadaLegsTotal'] as num).toInt().clamp(1, 999)
+        : wpsRaw.length + 1;
+    return _multiparadaLegCompletadasDesdeDoc(m) >= total;
+  }
+
+  /// Parada actual (multiparada) o destino final — misma referencia que la UI de encadenar.
+  static (double, double)? _coordsReferenciaEncadenamientoViajeActivo(
+    Map<String, dynamic>? m,
+  ) {
+    if (m == null) return null;
+    final dynamic wpsRaw = m['waypoints'];
+    if (wpsRaw is List &&
+        wpsRaw.isNotEmpty &&
+        !_multiparadaRutaCompletaDesdeDoc(m)) {
+      final List<Map<String, dynamic>> wps =
+          MultiparadaRutaHelper.sanitizarWaypoints(
+        wpsRaw
+            .map((dynamic w) => Map<String, dynamic>.from(w as Map))
+            .toList(growable: false),
+      );
+      final int hechas = _multiparadaLegCompletadasDesdeDoc(m);
+      if (wps.isNotEmpty && hechas < wps.length) {
+        final double? la = (wps[hechas]['lat'] as num?)?.toDouble();
+        final double? lo = (wps[hechas]['lon'] as num?)?.toDouble();
+        if (la != null &&
+            lo != null &&
+            MultiparadaRutaHelper.coordsValidas(la, lo)) {
+          return (la, lo);
+        }
+      }
+    }
+    return _coordsDestinoViaje(m);
   }
 
   /// UID del cliente en el documento del viaje.
@@ -394,6 +440,12 @@ class ViajesRepo {
     }
 
     final doc = _col.doc();
+
+    if (isPasajeroCapableFlavor) {
+      PoolTimbreSessionGuard.activarSesionPasajero();
+      await NotificationService.I.prepararViajeClienteSinTimbre(doc.id);
+    }
+
     final String codigoVerificacion =
         (100000 + (DateTime.now().millisecondsSinceEpoch % 900000)).toString();
 
@@ -571,7 +623,7 @@ class ViajesRepo {
     }
 
     if (isPasajeroCapableFlavor) {
-      unawaited(NotificationService.I.marcarViajePropioSinTimbre(doc.id));
+      await NotificationService.I.marcarViajePropioSinTimbre(doc.id);
     }
 
     if (tipoSrvFinal == 'turismo' && turismoPublicarEnPool) {
@@ -621,7 +673,19 @@ class ViajesRepo {
         return;
       }
 
-      final tripDoc = await _col.doc(viajeActivoId).get();
+      DocumentSnapshot<Map<String, dynamic>> tripDoc;
+      try {
+        tripDoc = await _col.doc(viajeActivoId).get();
+      } on FirebaseException catch (e) {
+        if (e.code == 'permission-denied' || e.code == 'permission_denied') {
+          await _limpiarViajeActivoIdTaxista(uidTaxista);
+          _viajesRepoDebugLog(
+            '✅ ensureTaxistaLibre - limpiado (viajeActivoId sin lectura)',
+          );
+          return;
+        }
+        rethrow;
+      }
       if (!tripDoc.exists) {
         await _limpiarViajeActivoIdTaxista(uidTaxista);
         _viajesRepoDebugLog('✅ ensureTaxistaLibre - limpiado (viaje inexistente)');
@@ -637,42 +701,24 @@ class ViajesRepo {
         return;
       }
 
-      // Corporativo informativo no usa «viajeActivoId» del shell pool.
-      if (CorporativoTaxistaService.esViajeCorporativoAsignado(
-            d,
-            uidTaxista,
-          ) &&
-          CorporativoTaxistaService.esModoInformativo(d)) {
+      if (!viajeOperativoBloqueanteParaTaxista(d, uidTaxista)) {
         await _limpiarViajeActivoIdTaxista(uidTaxista);
         _viajesRepoDebugLog(
-          '✅ ensureTaxistaLibre - limpiado (corp informativo → Mis rutas)',
-        );
-        return;
-      }
-
-      if (!viajeVisibleEnCursoTaxista(d, uidTaxista)) {
-        await _limpiarViajeActivoIdTaxista(uidTaxista);
-        _viajesRepoDebugLog(
-          '✅ ensureTaxistaLibre - limpiado (no visible en viaje en curso pool)',
-        );
-        return;
-      }
-
-      final bool activo = d['activo'] == true;
-      final String estado =
-          EstadosViaje.normalizar((d['estado'] ?? '').toString());
-      final bool terminal =
-          d['completado'] == true || EstadosViaje.esTerminal(estado);
-
-      if (!activo || terminal || estado == EstadosViaje.pendiente) {
-        await _limpiarViajeActivoIdTaxista(uidTaxista);
-        _viajesRepoDebugLog(
-          '✅ ensureTaxistaLibre - limpiado (inactivo/terminal/pendiente)',
+          '✅ ensureTaxistaLibre - limpiado (sin viaje bloqueante operativo)',
         );
         return;
       }
 
       _viajesRepoDebugLog('✅ ensureTaxistaLibre - OK (viaje activo vigente)');
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied' || e.code == 'permission_denied') {
+        _viajesRepoDebugLog(
+          '⚠️ ensureTaxistaLibre permission-denied (no bloquea claim): $e',
+        );
+        return;
+      }
+      _viajesRepoDebugLog('❌ ensureTaxistaLibre error: $e');
+      rethrow;
     } catch (e) {
       _viajesRepoDebugLog('❌ ensureTaxistaLibre error: $e');
       rethrow;
@@ -725,33 +771,65 @@ class ViajesRepo {
           '📄 ensureSiguienteCoherente - estado=$estado uidAsig=$uidAsig reservadoPor=$reservadoPor ok=$ok');
 
       if (!ok) {
-        await _db.runTransaction((tx) async {
-          tx.update(vRef, {
-            'reservadoPor': '',
-            'reservadoHasta': null,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp()
+        try {
+          await _db.runTransaction((tx) async {
+            tx.update(vRef, {
+              'reservadoPor': '',
+              'reservadoHasta': null,
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp()
+            });
+            tx.set(
+                uRef,
+                {
+                  'siguienteViajeId': '',
+                  'updatedAt': FieldValue.serverTimestamp(),
+                  'actualizadoEn': FieldValue.serverTimestamp()
+                },
+                SetOptions(merge: true));
           });
-          tx.set(
-              uRef,
+        } on FirebaseException catch (e) {
+          if (e.code != 'permission-denied' && e.code != 'permission_denied') {
+            rethrow;
+          }
+          _viajesRepoDebugLog(
+            '⚠️ ensureSiguienteCoherente: limpieza reserva omitida (rules)',
+          );
+          try {
+            await uRef.set(
               {
                 'siguienteViajeId': '',
                 'updatedAt': FieldValue.serverTimestamp(),
-                'actualizadoEn': FieldValue.serverTimestamp()
+                'actualizadoEn': FieldValue.serverTimestamp(),
               },
-              SetOptions(merge: true));
-        });
-        await uRef.collection('cola_viajes').doc(nextId).set(
-          {
-            'estado': 'invalidado',
-            'motivo': 'reserva_invalida',
-            'invalidadoEn': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
+              SetOptions(merge: true),
+            );
+          } catch (_) {}
+        }
+        try {
+          await uRef.collection('cola_viajes').doc(nextId).set(
+            {
+              'estado': 'invalidado',
+              'motivo': 'reserva_invalida',
+              'invalidadoEn': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+        } catch (_) {
+          // Cola solo servidor; no bloquear aceptar viaje del pool.
+        }
       }
       _viajesRepoDebugLog('✅ ensureSiguienteCoherente - OK');
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied' || e.code == 'permission_denied') {
+        _viajesRepoDebugLog(
+          '⚠️ ensureSiguienteCoherente permission-denied (no bloquea claim): $e',
+        );
+        return;
+      }
+      _viajesRepoDebugLog('❌ ensureSiguienteCoherente error: $e');
+      rethrow;
     } catch (e) {
       _viajesRepoDebugLog('❌ ensureSiguienteCoherente error: $e');
       rethrow;
@@ -885,8 +963,26 @@ class ViajesRepo {
         viajeData: data,
       );
       if (prepagoRechazo != null) return false;
-      final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
-      if (viajeActivoId.isNotEmpty) return false;
+      final String viajeActivoId =
+          (uData['viajeActivoId'] ?? '').toString().trim();
+      if (viajeActivoId.isNotEmpty && viajeActivoId != viajeId) {
+        final activoSnap = await tx.get(_col.doc(viajeActivoId));
+        if (activoSnap.exists) {
+          final ad = activoSnap.data() ?? <String, dynamic>{};
+          if (viajeOperativoBloqueanteParaTaxista(ad, uidTaxista)) {
+            return false;
+          }
+        }
+        tx.set(
+          uRef,
+          {
+            'viajeActivoId': '',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
 
       final String _tel =
           (telefono.isNotEmpty ? telefono : (uData['telefono'] ?? ''))
@@ -1065,6 +1161,9 @@ class ViajesRepo {
       if (e.code == 'unauthenticated') {
         return 'permiso:${e.code}';
       }
+      if (e.code == 'not-found' || e.code == 'unimplemented') {
+        return 'callable-no-disponible';
+      }
     } catch (cfErr) {
       _viajesRepoDebugLog('❌ aceptarViajeSeguro fallback error: $cfErr');
     }
@@ -1082,6 +1181,8 @@ class ViajesRepo {
     _viajesRepoDebugLog(
         '🟡 INICIO claimTripWithReason - viajeId: $viajeId, taxista: $uidTaxista');
 
+    await limpiarViajeActivoSiNoOperativo(uidTaxista);
+
     // Cloud Function (Admin SDK): evita permission-denied en claim pool motor/vehículo.
     final cfPrimero = await _claimViajePorCallable(
       viajeId: viajeId,
@@ -1092,7 +1193,21 @@ class ViajesRepo {
       tipoVehiculo: tipoVehiculo,
     );
     if (cfPrimero == 'ok') return 'ok';
-    if (cfPrimero != null && cfPrimero.isNotEmpty) return cfPrimero;
+    if (cfPrimero == 'taxista-ocupado') {
+      await limpiarViajeActivoSiNoOperativo(uidTaxista);
+      final cfRetry = await _claimViajePorCallable(
+        viajeId: viajeId,
+        uidTaxista: uidTaxista,
+        nombreTaxista: nombreTaxista,
+        telefono: telefono,
+        placa: placa,
+        tipoVehiculo: tipoVehiculo,
+      );
+      if (cfRetry == 'ok') return 'ok';
+      if (cfRetry != null && cfRetry.isNotEmpty) return cfRetry;
+    } else if (cfPrimero != null && cfPrimero.isNotEmpty) {
+      return cfPrimero;
+    }
 
     final vRef = _col.doc(viajeId);
     final uRef = _db.collection('usuarios').doc(uidTaxista);
@@ -1186,10 +1301,27 @@ class ViajesRepo {
               '❌ Prepago insuficiente para comisión del viaje en efectivo');
           throw prepagoRechazo;
         }
-        final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
-        if (viajeActivoId.isNotEmpty) {
-          _viajesRepoDebugLog('❌ Taxista ocupado con viajeActivoId=$viajeActivoId');
-          throw 'taxista-ocupado';
+        final String viajeActivoId =
+            (uData['viajeActivoId'] ?? '').toString().trim();
+        if (viajeActivoId.isNotEmpty && viajeActivoId != viajeId) {
+          final activoSnap = await tx.get(_col.doc(viajeActivoId));
+          if (activoSnap.exists) {
+            final ad = activoSnap.data() ?? <String, dynamic>{};
+            if (viajeOperativoBloqueanteParaTaxista(ad, uidTaxista)) {
+              _viajesRepoDebugLog(
+                  '❌ Taxista ocupado con viajeActivoId=$viajeActivoId');
+              throw 'taxista-ocupado';
+            }
+          }
+          tx.set(
+            uRef,
+            {
+              'viajeActivoId': '',
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
         }
 
         final String poolModo =
@@ -1298,13 +1430,18 @@ class ViajesRepo {
       });
 
       _viajesRepoDebugLog('✅ Transacción completada');
-      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
-      await _limpiarSiguienteSiEsElClaimed(
-        uidTaxista: uidTaxista,
-        viajeIdClaimed: viajeId,
-      );
-      await _ensureChatForTrip(viajeId);
-      _viajesRepoDebugLog('✅ Post-proceso completado');
+      try {
+        await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+        await _limpiarSiguienteSiEsElClaimed(
+          uidTaxista: uidTaxista,
+          viajeIdClaimed: viajeId,
+        );
+        await _ensureChatForTrip(viajeId);
+        _viajesRepoDebugLog('✅ Post-proceso completado');
+      } catch (e) {
+        // El claim ya quedó OK; no convertir en fallo total por cleanup/chat.
+        _viajesRepoDebugLog('⚠️ post-claim cleanup (no bloquea ok): $e');
+      }
 
       unawaited(AnalyticsRai.logTripAccepted());
       unawaited(BolaPuebloFirestoreSync.postClaimViajeEspejo(viajeId));
@@ -1350,108 +1487,200 @@ class ViajesRepo {
   static Future<void> reservarComoSiguiente({
     required String viajeId,
     required String uidTaxista,
-    int ttlMin = 10,
+    int ttlMin = 120,
+  }) async {
+    await ensureSiguienteCoherente(uidTaxista);
+
+    try {
+      final bool ok = await _reservarSiguientePorCallable(
+        viajeId: viajeId,
+        uidTaxista: uidTaxista,
+        ttlMin: ttlMin,
+      );
+      if (ok) return;
+    } on FirebaseFunctionsException catch (e) {
+      if (!_reservaCallableNoDisponible(e)) {
+        throw StateError(
+          taxistaMensajeReservarSiguienteFallido(
+            e.message ?? e.code,
+          ),
+        );
+      }
+      _viajesRepoDebugLog(
+        '⚠️ reservarSiguienteViaje CF no disponible (${e.code}); intento transacción cliente',
+      );
+    } on StateError {
+      rethrow;
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ reservarSiguienteViaje CF error: $e');
+    }
+
+    await _reservarComoSiguienteTransaccion(
+      viajeId: viajeId,
+      uidTaxista: uidTaxista,
+      ttlMin: ttlMin,
+    );
+  }
+
+  static bool _reservaCallableNoDisponible(FirebaseFunctionsException e) {
+    final String c = e.code.toLowerCase();
+    return c == 'not-found' ||
+        c == 'unimplemented' ||
+        c == 'unavailable' ||
+        c == 'deadline-exceeded';
+  }
+
+  static Future<bool> _reservarSiguientePorCallable({
+    required String viajeId,
+    required String uidTaxista,
+    required int ttlMin,
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('reservarSiguienteViaje');
+    final HttpsCallableResult<dynamic> res = await callable.call(
+      <String, dynamic>{
+        'viajeId': viajeId,
+        'uidTaxista': uidTaxista,
+        'ttlMin': ttlMin,
+      },
+    );
+    final dynamic raw = res.data;
+    if (raw is! Map) return false;
+    return raw['ok'] == true;
+  }
+
+  static Future<void> _reservarComoSiguienteTransaccion({
+    required String viajeId,
+    required String uidTaxista,
+    required int ttlMin,
   }) async {
     final ref = _col.doc(viajeId);
     final uRef = _db.collection('usuarios').doc(uidTaxista);
     final int? maxMetrosEncadenamiento =
         await _maxMetrosEncadenamientoDesdeConfig();
 
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
-      if (!snap.exists) throw Exception('El viaje no existe');
-      final d = snap.data()!;
+    try {
+      await _db.runTransaction((tx) async {
+        final snap = await tx.get(ref);
+        if (!snap.exists) throw Exception('El viaje no existe');
+        final d = snap.data()!;
 
-      final String estado = (d['estado'] ?? '').toString();
-      final String uidAsignado = (d['uidTaxista'] ?? '').toString();
-      final String reservadoPor = (d['reservadoPor'] ?? '').toString();
-      final Timestamp? reservadoHasta = d['reservadoHasta'];
-      final bool reservaVigente = reservadoPor.isNotEmpty &&
-          (reservadoHasta == null ||
-              reservadoHasta.compareTo(Timestamp.now()) > 0);
+        final String estado = (d['estado'] ?? '').toString();
+        final String uidAsignado = (d['uidTaxista'] ?? '').toString();
+        final String reservadoPor = (d['reservadoPor'] ?? '').toString();
+        final Timestamp? reservadoHasta = d['reservadoHasta'];
+        final bool reservaVigente = reservadoPor.isNotEmpty &&
+            (reservadoHasta == null ||
+                reservadoHasta.compareTo(Timestamp.now()) > 0);
 
-      final bool viajeLibre = uidAsignado.isEmpty;
-      final bool estadoPermitido = (estado == EstadosViaje.pendiente ||
-          estado == EstadosViaje.pendientePago ||
-          estado == 'pendiente_admin');
-      if (!estadoPermitido ||
-          !viajeLibre ||
-          (reservaVigente && reservadoPor != uidTaxista)) {
-        throw StateError('El viaje no está disponible para reservar.');
-      }
+        final bool viajeLibre = uidAsignado.isEmpty;
+        final bool estadoPermitido = (estado == EstadosViaje.pendiente ||
+            estado == EstadosViaje.pendientePago ||
+            estado == 'pendiente_admin');
+        if (!estadoPermitido ||
+            !viajeLibre ||
+            (reservaVigente && reservadoPor != uidTaxista)) {
+          throw StateError('El viaje no está disponible para reservar.');
+        }
 
-      final uSnap = await tx.get(uRef);
-      final uData = uSnap.data() ?? <String, dynamic>{};
-      final bSnapRes =
-          await tx.get(_db.collection('billeteras_taxista').doc(uidTaxista));
-      if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
-          uData, bSnapRes.data())) {
-        throw StateError(PagosTaxistaRepo.mensajeRecargaTomarViajes);
-      }
-      final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
-      if (viajeActivoId.isEmpty) {
-        throw StateError(
-            'Primero debes tener un viaje activo para reservar el siguiente.');
-      }
+        final uSnap = await tx.get(uRef);
+        final uData = uSnap.data() ?? <String, dynamic>{};
+        final rechazo = taxistaRechazoAceptarViajePool(uData);
+        if (rechazo != null) {
+          throw StateError(taxistaMensajeReservarSiguienteFallido(rechazo));
+        }
+        final bSnapRes =
+            await tx.get(_db.collection('billeteras_taxista').doc(uidTaxista));
+        if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+            uData, bSnapRes.data())) {
+          throw StateError(PagosTaxistaRepo.mensajeRecargaTomarViajes);
+        }
+        final String viajeActivoId = (uData['viajeActivoId'] ?? '').toString();
+        if (viajeActivoId.isEmpty) {
+          throw StateError(
+              'Primero debes tener un viaje activo para reservar el siguiente.');
+        }
 
-      final String siguienteViajeId =
-          (uData['siguienteViajeId'] ?? '').toString();
-      if (siguienteViajeId.isNotEmpty && siguienteViajeId != viajeId) {
-        throw StateError('Ya tienes un viaje reservado en cola.');
-      }
+        final String siguienteViajeId =
+            (uData['siguienteViajeId'] ?? '').toString();
+        if (siguienteViajeId.isNotEmpty && siguienteViajeId != viajeId) {
+          throw StateError('Ya tienes un viaje reservado en cola.');
+        }
 
-      if (maxMetrosEncadenamiento != null && maxMetrosEncadenamiento > 0) {
-        final actRef = _col.doc(viajeActivoId);
-        final actSnap = await tx.get(actRef);
-        final destino = _coordsDestinoViaje(actSnap.data());
-        final pickupCand = _coordsPickupClienteViaje(d);
-        if (destino != null && pickupCand != null) {
-          final double m = Geolocator.distanceBetween(
-            destino.$1,
-            destino.$2,
-            pickupCand.$1,
-            pickupCand.$2,
+        final String poolModo =
+            ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(uData);
+        if (!ViajePoolTaxistaGate.conductorPuedeClaimViajeEnPool(d, poolModo)) {
+          throw StateError(
+            taxistaMensajeReservarSiguienteFallido('tipo-servicio-no-coincide'),
           );
-          if (m > maxMetrosEncadenamiento + 1e-6) {
-            throw StateError(
-              'La nueva recogida está demasiado lejos del destino de tu viaje actual '
-              '(${m.toStringAsFixed(0)} m; máximo para encadenar: $maxMetrosEncadenamiento m).',
+        }
+        if (!ViajePoolTaxistaGate.ventanaPublicacionYAceptacionOk(d)) {
+          throw StateError(
+            taxistaMensajeReservarSiguienteFallido('acceptAfter-futuro'),
+          );
+        }
+
+        if (maxMetrosEncadenamiento != null && maxMetrosEncadenamiento > 0) {
+          final actRef = _col.doc(viajeActivoId);
+          final actSnap = await tx.get(actRef);
+          final destino =
+              _coordsReferenciaEncadenamientoViajeActivo(actSnap.data());
+          final pickupCand = _coordsPickupClienteViaje(d);
+          if (destino != null && pickupCand != null) {
+            final double m = Geolocator.distanceBetween(
+              destino.$1,
+              destino.$2,
+              pickupCand.$1,
+              pickupCand.$2,
             );
+            if (m > maxMetrosEncadenamiento + 1e-6) {
+              throw StateError(
+                'La nueva recogida está demasiado lejos del destino de tu viaje actual '
+                '(${m.toStringAsFixed(0)} m; máximo para encadenar: $maxMetrosEncadenamiento m).',
+              );
+            }
           }
         }
-      }
 
-      final vence =
-          Timestamp.fromDate(DateTime.now().add(Duration(minutes: ttlMin)));
+        final vence =
+            Timestamp.fromDate(DateTime.now().add(Duration(minutes: ttlMin)));
 
-      tx.update(ref, {
-        'reservadoPor': uidTaxista,
-        'reservadoHasta': vence,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      });
-      tx.set(
-          uRef,
+        tx.update(ref, {
+          'reservadoPor': uidTaxista,
+          'reservadoHasta': vence,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        });
+        tx.set(
+            uRef,
+            {
+              'siguienteViajeId': viajeId,
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true));
+        final cref = uRef.collection('cola_viajes').doc(viajeId);
+        tx.set(
+          cref,
           {
-            'siguienteViajeId': viajeId,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
+            'viajeId': viajeId,
+            'slot': 0,
+            'estado': 'pendiente',
+            'tipo': _tipoColaViajeParaCola(d),
+            'createdAt': FieldValue.serverTimestamp(),
+            'source': 'reservarComoSiguiente',
           },
-          SetOptions(merge: true));
-      final cref = uRef.collection('cola_viajes').doc(viajeId);
-      tx.set(
-        cref,
-        {
-          'viajeId': viajeId,
-          'slot': 0,
-          'estado': 'pendiente',
-          'tipo': _tipoColaViajeParaCola(d),
-          'createdAt': FieldValue.serverTimestamp(),
-          'source': 'reservarComoSiguiente',
-        },
-        SetOptions(merge: true),
-      );
-    });
+          SetOptions(merge: true),
+        );
+      });
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied' || e.code == 'permission_denied') {
+        throw StateError(
+          'No se pudo reservar el siguiente viaje. Actualiza la app o intenta en unos segundos.',
+        );
+      }
+      rethrow;
+    }
   }
 
   static String _tipoColaViajeParaCola(Map<String, dynamic> d) {
@@ -2205,6 +2434,19 @@ class ViajesRepo {
     await callable.call(<String, dynamic>{'viajeId': viajeId});
   }
 
+  /// Cliente elige o cambia método de pago durante el viaje activo.
+  static Future<void> actualizarMetodoPagoViaje({
+    required String viajeId,
+    required String metodoPago,
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('actualizarMetodoPagoViaje');
+    await callable.call(<String, dynamic>{
+      'viajeId': viajeId,
+      'metodoPago': metodoPago.trim().toLowerCase(),
+    });
+  }
+
   static Future<void> marcarTransferenciaReportadaCliente({
     required String viajeId,
     required String comprobanteUrl,
@@ -2227,6 +2469,19 @@ class ViajesRepo {
     final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
         .httpsCallable('confirmarTransferenciaTaxistaSeguro');
     await callable.call(<String, dynamic>{'viajeId': viajeId});
+  }
+
+  /// Conductor: pasajero sin efectivo ni tarjeta (caso extremo). No bloquea al taxista.
+  static Future<void> registrarImpagoPasajero({
+    required String viajeId,
+    String? motivo,
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('registrarImpagoPasajeroViaje');
+    await callable.call(<String, dynamic>{
+      'viajeId': viajeId,
+      if (motivo != null && motivo.trim().isNotEmpty) 'motivo': motivo.trim(),
+    });
   }
 
   static Future<void> rechazarTransferenciaCliente({

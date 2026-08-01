@@ -28,6 +28,10 @@ import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/servicios/finance_config_service.dart';
+import 'package:flygo_nuevo/widgets/rai_pago_tarjeta_panel.dart';
+import 'package:flygo_nuevo/widgets/viaje_metodo_pago_selector.dart';
+import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
 import 'package:flygo_nuevo/utils/release_build_flags.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
@@ -38,14 +42,19 @@ import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_volver_rai_dialog.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/navegacion/post_viaje_cliente_nav.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/drivers_location_nearby_repo.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_live_conductores.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
+import 'package:flygo_nuevo/widgets/rai_live_driver_map_animator.dart';
+import 'package:flygo_nuevo/widgets/rai_map_vehicle_icons.dart';
+import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
@@ -54,6 +63,7 @@ import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
 import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
+import 'package:flygo_nuevo/widgets/rai_viaje_en_curso_ui.dart';
 
 // ===== Helpers =====
 LatLng _latLng(double lat, double lon) => LatLng(lat, lon);
@@ -130,11 +140,9 @@ String _s(Object? x) => x?.toString() ?? '';
 double _taxistaHueByEstado(String estado) {
   final String e = EstadosViaje.normalizar(estado);
   if (e == EstadosViaje.aceptado || e == EstadosViaje.enCaminoPickup) {
-    // En camino al cliente: color distinto y visible
-    return BitmapDescriptor.hueCyan;
+    return BitmapDescriptor.hueRed;
   }
   if (e == EstadosViaje.aBordo || e == EstadosViaje.enCurso) {
-    // Viaje en curso
     return BitmapDescriptor.hueOrange;
   }
   return BitmapDescriptor.hueYellow;
@@ -244,6 +252,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   DateTime? _ultimoSeguimientoTaxistaMs;
   double? _ultimoSeguimientoTaxLat;
   double? _ultimoSeguimientoTaxLon;
+  LatLng? _prevTaxistaMarkerPos;
+  double _bearingTaxista = 0;
 
   /// Cámara movida por código (no colapsar/expandir tarjeta como si fuera gesto del usuario).
   int _programmaticCameraDepth = 0;
@@ -253,9 +263,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   String? _sheetCollapsedPickupForViajeId;
   final DraggableScrollableController _viajeSheetCtrl =
       DraggableScrollableController();
-  static const double _kViajeSheetMin = 0.14;
-  /// Más alto que conductor: al entrar en viaje el cliente debe ver botones y chat.
-  static const double _kViajeSheetInitial = 0.58;
+  static const double _kViajeSheetMin = 0.22;
+  /// Panel inicial con conductor asignado / en ruta.
+  static const double _kViajeSheetInitial = 0.52;
+  /// Esperando que un taxista acepte: más alto para que el mensaje y acciones se lean bien.
+  static const double _kViajeSheetEsperaConductor = 0.56;
+  double _sheetExpandedTarget = _kViajeSheetInitial;
 
   /// ETA taxista → pickup (Directions con tráfico, con fallback).
   String? _pickupEtaTitulo;
@@ -299,8 +312,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   String? _salidaCierreIniciadaParaViajeId;
   bool _snackCancelConductorMostrado = false;
 
-  // 🚀 NUEVO: Conductores disponibles
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _driversSub;
+  // Conductores disponibles (consulta geohash — escala)
+  DriversLocationNearbySession? _nearbyDriversSession;
   List<DocumentSnapshot<Map<String, dynamic>>> _driversList = [];
   String _lastDriversPoolSig = '';
   Map<String, String?> _driverFotoPorUid = <String, String?>{};
@@ -329,6 +342,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       vsync: this,
       duration: const Duration(milliseconds: 2200),
     )..repeat();
+    unawaited(RaiMapVehicleIcons.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    }));
     // Si un hijo (p. ej. GoogleMap) tira, no quedarse en «No pudimos cargar…»:
     // el próximo frame entra sin mapa pero con teléfono/chat.
     _errorBuilderAnterior = ErrorWidget.builder;
@@ -483,7 +499,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _disposeBolaPickupWatch();
     _stopClienteUbicacionEnViaje();
     _mensajeCercaniaTimer?.cancel();
-    _driversSub?.cancel();
+    _nearbyDriversSession?.dispose();
     _fotosDebounce?.cancel();
     _radarCtrl.dispose();
     _progresoBrilloCtrl.dispose();
@@ -666,12 +682,27 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _ultimoSeguimientoTaxLat = v.latTaxista;
     _ultimoSeguimientoTaxLon = v.lonTaxista;
 
+    final LatLng taxiPos = LatLng(v.latTaxista, v.lonTaxista);
+    final double? nuevoBearing = RaiMapVehicleIcons.bearingEntre(
+      _prevTaxistaMarkerPos,
+      taxiPos,
+    );
+    if (nuevoBearing != null) _bearingTaxista = nuevoBearing;
+    _prevTaxistaMarkerPos = taxiPos;
+
     final GoogleMapController? c = _map;
     if (c == null) return;
     _programmaticCameraDepth++;
     c
         .animateCamera(
-      CameraUpdate.newLatLngZoom(LatLng(v.latTaxista, v.lonTaxista), 16),
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: taxiPos,
+          zoom: RaiMapPresentation.followZoomDriver,
+          bearing: _bearingTaxista,
+          tilt: estadoBase == EstadosViaje.enCurso ? 0 : 28,
+        ),
+      ),
     )
         .then((_) {}, onError: (_) {
       if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
@@ -690,7 +721,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   void _expandirSheetTrasMapaInteract() {
     if (!_viajeSheetCtrl.isAttached) return;
     _viajeSheetCtrl.animateTo(
-      _kViajeSheetInitial,
+      _sheetExpandedTarget,
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
     );
@@ -730,9 +761,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   Widget _buildClienteZonaAccionesSticky(
     Viaje v,
     String estadoBase,
-    bool cancelarHabilitado, {
-    String? orientacionFlujo,
-  }) {
+    bool cancelarHabilitado,
+  ) {
     final bool multiparada =
         _clienteNavegacionMultiparadaActiva(v, estadoBase);
     final bool mostrarNavDestino = estadoBase == EstadosViaje.enCurso &&
@@ -749,8 +779,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (orientacionFlujo != null) ...[
-          ViajeFlujoOrientacionBanner(mensaje: orientacionFlujo),
+        if (!EstadosViaje.esTerminal(estadoBase)) ...[
+          _botonVolverARaiEnPanel(v),
           const SizedBox(height: 10),
         ],
         if (multiparada) ...[
@@ -969,6 +999,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             estadoBase == EstadosViaje.enCaminoPickup) &&
         _isValidCoord(v.latTaxista, v.lonTaxista);
     if (!esperandoPool && !turismoSinConductor && !fasePickup) return;
+    _sheetExpandedTarget = (esperandoPool || turismoSinConductor)
+        ? _kViajeSheetEsperaConductor
+        : _kViajeSheetInitial;
     _sheetCollapsedPickupForViajeId = v.id;
     _expandirSheetTrasMapaInteract();
     if (fasePickup && !_seguirTaxistaCamara) {
@@ -1055,32 +1088,30 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   // 🚀 NUEVO: Iniciar escucha de conductores disponibles
-  void _startListeningDrivers() {
-    if (_driversSub != null) return;
+  void _startListeningDrivers(double pickupLat, double pickupLon) {
+    if (_nearbyDriversSession != null) return;
 
-    _driversSub = FirebaseFirestore.instance
-        .collection('drivers_location')
-        .where('online', isEqualTo: true)
-        .snapshots()
-        .listen((snapshot) {
-      final String sig =
-          snapshot.docs.map((DocumentSnapshot<Map<String, dynamic>> doc) {
-        final Map<String, dynamic>? data = doc.data();
-        final GeoPoint? gp = _geoPointSeguro(data?['location']);
-        if (gp == null) return doc.id;
-        return '${doc.id}:${gp.latitude.toStringAsFixed(4)},${gp.longitude.toStringAsFixed(4)}';
-      }).join('|');
-      if (sig == _lastDriversPoolSig) return;
-      _lastDriversPoolSig = sig;
-      if (mounted) {
-        setState(() {
-          _driversList = snapshot.docs;
-        });
-        _schedulePrefetchDriverFotos();
-      }
-    }, onError: (error) {
-      debugPrint('Error cargando conductores: $error');
-    });
+    _nearbyDriversSession = DriversLocationNearbyRepo.createSession(
+      initialCenter: LatLng(pickupLat, pickupLon),
+      radiusKm: _kRadioKmConductoresCerca,
+      maxResultados: 50,
+      onUpdate: (DriversLocationNearbyUpdate update) {
+        final String sig = update.conductores
+            .map(
+              (RaiLiveDriverPoint d) =>
+                  '${d.uid}:${d.position.latitude.toStringAsFixed(4)},${d.position.longitude.toStringAsFixed(4)}',
+            )
+            .join('|');
+        if (sig == _lastDriversPoolSig) return;
+        _lastDriversPoolSig = sig;
+        if (mounted) {
+          setState(() {
+            _driversList = update.docs;
+          });
+          _schedulePrefetchDriverFotos();
+        }
+      },
+    );
   }
 
   // 🚀 NUEVO: Detener escucha de conductores
@@ -1089,8 +1120,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   void _stopListeningDrivers({bool deferSetState = false}) {
     _fotosDebounce?.cancel();
     _fotosDebounce = null;
-    _driversSub?.cancel();
-    _driversSub = null;
+    _nearbyDriversSession?.dispose();
+    _nearbyDriversSession = null;
     _lastDriversPoolSig = '';
     void clear() {
       if (!mounted) return;
@@ -1161,7 +1192,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final List<DocumentSnapshot<Map<String, dynamic>>> near =
         <DocumentSnapshot<Map<String, dynamic>>>[];
     for (final DocumentSnapshot<Map<String, dynamic>> d in _driversList) {
-      final GeoPoint? gp = _geoPointSeguro(d.data()?['location']);
+      final Map<String, dynamic>? data = d.data();
+      if (data == null) continue;
+      if (data['tracking'] != true && data['online'] != true) continue;
+      final GeoPoint? gp = _geoPointSeguro(data['location']);
       if (gp == null) continue;
       if (!_isValidCoord(gp.latitude, gp.longitude)) continue;
       final double km = DistanciaService.calcularDistancia(
@@ -2105,11 +2139,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             estFit == EstadosViaje.enCaminoPickup) &&
         _isValidCoord(v.latTaxista, v.lonTaxista) &&
         _isValidCoord(v.latCliente, v.lonCliente);
-    final double edgePad = fasePickupCam ? 88.0 : 60.0;
+    final double edgePad = fasePickupCam ? 128.0 : 104.0;
 
     try {
       _programmaticCameraDepth++;
-      await mapRef.animateCamera(CameraUpdate.newLatLngBounds(bounds, edgePad));
+      await RaiMapPresentation.fitBounds(
+        mapRef,
+        bounds,
+        padding: edgePad,
+        maxZoom: RaiMapPresentation.maxZoomTrip,
+      );
     } catch (_) {
       if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
       await Future.delayed(const Duration(milliseconds: 200));
@@ -2118,8 +2157,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       if (mapRef2 != null) {
         try {
           _programmaticCameraDepth++;
-          await mapRef2
-              .animateCamera(CameraUpdate.newLatLngBounds(bounds, edgePad));
+          await RaiMapPresentation.fitBounds(
+            mapRef2,
+            bounds,
+            padding: edgePad,
+            maxZoom: RaiMapPresentation.maxZoomTrip,
+          );
         } catch (_) {
           if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
         }
@@ -2338,6 +2381,68 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }
   }
 
+  Future<void> _pausarYVolverARai(String viajeId) async {
+    if (_yendoAlInicio) return;
+    final bool ok = await ClienteVolverRaiDialog.confirmar(context);
+    if (!ok || !mounted) return;
+    setState(() => _yendoAlInicio = true);
+    _disposeDocWatch();
+    _stopClienteUbicacionEnViaje();
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    try {
+      await NavigationService.pausarViajeClienteYVolverARai(
+        context: context,
+        viajeId: viajeId.trim().isNotEmpty ? viajeId : null,
+      ).timeout(const Duration(seconds: 12));
+    } catch (_) {
+      if (mounted) setState(() => _yendoAlInicio = false);
+    }
+  }
+
+  Widget _botonVolverARaiEnPanel(Viaje v) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _yendoAlInicio
+                ? null
+                : () => unawaited(_pausarYVolverARai(v.id)),
+            icon: const Icon(Icons.home_work_rounded, size: 20),
+            label: Text(
+              _yendoAlInicio ? 'Volviendo a RAI…' : 'Volver a RAI',
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white70,
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+              minimumSize: const Size(double.infinity, 48),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 4),
+          child: Text(
+            'Tu viaje sigue activo. Retómalo desde el banner en Inicio.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.45),
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _bodySinViajeActivo({required String mensaje}) {
     return Center(
       child: Padding(
@@ -2484,10 +2589,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }) {
     return ColoredBox(
       color: const Color(0xFF0A0A0A),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      child: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
             if (!mostrarBotonInicio)
               const SizedBox(
                 width: 40,
@@ -2548,7 +2656,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 ),
               ),
             ],
-          ],
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -2721,6 +2831,84 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (b.isNotEmpty) return b;
     if (data == null) return '';
     return (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
+  }
+
+  /// Pago AZUL: solo después de abordar (código verificado o en ruta).
+  bool _mostrarSelectorMetodoPagoCliente(
+    Viaje v,
+    String estadoBase,
+    Map<String, dynamic> data,
+  ) {
+    if (_uidTaxistaDelViaje(v, data).isEmpty) return false;
+    if (EstadosViaje.esTerminal(estadoBase)) return false;
+    if (MetodoPagoViaje.tarjetaPagadoVerificado(data)) return false;
+    return EstadosViaje.esAceptado(estadoBase) ||
+        EstadosViaje.esEnCaminoPickup(estadoBase) ||
+        EstadosViaje.esAbordo(estadoBase) ||
+        EstadosViaje.esEnCurso(estadoBase);
+  }
+
+  /// Pago AZUL: solo después de abordar (código verificado o en ruta).
+  bool _mostrarPagoTarjetaCliente(
+    Viaje v,
+    String estadoBase,
+    Map<String, dynamic> data, {
+    required bool codigoVerificado,
+  }) {
+    if (!FinanceConfigService.pagosConTarjetaAzulHabilitados) return false;
+    if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
+    if (_uidTaxistaDelViaje(v).isEmpty) return false;
+    if (EstadosViaje.esTerminal(estadoBase)) return false;
+    if (MetodoPagoViaje.tarjetaPagadoVerificado(data)) return false;
+    if (codigoVerificado) return true;
+    return EstadosViaje.esAbordo(estadoBase) ||
+        EstadosViaje.esEnCurso(estadoBase);
+  }
+
+  /// Aviso previo: conductor asignado pero cliente aún no subió.
+  bool _mostrarAvisoTarjetaPreAbordo(
+    Viaje v,
+    String estadoBase,
+    Map<String, dynamic> data,
+  ) {
+    if (!FinanceConfigService.pagosConTarjetaAzulHabilitados) return false;
+    if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
+    if (_uidTaxistaDelViaje(v).isEmpty) return false;
+    if (EstadosViaje.esTerminal(estadoBase)) return false;
+    if (MetodoPagoViaje.tarjetaPagadoVerificado(data)) return false;
+    if (EstadosViaje.esAbordo(estadoBase) ||
+        EstadosViaje.esEnCurso(estadoBase)) {
+      return false;
+    }
+    return EstadosViaje.esAceptado(estadoBase) ||
+        EstadosViaje.esEnCaminoPickup(estadoBase);
+  }
+
+  bool _mostrarTarjetaPagadaCliente(
+    Viaje v,
+    String estadoBase,
+    Map<String, dynamic> data,
+  ) {
+    if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
+    if (EstadosViaje.esTerminal(estadoBase)) return false;
+    return MetodoPagoViaje.tarjetaPagadoVerificado(data);
+  }
+
+  bool _mostrarPagoEfectivoCliente(
+    Viaje v,
+    String estadoBase,
+    Map<String, dynamic> data, {
+    required bool codigoVerificado,
+  }) {
+    final String metodo =
+        (data['metodoPago'] ?? v.metodoPago).toString();
+    if (!MetodoPagoViaje.esEfectivo(metodo)) return false;
+    if (_uidTaxistaDelViaje(v).isEmpty) return false;
+    if (EstadosViaje.esTerminal(estadoBase)) return false;
+    if (!MetodoPagoViaje.cambioDesdeTarjetaAEfectivo(data)) return false;
+    return codigoVerificado ||
+        EstadosViaje.esAbordo(estadoBase) ||
+        EstadosViaje.esEnCurso(estadoBase);
   }
 
   /// Cuenta completa del conductor: desde abordo o en ruta (vida real, anti-fraude).
@@ -3319,12 +3507,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             children: [
               Icon(Icons.route, size: 16, color: Colors.blueAccent),
               SizedBox(width: 8),
-              Text(
-                '📍 Ruta con paradas:',
-                style: TextStyle(
-                    color: Colors.blueAccent,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14),
+              Expanded(
+                child: Text(
+                  '📍 Ruta con paradas:',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: Colors.blueAccent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14),
+                ),
               ),
             ],
           ),
@@ -3709,6 +3901,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Column(
@@ -3717,29 +3910,37 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     const Text('ORIGEN',
                         style: TextStyle(color: Colors.white54, fontSize: 12)),
                     const SizedBox(height: 4),
-                    Text(v.origen,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500)),
+                    RaiViajeEnCursoUi.ellipsizedText(
+                      v.origen,
+                      maxLines: 3,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500),
+                    ),
                   ],
                 ),
               ),
               const SizedBox(width: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.greenAccent.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(30),
-                  border: Border.all(color: Colors.greenAccent),
-                ),
-                child: Text(
-                  _labelEstado(estadoBase),
-                  style: const TextStyle(
-                      color: Colors.greenAccent,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold),
+              Flexible(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.greenAccent.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(color: Colors.greenAccent),
+                  ),
+                  child: Text(
+                    _labelEstado(estadoBase),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.greenAccent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold),
+                  ),
                 ),
               ),
             ],
@@ -3757,6 +3958,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         style: TextStyle(color: Colors.white54, fontSize: 12)),
                     const SizedBox(height: 4),
                     Text(v.destino,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
@@ -4000,6 +4203,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             Expanded(
                               child: Text(
                                 nombre.isEmpty ? 'Tu conductor' : nombre,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                     color: cs.onSurface,
                                     fontSize: 19,
@@ -4034,6 +4239,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         const SizedBox(height: 4),
                         Text(
                           vehiculoLinea.isEmpty ? 'Vehículo' : vehiculoLinea,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                               color: cs.onSurfaceVariant, fontSize: 14),
                         ),
@@ -4325,6 +4532,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               const SizedBox(height: 4),
               Text(
                 label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   color: onPressed == null
                       ? cs.onSurface.withValues(alpha: 0.38)
@@ -4785,11 +4995,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     // Iniciar o detener escucha de conductores según corresponda.
                     // Nunca setState síncrono aquí: al aceptar el taxista se corta
                     // el pool y antes crasheaba con ErrorWidget.
-                    if (esperandoTaxista && _driversSub == null) {
+                    if (esperandoTaxista &&
+                        _nearbyDriversSession == null &&
+                        _isValidCoord(v.latCliente, v.lonCliente)) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) _startListeningDrivers();
+                        if (mounted) {
+                          _startListeningDrivers(v.latCliente, v.lonCliente);
+                        }
                       });
-                    } else if (!esperandoTaxista && _driversSub != null) {
+                    } else if (!esperandoTaxista &&
+                        _nearbyDriversSession != null) {
                       _stopListeningDrivers(deferSetState: true);
                     }
 
@@ -4845,9 +5060,25 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           markerId: const MarkerId('taxista'),
                           position: _latLng(v.latTaxista, v.lonTaxista),
                           infoWindow: const InfoWindow(title: 'Tu conductor'),
-                          icon: BitmapDescriptor.defaultMarkerWithHue(
-                            _taxistaHueByEstado(estadoBase),
-                          ),
+                          icon: RaiMapVehicleIcons.taxiClienteAsignado ??
+                              RaiMapVehicleIcons.taxiCliente ??
+                              BitmapDescriptor.defaultMarkerWithHue(
+                                _taxistaHueByEstado(estadoBase),
+                              ),
+                          rotation: (RaiMapVehicleIcons.taxiClienteAsignado !=
+                                      null ||
+                                  RaiMapVehicleIcons.taxiCliente != null)
+                              ? RaiMapVehicleIcons.rotationTaxiCliente(
+                                  _bearingTaxista,
+                                )
+                              : 0,
+                          flat: RaiMapVehicleIcons.taxiClienteAsignado != null ||
+                              RaiMapVehicleIcons.taxiCliente != null,
+                          anchor: (RaiMapVehicleIcons.taxiClienteAsignado !=
+                                      null ||
+                                  RaiMapVehicleIcons.taxiCliente != null)
+                              ? const Offset(0.5, 0.5)
+                              : const Offset(0.5, 1.0),
                           zIndexInt: 8,
                         ),
                     };
@@ -4890,17 +5121,47 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         if (location != null &&
                             _isValidCoord(
                                 location.latitude, location.longitude)) {
-                          final double hue =
-                              35 + (doc.id.hashCode % 115).abs().toDouble();
+                          final double? heading = (docData?['heading'] is num)
+                              ? (docData!['heading'] as num).toDouble()
+                              : null;
+                          final bool enViaje =
+                              (docData?['viajeId'] ?? '').toString().trim().isNotEmpty;
+                          final LatLng pos =
+                              LatLng(location.latitude, location.longitude);
                           markers.add(
                             Marker(
                               markerId: MarkerId('pool_${doc.id}'),
-                              position:
-                                  LatLng(location.latitude, location.longitude),
-                              icon: BitmapDescriptor.defaultMarkerWithHue(
-                                  hue.clamp(15.0, 330.0)),
-                              infoWindow:
-                                  const InfoWindow(title: 'Conductor en línea'),
+                              position: pos,
+                              icon: enViaje
+                                  ? (RaiMapVehicleIcons.taxiClienteAsignado ??
+                                      BitmapDescriptor.defaultMarkerWithHue(
+                                        BitmapDescriptor.hueRed,
+                                      ))
+                                  : (RaiMapVehicleIcons.taxiCliente ??
+                                      BitmapDescriptor.defaultMarkerWithHue(
+                                        BitmapDescriptor.hueGreen,
+                                      )),
+                              rotation: (enViaje
+                                          ? RaiMapVehicleIcons.taxiClienteAsignado
+                                          : RaiMapVehicleIcons.taxiCliente) !=
+                                      null
+                                  ? RaiMapVehicleIcons.rotationTaxiCliente(
+                                      heading ?? 0,
+                                    )
+                                  : 0,
+                              flat: enViaje
+                                  ? RaiMapVehicleIcons.taxiClienteAsignado != null
+                                  : RaiMapVehicleIcons.taxiCliente != null,
+                              anchor: (enViaje
+                                          ? RaiMapVehicleIcons.taxiClienteAsignado
+                                          : RaiMapVehicleIcons.taxiCliente) !=
+                                      null
+                                  ? const Offset(0.5, 0.5)
+                                  : const Offset(0.5, 1.0),
+                              infoWindow: InfoWindow(
+                                title: enViaje ? 'En viaje' : 'Disponible',
+                              ),
+                              zIndexInt: 2,
                             ),
                           );
                         }
@@ -4920,9 +5181,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           circleId: const CircleId('taxista_pulse_inner'),
                           center: txPos,
                           radius: 120,
-                          fillColor: Colors.greenAccent.withValues(alpha: 0.18),
-                          strokeColor:
-                              Colors.greenAccent.withValues(alpha: 0.55),
+                          fillColor: const Color(0x44E53935),
+                          strokeColor: const Color(0xFFE53935),
                           strokeWidth: 2,
                         ),
                       );
@@ -4931,10 +5191,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           circleId: const CircleId('taxista_pulse_outer'),
                           center: txPos,
                           radius: 220,
-                          fillColor:
-                              Colors.lightBlueAccent.withValues(alpha: 0.08),
-                          strokeColor:
-                              Colors.lightBlueAccent.withValues(alpha: 0.35),
+                          fillColor: const Color(0x22E53935),
+                          strokeColor: const Color(0x99E53935),
                           strokeWidth: 1,
                         ),
                       );
@@ -5004,6 +5262,28 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       estadoBase,
                       mostrarCodigoCliente: mostrarCodigoCliente,
                     );
+
+                    final bool esperandoConductor = v.uidTaxista.isEmpty &&
+                        (estadoBase == EstadosViaje.pendiente ||
+                            estadoBase == EstadosViaje.pendientePago ||
+                            v.esTurismo);
+                    final double sheetInitial = esperandoConductor
+                        ? _kViajeSheetEsperaConductor
+                        : _kViajeSheetInitial;
+                    final List<double> sheetSnapSizes = esperandoConductor
+                        ? <double>[
+                            _kViajeSheetMin,
+                            _kViajeSheetEsperaConductor,
+                            0.68,
+                            0.88,
+                          ]
+                        : <double>[
+                            _kViajeSheetMin,
+                            0.40,
+                            _kViajeSheetInitial,
+                            0.62,
+                            0.88,
+                          ];
 
                     // ===== DETECCIÓN DE CERCANÍA (solo fase pickup; en `en_curso` el cliente en
                     // Firestore puede quedar congelado si la app pasajero no está en primer plano
@@ -5120,6 +5400,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                 )
                               : GoogleMap(
                             key: ValueKey<String>('gmap-${v.id}'),
+                            padding: EdgeInsets.only(
+                              top: MediaQuery.of(context).padding.top + 56,
+                              bottom: MediaQuery.of(context).size.height * 0.40,
+                              left: 32,
+                              right: 32,
+                            ),
                             initialCameraPosition:
                                 CameraPosition(target: initialTarget, zoom: 14),
                             onMapCreated: (GoogleMapController c) {
@@ -5456,14 +5742,34 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           Positioned(
                             top: pulsoTaxistaEnMapa ? 164 : 72,
                             right: 16,
-                            child: FloatingActionButton.extended(
-                              onPressed: () => _centrarClienteYTaxista(v),
-                              icon: const Icon(Icons.center_focus_strong,
-                                  color: Colors.white),
-                              label: const Text('Centrar ambos',
-                                  style: TextStyle(color: Colors.white)),
-                              backgroundColor: Colors.black54,
-                              heroTag: null,
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                final bool narrow =
+                                    MediaQuery.sizeOf(context).width < 360;
+                                if (narrow) {
+                                  return FloatingActionButton(
+                                    onPressed: () =>
+                                        _centrarClienteYTaxista(v),
+                                    tooltip: 'Centrar ambos',
+                                    backgroundColor: Colors.black54,
+                                    heroTag: null,
+                                    child: const Icon(
+                                      Icons.center_focus_strong,
+                                      color: Colors.white,
+                                    ),
+                                  );
+                                }
+                                return FloatingActionButton.extended(
+                                  onPressed: () =>
+                                      _centrarClienteYTaxista(v),
+                                  icon: const Icon(Icons.center_focus_strong,
+                                      color: Colors.white),
+                                  label: const Text('Centrar ambos',
+                                      style: TextStyle(color: Colors.white)),
+                                  backgroundColor: Colors.black54,
+                                  heroTag: null,
+                                );
+                              },
                             ),
                           ),
                         // ===== MENSAJE DE CERCANÍA =====
@@ -5547,15 +5853,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           controller: _viajeSheetCtrl,
                           minChildSize: _kViajeSheetMin,
                           maxChildSize: 1.0,
-                          initialChildSize: _kViajeSheetInitial,
+                          initialChildSize: sheetInitial,
                           snap: true,
-                          snapSizes: const <double>[
-                            _kViajeSheetMin,
-                            0.40,
-                            _kViajeSheetInitial,
-                            0.75,
-                            1.0,
-                          ],
+                          snapSizes: sheetSnapSizes,
                           builder: (sheetCtx, scrollController) {
                             final double bottomInset =
                                 MediaQuery.viewPaddingOf(sheetCtx).bottom;
@@ -5603,7 +5903,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     v,
                                     estadoBase,
                                     cancelarHabilitado,
-                                    orientacionFlujo: orientacionFlujo,
                                   ),
                                   _viajeSheetDivider(),
 
@@ -5804,6 +6103,47 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     ),
 
                                   // Transferencia: cuenta completa desde abordo / en ruta.
+                                  if (_mostrarSelectorMetodoPagoCliente(
+                                      v, estadoBase, data))
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 10),
+                                      child: ViajeMetodoPagoSelector(
+                                        viajeId: v.id,
+                                        metodoPagoActual: (data['metodoPago'] ??
+                                                v.metodoPago)
+                                            .toString(),
+                                        fondoOscuro: true,
+                                      ),
+                                    ),
+                                  if (_mostrarAvisoTarjetaPreAbordo(
+                                      v, estadoBase, data))
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 10),
+                                      child: Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1A1F2E),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Colors.deepPurpleAccent
+                                                .withValues(alpha: 0.35),
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'Pago con tarjeta: cuando subas al vehículo y verifiques el código '
+                                          'con el conductor, verás el botón para pagar desde la app antes de llegar al destino.',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 13,
+                                            height: 1.35,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   if (_mostrarAvisoTransferenciaPreAbordo(
                                       v, estadoBase))
                                     Padding(
@@ -5878,6 +6218,69 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       mostrarCodigo: mostrarCodigoCliente,
                                       esMotor: v.esMotor,
                                     ),
+                                  ],
+                                  if (_mostrarPagoTarjetaCliente(
+                                    v,
+                                    estadoBase,
+                                    data,
+                                    codigoVerificado: codigoVerificado,
+                                  )) ...[
+                                    const SizedBox(height: 12),
+                                    RaiPagoTarjetaPanel(
+                                      viajeId: v.id,
+                                      viajeData: data,
+                                      montoRd: v.precio,
+                                      fondoOscuro: true,
+                                      role: 'cliente',
+                                      modoViajeEnCurso: true,
+                                    ),
+                                    const SizedBox(height: 16),
+                                  ] else if (_mostrarTarjetaPagadaCliente(
+                                      v, estadoBase, data)) ...[
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF10231A),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: Colors.greenAccent
+                                              .withValues(alpha: 0.45),
+                                        ),
+                                      ),
+                                      child: const Row(
+                                        children: [
+                                          Icon(Icons.check_circle_outline,
+                                              color: Colors.greenAccent),
+                                          SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              'Pago con tarjeta confirmado. '
+                                              'Al finalizar el viaje verás tu recibo.',
+                                              style: TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 13,
+                                                height: 1.35,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                  ] else if (_mostrarPagoEfectivoCliente(
+                                    v,
+                                    estadoBase,
+                                    data,
+                                    codigoVerificado: codigoVerificado,
+                                  )) ...[
+                                    const SizedBox(height: 12),
+                                    EfectivoPagoClienteBanner(
+                                      montoRd: v.precio,
+                                      desdeTarjeta: true,
+                                    ),
+                                    const SizedBox(height: 16),
                                   ],
 
                                   // Tarjeta de información del viaje

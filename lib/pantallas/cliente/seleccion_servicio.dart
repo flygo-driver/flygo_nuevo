@@ -1,5 +1,4 @@
 ﻿import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -9,6 +8,7 @@ import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/programar_viaje_multi.dart';
 import 'package:flygo_nuevo/servicios/cliente_viaje_navegacion.dart';
+import 'package:flygo_nuevo/servicios/cliente_viaje_activo_gate.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
@@ -17,11 +17,12 @@ import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo, etiq
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
 import 'package:flygo_nuevo/widgets/promo_taxi_pista_animation.dart';
-import 'package:flygo_nuevo/widgets/motor_servicio_animation.dart';
-import 'package:flygo_nuevo/widgets/giras_cupos_animation.dart';
-import 'package:flygo_nuevo/widgets/turismo_servicio_animation.dart';
+import 'package:flygo_nuevo/widgets/cliente_home_live_map.dart';
 import 'package:flygo_nuevo/widgets/rai_direccion_inteligente_sheet.dart';
 import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
+import 'package:flygo_nuevo/widgets/rai_tipo_viaje_picker.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 /// Colores del inicio derivados del fondo real (Apariencia + claro/oscuro).
 class _HomePalette {
@@ -59,11 +60,20 @@ class _HomePalette {
   Color get cardShadow =>
       Colors.black.withValues(alpha: cardIsDark ? 0.32 : 0.08);
 
+  /// Verde marca RAI (#00E676), no el verde tipo inDrive.
   Color get accentGreen =>
-      scaffoldIsDark ? const Color(0xFF34D399) : const Color(0xFF059669);
+      scaffoldIsDark ? RaiDsColors.neon : const Color(0xFF16A34A);
 
   Color get conductoresAccent =>
       scaffoldIsDark ? const Color(0xFFFFB74D) : const Color(0xFFE8590C);
+}
+
+String? _primerNombreUsuario() {
+  final String? nombre = FirebaseAuth.instance.currentUser?.displayName?.trim();
+  if (nombre == null || nombre.isEmpty) return null;
+  final String primero = nombre.split(RegExp(r'\s+')).first;
+  if (primero.isEmpty) return null;
+  return primero[0].toUpperCase() + primero.substring(1).toLowerCase();
 }
 
 class SeleccionServicio extends StatelessWidget {
@@ -102,6 +112,7 @@ class SeleccionServicio extends StatelessWidget {
     final Color promoBorder = palette.borderScaffold;
     final Color promoBg = palette.card;
     final Color verConductoresColor = palette.conductoresAccent;
+    final String? primerNombre = _primerNombreUsuario();
 
     return Scaffold(
       backgroundColor: bgScaffold,
@@ -120,7 +131,7 @@ class SeleccionServicio extends StatelessWidget {
           SafeArea(
             bottom: false,
             child: Padding(
-              padding: const EdgeInsets.only(bottom: 52),
+              padding: const EdgeInsets.only(bottom: 72),
               child: CustomScrollView(
                 physics: const AlwaysScrollableScrollPhysics(
                   parent: ClampingScrollPhysics(),
@@ -140,7 +151,9 @@ class SeleccionServicio extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '¿A dónde quieres ir?',
+                            primerNombre != null
+                                ? '¡Hola, $primerNombre!'
+                                : '¿A dónde vamos hoy?',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -153,7 +166,9 @@ class SeleccionServicio extends StatelessWidget {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Toca abajo para pedir tu viaje en minutos',
+                            primerNombre != null
+                                ? 'Ingresa tu destino y pide tu viaje en minutos'
+                                : 'Toca abajo para pedir tu viaje en minutos',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -169,8 +184,21 @@ class SeleccionServicio extends StatelessWidget {
                   ),
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-                      child: _HomePrimaryTripBlock(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                      child: _HomeSearchDestinoBar(
+                        onElegirTipo: (programar) {
+                          unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
+                            context,
+                            ProgramarViaje(modoAhora: !programar),
+                          ));
+                        },
+                      ),
+                    ),
+                  ),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                      child: _HomeTipoViajeCards(
                         onPedirAhora: () {
                           unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
                             context,
@@ -217,6 +245,11 @@ class SeleccionServicio extends StatelessWidget {
                                         }
                                       }
                                       if (!context.mounted) return;
+                                      if (!await ClienteViajeActivoGate
+                                          .intentarFlujoNuevoViaje(context)) {
+                                        return;
+                                      }
+                                      if (!context.mounted) return;
                                       Navigator.of(context, rootNavigator: true)
                                           .pushNamed(rutaBolaPueblo);
                                     },
@@ -227,266 +260,110 @@ class SeleccionServicio extends StatelessWidget {
                             ],
                             if (ProductosConfigService.muestraConductoresEnRuta)
                               _HomeConductoresTile(
-                                onTap: () => NavigationService.pushEnTabShell(
-                                  context,
-                                  const BolaConductoresEnRutaClientePage(),
-                                ),
+                                onTap: () async {
+                                  if (!await ClienteViajeActivoGate
+                                      .intentarFlujoNuevoViaje(context)) {
+                                    return;
+                                  }
+                                  if (!context.mounted) return;
+                                  NavigationService.pushEnTabShell(
+                                    context,
+                                    const BolaConductoresEnRutaClientePage(),
+                                  );
+                                },
                                 accentColor: verConductoresColor,
                               ),
                           ],
                         ),
                       ),
                     ),
-                  if (ProductosConfigService.hayOpcionesExtrasHome)
-                    SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Más opciones',
-                                style: TextStyle(
-                                  color: textPrimary,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: -0.3,
-                                ),
-                              ),
-                            ),
-                            Icon(Icons.swipe_rounded,
-                                size: 18, color: textMuted),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Desliza',
-                              style: TextStyle(
-                                color: textMuted,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                      child: Text(
+                        'Servicios',
+                        style: TextStyle(
+                          color: textPrimary,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.3,
                         ),
                       ),
                     ),
-                  if (ProductosConfigService.hayOpcionesExtrasHome)
-                    SliverToBoxAdapter(
-                      child: Builder(
-                        builder: (context) {
-                          final double h = MediaQuery.sizeOf(context).height;
-                          final double stripH =
-                              (h * 0.26).clamp(196.0, 268.0);
-                          const double cardW = 168.0;
-                          final cards = <Widget>[];
-                          if (ProductosConfigService.muestraMultiparada) {
-                            cards.add(
-                              _HomeGiantServiceCard(
-                                cardWidth: cardW,
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFFFF5252),
-                                    Color(0xFFD32F2F),
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                icon: Icons.route,
-                                iconSize: 30,
-                                title: 'MÚLTIPLES\nPARADAS',
-                                titleSize: 15,
-                                subtitle: 'Hasta 5 paradas',
-                                price: 'FLEXIBLE',
-                                features: const [
-                                  '📍 5 paradas',
-                                  '🔄 Cambia ruta',
-                                ],
-                                badge: const Icon(Icons.alt_route,
-                                    color: Colors.white, size: 16),
-                                onTap: () {
-                                  unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
-                                    context,
-                                    const ProgramarViajeMulti(),
-                                  ));
-                                },
+                  ),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                      child: _HomeExtrasServiceGrid(
+                          onViajeAhora: () {
+                            unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
+                              context,
+                              const ProgramarViaje(modoAhora: true),
+                            ));
+                          },
+                          onProgramado: () {
+                            unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
+                              context,
+                              const ProgramarViaje(modoAhora: false),
+                            ));
+                          },
+                          onMultiparada: () {
+                            unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
+                              context,
+                              const ProgramarViajeMulti(),
+                            ));
+                          },
+                          onMotor: () {
+                            unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
+                              context,
+                              const ProgramarViaje(
+                                modoAhora: true,
+                                tipoServicio: 'motor',
+                              ),
+                            ));
+                          },
+                          onGiras: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    const PoolsClienteLista(tipo: 'todos'),
                               ),
                             );
-                          }
-                          if (ProductosConfigService.muestraMotor) {
-                            if (cards.isNotEmpty) {
-                              cards.add(const SizedBox(width: 10));
-                            }
-                            cards.add(
-                              _HomeGiantServiceCard(
-                                cardWidth: cardW,
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFFFF9100),
-                                    Color(0xFFE65100),
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                icon: Icons.two_wheeler,
-                                iconSize: 32,
-                                customHeader: const MotorServicioAnimation(),
-                                title: 'MOTORES',
-                                titleSize: 18,
-                                subtitle: 'Rápido y económico',
-                                price: 'DESDE RD\$ 50',
-                                features: const [
-                                  '💨 1 pasajero',
-                                  '⚡ Anti-tráfico',
-                                ],
-                                badge: const Icon(Icons.speed,
-                                    color: Colors.white, size: 16),
-                                onTap: () {
-                                  unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
-                                    context,
-                                    const ProgramarViaje(
-                                      modoAhora: true,
-                                      tipoServicio: 'motor',
-                                    ),
-                                  ));
-                                },
-                              ),
+                          },
+                          onTurismo: () => _mostrarEleccionTurismo(context),
+                          onCorporativo: () {
+                            unawaited(
+                              ClienteViajeNavegacion.pushCorporativoHub(context),
                             );
-                          }
-                          if (ProductosConfigService.muestraGiras) {
-                            if (cards.isNotEmpty) {
-                              cards.add(const SizedBox(width: 10));
-                            }
-                            cards.add(
-                              _HomeGiantServiceCard(
-                                cardWidth: cardW,
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFF00ACC1),
-                                    Color(0xFF006064),
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                icon: Icons.groups_2,
-                                iconSize: 30,
-                                customHeader: const GirasCuposAnimation(),
-                                title: 'GIRAS POR\nCUPOS',
-                                titleSize: 15,
-                                subtitle: 'Viajes de agencias',
-                                price: 'CATÁLOGO',
-                                features: const [
-                                  '🏢 Agencias',
-                                  '🚌 Tours',
-                                ],
-                                badge: const Icon(Icons.travel_explore,
-                                    color: Colors.white, size: 16),
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const PoolsClienteLista(
-                                          tipo: 'todos'),
-                                    ),
-                                  );
-                                },
-                              ),
-                            );
-                          }
-                          if (ProductosConfigService.muestraTurismo) {
-                            if (cards.isNotEmpty) {
-                              cards.add(const SizedBox(width: 10));
-                            }
-                            cards.add(
-                              _HomeGiantServiceCard(
-                                cardWidth: cardW,
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFFAA00FF),
-                                    Color(0xFF4A0072),
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                icon: Icons.beach_access,
-                                iconSize: 32,
-                                customHeader:
-                                    const TurismoServicioAnimation(),
-                                title: 'TURISMO',
-                                titleSize: 17,
-                                subtitle: 'Aeropuertos, hoteles',
-                                price: 'DESDE RD\$ 150',
-                                features: const [
-                                  '🏨 Traslados',
-                                  '✈️ Aeropuerto',
-                                ],
-                                badge: const Icon(Icons.airplanemode_active,
-                                    color: Colors.white, size: 16),
-                                onTap: () =>
-                                    _mostrarEleccionTurismo(context),
-                              ),
-                            );
-                          }
-                          if (ProductosConfigService.muestraCorporativo) {
-                            if (cards.isNotEmpty) {
-                              cards.add(const SizedBox(width: 10));
-                            }
-                            cards.add(
-                              _HomeGiantServiceCard(
-                                cardWidth: cardW,
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFF0D9488),
-                                    Color(0xFF134E4A),
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                icon: Icons.business_center,
-                                iconSize: 30,
-                                title: 'CORPORATIVO\nCOMPARTIDO',
-                                titleSize: 14,
-                                subtitle: 'Rutas de empresa',
-                                price: 'PLANTILLAS',
-                                features: const [
-                                  '🏢 Empresa',
-                                  '👥 Pasajeros',
-                                ],
-                                badge: const Icon(Icons.route,
-                                    color: Colors.white, size: 16),
-                                onTap: () {
-                                  unawaited(
-                                    ClienteViajeNavegacion.pushCorporativoHub(
-                                      context,
-                                    ),
-                                  );
-                                },
-                              ),
-                            );
-                          }
-                          return SizedBox(
-                            height: stripH,
-                            child: ListView(
-                              scrollDirection: Axis.horizontal,
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              children: cards,
-                            ),
-                          );
-                        },
+                          },
+                        ),
                       ),
                     ),
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(20, 12, 20, 22),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: promoBg,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: promoBorder),
-                        ),
-                        child: const ClipRRect(
-                          borderRadius: BorderRadius.all(Radius.circular(15)),
-                          child: PromoTaxiPistaAnimation(),
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: promoBg,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: promoBorder),
+                            ),
+                            child: const ClipRRect(
+                              borderRadius:
+                                  BorderRadius.all(Radius.circular(15)),
+                              child: PromoTaxiPistaAnimation(),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          ClienteHomeLiveMap(
+                            accentGreen: palette.accentGreen,
+                            isDark: palette.scaffoldIsDark,
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -522,84 +399,17 @@ class SeleccionServicio extends StatelessWidget {
     );
   }
 
-  /// Turismo: elegir Ahora o Programar y abrir [ProgramarViaje].
+  /// Turismo: elegir Ahora o Programar con el mismo diseño de tarjetas.
   Future<void> _mostrarEleccionTurismo(BuildContext context) async {
     if (!context.mounted) return;
-    bool programar = false;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return Padding(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                8,
-                20,
-                20 + MediaQuery.paddingOf(ctx).bottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    'Turismo RAI',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Traslados a aeropuertos, hoteles y destinos turísticos',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                  const SizedBox(height: 16),
-                  SegmentedButton<bool>(
-                    segments: const [
-                      ButtonSegment<bool>(
-                        value: false,
-                        icon: Icon(Icons.bolt_rounded, size: 18),
-                        label: Text('Ahora'),
-                      ),
-                      ButtonSegment<bool>(
-                        value: true,
-                        icon: Icon(Icons.event_rounded, size: 18),
-                        label: Text('Programar'),
-                      ),
-                    ],
-                    selected: {programar},
-                    onSelectionChanged: (selection) {
-                      setModalState(() => programar = selection.first);
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _abrirTurismoDesdeInicio(
-                        context,
-                        modoAhora: !programar,
-                      );
-                    },
-                    icon: const Icon(Icons.arrow_forward_rounded),
-                    label: const Text('Continuar'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFAA00FF),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+    final bool? programar = await RaiTipoViajePicker.mostrar(
+      context,
+      titulo: 'Turismo RAI',
+      subtitulo:
+          'Traslados a aeropuertos, hoteles y destinos turísticos',
     );
+    if (programar == null || !context.mounted) return;
+    _abrirTurismoDesdeInicio(context, modoAhora: !programar);
   }
 
   void _abrirTurismoDesdeInicio(
@@ -617,39 +427,341 @@ class SeleccionServicio extends StatelessWidget {
   }
 }
 
-/// Bloque superior: selector Pide ahora / Programar + destino + CTA.
-class _HomePrimaryTripBlock extends StatefulWidget {
-  const _HomePrimaryTripBlock({
-    required this.onPedirAhora,
-    required this.onProgramar,
+/// Spec interno para cada cuadrito de servicio.
+class _ServiceTileSpec {
+  const _ServiceTileSpec({
+    required this.icon,
+    required this.title,
+    required this.gradient,
+    required this.glowColor,
+    required this.onTap,
   });
 
-  final VoidCallback onPedirAhora;
-  final VoidCallback onProgramar;
-
-  @override
-  State<_HomePrimaryTripBlock> createState() => _HomePrimaryTripBlockState();
+  final IconData icon;
+  final String title;
+  final Gradient gradient;
+  final Color glowColor;
+  final VoidCallback onTap;
 }
 
-class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
-  bool _programar = false;
+/// Grilla compacta de servicios (mismo flujo que antes, diseño moderno).
+class _HomeExtrasServiceGrid extends StatelessWidget {
+  const _HomeExtrasServiceGrid({
+    required this.onViajeAhora,
+    required this.onProgramado,
+    required this.onMultiparada,
+    required this.onMotor,
+    required this.onGiras,
+    required this.onTurismo,
+    required this.onCorporativo,
+  });
 
-  void _continuar() {
-    if (_programar) {
-      widget.onProgramar();
-    } else {
-      widget.onPedirAhora();
-    }
+  final VoidCallback onViajeAhora;
+  final VoidCallback onProgramado;
+  final VoidCallback onMultiparada;
+  final VoidCallback onMotor;
+  final VoidCallback onGiras;
+  final VoidCallback onTurismo;
+  final VoidCallback onCorporativo;
+
+  @override
+  Widget build(BuildContext context) {
+    final _HomePalette p = _HomePalette.of(context);
+    const int cols = 3;
+
+    final tiles = <_ServiceTileSpec>[
+      _ServiceTileSpec(
+        icon: PhosphorIconsFill.lightning,
+        title: 'Pide ahora',
+        glowColor: const Color(0xFF00FF88),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF00FF88), Color(0xFF00C853)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        onTap: onViajeAhora,
+      ),
+      _ServiceTileSpec(
+        icon: PhosphorIconsFill.calendarBlank,
+        title: 'Programado',
+        glowColor: const Color(0xFF5DFFA8),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF5DFFA8), Color(0xFF00A86B)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        onTap: onProgramado,
+      ),
+      if (ProductosConfigService.muestraMultiparada)
+        _ServiceTileSpec(
+          icon: PhosphorIconsFill.signpost,
+          title: 'Paradas múltiples',
+          glowColor: const Color(0xFFFF5C8A),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFFF6B9D), Color(0xFFFF1744)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          onTap: onMultiparada,
+        ),
+      if (ProductosConfigService.muestraMotor)
+        _ServiceTileSpec(
+          icon: PhosphorIconsFill.motorcycle,
+          title: 'Motores',
+          glowColor: const Color(0xFFFFAB40),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFFFB74D), Color(0xFFFF6D00)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          onTap: onMotor,
+        ),
+      if (ProductosConfigService.muestraGiras)
+        _ServiceTileSpec(
+          icon: PhosphorIconsFill.bus,
+          title: 'Giras y excursiones',
+          glowColor: const Color(0xFF40E0FF),
+          gradient: const LinearGradient(
+            colors: [Color(0xFF4DEEFF), Color(0xFF00B8D4)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          onTap: onGiras,
+        ),
+      if (ProductosConfigService.muestraTurismo)
+        _ServiceTileSpec(
+          icon: PhosphorIconsFill.airplaneTilt,
+          title: 'Turismo',
+          glowColor: const Color(0xFFD05CFF),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFE879FF), Color(0xFF9C27B0)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          onTap: onTurismo,
+        ),
+      if (ProductosConfigService.muestraCorporativo)
+        _ServiceTileSpec(
+          icon: PhosphorIconsFill.buildings,
+          title: 'Corporativo',
+          glowColor: const Color(0xFF3DFFE8),
+          gradient: const LinearGradient(
+            colors: [Color(0xFF5CFFE8), Color(0xFF00BFA5)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          onTap: onCorporativo,
+        ),
+    ];
+
+    if (tiles.isEmpty) return const SizedBox.shrink();
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: p.borderCard),
+        boxShadow: [
+          BoxShadow(
+            color: p.cardShadow,
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 14, 10, 12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            const double gap = 8;
+            final double cellW =
+                (constraints.maxWidth - gap * (cols - 1)) / cols;
+            final double box = cellW * 0.96;
+
+            return GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: cols,
+                mainAxisSpacing: gap,
+                crossAxisSpacing: gap,
+                childAspectRatio: 1.0,
+              ),
+              itemCount: tiles.length,
+              itemBuilder: (context, index) {
+                final _ServiceTileSpec spec = tiles[index];
+                return _HomeServiceGridTile(
+                  icon: spec.icon,
+                  title: spec.title,
+                  gradient: spec.gradient,
+                  glowColor: spec.glowColor,
+                  boxSize: box,
+                  onTap: spec.onTap,
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeServiceGridTile extends StatelessWidget {
+  const _HomeServiceGridTile({
+    required this.icon,
+    required this.title,
+    required this.gradient,
+    required this.glowColor,
+    required this.onTap,
+    required this.boxSize,
+  });
+
+  final IconData icon;
+  final String title;
+  final Gradient gradient;
+  final Color glowColor;
+  final VoidCallback onTap;
+  final double boxSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final _HomePalette p = _HomePalette.of(context);
+    final double radius = boxSize * 0.18;
+    final double iconSize = (boxSize * 0.26).clamp(20.0, 30.0);
+    final bool largo = title.length > 12;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(radius),
+        child: Center(
+          child: Container(
+            width: boxSize,
+            height: boxSize,
+            decoration: BoxDecoration(
+              gradient: gradient,
+              borderRadius: BorderRadius.circular(radius),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.35),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: glowColor.withValues(alpha: 0.45),
+                  blurRadius: 16,
+                  spreadRadius: -2,
+                  offset: const Offset(0, 5),
+                ),
+                BoxShadow(
+                  color: Colors.black.withValues(
+                    alpha: p.cardIsDark ? 0.28 : 0.12,
+                  ),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.white.withValues(alpha: 0.28),
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: 0.08),
+                        ],
+                        stops: const [0.0, 0.45, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: largo ? 5 : 7,
+                    vertical: 7,
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        icon,
+                        color: Colors.white,
+                        size: iconSize,
+                        shadows: const [
+                          Shadow(
+                            color: Color(0x88000000),
+                            blurRadius: 6,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: largo ? 3 : 5),
+                      Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            title,
+                            maxLines: largo ? 3 : 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              height: 1.1,
+                              letterSpacing: -0.15,
+                              shadows: [
+                                Shadow(
+                                  color: Color(0x77000000),
+                                  blurRadius: 4,
+                                  offset: Offset(0, 1),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Barra de búsqueda de destino (abre selector Ahora/Programado).
+class _HomeSearchDestinoBar extends StatelessWidget {
+  const _HomeSearchDestinoBar({required this.onElegirTipo});
+
+  final void Function(bool programar) onElegirTipo;
+
+  Future<void> _abrirBusqueda(BuildContext context) async {
+    final bool? programar = await RaiTipoViajePicker.mostrar(context);
+    if (programar == null || !context.mounted) return;
+    onElegirTipo(programar);
   }
 
-  Future<void> _abrirDestinoConVoz() async {
+  Future<void> _abrirDestinoConVoz(BuildContext context) async {
     final det = await RaiDireccionInteligenteSheet.mostrar(context);
-    if (det == null || !mounted) return;
-    if (!context.mounted) return;
+    if (det == null || !context.mounted) return;
+    final bool? programar = await RaiTipoViajePicker.mostrar(context);
+    if (programar == null || !context.mounted) return;
     unawaited(ClienteViajeNavegacion.pushTrasVerificacion(
       context,
       ProgramarViaje(
-        modoAhora: !_programar,
+        modoAhora: !programar,
         destinoPrecargado: det.displayLabel,
         latDestinoPrecargado: det.lat,
         lonDestinoPrecargado: det.lon,
@@ -661,180 +773,202 @@ class _HomePrimaryTripBlockState extends State<_HomePrimaryTripBlock> {
   Widget build(BuildContext context) {
     final _HomePalette p = _HomePalette.of(context);
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: p.borderCard),
-        boxShadow: [
-          BoxShadow(
-            color: p.cardShadow,
-            blurRadius: 20,
-            offset: const Offset(0, 8),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _abrirBusqueda(context),
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: p.card,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: p.borderCard),
+            boxShadow: [
+              BoxShadow(
+                color: p.cardShadow,
+                blurRadius: 14,
+                offset: const Offset(0, 5),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final bool narrow = constraints.maxWidth < 340;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+            child: Row(
               children: [
-                SegmentedButton<bool>(
-                  segments: [
-                    ButtonSegment<bool>(
-                      value: false,
-                      icon: Icon(Icons.bolt_rounded, size: narrow ? 18 : 20),
-                      label: Text(
-                        'Pide ahora',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: narrow ? 13 : 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    ButtonSegment<bool>(
-                      value: true,
-                      icon: Icon(Icons.event_rounded, size: narrow ? 18 : 20),
-                      label: Text(
-                        'Programar',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: narrow ? 13 : 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                  selected: {_programar},
-                  showSelectedIcon: !narrow,
-                  emptySelectionAllowed: false,
-                  onSelectionChanged: (selection) {
-                    setState(() => _programar = selection.first);
-                  },
-                  style: SegmentedButton.styleFrom(
-                    selectedBackgroundColor: p.accentGreen,
-                    selectedForegroundColor: Colors.white,
-                    backgroundColor: p.inputFill,
-                    foregroundColor: p.textOnCard,
-                    side: BorderSide(color: p.borderCard),
-                    padding: EdgeInsets.symmetric(
-                      vertical: narrow ? 8 : 12,
-                      horizontal: narrow ? 2 : 6,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    visualDensity: narrow
-                        ? VisualDensity.compact
-                        : VisualDensity.standard,
-                    tapTargetSize: MaterialTapTargetSize.padded,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: _continuar,
-                    borderRadius: BorderRadius.circular(14),
-                    child: Ink(
-                      decoration: BoxDecoration(
-                        color: p.inputFill,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: p.borderCard),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 16,
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.search_rounded,
-                                color: p.textMutedCard, size: 22),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                '¿A dónde vas?',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: p.textMutedCard,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Dictar destino con RAI',
-                              visualDensity: VisualDensity.compact,
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(
-                                minWidth: 36,
-                                minHeight: 36,
-                              ),
-                              icon: Icon(
-                                Icons.mic_none_rounded,
-                                color: p.accentGreen,
-                                size: 22,
-                              ),
-                              onPressed: _abrirDestinoConVoz,
-                            ),
-                            Icon(Icons.arrow_forward_ios_rounded,
-                                size: 14, color: p.textMutedCard),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                FilledButton(
-                  onPressed: _continuar,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: p.accentGreen,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 16,
-                      horizontal: 16,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    textStyle: const TextStyle(
+                Icon(Icons.location_on_outlined,
+                    color: p.accentGreen, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Ingresa tu destino',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: p.textMutedCard,
                       fontSize: 16,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                ),
+                IconButton(
+                  tooltip: 'Dictar destino con RAI',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  icon: Icon(
+                    Icons.mic_none_rounded,
+                    color: p.accentGreen,
+                    size: 22,
+                  ),
+                  onPressed: () => _abrirDestinoConVoz(context),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tarjetas Ahora / Programado en el inicio (mismo diseño del mockup).
+class _HomeTipoViajeCards extends StatelessWidget {
+  const _HomeTipoViajeCards({
+    required this.onPedirAhora,
+    required this.onProgramar,
+  });
+
+  final VoidCallback onPedirAhora;
+  final VoidCallback onProgramar;
+
+  @override
+  Widget build(BuildContext context) {
+    final _HomePalette p = _HomePalette.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '¿Qué tipo de viaje quieres?',
+          style: TextStyle(
+            color: p.textOnScaffold,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.2,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _HomeTipoViajeCard(
+          icon: Icons.bolt_rounded,
+          titulo: 'Ahora',
+          subtitulo: 'Pide un viaje al instante',
+          accent: p.accentGreen,
+          palette: p,
+          onTap: onPedirAhora,
+        ),
+        const SizedBox(height: 10),
+        _HomeTipoViajeCard(
+          icon: Icons.event_rounded,
+          titulo: 'Programado',
+          subtitulo: 'Elige día y hora',
+          accent: p.accentGreen,
+          palette: p,
+          onTap: onProgramar,
+        ),
+      ],
+    );
+  }
+}
+
+class _HomeTipoViajeCard extends StatelessWidget {
+  const _HomeTipoViajeCard({
+    required this.icon,
+    required this.titulo,
+    required this.subtitulo,
+    required this.accent,
+    required this.palette,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String titulo;
+  final String subtitulo;
+  final Color accent;
+  final _HomePalette palette;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: palette.card,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: accent.withValues(
+                alpha: palette.cardIsDark ? 0.30 : 0.22,
+              ),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: palette.cardShadow,
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: accent.withValues(
+                      alpha: palette.cardIsDark ? 0.16 : 0.12,
+                    ),
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  child: Icon(icon, color: accent, size: 26),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        _programar ? Icons.event_rounded : Icons.bolt_rounded,
-                        size: 20,
+                      Text(
+                        titulo,
+                        style: TextStyle(
+                          color: palette.textOnCard,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          _programar
-                              ? 'Elegir fecha y destino'
-                              : 'Pedir viaje ahora',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitulo,
+                        style: TextStyle(
+                          color: palette.textMutedCard,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
                   ),
                 ),
+                Icon(Icons.chevron_right_rounded,
+                    color: palette.textMutedCard, size: 22),
               ],
-            );
-          },
+            ),
+          ),
         ),
       ),
     );
@@ -913,277 +1047,6 @@ class _HomeConductoresTile extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-/// Tarjeta grande con gradiente para «Más opciones» (motor, turismo, etc.).
-class _HomeGiantServiceCard extends StatelessWidget {
-  const _HomeGiantServiceCard({
-    required this.cardWidth,
-    required this.gradient,
-    required this.icon,
-    required this.iconSize,
-    required this.title,
-    required this.titleSize,
-    required this.subtitle,
-    required this.price,
-    required this.features,
-    required this.badge,
-    required this.onTap,
-    this.customHeader,
-  });
-
-  final double cardWidth;
-  final Gradient gradient;
-  final IconData icon;
-  final double iconSize;
-  final Widget? customHeader;
-  final String title;
-  final double titleSize;
-  final String subtitle;
-  final String price;
-  final List<String> features;
-  final Widget badge;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool compact = cardWidth < 200;
-    final double radius = compact ? 16.0 : 20.0;
-    final bool isDarkBg = _HomePalette.of(context).scaffoldIsDark;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: cardWidth,
-        decoration: BoxDecoration(
-          gradient: gradient,
-          borderRadius: BorderRadius.circular(radius),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDarkBg ? 0.32 : 0.16),
-              blurRadius: compact ? 10 : 14,
-              spreadRadius: 0,
-              offset: Offset(0, compact ? 4 : 6),
-            ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _PatternPainter(
-                  color: Colors.white
-                      .withValues(alpha: compact ? 0.035 : 0.055),
-                  step: compact ? 30 : 24,
-                  strokeWidth: compact ? 0.55 : 0.75,
-                ),
-              ),
-            ),
-            Positioned(
-              top: compact ? 8 : 12,
-              right: compact ? 8 : 12,
-              child: Container(
-                padding: EdgeInsets.all(compact ? 6 : 8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.18),
-                  shape: BoxShape.circle,
-                ),
-                child: badge,
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                compact ? 11 : 14,
-                compact ? 9 : 12,
-                compact ? 11 : 14,
-                compact ? 11 : 14,
-              ),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final double headerH = (constraints.maxHeight - 4)
-                      .clamp(0.0, compact ? 52.0 : 86.0);
-                  const double headerDesignW = 140;
-                  const double headerDesignH = 52;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        height: headerH,
-                        width: double.infinity,
-                        child: headerH <= 0
-                            ? const SizedBox.shrink()
-                            : customHeader != null
-                                ? FittedBox(
-                                    fit: BoxFit.contain,
-                                    alignment: Alignment.centerLeft,
-                                    clipBehavior: Clip.hardEdge,
-                                    child: SizedBox(
-                                      width: headerDesignW,
-                                      height: headerDesignH,
-                                      child: customHeader,
-                                    ),
-                                  )
-                                : Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: FittedBox(
-                                      fit: BoxFit.contain,
-                                      child: Icon(
-                                        icon,
-                                        color: Colors.white,
-                                        size: math.min(
-                                            iconSize, headerH * 0.85),
-                                      ),
-                                    ),
-                                  ),
-                      ),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          physics: const ClampingScrollPhysics(),
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                title,
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
-                                softWrap: true,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: titleSize,
-                                  fontWeight: FontWeight.w900,
-                                  height: 1.02,
-                                  letterSpacing: -0.2,
-                                  shadows: const [
-                                    Shadow(
-                                      offset: Offset(0, 1),
-                                      blurRadius: 4,
-                                      color: Color(0x59000000),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 5),
-                              Text(
-                                subtitle,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.95),
-                                  fontSize: compact ? 11.5 : 13,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.2,
-                                  shadows: const [
-                                    Shadow(
-                                      offset: Offset(0, 1),
-                                      blurRadius: 3,
-                                      color: Color(0x45000000),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(height: compact ? 6 : 8),
-                              Container(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: compact ? 8 : 10,
-                                  vertical: compact ? 3 : 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.18),
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Text(
-                                  price,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: compact ? 10 : 11.5,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 0.3,
-                                  ),
-                                ),
-                              ),
-                              SizedBox(height: compact ? 5 : 7),
-                              ...features.map(
-                                (feature) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 2),
-                                  child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Icon(
-                                        Icons.check,
-                                        color: Colors.white
-                                            .withValues(alpha: 0.98),
-                                        size: compact ? 12 : 14,
-                                      ),
-                                      SizedBox(width: compact ? 4 : 5),
-                                      Expanded(
-                                        child: Text(
-                                          feature,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.96),
-                                            fontSize: compact ? 10.5 : 11.5,
-                                            fontWeight: FontWeight.w600,
-                                            height: 1.28,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PatternPainter extends CustomPainter {
-  final Color color;
-  final double step;
-  final double strokeWidth;
-
-  _PatternPainter({
-    required this.color,
-    this.step = 24,
-    this.strokeWidth = 0.75,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = strokeWidth
-      ..style = PaintingStyle.stroke;
-    for (double i = 0; i < size.width; i += step) {
-      canvas.drawLine(Offset(i, 0), Offset(i, size.height), paint);
-    }
-    for (double i = 0; i < size.height; i += step) {
-      canvas.drawLine(Offset(0, i), Offset(size.width, i), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _PatternPainter oldDelegate) {
-    return oldDelegate.color != color ||
-        oldDelegate.step != step ||
-        oldDelegate.strokeWidth != strokeWidth;
   }
 }
 

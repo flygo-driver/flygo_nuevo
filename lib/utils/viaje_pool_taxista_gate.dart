@@ -225,6 +225,50 @@ class ViajePoolTaxistaGate {
     return ventanaPublicacionYAceptacionOk(data);
   }
 
+  /// Reserva como siguiente (taxista con viaje activo): mismas reglas que pool + reserva propia.
+  static bool reservaAjenaVigenteBloquea(
+    Map<String, dynamic> data,
+    String myUid,
+  ) {
+    final String reservadoPor = (data['reservadoPor'] ?? '').toString();
+    if (reservadoPor.isEmpty || reservadoPor == myUid) return false;
+    return reservaVigenteBloquea(data);
+  }
+
+  static bool viajeEncadenableComoSiguiente(
+    Map<String, dynamic> data,
+    String myUid, {
+    String poolModoConductor = TaxistaPoolModoConductor.vehiculo,
+  }) {
+    final String bolaPid =
+        (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
+    if (bolaPid.isNotEmpty && data['bolaNegociacionAbierta'] == true) {
+      return false;
+    }
+
+    final String tipoServicio = (data['tipoServicio'] ?? 'normal').toString();
+    final String canalAsignacion =
+        (data['canalAsignacion'] ?? 'pool').toString();
+
+    if (canalAsignacion == 'corporativo_fijo') return false;
+    if (tipoServicio == 'turismo' ||
+        canalAsignacion == 'admin' ||
+        canalAsignacion == AsignacionTurismoRepo.canalTurismoPool) {
+      return false;
+    }
+
+    if ((data['uidTaxista'] ?? '').toString().isNotEmpty) return false;
+    if (_usuarioEsClienteEnDoc(data, myUid)) return false;
+
+    final String estadoNorm =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    final String estadoRaw = (data['estado'] ?? '').toString().trim();
+    if (!estadoPermiteClaimPool(estadoRaw, estadoNorm)) return false;
+    if (reservaAjenaVigenteBloquea(data, myUid)) return false;
+    if (!viajeCoincideModoConductor(data, poolModoConductor)) return false;
+    return ventanaPublicacionYAceptacionOk(data);
+  }
+
   /// Turismo canal admin: no se acepta en app; se muestra aviso en detalle.
   static bool esTurismoSoloAdminPendiente(Map<String, dynamic> data) {
     final tipoServicio = (data['tipoServicio'] ?? 'normal').toString();
@@ -345,6 +389,9 @@ class ViajePoolTaxistaGate {
     if (!bolaData.containsKey('pickupConfirmadoTaxista')) return true;
     return bolaData['pickupConfirmadoTaxista'] == true;
   }
+
+  static bool esViajeDelCliente(Map<String, dynamic> data, String uid) =>
+      _usuarioEsClienteEnDoc(data, uid);
 
   static bool _usuarioEsClienteEnDoc(Map<String, dynamic> data, String uid) {
     final String u = uid.trim();

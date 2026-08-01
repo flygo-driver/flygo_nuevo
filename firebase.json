@@ -22,7 +22,85 @@
     "predeploy": ["node scripts/prepare-hosting.js"],
     "headers": [
       {
+        "source": "/azul/preview-post",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" }
+        ]
+      },
+      {
+        "source": "/azul/preview-post/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" }
+        ]
+      },
+      {
+        "source": "/azul/demo-pago",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" }
+        ]
+      },
+      {
+        "source": "/azul/demo-pago/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" }
+        ]
+      },
+      {
         "source": "/index.html",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/404.html",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/login_admin",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/login_admin/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/admin",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/admin/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/corporativo",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/corporativo/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/empresas",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/empresas/**",
         "headers": [
           { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
         ]
@@ -101,6 +179,46 @@
       {
         "source": "/legal/contrato-corporativo",
         "destination": "/legal/contrato-corporativo/index.html"
+      },
+      {
+        "source": "/legal/pagos-tarjeta",
+        "destination": "/legal/pagos-tarjeta/index.html"
+      },
+      {
+        "source": "/legal/seguridad-tarjetas",
+        "destination": "/legal/seguridad-tarjetas/index.html"
+      },
+      {
+        "source": "/azul/resultado",
+        "destination": "/azul/resultado/index.html"
+      },
+      {
+        "source": "/azul/preview-post",
+        "function": {
+          "functionId": "azulPreviewDemo",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/azul/preview-post/**",
+        "function": {
+          "functionId": "azulPreviewDemo",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/azul/demo-pago",
+        "function": {
+          "functionId": "azulPreviewDemo",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/azul/demo-pago/**",
+        "function": {
+          "functionId": "azulPreviewDemo",
+          "region": "us-central1"
+        }
       },
       {
         "source": "/empresas",

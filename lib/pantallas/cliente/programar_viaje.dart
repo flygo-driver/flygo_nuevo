@@ -31,6 +31,7 @@ import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
@@ -48,12 +49,12 @@ import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/widgets/rai_cotizacion_offline_hint.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
-import 'package:flygo_nuevo/servicios/pay_config.dart';
+import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 // ✅ IMPORTS PARA TURISMO
 import 'package:flygo_nuevo/widgets/turismo_destinos_sheet_host.dart';
 import 'package:flygo_nuevo/widgets/selector_destinos_turisticos.dart';
 import 'package:flygo_nuevo/servicios/turismo_catalogo_rd.dart';
-import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
 // ✅ NUEVO SERVICIO UNIFICADO DE TARIFAS
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
@@ -171,7 +172,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   String destino = '';
   DateTime fechaHora = DateTime.now();
   String tipoVehiculo = 'Carro';
-  String metodoPago = 'Efectivo';
   bool idaYVuelta = false;
 
   // El tipo de servicio viene del widget, no se cambia localmente
@@ -212,6 +212,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   LatLng? _origenMap;
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
+  final Set<Circle> _circles = {};
 
   bool _locPermDeniedForever = false;
   bool _cargandoUbicacion = true;
@@ -241,11 +242,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   void _expandProgramarSheetTrasMapaInteract() {
     if (!_sheetCtrl.isAttached) return;
     final double target = (_vistaResumenCotizada && _mostrarResumenCotizacion)
-        ? 0.72
-        : (widget.modoAhora ? 0.86 : 0.88);
+        ? 0.56
+        : (widget.modoAhora ? 0.62 : 0.66);
     try {
       _sheetCtrl.animateTo(
-        target.clamp(_sheetMinFracProgramar, 0.88),
+        target.clamp(_sheetMinFracProgramar, 0.75),
         duration: const Duration(milliseconds: 320),
         curve: Curves.easeOutCubic,
       );
@@ -280,6 +281,32 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     } catch (_) {
       if (_mapProgrammaticCameraDepth > 0) _mapProgrammaticCameraDepth--;
     }
+  }
+
+
+  EdgeInsets _programarMapPadding(BuildContext context) {
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double h = mq.size.height;
+    final double sheetFrac = _sheetCtrl.isAttached
+        ? _sheetCtrl.size.clamp(_sheetMinFracProgramar, 0.75)
+        : (_vistaResumenCotizada && _mostrarResumenCotizacion ? 0.52 : 0.34);
+    return EdgeInsets.only(
+      top: mq.padding.top + 64,
+      bottom: h * sheetFrac + 12,
+      left: 36,
+      right: 36,
+    );
+  }
+
+  Future<void> _fitProgramarBounds(LatLngBounds bounds, {double pad = 112}) async {
+    await _programarMapAnimate((c) async {
+      await RaiMapPresentation.fitBounds(
+        c,
+        bounds,
+        padding: pad,
+        maxZoom: RaiMapPresentation.maxZoomTrip,
+      );
+    });
   }
 
   // Flecha “nudge”
@@ -364,6 +391,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   @override
   void initState() {
     super.initState();
+    PoolTimbreSessionGuard.activarSesionPasajero();
 
     if (widget.modoAhora) {
       fechaHora = DateTime.now();
@@ -539,9 +567,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
   Future<void> _expandSheet() async {
     final double target = tipoServicio == 'turismo'
-        ? (widget.modoAhora ? 0.56 : 0.68)
-        : (widget.modoAhora ? 0.86 : 0.88);
-    final double clamped = target.clamp(_sheetMinFracProgramar, 0.88);
+        ? (widget.modoAhora ? 0.48 : 0.58)
+        : (widget.modoAhora ? 0.62 : 0.66);
+    final double clamped = target.clamp(_sheetMinFracProgramar, 0.75);
     try {
       await _sheetCtrl.animateTo(
         clamped,
@@ -554,7 +582,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   Future<void> _expandToMax() async {
     try {
       await _sheetCtrl.animateTo(
-        0.88,
+        0.76,
         duration: const Duration(milliseconds: 260),
         curve: Curves.easeOut,
       );
@@ -592,7 +620,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       if (!mounted) return;
       try {
         _sheetCtrl.animateTo(
-          0.72,
+          0.56,
           duration: const Duration(milliseconds: 360),
           curve: Curves.easeOutCubic,
         );
@@ -699,11 +727,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         final ll = LatLng(p.latitude, p.longitude);
         _origenMap = ll;
         _updateOrigenMarker(ll);
-        if (_map != null && _didCenterOnce) {
+        if (_map != null && _didCenterOnce && !_tieneDestinoParaCalculo()) {
           unawaited(_programarMapAnimate(
             (c) => c.animateCamera(CameraUpdate.newLatLng(ll)),
           ));
         }
+        _syncProgramarMapHalos();
         if (mounted) setState(() {});
         // Viaje ahora: si el destino se eligió antes que el GPS, recalcular al mover origen
         if (widget.modoAhora &&
@@ -740,17 +769,30 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
   }
 
+  void _syncProgramarMapHalos() {
+    LatLng? dest;
+    if (latDestino != null && lonDestino != null) {
+      dest = LatLng(latDestino!, lonDestino!);
+    }
+    RaiMapPresentation.syncHalos(
+      circles: _circles,
+      origen: _origenMap,
+      destino: dest,
+    );
+  }
+
   void _updateOrigenMarker(LatLng pos) {
     _markers.removeWhere((m) => m.markerId.value == 'origen');
     _markers.add(
       Marker(
         markerId: const MarkerId('origen'),
         position: pos,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
-        infoWindow: const InfoWindow(title: 'Origen'),
-        zIndexInt: 2,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+        infoWindow: const InfoWindow(title: 'Origen · Salida'),
+        zIndexInt: 5,
       ),
     );
+    _syncProgramarMapHalos();
   }
 
   Future<void> _centrarEnMiUbicacion() async {
@@ -782,11 +824,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       Marker(
         markerId: const MarkerId('destino'),
         position: p,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
-        infoWindow: const InfoWindow(title: 'Destino'),
-        zIndexInt: 1,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        infoWindow: const InfoWindow(title: 'Destino · Llegada'),
+        zIndexInt: 6,
       ),
     );
+    _syncProgramarMapHalos();
 
     final placemarks = await _safePlacemark(p.latitude, p.longitude);
     destinoTexto = placemarks.isNotEmpty
@@ -1318,32 +1361,28 @@ class _ProgramarViajeState extends State<ProgramarViaje>
               markerId: const MarkerId('destino'),
               position: LatLng(dLat, dLon),
               icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueViolet),
-              infoWindow: const InfoWindow(title: 'Destino'),
-              zIndexInt: 1,
+                  BitmapDescriptor.hueGreen),
+              infoWindow: const InfoWindow(title: 'Destino · Llegada'),
+              zIndexInt: 6,
             ),
           );
+        _syncProgramarMapHalos();
 
         _polylines.clear();
         if (routeLatLng.isNotEmpty) {
-          _polylines.add(
-            Polyline(
-              polylineId: const PolylineId('ruta'),
-              points: routeLatLng,
-              width: 5,
-              color: const Color(0xFF49F18B),
-              geodesic: true,
-            ),
+          RaiMapPresentation.applyRoutePolylines(
+            _polylines,
+            id: 'ruta',
+            points: routeLatLng,
           );
         } else {
-          _polylines.add(
-            Polyline(
-              polylineId: const PolylineId('ruta'),
-              points: [LatLng(origenLat, origenLon), LatLng(dLat, dLon)],
-              width: 4,
-              color: const Color(0xFF49F18B),
-              geodesic: true,
-            ),
+          RaiMapPresentation.applyRoutePolylines(
+            _polylines,
+            id: 'ruta',
+            points: <LatLng>[
+              LatLng(origenLat, origenLon),
+              LatLng(dLat, dLon),
+            ],
           );
         }
 
@@ -1360,19 +1399,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       if (_map != null && runId == _cotizacionSeq) {
         if (routeLatLng.length >= 2) {
-          await _programarMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
-            ),
-          );
+          await _fitProgramarBounds(_boundsFromList(routeLatLng));
         } else {
-          await _programarMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(
-                _boundsFrom(LatLng(origenLat, origenLon), LatLng(dLat, dLon)),
-                80,
-              ),
-            ),
+          await _fitProgramarBounds(
+            _boundsFrom(LatLng(origenLat, origenLon), LatLng(dLat, dLon)),
+            pad: 120,
           );
         }
       }
@@ -1404,36 +1435,24 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       final List<LatLng> pts = dir.path ?? const <LatLng>[];
       setState(() {
-        _polylines
-          ..clear()
-          ..add(
-            Polyline(
-              polylineId: const PolylineId('ruta'),
-              points: pts.isNotEmpty
-                  ? pts
-                  : [LatLng(oLat, oLon), LatLng(dLat, dLon)],
-              width: 5,
-              color: const Color(0xFF49F18B),
-              geodesic: true,
-            ),
-          );
+        _polylines.clear();
+        RaiMapPresentation.applyRoutePolylines(
+          _polylines,
+          id: 'ruta',
+          points: pts.isNotEmpty
+              ? pts
+              : <LatLng>[LatLng(oLat, oLon), LatLng(dLat, dLon)],
+        );
       });
+      _syncProgramarMapHalos();
 
       if (_map != null) {
         if (pts.length >= 2) {
-          await _programarMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
-            ),
-          );
+          await _fitProgramarBounds(_boundsFromList(pts));
         } else {
-          await _programarMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(
-                _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
-                80,
-              ),
-            ),
+          await _fitProgramarBounds(
+            _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
+            pad: 120,
           );
         }
       }
@@ -1529,81 +1548,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     });
   }
 
-  // ====== MÉTODO DE PAGO ======
-  Future<void> _elegirMetodoPago() async {
-    if (_cargando) return;
-    final elegido = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        final t = Theme.of(ctx);
-        final cs = t.colorScheme;
-        final onSurface = cs.onSurface;
-        final muted = onSurface.withValues(alpha: 0.65);
-        final disabled = onSurface.withValues(alpha: 0.38);
-        Widget item(String label, {bool enabled = true, String? subtitle}) {
-          return ListTile(
-            title: Text(
-              label,
-              style: TextStyle(
-                color: enabled ? onSurface : disabled,
-                fontWeight: enabled ? FontWeight.normal : FontWeight.w300,
-              ),
-            ),
-            subtitle: subtitle != null
-                ? Text(
-                    subtitle,
-                    style: TextStyle(color: muted, fontSize: 12),
-                  )
-                : null,
-            trailing: label == metodoPago && enabled
-                ? Icon(Icons.check,
-                    color: cs.brightness == Brightness.dark
-                        ? Colors.greenAccent
-                        : const Color(0xFF0F9D58))
-                : null,
-            enabled: enabled,
-            onTap: enabled ? () => Navigator.pop(ctx, label) : null,
-          );
-        }
-
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              const SizedBox(height: 8),
-              Container(
-                height: 4,
-                width: 48,
-                decoration: BoxDecoration(
-                  color: onSurface.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Método de pago',
-                style: TextStyle(color: muted, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 4),
-              ...PayConfig.metodosReservaVisibles.map(
-                (String label) => item(label),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-    if (!mounted) return;
-    if (elegido != null && elegido.trim().isNotEmpty) {
-      setState(() => metodoPago = elegido);
-    }
-  }
-
   // ====== BLOQUEO ======
   Future<bool> _bloquearSiTaxista() async {
     final u = FirebaseAuth.instance.currentUser;
@@ -1670,12 +1614,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             markerId: const MarkerId('destino'),
             position: LatLng(seleccion.lugar.lat, seleccion.lugar.lon),
             icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueViolet,
+              BitmapDescriptor.hueGreen,
             ),
             infoWindow: InfoWindow(title: seleccion.lugar.nombre),
-            zIndexInt: 1,
+            zIndexInt: 6,
           ),
         );
+      _syncProgramarMapHalos();
     });
 
     await _cotizarTurismoTrasElegirDestino(forzar: true);
@@ -1872,12 +1817,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           markerId: const MarkerId('destino'),
           position: LatLng(det.lat, det.lon),
           icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueViolet,
+            BitmapDescriptor.hueGreen,
           ),
           infoWindow: InfoWindow(title: det.name),
-          zIndexInt: 1,
+          zIndexInt: 6,
         ),
       );
+    _syncProgramarMapHalos();
 
     await _cotizarTurismoTrasElegirDestino(forzar: true);
   }
@@ -1944,6 +1890,9 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       );
       return;
     }
+    PoolTimbreSessionGuard.activarSesionPasajero();
+    NotificationService.I.suprimirTimbrePoolCliente();
+    unawaited(NotificationService.I.stopTimbre());
     if (!ubicacionObtenida || latCliente == null || latDestino == null) {
       if (!ubicacionObtenida &&
           RaiUbicacionClienteService.instance.bannerActivo) {
@@ -2096,7 +2045,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
         lonDestino: lonDestino!,
         fechaHora: fechaProgramadaUtc,
         precio: precioCalculado,
-        metodoPago: metodoPago,
+        metodoPago: 'Efectivo',
         tipoVehiculo:
             tipoServicio == 'turismo' && _tipoVehiculoTurismo.isNotEmpty
                 ? _mapTipoVehiculoTurismo(_tipoVehiculoTurismo)
@@ -2645,16 +2594,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     final Color dividerSoft = mapFloating
         ? Colors.white.withValues(alpha: 0.22)
         : CustomThemeService.borderOn(themedBg);
-    final Color metodoPagoChipBg = mapFloating
-        ? Colors.white.withValues(alpha: 0.12)
-        : (fondoClaro
-            ? themedBg.withValues(alpha: 0.72)
-            : (isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5)));
-    final Color metodoPagoChipBorder = mapFloating
-        ? Colors.white.withValues(alpha: 0.42)
-        : (fondoClaro
-            ? CustomThemeService.borderOn(themedBg)
-            : (isDark ? Colors.white24 : const Color(0xFFD0D5DD)));
     final Color c = _colorServicio;
     final Color cLegible = _colorServicioLegibleEnFondoClaro();
     // En flotante "subimos" el acento del servicio a un tono brillante para
@@ -2957,35 +2896,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                     ),
                   ),
                 ],
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.payments_outlined,
-                          size: 18, color: textSecondary),
-                      const SizedBox(width: 8),
-                      Text('Pago:',
-                          style: TextStyle(color: textMuted, fontSize: 13)),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: metodoPagoChipBg,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: metodoPagoChipBorder),
-                        ),
-                        child: Text(
-                          metodoPago,
-                          style: TextStyle(
-                              color: textPrimary, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 const SizedBox(height: 18),
                 SizedBox(
                   width: double.infinity,
@@ -3422,7 +3332,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           const SizedBox(height: 6),
           Text(
             'Destino: ${_destinoTurismoSeleccionado!.nombre}. '
-            'Ahora elige fecha y hora, confirma el vehículo '
+            'Elige fecha y hora abajo, confirma el vehículo '
             '(${_mapTipoVehiculoTurismo(_tipoVehiculoTurismo)}) '
             'y activa ida y vuelta si la necesitas.',
             style: TextStyle(
@@ -3508,18 +3418,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             : sheetStrongChrome
                 ? const Color(0xFF065F46)
                 : (isDark ? Colors.green.shade300 : const Color(0xFF0F9D58));
-        final Color metodoPagoChipBg = mapFloating
-            ? const Color(0xFF111827).withValues(alpha: 0.92)
-            : sheetStrongChrome
-                ? (isDark
-                    ? const Color(0xFF252830)
-                    : Colors.white.withValues(alpha: 0.94))
-                : (isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5));
-        final Color metodoPagoChipBorder = mapFloating
-            ? Colors.white.withValues(alpha: 0.45)
-            : sheetStrongChrome
-                ? Colors.white.withValues(alpha: isDark ? 0.42 : 0.58)
-                : (isDark ? Colors.white24 : const Color(0xFFD0D5DD));
         final Color dividerSoft = mapFloating
             ? Colors.white.withValues(alpha: 0.28)
             : sheetStrongChrome
@@ -3546,6 +3444,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
             child: AbsorbPointer(
               absorbing: _cargandoUbicacion,
               child: GoogleMap(
+                padding: _programarMapPadding(context),
                 initialCameraPosition: const CameraPosition(
                   target: LatLng(18.4861, -69.9312),
                   zoom: 12,
@@ -3555,6 +3454,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                 zoomControlsEnabled: false,
                 markers: _markers,
                 polylines: _polylines,
+                circles: _circles,
                 onMapCreated: (c) => _map = c,
                 onLongPress: _onLongPressMap,
                 onTap: (_) {
@@ -3643,11 +3543,11 @@ class _ProgramarViajeState extends State<ProgramarViaje>
           DraggableScrollableSheet(
             controller: _sheetCtrl,
             minChildSize: _sheetMinFracProgramar,
-            maxChildSize: 0.88,
+            maxChildSize: 0.75,
             initialChildSize:
-                tipoServicio == 'turismo' ? 0.44 : 0.36,
+                tipoServicio == 'turismo' ? 0.38 : 0.32,
             snap: true,
-            snapSizes: const [_sheetMinFracProgramar, 0.72, 0.88],
+            snapSizes: const [_sheetMinFracProgramar, 0.56, 0.75],
             builder: (context, controller) {
               final double safeBottom = MediaQuery.of(context).padding.bottom;
               const BorderRadius sheetTopRadius =
@@ -4591,14 +4491,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                           icon: BitmapDescriptor
                                                               .defaultMarkerWithHue(
                                                                   BitmapDescriptor
-                                                                      .hueViolet),
+                                                                      .hueGreen),
                                                           infoWindow:
                                                               const InfoWindow(
                                                                   title:
-                                                                      'Destino'),
-                                                          zIndexInt: 1,
+                                                                      'Destino · Llegada'),
+                                                          zIndexInt: 6,
                                                         ),
                                                       );
+                                                      _syncProgramarMapHalos();
                                                       setState(() {});
 
                                                       if (_origenMap != null) {
@@ -4903,18 +4804,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                                           },
                                                         ),
                                                       ),
-                                                      if (!widget.modoAhora)
-                                                        _selectorFechaHoraProgramado(
-                                                          textPrimary:
-                                                              textPrimary,
-                                                          textSecondary:
-                                                              textSecondary,
-                                                          isDark: isDark,
-                                                          sheetStrongChrome:
-                                                              sheetStrongChrome,
-                                                          accent: pRuta
-                                                              .destinoAccent,
-                                                        ),
                                                       TextButton.icon(
                                                         onPressed: () {
                                                           setState(() {
@@ -4948,6 +4837,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                         ),
                                       ),
                                       const SizedBox(height: 8),
+                                    ],
+                                    if (!widget.modoAhora &&
+                                        tipoServicio == 'turismo' &&
+                                        _destinoTurismoSeleccionado != null) ...[
+                                      _bannerCompletarTurismoProgramado(
+                                        textPrimary: textPrimary,
+                                        textSecondary: textSecondary,
+                                        mapFloating: mapFloating,
+                                      ),
                                     ],
                                     if (!widget.modoAhora &&
                                         tipoServicio != 'turismo') ...[
@@ -5000,12 +4898,16 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                     ],
                                     if (!widget.modoAhora &&
                                         tipoServicio == 'turismo' &&
-                                        _destinoTurismoSeleccionado == null) ...[
-                                      _bannerCompletarTurismoProgramado(
+                                        _destinoTurismoSeleccionado != null) ...[
+                                      const ProgramarViajeFuturoAnimation(),
+                                      _selectorFechaHoraProgramado(
                                         textPrimary: textPrimary,
                                         textSecondary: textSecondary,
-                                        mapFloating: mapFloating,
+                                        isDark: isDark,
+                                        sheetStrongChrome: sheetStrongChrome,
+                                        accent: pRuta.destinoAccent,
                                       ),
+                                      const SizedBox(height: 8),
                                     ],
                                     const SizedBox(height: 14),
                                     Padding(
@@ -5143,125 +5045,6 @@ class _ProgramarViajeState extends State<ProgramarViaje>
                                         ),
                                       const SizedBox(height: 10),
                                     ],
-                                    _Caja(
-                                      mapFloating: mapFloating,
-                                      strongChrome: sheetStrongChrome,
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.center,
-                                        children: [
-                                          Icon(Icons.credit_card_outlined,
-                                              color: textSecondary),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            flex: 3,
-                                            child: TextButton.icon(
-                                              onPressed: _elegirMetodoPago,
-                                              icon: Icon(
-                                                  Icons
-                                                      .account_balance_wallet_outlined,
-                                                  color: payLinkColor),
-                                              label: Text(
-                                                'Elegir método de pago',
-                                                maxLines: 2,
-                                                softWrap: true,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                    color: payLinkColor,
-                                                    fontWeight:
-                                                        FontWeight.w700),
-                                              ),
-                                            ),
-                                          ),
-                                          Flexible(
-                                            flex: 2,
-                                            child: Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                horizontal: 12,
-                                                vertical: 10,
-                                              ),
-                                              decoration: BoxDecoration(
-                                                color: metodoPagoChipBg,
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                border: Border.all(
-                                                  color: metodoPagoChipBorder,
-                                                  width: sheetStrongChrome
-                                                      ? 1.4
-                                                      : 1.0,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                metodoPago,
-                                                maxLines: 2,
-                                                softWrap: true,
-                                                textAlign: TextAlign.end,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  color: sheetStrongChrome
-                                                      ? Colors.white
-                                                      : textSecondary,
-                                                  fontWeight: FontWeight.w800,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    if (MetodoPagoViaje.esTransferencia(
-                                        metodoPago))
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 8),
-                                        child: Container(
-                                          width: double.infinity,
-                                          padding: const EdgeInsets.all(12),
-                                          decoration: BoxDecoration(
-                                            color: Colors.blue.withValues(
-                                                alpha: isDark ? 0.12 : 0.08),
-                                            borderRadius:
-                                                BorderRadius.circular(10),
-                                            border: Border.all(
-                                              color: isDark
-                                                  ? Colors.blueAccent
-                                                  : const Color(0xFF1570EF),
-                                            ),
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                'Transferencia al taxista',
-                                                style: TextStyle(
-                                                  color: textPrimary,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 6),
-                                              Text(
-                                                'El pago por transferencia se realiza al taxista asignado.\n'
-                                                'Cuando tengas el viaje asignado podras ver su cuenta bancaria\n'
-                                                'y subir el comprobante para validacion de Administracion.',
-                                                style: TextStyle(
-                                                    color: textSecondary,
-                                                    height: 1.35),
-                                              ),
-                                              const SizedBox(height: 6),
-                                              Text(
-                                                'Efectivo y transferencia se pagan al taxista. La comision se liquida semanalmente.',
-                                                style: TextStyle(
-                                                  color: isDark
-                                                      ? Colors.amberAccent
-                                                      : const Color(0xFFB45309),
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
                                     if (precioCalculado > 0)
                                       Container(
                                         margin: const EdgeInsets.symmetric(

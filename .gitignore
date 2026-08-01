@@ -32,6 +32,8 @@ lib/servicios/keys.dart
 functions/node_modules/
 functions/lib/
 functions/dist/
+functions/.secret.local
+functions/.env.azul
 
 # Web (build cache)
 web/.dart_tool/

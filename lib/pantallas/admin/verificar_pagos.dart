@@ -20,9 +20,10 @@ import '../../widgets/admin_app_bar.dart';
 import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import 'admin_ui_theme.dart';
 import 'admin_pool_recaudo_central_panel.dart';
+import 'admin_pagos_azul_panel.dart';
 
 class VerificarPagos extends StatefulWidget {
-  /// 0 = recargas prepago, 1 = comisiones semanales, 2/3 = transferencias, 4 = conciliación, 5 = giras RAI.
+  /// 0 = recargas prepago, 1 = comisiones semanales, 2/3 = transferencias, 4 = conciliación, 5 = giras RAI, 6 = tarjetas AZUL.
   const VerificarPagos({
     super.key,
     this.initialTabIndex = 0,
@@ -54,7 +55,7 @@ class _VerificarPagosState extends State<VerificarPagos> {
   void initState() {
     super.initState();
     final int tab = widget.initialTabIndex;
-    _tabIndex = tab < 0 ? 0 : (tab > 5 ? 5 : tab);
+    _tabIndex = tab < 0 ? 0 : (tab > 6 ? 6 : tab);
     _filtroEstadoRecarga = widget.initialFiltroRecarga.trim().isEmpty
         ? 'todos'
         : widget.initialFiltroRecarga.trim();
@@ -1045,6 +1046,11 @@ class _VerificarPagosState extends State<VerificarPagos> {
                     width: 148,
                     child: _tabButton('Giras RAI', 5),
                   ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 148,
+                    child: _tabButton('Tarjetas AZUL', 6),
+                  ),
                 ],
               ),
             ),
@@ -1056,11 +1062,12 @@ class _VerificarPagosState extends State<VerificarPagos> {
               2 => _buildTransferenciasPendientes(),
               3 => _buildPagosATaxistas(),
               4 => _buildConciliacionesBanco(),
-              _ => AdminPoolRecaudoCentralPanel(
+              5 => AdminPoolRecaudoCentralPanel(
                   accionEnCurso: _accionEnCurso,
                   onEjecutar: _ejecutarAccionAdmin,
                   formatter: formatter,
                 ),
+              _ => const AdminPagosAzulPanel(),
             },
           ),
         ],
@@ -1448,9 +1455,9 @@ class _VerificarPagosState extends State<VerificarPagos> {
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
-                'Liquidaciones semanales (PR2): solo transferencia/tarjeta verificadas. '
-                'Aprobar marca viajes liquidado=true vía Cloud Function. '
-                'No acredita prepago: usá «Recargas prepago».',
+                'Liquidaciones semanales (PR2): neto al conductor por transferencia/tarjeta '
+                'verificada. Efectivo NO entra aquí (comisión del prepago). '
+                'Aprobar marca viajes liquidado=true. No acredita prepago.',
                 style: TextStyle(
                   color: AdminUi.onCard(context),
                   fontSize: 13,

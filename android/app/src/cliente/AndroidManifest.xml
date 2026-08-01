@@ -39,6 +39,34 @@
                     android:host="flygo-rd.firebaseapp.com"
                     android:pathPrefix="/pool" />
             </intent-filter>
+            <!-- Retorno pago AZUL → app -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="raidriver"
+                    android:host="azul"
+                    android:pathPrefix="/resultado" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="flygo-rd.web.app"
+                    android:pathPrefix="/azul/resultado" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="flygo-rd.firebaseapp.com"
+                    android:pathPrefix="/azul/resultado" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

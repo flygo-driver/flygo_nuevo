@@ -19,6 +19,7 @@ import 'package:flygo_nuevo/widgets/bola_cancelacion_listener.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_fidelidad_milestone_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_listener.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_activo_retomar_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_asistente_fab.dart';
 import 'package:flygo_nuevo/widgets/cliente_registro_gate.dart';
@@ -30,8 +31,11 @@ import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_detalle.dar
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/shell/cliente_pool_deep_link_bridge.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/finance_config_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_shell_nav_bridge.dart';
+import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 
 /// Shell del cliente: barra inferior fija; cada pestaña usa un [Navigator] anidado
 /// (pantallas con [Navigator.push] no tapan Inicio / Mis viajes / etc.).
@@ -49,6 +53,7 @@ class _ClienteShellWithDeepLinkState extends State<ClienteShellWithDeepLink> {
   @override
   void initState() {
     super.initState();
+    PoolTimbreSessionGuard.activarSesionPasajero();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       PoolDeepLink.notifyClienteShellReady();
     });
@@ -193,9 +198,19 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     setState(() => _index = i);
   }
 
+  void _popAllTabRoutes() {
+    for (final GlobalKey<NavigatorState> key in _navigatorKeys) {
+      final NavigatorState? nav = key.currentState;
+      if (nav != null && nav.mounted) {
+        nav.popUntil((Route<dynamic> route) => route.isFirst);
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    ClienteShellNavBridge.bind(popAllTabRoutes: _popAllTabRoutes);
     ShellTabController.clienteIndex.value = 0;
     ShellTabController.clienteIndex.addListener(_onShellTabController);
     ClientePoolDeepLinkBridge.bindShell(
@@ -335,6 +350,7 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
   @override
   void dispose() {
+    ClienteShellNavBridge.unbind();
     ShellTabController.clienteIndex.removeListener(_onShellTabController);
     ClientePoolDeepLinkBridge.unbindShell();
     _bootstrapViajeTimeout?.cancel();
@@ -367,6 +383,13 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
   }
 
   void _seleccionarTab(int i) {
+    if (i == _index) {
+      final NavigatorState? nav = _navigatorKeys[i].currentState;
+      if (nav != null && nav.mounted) {
+        nav.popUntil((Route<dynamic> route) => route.isFirst);
+      }
+      return;
+    }
     ShellTabController.clienteIndex.value = i;
     if (!mounted) return;
     setState(() => _index = i);
@@ -424,6 +447,11 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     final Color barSurface = Theme.of(context).colorScheme.surface;
     final bool barOscura =
         ThemeData.estimateBrightnessForColor(barSurface) == Brightness.dark;
+    final Color navAccent =
+        barOscura ? RaiDsColors.neon : const Color(0xFF16A34A);
+    final Color navMuted = barOscura
+        ? RaiDsColors.textMuted
+        : const Color(0xFF6B7280);
     final overlayBarra = SystemUiOverlayStyle(
       systemNavigationBarColor: barSurface,
       systemNavigationBarIconBrightness:
@@ -433,14 +461,16 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayBarra,
-      child: Scaffold(
-      floatingActionButton: const RaiAsistenteFab(),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      child: Stack(
+        children: [
+          Scaffold(
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           RaiOfflineBanner(uid: uidOffline),
           const RaiUbicacionClienteBanner(),
+          if (uidOffline != null && uidOffline.isNotEmpty)
+            ClienteViajeActivoRetomarBanner(uid: uidOffline),
           Expanded(
             child: RaiUbicacionBannerScope(
               child: IndexedStack(
@@ -461,40 +491,72 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
       ),
       bottomNavigationBar: ColoredBox(
         color: barSurface,
-        child: SafeArea(
-          top: false,
-          child: NavigationBar(
-            backgroundColor: barSurface,
-            surfaceTintColor: Colors.transparent,
-            selectedIndex: _index,
-            onDestinationSelected: _seleccionarTab,
-            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home_rounded),
-                label: 'Inicio',
+        child: Theme(
+          data: Theme.of(context).copyWith(
+            navigationBarTheme: NavigationBarThemeData(
+              height: MediaQuery.textScalerOf(context).scale(58).clamp(58, 76),
+              elevation: 0,
+              indicatorColor: navAccent.withValues(alpha: 0.16),
+              labelTextStyle: WidgetStateProperty.resolveWith((states) {
+                final selected = states.contains(WidgetState.selected);
+                return TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  height: 1.1,
+                  color: selected ? navAccent : navMuted,
+                );
+              }),
+              iconTheme: WidgetStateProperty.resolveWith((states) {
+                final selected = states.contains(WidgetState.selected);
+                return IconThemeData(
+                  size: 22,
+                  color: selected ? navAccent : navMuted,
+                );
+              }),
+              indicatorShape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
-              NavigationDestination(
-                icon: Icon(Icons.directions_car_outlined),
-                selectedIcon: Icon(Icons.directions_car),
-                label: 'Mis viajes',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.travel_explore_outlined),
-                selectedIcon: Icon(Icons.travel_explore),
-                label: 'Experiencias',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.person_outline),
-                selectedIcon: Icon(Icons.person_rounded),
-                label: 'Cuenta',
-              ),
-            ],
+            ),
+          ),
+          child: SafeArea(
+            top: false,
+            minimum: EdgeInsets.zero,
+            child: NavigationBar(
+              backgroundColor: barSurface,
+              surfaceTintColor: Colors.transparent,
+              selectedIndex: _index,
+              onDestinationSelected: _seleccionarTab,
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  selectedIcon: Icon(Icons.home_rounded),
+                  label: 'Inicio',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.directions_car_outlined),
+                  selectedIcon: Icon(Icons.directions_car),
+                  label: 'Mis viajes',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.travel_explore_outlined),
+                  selectedIcon: Icon(Icons.travel_explore),
+                  label: 'Experiencias',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.person_outline),
+                  selectedIcon: Icon(Icons.person_rounded),
+                  label: 'Cuenta',
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ),
+          ),
+          const RaiAsistenteFab(),
+        ],
+      ),
     );
   }
 

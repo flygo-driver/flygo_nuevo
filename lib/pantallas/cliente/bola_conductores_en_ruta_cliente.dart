@@ -5,12 +5,63 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/cliente_viaje_activo_gate.dart';
+import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 
 /// Pantalla cliente: conductores que publicaron «Voy para» (tipo [oferta]).
-class BolaConductoresEnRutaClientePage extends StatelessWidget {
+class BolaConductoresEnRutaClientePage extends StatefulWidget {
   const BolaConductoresEnRutaClientePage({super.key});
+
+  @override
+  State<BolaConductoresEnRutaClientePage> createState() =>
+      _BolaConductoresEnRutaClientePageState();
+}
+
+class _BolaConductoresEnRutaClientePageState
+    extends State<BolaConductoresEnRutaClientePage> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _redirigirSiViajeActivo());
+  }
+
+  Future<void> _redirigirSiViajeActivo() async {
+    if (!mounted) return;
+    if (!ClienteViajeActivoGate.debeBloquearFlujosNuevoViaje) return;
+
+    final bool retomar = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext ctx) => AlertDialog(
+            icon: const Icon(Icons.local_taxi_rounded, color: Color(0xFF1B5E20)),
+            title: const Text('Tenés un viaje en curso'),
+            content: const Text(
+              'Esta pantalla es para buscar un conductor nuevo. '
+              'Retomá tu viaje activo para seguir el recorrido.',
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Volver'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Retomar viaje'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!mounted) return;
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    if (retomar) {
+      NavigationService.retomarViajeActivoCliente();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -104,9 +155,15 @@ class BolaConductoresEnRutaClientePage extends StatelessWidget {
                           context: context,
                           label: 'Mapa y tablero completo',
                           icon: Icons.map_rounded,
-                          onPressed: () =>
-                              Navigator.of(context, rootNavigator: true)
-                                  .pushNamed(rutaBolaPueblo),
+                          onPressed: () async {
+                            if (!await ClienteViajeActivoGate
+                                .intentarFlujoNuevoViaje(context)) {
+                              return;
+                            }
+                            if (!context.mounted) return;
+                            Navigator.of(context, rootNavigator: true)
+                                .pushNamed(rutaBolaPueblo);
+                          },
                           background: BolaPuebloTheme.accentSecondary,
                         ),
                         const SizedBox(height: 18),

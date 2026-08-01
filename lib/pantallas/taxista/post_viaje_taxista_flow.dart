@@ -13,6 +13,7 @@ import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/post_viaje_rating_throttle.dart';
+import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
 
 class PostViajeTaxistaFlow extends StatefulWidget {
   const PostViajeTaxistaFlow({
@@ -217,6 +218,7 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     final bool esCorp = CorporativoTaxistaService.esViajeCorporativoDoc(d);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(v.metodoPago);
     final bool esTransfer = MetodoPagoViaje.esTransferencia(v.metodoPago);
+    final bool tarjetaPagada = MetodoPagoViaje.tarjetaPagadoVerificado(d);
 
     final double bottomPad = _scrollBottomPad(context);
     return SingleChildScrollView(
@@ -239,7 +241,24 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
             textAlign: TextAlign.center,
             style: const TextStyle(color: Colors.white70, height: 1.35),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 18),
+          MetodoPagoVisualCard(
+            metodoPago: v.metodoPago,
+            viajeData: d,
+            corporativo: esCorp,
+            estadoSello: tarjetaPagada
+                ? 'COBRO CONFIRMADO'
+                : (esEfectivo
+                    ? 'COBRAR EN EFECTIVO'
+                    : (esTransfer ? 'TRANSFERENCIA' : null)),
+            estadoColor: tarjetaPagada
+                ? const Color(0xFF69F0AE)
+                : (esEfectivo
+                    ? const Color(0xFF69F0AE)
+                    : (esTransfer ? const Color(0xFF64B5F6) : null)),
+            fondoOscuro: true,
+          ),
+          const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
@@ -250,7 +269,6 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _kv('Método', MetodoPagoViaje.etiquetaDocumento(v.metodoPago)),
                 if ((d['nombreCliente'] ?? d['clienteNombre'] ?? '')
                     .toString()
                     .trim()

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Logos tarjetas — vista previa RAI</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      padding: 28px 16px 48px;
+    }
+    h1 {
+      font-size: 1.15rem;
+      font-weight: 800;
+      margin: 0 0 6px;
+      text-align: center;
+      color: #7ee787;
+    }
+    p.sub {
+      text-align: center;
+      color: #8b949e;
+      font-size: 0.85rem;
+      margin: 0 0 32px;
+      line-height: 1.4;
+    }
+    .card {
+      max-width: 560px;
+      margin: 0 auto 24px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 22px;
+    }
+    .card h2 {
+      margin: 0 0 6px;
+      font-size: 0.9rem;
+      color: #e6edf3;
+    }
+    .card .meta {
+      margin: 0 0 18px;
+      font-size: 0.72rem;
+      color: #8b949e;
+    }
+    /* Igual que _azul.css producción */
+    .card-brands {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+    .card-brands img {
+      height: 32px;
+      width: auto;
+      max-width: 96px;
+      object-fit: contain;
+      background: #fff;
+      border-radius: 4px;
+      padding: 2px 4px;
+    }
+    .size-block {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #30363d;
+    }
+    .size-block label {
+      display: block;
+      font-size: 0.72rem;
+      color: #8b949e;
+      margin-bottom: 10px;
+    }
+    .card-brands.tall img { height: 48px; max-width: 120px; }
+    .card-brands.xl img { height: 64px; max-width: 140px; }
+    .badge {
+      display: inline-block;
+      background: #238636;
+      color: #fff;
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 99px;
+      margin-bottom: 12px;
+      letter-spacing: 0.03em;
+    }
+    .note {
+      max-width: 560px;
+      margin: 0 auto;
+      font-size: 0.78rem;
+      color: #8b949e;
+      line-height: 1.5;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>Logos en uso — RAI / AZUL</h1>
+  <p class="sub">
+    Versión actual (SVG nítidos, Amex legible).<br />
+    Igual que en pagos-tarjeta y en la app.
+  </p>
+
+  <div class="card">
+    <span class="badge">PRODUCCIÓN</span>
+    <h2>Marcas aceptadas</h2>
+    <p class="meta">Visa · Mastercard · American Express · Discover</p>
+    <div class="card-brands" aria-label="Marcas de tarjetas">
+      <img src="/pagos/logos/visa.svg" alt="Visa" />
+      <img src="/pagos/logos/mastercard.svg" alt="Mastercard" />
+      <img src="/pagos/logos/amex.svg" alt="American Express" />
+      <img src="/pagos/logos/discover.svg" alt="Discover" />
+    </div>
+
+    <div class="size-block">
+      <label>Tamaño web legal (32 px alto)</label>
+      <div class="card-brands">
+        <img src="/pagos/logos/visa.svg" alt="Visa" />
+        <img src="/pagos/logos/mastercard.svg" alt="Mastercard" />
+        <img src="/pagos/logos/amex.svg" alt="American Express" />
+        <img src="/pagos/logos/discover.svg" alt="Discover" />
+      </div>
+    </div>
+
+    <div class="size-block">
+      <label>Zoom app / detalle (48 px)</label>
+      <div class="card-brands tall">
+        <img src="/pagos/logos/visa.svg" alt="Visa" />
+        <img src="/pagos/logos/mastercard.svg" alt="Mastercard" />
+        <img src="/pagos/logos/amex.svg" alt="American Express" />
+        <img src="/pagos/logos/discover.svg" alt="Discover" />
+      </div>
+    </div>
+
+    <div class="size-block">
+      <label>Amex grande — revisar lectura (64 px)</label>
+      <div class="card-brands xl">
+        <img src="/pagos/logos/amex.svg" alt="American Express" />
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3D Secure</h2>
+    <p class="meta">Visa Secure · Mastercard ID Check</p>
+    <div class="card-brands">
+      <img src="/pagos/logos/visa-secure.svg" alt="Visa Secure" height="32" />
+      <img src="/pagos/logos/mastercard-id-check.svg" alt="Mastercard ID Check" height="32" />
+    </div>
+  </div>
+
+  <p class="note">
+    Si Amex se lee claro aquí, está listo para AZUL y la app.<br />
+    <a href="/legal/pagos-tarjeta" style="color:#58a6ff">Ver página pagos-tarjeta completa →</a>
+  </p>
+</body>
+</html>

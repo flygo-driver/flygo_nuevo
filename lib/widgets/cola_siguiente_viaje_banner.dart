@@ -1,12 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/formato_distancia_cercania.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
 /// Próximo viaje encolado / ruta corporativa lista (pool taxista).
 class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
@@ -14,10 +17,14 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
     super.key,
     required this.uidTaxista,
     this.compact = false,
+    this.referenciaOrden,
   });
 
   final String uidTaxista;
   final bool compact;
+
+  /// Destino del viaje actual o GPS: ordena cola por pickup más cercano.
+  final ValueNotifier<ColaCercaniaReferencia?>? referenciaOrden;
 
   static int _slotOf(Map<String, dynamic> m) {
     final s = m['slot'];
@@ -98,6 +105,61 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
     return copy.first;
   }
 
+  static Future<String?> _mejorViajeColaPorCercania({
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    required ColaCercaniaReferencia referencia,
+  }) async {
+    if (docs.isEmpty) return null;
+    if (docs.length == 1) return docs.first.id;
+
+    String? mejorId;
+    double mejorDist = double.infinity;
+
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> d in docs) {
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(d.id)
+            .get();
+        if (!snap.exists) continue;
+        final m = snap.data() ?? <String, dynamic>{};
+        final double? la =
+            (m['latCliente'] is num) ? (m['latCliente'] as num).toDouble() : null;
+        final double? lo =
+            (m['lonCliente'] is num) ? (m['lonCliente'] as num).toDouble() : null;
+        if (la == null || lo == null || !la.isFinite || !lo.isFinite) continue;
+        final double dist = Geolocator.distanceBetween(
+          referencia.lat,
+          referencia.lon,
+          la,
+          lo,
+        );
+        if (dist < mejorDist) {
+          mejorDist = dist;
+          mejorId = d.id;
+        }
+      } catch (_) {}
+    }
+    return mejorId ?? _primerPendienteCola(docs)?.id;
+  }
+
+  static double? _distanciaMetrosPickupViaje(
+    Map<String, dynamic> viaje,
+    ColaCercaniaReferencia referencia,
+  ) {
+    final double? la =
+        (viaje['latCliente'] is num) ? (viaje['latCliente'] as num).toDouble() : null;
+    final double? lo =
+        (viaje['lonCliente'] is num) ? (viaje['lonCliente'] as num).toDouble() : null;
+    if (la == null || lo == null || !la.isFinite || !lo.isFinite) return null;
+    return Geolocator.distanceBetween(
+      referencia.lat,
+      referencia.lon,
+      la,
+      lo,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (uidTaxista.isEmpty) return const SizedBox.shrink();
@@ -152,119 +214,188 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
                 final enc = (ud['viajeEncoladoId'] ?? '').toString();
                 final activo = (ud['viajeActivoId'] ?? '').toString().trim();
 
-                final pendCola = colaSnap.hasData
-                    ? _primerPendienteCola(colaSnap.data!.docs)
-                    : null;
+                final List<QueryDocumentSnapshot<Map<String, dynamic>>>
+                    colaDocs =
+                    colaSnap.hasData ? colaSnap.data!.docs : const [];
+                final QueryDocumentSnapshot<Map<String, dynamic>>? pendCola =
+                    _primerPendienteCola(colaDocs);
 
-                final String nextId;
-                final bool reservaFormal;
-                if (pendCola != null) {
-                  nextId = pendCola.id;
-                  reservaFormal = _slotOf(pendCola.data()) == 0;
-                } else if (sig.isNotEmpty || enc.isNotEmpty) {
-                  nextId = sig.isNotEmpty ? sig : enc;
-                  reservaFormal = sig.isNotEmpty;
-                } else {
-                  nextId = corpListoId;
-                  reservaFormal = false;
-                }
+                Widget buildForNextId({
+                  required String nextId,
+                  required bool reservaFormal,
+                  required ColaCercaniaReferencia? ref,
+                }) {
+                  if (nextId.isEmpty) return const SizedBox.shrink();
 
-                if (nextId.isEmpty) return const SizedBox.shrink();
-
-                return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance
-                      .collection('viajes')
-                      .doc(nextId)
-                      .snapshots(),
-                  builder: (context, vSnap) {
-                    if (vSnap.hasError) return const SizedBox.shrink();
-                    if (!vSnap.hasData || !vSnap.data!.exists) {
-                      return const SizedBox.shrink();
-                    }
-                    final m = vSnap.data!.data() ?? {};
-                    final taxistaViaje = (m['uidTaxista'] ?? m['taxistaId'] ?? '')
-                        .toString()
-                        .trim();
-                    if (taxistaViaje.isNotEmpty && taxistaViaje != uidTaxista) {
-                      return const SizedBox.shrink();
-                    }
-                    if (_viajeCerradoParaBanner(m)) {
-                      _limpiarColaColgadaSiViajeCerrado(
-                        uidTaxista: uidTaxista,
-                        viajeId: nextId,
-                      );
-                      return const SizedBox.shrink();
-                    }
-                    if (!CorporativoTaxistaService
-                        .esViajeCorporativoAsignado(m, uidTaxista)) {
-                      if (!reservaFormal && corpListoId.isEmpty) {
-                        // Cola pool normal: solo si sigue pendiente/aceptado.
-                        final st =
-                            EstadosViaje.normalizar((m['estado'] ?? '').toString());
-                        if (EstadosViaje.esTerminal(st)) {
-                          return const SizedBox.shrink();
+                  return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('viajes')
+                        .doc(nextId)
+                        .snapshots(),
+                    builder: (context, vSnap) {
+                      if (vSnap.hasError) return const SizedBox.shrink();
+                      if (!vSnap.hasData || !vSnap.data!.exists) {
+                        return const SizedBox.shrink();
+                      }
+                      final m = vSnap.data!.data() ?? {};
+                      final taxistaViaje =
+                          (m['uidTaxista'] ?? m['taxistaId'] ?? '')
+                              .toString()
+                              .trim();
+                      if (taxistaViaje.isNotEmpty &&
+                          taxistaViaje != uidTaxista) {
+                        return const SizedBox.shrink();
+                      }
+                      if (_viajeCerradoParaBanner(m)) {
+                        _limpiarColaColgadaSiViajeCerrado(
+                          uidTaxista: uidTaxista,
+                          viajeId: nextId,
+                        );
+                        return const SizedBox.shrink();
+                      }
+                      if (!CorporativoTaxistaService
+                          .esViajeCorporativoAsignado(m, uidTaxista)) {
+                        if (!reservaFormal && corpListoId.isEmpty) {
+                          final st = EstadosViaje.normalizar(
+                              (m['estado'] ?? '').toString());
+                          if (EstadosViaje.esTerminal(st)) {
+                            return const SizedBox.shrink();
+                          }
                         }
                       }
-                    }
 
-                    try {
-                      final origen = (m['origen'] ?? 'Origen').toString();
-                      final destino = (m['destino'] ?? 'Destino').toString();
-                      final g = m['gananciaTaxista'];
-                      final p = m['precio'];
-                      double ganancia = g is num ? g.toDouble() : 0.0;
-                      final precio = p is num ? p.toDouble() : 0.0;
-                      if (ganancia <= 0 && precio > 0) {
-                        ganancia =
-                            precio * (1.0 - PlataformaEconomia.factorComision);
+                      try {
+                        final origen = (m['origen'] ?? 'Origen').toString();
+                        final destino = (m['destino'] ?? 'Destino').toString();
+                        final g = m['gananciaTaxista'];
+                        final p = m['precio'];
+                        double ganancia = g is num ? g.toDouble() : 0.0;
+                        final precio = p is num ? p.toDouble() : 0.0;
+                        if (ganancia <= 0 && precio > 0) {
+                          ganancia = precio *
+                              (1.0 - PlataformaEconomia.factorComision);
+                        }
+                        final ganTxt =
+                            FormatosMoneda.rd(ganancia > 0 ? ganancia : precio);
+
+                        DateTime? fh;
+                        final ts = m['fechaHora'];
+                        if (ts is Timestamp) fh = ts.toDate();
+                        final sw = m['startWindowAt'];
+                        if (fh == null && sw is Timestamp) fh = sw.toDate();
+                        String ventana = '';
+                        if (fh != null) {
+                          ventana = DateFormat('dd/MM · HH:mm').format(fh);
+                        }
+
+                        final bool esCorp =
+                            CorporativoTaxistaService
+                                .esViajeCorporativoAsignado(m, uidTaxista);
+                        final encoladoTrasViajeActual = activo.isNotEmpty &&
+                            activo != nextId &&
+                            (esCorp || reservaFormal);
+
+                        String? distanciaLinea;
+                        if (ref != null) {
+                          final double? metros =
+                              _distanciaMetrosPickupViaje(m, ref);
+                          if (metros != null && metros.isFinite) {
+                            distanciaLinea = ref.porDestinoViajeActivo
+                                ? FormatoDistanciaCercania
+                                    .pickupCercaDeDestinoActual(
+                                    metros,
+                                    destinoActual: ref.destinoEtiqueta,
+                                  )
+                                : FormatoDistanciaCercania.aRecogida(metros);
+                          }
+                        }
+
+                        final titulo = esCorp
+                            ? (encoladoTrasViajeActual
+                                ? 'Después de este viaje · Corporativo'
+                                : 'Ruta corporativa')
+                            : (reservaFormal
+                                ? 'Tu siguiente (ya reservado)'
+                                : 'Próximo en cola');
+
+                        return _shell(
+                          context: context,
+                          compact: compact,
+                          reservaFormal: reservaFormal,
+                          esCorporativo: esCorp,
+                          encoladoTrasViajeActual: encoladoTrasViajeActual,
+                          viajeId: nextId,
+                          uidTaxista: uidTaxista,
+                          titulo: titulo,
+                          origen: origen,
+                          destino: destino,
+                          ventanaLine: ventana,
+                          gananciaLine: ganTxt,
+                          distanciaLine: distanciaLinea,
+                        );
+                      } catch (_) {
+                        return const SizedBox.shrink();
                       }
-                      final ganTxt =
-                          FormatosMoneda.rd(ganancia > 0 ? ganancia : precio);
+                    },
+                  );
+                }
 
-                      DateTime? fh;
-                      final ts = m['fechaHora'];
-                      if (ts is Timestamp) fh = ts.toDate();
-                      final sw = m['startWindowAt'];
-                      if (fh == null && sw is Timestamp) fh = sw.toDate();
-                      String ventana = '';
-                      if (fh != null) {
-                        ventana = DateFormat('dd/MM · HH:mm').format(fh);
-                      }
+                String nextIdFallback;
+                bool reservaFormalFallback;
+                if (pendCola != null) {
+                  nextIdFallback = pendCola.id;
+                  reservaFormalFallback = _slotOf(pendCola.data()) == 0;
+                } else if (sig.isNotEmpty || enc.isNotEmpty) {
+                  nextIdFallback = sig.isNotEmpty ? sig : enc;
+                  reservaFormalFallback = sig.isNotEmpty;
+                } else {
+                  nextIdFallback = corpListoId;
+                  reservaFormalFallback = false;
+                }
 
-                      final bool esCorp =
-                          CorporativoTaxistaService.esViajeCorporativoAsignado(
-                        m,
-                        uidTaxista,
+                if (referenciaOrden == null ||
+                    colaDocs.length <= 1 ||
+                    pendCola == null) {
+                  return buildForNextId(
+                    nextId: nextIdFallback,
+                    reservaFormal: reservaFormalFallback,
+                    ref: referenciaOrden?.value,
+                  );
+                }
+
+                return ValueListenableBuilder<ColaCercaniaReferencia?>(
+                  valueListenable: referenciaOrden!,
+                  builder: (context, ref, _) {
+                    if (ref == null) {
+                      return buildForNextId(
+                        nextId: nextIdFallback,
+                        reservaFormal: reservaFormalFallback,
+                        ref: null,
                       );
-                      final encoladoTrasViajeActual = activo.isNotEmpty &&
-                          activo != nextId &&
-                          (esCorp || reservaFormal);
-
-                      final titulo = esCorp
-                          ? (encoladoTrasViajeActual
-                              ? 'Después de este viaje · Corporativo'
-                              : 'Ruta corporativa')
-                          : (reservaFormal
-                              ? 'Siguiente recogida reservada'
-                              : 'Próximo en cola');
-
-                      return _shell(
-                        context: context,
-                        compact: compact,
-                        reservaFormal: reservaFormal,
-                        esCorporativo: esCorp,
-                        encoladoTrasViajeActual: encoladoTrasViajeActual,
-                        viajeId: nextId,
-                        uidTaxista: uidTaxista,
-                        titulo: titulo,
-                        origen: origen,
-                        destino: destino,
-                        ventanaLine: ventana,
-                        gananciaLine: ganTxt,
-                      );
-                    } catch (_) {
-                      return const SizedBox.shrink();
                     }
+                    return FutureBuilder<String?>(
+                      future: _mejorViajeColaPorCercania(
+                        docs: colaDocs,
+                        referencia: ref,
+                      ),
+                      builder: (context, pickSnap) {
+                        final String picked =
+                            (pickSnap.data ?? pendCola.id).trim();
+                        QueryDocumentSnapshot<Map<String, dynamic>>? pickedDoc;
+                        for (final d in colaDocs) {
+                          if (d.id == picked) {
+                            pickedDoc = d;
+                            break;
+                          }
+                        }
+                        pickedDoc ??= pendCola;
+                        return buildForNextId(
+                          nextId: picked.isNotEmpty ? picked : nextIdFallback,
+                          reservaFormal: _slotOf(pickedDoc.data()) == 0,
+                          ref: ref,
+                        );
+                      },
+                    );
                   },
                 );
               },
@@ -288,6 +419,7 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
     required String destino,
     required String ventanaLine,
     required String gananciaLine,
+    String? distanciaLine,
   }) {
     Future<void> onTap() async {
       if (viajeId.isEmpty || uidTaxista.isEmpty) return;
@@ -365,6 +497,15 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
                           style: const TextStyle(
                             color: Colors.white54,
                             fontSize: 11,
+                          ),
+                        ),
+                      if (distanciaLine != null && distanciaLine.isNotEmpty)
+                        Text(
+                          distanciaLine,
+                          style: const TextStyle(
+                            color: Colors.greenAccent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                     ],
@@ -459,6 +600,17 @@ class ColaSiguienteViajeBannerTaxista extends StatelessWidget {
                 Text(
                   ventanaLine,
                   style: const TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+              ],
+              if (distanciaLine != null && distanciaLine.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  distanciaLine,
+                  style: const TextStyle(
+                    color: Colors.greenAccent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ],
               if (gananciaLine.isNotEmpty) ...[

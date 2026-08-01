@@ -11,6 +11,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
 import 'package:flygo_nuevo/widgets/rai_map_vehicle_icons.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_activar_button.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
@@ -87,6 +88,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   static const LatLng _fallback = LatLng(18.4861, -69.9312); // Santo Domingo
   final Set<Marker> _markers = <Marker>{};
   final Set<Polyline> _polylines = <Polyline>{};
+  final Set<Circle> _circles = <Circle>{};
 
   bool _myLocEnabled = false;
   bool _serviceOn = true;
@@ -149,29 +151,15 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     );
     if (origenChanged || destinoChanged || previewChanged) {
       _actualizarMarcadores();
-      final List<LatLng>? pts = widget.polylinePreviewPoints;
-      if (previewChanged && pts != null && pts.length >= 2) {
-        _following = false;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _fitTo(pts.first, pts.last);
-        });
-      } else if (destinoChanged) {
-        _centrarEnPuntoImportante();
-      } else if (origenChanged) {
-        final LatLng? o0 = oldWidget.origen;
-        final LatLng? o1 = widget.origen;
-        if (o0 == null && o1 != null) {
-          _centrarEnPuntoImportante();
-        } else if (o0 != null && o1 != null && widget.esTaxista) {
-          // Cliente en movimiento: actualizar marcador sin saltar la cámara en cada ping.
-          final double dM = _haversineM(o0, o1);
-          if (dM > 140.0) {
-            _centrarEnPuntoImportante();
-          }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_tienePuntosFijosParaEncuadrar()) {
+          _following = false;
+          _fitAllVisiblePoints();
         } else {
           _centrarEnPuntoImportante();
         }
-      }
+      });
       return;
     }
     if (taxiChanged && (widget.mostrarTaxista || _usaUbicacionTaxistaPasiva)) {
@@ -228,9 +216,47 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     return R * (2 * math.atan2(math.sqrt(h), math.sqrt(1 - h)));
   }
 
+  bool _tienePuntosFijosParaEncuadrar() {
+    int n = 0;
+    if (widget.mostrarOrigen && widget.origen != null) n++;
+    if (widget.mostrarDestino && widget.destino != null) n++;
+    final List<LatLng>? preview = widget.polylinePreviewPoints;
+    if (preview != null && preview.length >= 2) n += 2;
+    return n >= 2;
+  }
+
+  void _fitAllVisiblePoints() {
+    if (!_mapReady) return;
+    final List<LatLng> pts = <LatLng>[];
+    if (widget.mostrarOrigen && widget.origen != null) {
+      pts.add(widget.origen!);
+    }
+    if (widget.mostrarDestino && widget.destino != null) {
+      pts.add(widget.destino!);
+    }
+    if (widget.mostrarTaxista && widget.ubicacionTaxista != null) {
+      pts.add(widget.ubicacionTaxista!);
+    }
+    if (_lastLatLng != null && widget.esTaxista) {
+      pts.add(_lastLatLng!);
+    }
+    final List<LatLng>? preview = widget.polylinePreviewPoints;
+    if (preview != null) pts.addAll(preview);
+    if (pts.length >= 2) {
+      unawaited(_fitToMultiple(pts));
+    } else if (pts.length == 1) {
+      unawaited(_animateTo(pts.first, zoom: 16));
+    }
+  }
+
   void _centrarEnPuntoImportante() {
     if (!_mapReady) return;
     if (!kIsWeb && _map == null) return;
+
+    if (_tienePuntosFijosParaEncuadrar()) {
+      _fitAllVisiblePoints();
+      return;
+    }
 
     LatLng target;
 
@@ -307,10 +333,8 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
           title: widget.esTaxista ? 'Recoger cliente' : 'Mi ubicación',
           snippet: widget.origenNombre ?? 'Punto de recogida',
         ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(widget.esTaxista
-            ? BitmapDescriptor.hueAzure
-            : BitmapDescriptor.hueBlue),
-        zIndexInt: 1,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+        zIndexInt: 5,
       ));
     }
 
@@ -324,9 +348,15 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
           snippet: widget.destinoNombre ?? 'Lugar de destino',
         ),
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        zIndexInt: 1,
+        zIndexInt: 6,
       ));
     }
+
+    RaiMapPresentation.syncHalos(
+      circles: _circles,
+      origen: widget.mostrarOrigen ? widget.origen : null,
+      destino: widget.mostrarDestino ? widget.destino : null,
+    );
 
     // Vehículo del taxista en GPS en vivo (o posición pasiva del viaje).
     if (_lastLatLng != null &&
@@ -461,8 +491,9 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     if (_following && (widget.esTaxista || kIsWeb)) {
       _animateTo(
         here,
-        zoom: 17,
-        bearing: _lastBearing,
+        zoom: RaiMapPresentation.followZoomDriver,
+        bearing: widget.esTaxista ? _lastBearing : null,
+        tilt: widget.esTaxista ? 32 : 0,
         followMode: true,
       );
     }
@@ -582,69 +613,33 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     }
   }
 
-  Future<void> _fitTo(LatLng a, LatLng b) async {
-    if (!_mapReady) return;
+  Future<void> _fitToMultiple(List<LatLng> pts) async {
+    if (!_mapReady || pts.length < 2) return;
+    final LatLngBounds bounds = RaiMapPresentation.boundsFromPoints(pts);
 
     if (kIsWeb) {
       try {
         _fmCtrl.fitCamera(
           fm.CameraFit.bounds(
             bounds: fm.LatLngBounds(
-              ll.LatLng(
-                math.min(a.latitude, b.latitude),
-                math.min(a.longitude, b.longitude),
-              ),
-              ll.LatLng(
-                math.max(a.latitude, b.latitude),
-                math.max(a.longitude, b.longitude),
-              ),
+              ll.LatLng(bounds.southwest.latitude, bounds.southwest.longitude),
+              ll.LatLng(bounds.northeast.latitude, bounds.northeast.longitude),
             ),
-            padding: const EdgeInsets.all(80),
+            padding: const EdgeInsets.all(88),
           ),
         );
-      } catch (_) {
-        try {
-          _fmCtrl.move(
-            ll.LatLng(
-              (a.latitude + b.latitude) / 2,
-              (a.longitude + b.longitude) / 2,
-            ),
-            13,
-          );
-        } catch (_) {}
-      }
+      } catch (_) {}
       return;
     }
 
-    final c = _map;
+    final GoogleMapController? c = _map;
     if (c == null) return;
-    final bounds = _boundsFrom(a, b);
     _programmaticCameraDepth++;
-    try {
-      await c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
-    } catch (_) {
-      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
-      // segundo intento (algunas veces falla si aún no pintó el mapa)
-      await Future.delayed(const Duration(milliseconds: 120));
-      _programmaticCameraDepth++;
-      try {
-        await c.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
-      } catch (_) {
-        if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
-      }
-    }
+    await RaiMapPresentation.fitBounds(c, bounds, padding: 96);
   }
 
-  LatLngBounds _boundsFrom(LatLng a, LatLng b) {
-    final southWest = LatLng(
-      math.min(a.latitude, b.latitude),
-      math.min(a.longitude, b.longitude),
-    );
-    final northEast = LatLng(
-      math.max(a.latitude, b.latitude),
-      math.max(a.longitude, b.longitude),
-    );
-    return LatLngBounds(southwest: southWest, northeast: northEast);
+  Future<void> _fitTo(LatLng a, LatLng b) async {
+    await _fitToMultiple(<LatLng>[a, b]);
   }
 
   // ====== Interacciones ======
@@ -754,6 +749,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
         ..._polylines,
         ...?widget.overlayPolylines,
       },
+      circles: _circles,
       onLongPress: _onLongPress,
       onCameraMoveStarted: _onUserGesture,
       onCameraIdle: _onMapCameraIdle,

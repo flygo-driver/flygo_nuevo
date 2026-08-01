@@ -11,12 +11,12 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
-import 'package:flygo_nuevo/servicios/pay_config.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
@@ -80,8 +80,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   bool _esAhora = true;
 
   String _tipoVehiculo = 'Carro';
-  String _metodoPago = 'Efectivo';
-
   bool _cargando = false;
   String _mensajeCarga = '';
 
@@ -956,6 +954,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }
 
   Future<void> _confirmar() async {
+    PoolTimbreSessionGuard.activarSesionPasajero();
     if (RaiOfflineCotizacionService.estaOffline) {
       _snack(RaiOfflineCotizacionService.mensajeNoConfirmar);
       return;
@@ -1187,7 +1186,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         lonDestino: destinoGuardar.lon,
         fechaHora: fechaHoraViaje,
         precio: _precio,
-        metodoPago: _metodoPago,
+        metodoPago: 'Efectivo',
         tipoVehiculo: _tipoVehiculo,
         idaYVuelta: false,
         categoria: 'multi',
@@ -1261,80 +1260,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     });
   }
 
-  Future<void> _elegirMetodoPago() async {
-    if (_cargando) return;
-    final elegido = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        final t = Theme.of(ctx);
-        final cs = t.colorScheme;
-        final onSurface = cs.onSurface;
-        final muted = onSurface.withValues(alpha: 0.65);
-        final disabled = onSurface.withValues(alpha: 0.38);
-        Widget item(String label, {bool enabled = true, String? subtitle}) {
-          return ListTile(
-            title: Text(
-              label,
-              style: TextStyle(
-                color: enabled ? onSurface : disabled,
-                fontWeight: enabled ? FontWeight.normal : FontWeight.w300,
-              ),
-            ),
-            subtitle: subtitle != null
-                ? Text(
-                    subtitle,
-                    style: TextStyle(color: muted, fontSize: 12),
-                  )
-                : null,
-            trailing: label == _metodoPago && enabled
-                ? Icon(Icons.check,
-                    color: cs.brightness == Brightness.dark
-                        ? Colors.greenAccent
-                        : const Color(0xFF0F9D58))
-                : null,
-            enabled: enabled,
-            onTap: enabled ? () => Navigator.pop(ctx, label) : null,
-          );
-        }
-
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              const SizedBox(height: 8),
-              Container(
-                height: 4,
-                width: 48,
-                decoration: BoxDecoration(
-                  color: onSurface.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Método de pago',
-                style: TextStyle(color: muted, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 4),
-              ...PayConfig.metodosReservaVisibles.map(
-                (String label) => item(label),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-    if (!mounted) return;
-    if (elegido != null && elegido.trim().isNotEmpty) {
-      setState(() => _metodoPago = elegido);
-    }
-  }
-
   Widget _buildDestinoSection({
     _EstiloRutaCampo? estiloDestino,
     bool legacyRutaCampos = false,
@@ -1379,8 +1304,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     required Color textSecondary,
     required Color textMuted,
     required Color dividerSoft,
-    required Color metodoPagoChipBg,
-    required Color metodoPagoChipBorder,
   }) {
     final Color c = _colorServicio;
     final String tipoLabel = 'Normal · $_tipoVehiculo';
@@ -1537,35 +1460,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: <Widget>[
-                    Icon(Icons.payments_outlined,
-                        size: 18, color: textSecondary),
-                    const SizedBox(width: 8),
-                    Text('Pago:',
-                        style: TextStyle(color: textMuted, fontSize: 13)),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: metodoPagoChipBg,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: metodoPagoChipBorder),
-                      ),
-                      child: Text(
-                        _metodoPago,
-                        style: TextStyle(
-                            color: textPrimary, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
@@ -1650,10 +1544,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     final Color textMuted = isDark ? Colors.white60 : const Color(0xFF667085);
     final Color payLinkColor =
         isDark ? Colors.green.shade300 : const Color(0xFF0F9D58);
-    final Color metodoPagoChipBg =
-        isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEFF1F5);
-    final Color metodoPagoChipBorder =
-        isDark ? Colors.white24 : const Color(0xFFD0D5DD);
     final Color dividerSoft = isDark ? Colors.white24 : const Color(0xFFE4E7EC);
     final Color ddBg = isDark ? const Color(0xFF1A1A1A) : Colors.white;
 
@@ -1885,8 +1775,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                   textSecondary: textSecondary,
                   textMuted: textMuted,
                   dividerSoft: dividerSoft,
-                  metodoPagoChipBg: metodoPagoChipBg,
-                  metodoPagoChipBorder: metodoPagoChipBorder,
                 ),
               if (!_mostrarResumenMulti) ...<Widget>[
                 ClienteViajeOrientacionBanner(
@@ -2047,59 +1935,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                           ),
                         ),
                       ],
-                      const SizedBox(height: 12),
-                      _card(
-                        mockupSurface: rutaMockup,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Icon(Icons.credit_card_outlined,
-                                color: textSecondary),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              flex: 3,
-                              child: TextButton.icon(
-                                onPressed: _elegirMetodoPago,
-                                icon: Icon(
-                                    Icons.account_balance_wallet_outlined,
-                                    color: payLinkColor),
-                                label: Text(
-                                  'Elegir método de pago',
-                                  maxLines: 2,
-                                  softWrap: true,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                      color: payLinkColor,
-                                      fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                            ),
-                            Flexible(
-                              flex: 2,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: metodoPagoChipBg,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border:
-                                      Border.all(color: metodoPagoChipBorder),
-                                ),
-                                child: Text(
-                                  _metodoPago,
-                                  maxLines: 2,
-                                  softWrap: true,
-                                  textAlign: TextAlign.end,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                      color: textSecondary,
-                                      fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     ],
                   ),
                 ),

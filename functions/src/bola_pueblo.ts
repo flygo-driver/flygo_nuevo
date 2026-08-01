@@ -2,7 +2,7 @@ import { randomInt } from "crypto";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore";
 
-import { syncTaxistaComisionTrasBola } from "./finance.js";
+import { getFinanceConfig, syncTaxistaComisionTrasBola } from "./finance.js";
 import { debitarComisionBolaPuebloEnTx } from "./taxista_prepago_ledger.js";
 import {
   comisionCentsDesdePrecioCents,
@@ -838,8 +838,17 @@ export const actualizarMetodoPagoBola = onCall(async (request) => {
   if (!bolaId) {
     throw new HttpsError("invalid-argument", "Falta bolaId.");
   }
-  if (metodoRaw !== "efectivo" && metodoRaw !== "transferencia") {
+  if (metodoRaw !== "efectivo" && metodoRaw !== "transferencia" && metodoRaw !== "tarjeta") {
     throw new HttpsError("invalid-argument", "Método de pago inválido.");
+  }
+  if (metodoRaw === "tarjeta") {
+    const financeCfg = await getFinanceConfig();
+    if (!financeCfg.pagosConTarjetaAzulHabilitados) {
+      throw new HttpsError(
+        "failed-precondition",
+        "El pago con tarjeta no está habilitado en este momento.",
+      );
+    }
   }
 
   const db = getFirestore();
@@ -878,16 +887,24 @@ export const actualizarMetodoPagoBola = onCall(async (request) => {
 
   const viajeEspejoId = String(d.viajeEspejoId ?? "").trim();
   if (viajeEspejoId) {
-    await db.collection("viajes").doc(viajeEspejoId).set(
-      {
-        metodoPago: metodoRaw === "efectivo" ? "Efectivo" : "Transferencia",
-        metodoPagoUpdatedBy: uid,
-        metodoPagoUpdatedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-        actualizadoEn: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
+    const metodoViaje =
+      metodoRaw === "efectivo"
+        ? "Efectivo"
+        : metodoRaw === "tarjeta"
+          ? "Tarjeta"
+          : "Transferencia";
+    const viajePatch: Record<string, unknown> = {
+      metodoPago: metodoViaje,
+      metodoPagoNormalizado: metodoRaw,
+      metodoPagoUpdatedBy: uid,
+      metodoPagoUpdatedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    };
+    if (metodoRaw === "tarjeta") {
+      viajePatch.estadoPago = "pendiente";
+    }
+    await db.collection("viajes").doc(viajeEspejoId).set(viajePatch, { merge: true });
   }
 
   return { ok: true };
@@ -1009,9 +1026,17 @@ export const finalizarBolaPueblo = onCall(async (request) => {
     const metodoPago = String(d.metodoPago ?? "efectivo").toLowerCase().trim();
     const esEfectivo =
       metodoPago.length === 0 || metodoPago.includes("efectivo");
+    const esTarjeta =
+      !esEfectivo &&
+      (metodoPago.includes("tarjeta") || metodoPago.includes("card"));
+    const metodoBola = esEfectivo
+      ? "efectivo"
+      : esTarjeta
+        ? "tarjeta"
+        : "transferencia";
     const updates: Record<string, unknown> = {
       updatedAt: FieldValue.serverTimestamp(),
-      metodoPago: esEfectivo ? "efectivo" : "transferencia",
+      metodoPago: metodoBola,
     };
     if (uid === uidTx) {
       updates.confirmacionTaxistaFinal = true;
@@ -1043,7 +1068,21 @@ export const finalizarBolaPueblo = onCall(async (request) => {
         });
         if (deb.appliedNow || deb.alreadyHadLedger) {
           updates.comisionAplicada = true;
-          updates.estadoPago = esEfectivo ? "pagado" : "pendiente";
+          if (esTarjeta && viajeEspejoId) {
+            const vSnapTarjeta = await tx.get(db.collection("viajes").doc(viajeEspejoId));
+            if (vSnapTarjeta.exists) {
+              const vd = (vSnapTarjeta.data() ?? {}) as Record<string, unknown>;
+              const ep = String(vd.estadoPago ?? "").trim().toLowerCase();
+              const payObj = (vd.payment ?? {}) as Record<string, unknown>;
+              const captured =
+                ep === "verificado" || String(payObj.status ?? "").trim().toLowerCase() === "captured";
+              updates.estadoPago = captured ? "verificado" : "pendiente";
+            } else {
+              updates.estadoPago = "pendiente";
+            }
+          } else {
+            updates.estadoPago = esEfectivo ? "pagado" : "pendiente";
+          }
           updates.facturaSaldoPrepagoComisionRd = deb.saldoPrepagoDespues;
         }
       }

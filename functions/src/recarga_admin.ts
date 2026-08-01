@@ -3,7 +3,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 import { logAdminAudit } from "./audit.js";
 import { syncTaxistaBloqueoOperativo } from "./finance.js";
-import { ledgerRecargaPrepagoVerificadaCf } from "./taxista_prepago_ledger.js";
+import { acreditarRecargaPrepagoEnTx } from "./recarga_prepago_credit.js";
 
 type AnyMap = Record<string, unknown>;
 
@@ -36,7 +36,6 @@ export const approveRecargaComision = onCall(async (request) => {
   const notaAdmin = typeof request.data?.notaAdmin === "string" ? request.data.notaAdmin.trim() : "";
   if (!recargaId) throw new HttpsError("invalid-argument", "Falta recargaId");
 
-  const recRef = db().collection("recargas_comision_taxista").doc(recargaId);
   let uidTaxista = "";
   let montoAcreditado = 0;
   let yaEstabaPagada = false;
@@ -44,84 +43,24 @@ export const approveRecargaComision = onCall(async (request) => {
   let saldoPrepagoIncrementoRd = 0;
 
   await db().runTransaction(async (tx) => {
-    const recSnap = await tx.get(recRef);
-    if (!recSnap.exists) throw new HttpsError("not-found", "Recarga no encontrada");
-    const m = (recSnap.data() ?? {}) as AnyMap;
-    const estado = String(m.estado ?? "").trim().toLowerCase();
-    uidTaxista = String(m.uidTaxista ?? "").trim();
-    if (!uidTaxista) throw new HttpsError("failed-precondition", "Recarga sin taxista");
-
-    if (estado === "pagado") {
-      // Idempotencia: no re-acreditar; igual forzamos sync de pools/bloqueo al salir (p. ej. doc marcado a mano sin sync).
-      yaEstabaPagada = true;
-      return;
+    try {
+      const credit = await acreditarRecargaPrepagoEnTx(tx, {
+        recargaId,
+        actorUid,
+        notaAdmin,
+        estadosPermitidos: ["pendiente_verificacion"],
+        metodoVerificacion: "admin",
+      });
+      uidTaxista = credit.uidTaxista;
+      yaEstabaPagada = credit.yaEstabaPagada;
+      montoAcreditado = credit.montoAcreditado;
+      abonoComisionLegacyRd = credit.abonoComisionLegacyRd;
+      saldoPrepagoIncrementoRd = credit.saldoPrepagoIncrementoRd;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("no encontrada")) throw new HttpsError("not-found", msg);
+      throw new HttpsError("failed-precondition", msg);
     }
-    if (estado !== "pendiente_verificacion") {
-      throw new HttpsError("failed-precondition", "Recarga no está pendiente de verificación");
-    }
-
-    const montoRaw = m.montoDeclaradoRd;
-    montoAcreditado = typeof montoRaw === "number" ? montoRaw : Number(montoRaw ?? 0);
-    if (!Number.isFinite(montoAcreditado) || montoAcreditado <= 0) {
-      const altRaw = m.montoElegidoRd;
-      const alt = typeof altRaw === "number" ? altRaw : Number(altRaw ?? 0);
-      if (Number.isFinite(alt) && alt > 0) {
-        montoAcreditado = alt;
-      }
-    }
-    if (!Number.isFinite(montoAcreditado) || montoAcreditado <= 0) {
-      throw new HttpsError("failed-precondition", "Monto inválido en solicitud (montoDeclaradoRd / montoElegidoRd)");
-    }
-
-    const bRef = db().collection("billeteras_taxista").doc(uidTaxista);
-    const bSnap = await tx.get(bRef);
-    const bData = (bSnap.data() ?? {}) as AnyMap;
-    const saldoAntes = Number(bData.saldoPrepagoComisionRd ?? 0) || 0;
-    const pendAntes = Number(bData.comisionPendiente ?? 0) || 0;
-
-    // El depósito verificado por admin primero paga comisión legacy (`comisionPendiente`);
-    // lo que sobra acredita a prepago. Sin esto, con legacy ≥ RD$500 el taxista sigue bloqueado
-    // aunque el prepago suba (caso captura: prepago alto + legacy 786,77).
-    const abonoLegacy = Math.min(Math.max(0, montoAcreditado), Math.max(0, pendAntes));
-    const restoPrepago = Math.max(0, Number((montoAcreditado - abonoLegacy).toFixed(2)));
-    const pendDespues = Math.max(0, Number((pendAntes - abonoLegacy).toFixed(2)));
-    const saldoDespues = Number((saldoAntes + restoPrepago).toFixed(2));
-    abonoComisionLegacyRd = abonoLegacy;
-    saldoPrepagoIncrementoRd = restoPrepago;
-
-    await ledgerRecargaPrepagoVerificadaCf(tx, {
-      uidTaxista,
-      recargaId,
-      saldoPrepagoAntes: saldoAntes,
-      saldoPrepagoDespues: saldoDespues,
-      comisionPendienteAntes: pendAntes,
-      comisionPendienteDespues: pendDespues,
-      montoAcreditadoRd: montoAcreditado,
-      referencia: `recarga:${recargaId}`,
-    });
-
-    const billePatch: Record<string, unknown> = {
-      saldoPrepagoComisionRd: saldoDespues,
-      comisionPendiente: pendDespues,
-      ultimaRecargaPrepagoComisionEn: FieldValue.serverTimestamp(),
-      ultimaRecargaPrepagoComisionMonto: Number(montoAcreditado.toFixed(2)),
-      ultimaRecargaPrepagoComisionRef: `recarga:${recargaId}`,
-      updatedAt: FieldValue.serverTimestamp(),
-    };
-    if (abonoLegacy + 1e-9 > 0) {
-      billePatch.ultimaRecargaAbonoLegacyRd = Number(abonoLegacy.toFixed(2));
-      billePatch.ultimaRecargaAbonoLegacyEn = FieldValue.serverTimestamp();
-    }
-
-    tx.set(bRef, billePatch, { merge: true });
-
-    tx.update(recRef, {
-      estado: "pagado",
-      notaAdmin,
-      verificadoPor: actorUid,
-      verificadoEn: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
   });
 
   if (uidTaxista) {

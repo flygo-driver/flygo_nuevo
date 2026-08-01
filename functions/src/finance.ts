@@ -74,6 +74,7 @@ let _financeCfgCache: {
   transferenciaExigeVerificadoParaFinalizar: boolean;
   qrRecaudoPopularHabilitado: boolean;
   pagosConTarjetaAzulHabilitados: boolean;
+  recargaPrepagoAzulHabilitados: boolean;
 } | null = null;
 
 type AnyMap = Record<string, unknown>;
@@ -176,6 +177,7 @@ export async function getFinanceConfig(): Promise<{
   transferenciaExigeVerificadoParaFinalizar: boolean;
   qrRecaudoPopularHabilitado: boolean;
   pagosConTarjetaAzulHabilitados: boolean;
+  recargaPrepagoAzulHabilitados: boolean;
 }> {
   const now = Date.now();
   if (_financeCfgCache && now - _financeCfgCache.loadedAt < COMISION_PREPAGO_CONFIG_TTL_MS) {
@@ -190,6 +192,7 @@ export async function getFinanceConfig(): Promise<{
         _financeCfgCache.transferenciaExigeVerificadoParaFinalizar,
       qrRecaudoPopularHabilitado: _financeCfgCache.qrRecaudoPopularHabilitado,
       pagosConTarjetaAzulHabilitados: _financeCfgCache.pagosConTarjetaAzulHabilitados,
+      recargaPrepagoAzulHabilitados: _financeCfgCache.recargaPrepagoAzulHabilitados,
     };
   }
   try {
@@ -208,6 +211,7 @@ export async function getFinanceConfig(): Promise<{
       ),
       qrRecaudoPopularHabilitado: financeBool(data.qrRecaudoPopularHabilitado, false),
       pagosConTarjetaAzulHabilitados: financeBool(data.pagosConTarjetaAzulHabilitados, false),
+      recargaPrepagoAzulHabilitados: financeBool(data.recargaPrepagoAzulHabilitados, false),
     };
     _financeCfgCache = { loadedAt: now, ...cfg };
     return cfg;
@@ -223,6 +227,7 @@ export async function getFinanceConfig(): Promise<{
       transferenciaExigeVerificadoParaFinalizar: false,
       qrRecaudoPopularHabilitado: false,
       pagosConTarjetaAzulHabilitados: false,
+      recargaPrepagoAzulHabilitados: false,
     };
   }
 }
@@ -775,10 +780,16 @@ function bolaIdDesdeViajeEspejo(d: AnyMap): string {
   return String(d.bolaPuebloId ?? d.bolaId ?? "").trim();
 }
 
+function metodoPagoBolaDesdeViajeEspejo(viajeData: AnyMap): "efectivo" | "transferencia" | "tarjeta" {
+  const metodo = String(viajeData.metodoPago ?? "").toLowerCase().trim();
+  if (metodo.includes("tarjeta") || metodo.includes("card")) return "tarjeta";
+  if (metodo.includes("transfer")) return "transferencia";
+  return "efectivo";
+}
+
 function patchBolaPuebloTrasViajeEspejoFinalizado(
   viajeId: string,
   viajeData: AnyMap,
-  esEfectivo: boolean,
   facturaSaldoPrepagoComisionRd: number | null,
   /** Solo true si ya se debitó ledger/billetera (o ledger previo existía). */
   comisionAplicada: boolean,
@@ -786,10 +797,15 @@ function patchBolaPuebloTrasViajeEspejoFinalizado(
   const bolaId = bolaIdDesdeViajeEspejo(viajeData);
   if (!bolaId) return null;
 
-  const estadoPagoRaw = viajeData.estadoPago;
-  const estadoPago = String(
-    estadoPagoRaw ?? (esEfectivo ? "pagado" : "pendiente"),
-  ).trim();
+  const metodoBola = metodoPagoBolaDesdeViajeEspejo(viajeData);
+  const esEfectivo = metodoBola === "efectivo";
+  const paymentObj = (viajeData.payment ?? {}) as AnyMap;
+  const epRaw = String(viajeData.estadoPago ?? "").trim().toLowerCase();
+  const tarjetaCapturada =
+    metodoBola === "tarjeta" &&
+    (epRaw === "verificado" || String(paymentObj.status ?? "").trim().toLowerCase() === "captured");
+  const estadoPago = String(viajeData.estadoPago ?? "").trim() ||
+    (esEfectivo ? "pagado" : tarjetaCapturada ? "verificado" : "pendiente");
 
   const patch: Record<string, unknown> = {
     estado: "finalizada",
@@ -798,7 +814,7 @@ function patchBolaPuebloTrasViajeEspejoFinalizado(
     comisionAplicada,
     viajeCompletadoId: viajeId,
     updatedAt: FieldValue.serverTimestamp(),
-    metodoPago: esEfectivo ? "efectivo" : "transferencia",
+    metodoPago: metodoBola,
     estadoPago,
     confirmacionTaxistaFinal: true,
     confirmacionClienteFinal: true,
@@ -870,7 +886,6 @@ async function syncBolaPuebloTrasViajeEspejoFinalizado(
     const patch = patchBolaPuebloTrasViajeEspejoFinalizado(
       viajeId,
       viajeData,
-      esEfectivo,
       saldoFactura,
       comisionOk,
     );
@@ -1004,23 +1019,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       }
     }
 
-    const esTarjetaPre =
-      metodoPre.includes("tarjeta") || metodoPre.includes("card");
-    if (
-      !esCorporativoEmpresa &&
-      financeCfg.pagosConTarjetaAzulHabilitados &&
-      esTarjetaPre
-    ) {
-      const paymentObj = (d.payment ?? {}) as AnyMap;
-      const payStatus = String(paymentObj.status ?? "").trim().toLowerCase();
-      const ep = String(d.estadoPago ?? "").trim().toLowerCase();
-      if (ep !== "verificado" && payStatus !== "captured") {
-        throw new HttpsError(
-          "failed-precondition",
-          "No se puede finalizar: el pago con tarjeta (AZUL) aún no está capturado.",
-        );
-      }
-    }
+    // Tarjeta: el cliente paga en la factura tras finalizar (igual que transferencia/efectivo).
+    // No bloquear al taxista; AZUL actualiza estadoPago cuando captura el pago.
 
     if (!estadoPermiteFinalizarTaxista(estado)) {
       const corpOk =
@@ -1060,7 +1060,12 @@ export const finalizarViajeSeguro = onCall(async (request) => {
 
     const metodo = String(d.metodoPago ?? "").toLowerCase().trim();
     const esEfectivo = metodo.includes("efectivo");
-    const metodoAsiento = esEfectivo ? "efectivo" : (metodo.includes("transfer") ? "transferencia" : "tarjeta");
+    const esTransferencia = metodo.includes("transfer");
+    const esTarjeta =
+      !esEfectivo &&
+      !esTransferencia &&
+      (metodo.includes("tarjeta") || metodo.includes("card"));
+    const metodoAsiento = esEfectivo ? "efectivo" : (esTransferencia ? "transferencia" : "tarjeta");
     const pagoRegistrado = d.pagoRegistrado === true;
     const aplicaPrepagoComision = viajeAplicaComisionPrepago(d);
 
@@ -1144,12 +1149,17 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     }
 
     if (!pagoRegistrado) {
-      tx.update(viajeRef, {
-        metodoPago: esEfectivo ? "Efectivo" : (metodo.includes("transfer") ? "Transferencia" : "Tarjeta"),
-        "payment.status": esEfectivo ? "cash_collected" : "bank_transfer_received",
-        "payment.provider": esEfectivo ? "cash" : "transfer",
-        "payment.updatedAt": FieldValue.serverTimestamp(),
-        estadoPago: esEfectivo ? "pagado" : "pendiente",
+      const paymentObj = (d.payment ?? {}) as AnyMap;
+      const payStatusActual = String(paymentObj.status ?? "").trim().toLowerCase();
+      const epActual = String(d.estadoPago ?? "").trim().toLowerCase();
+      const tarjetaCapturada =
+        epActual === "verificado" || payStatusActual === "captured";
+
+      const cierrePago: AnyMap = {
+        metodoPago: esEfectivo ? "Efectivo" : (esTransferencia ? "Transferencia" : "Tarjeta"),
+        estadoPago: esEfectivo
+          ? "pagado"
+          : (esTarjeta && tarjetaCapturada ? "verificado" : "pendiente"),
         precio_cents: precioCents,
         comision_cents: comisionCents,
         ganancia_cents: gananciaCents,
@@ -1173,7 +1183,46 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         "settlement.status": "pending",
         updatedAt: FieldValue.serverTimestamp(),
         actualizadoEn: FieldValue.serverTimestamp(),
-      });
+      };
+
+      if (esEfectivo) {
+        cierrePago["payment.status"] = "cash_collected";
+        cierrePago["payment.provider"] = "cash";
+        cierrePago["payment.updatedAt"] = FieldValue.serverTimestamp();
+      } else if (esTarjeta) {
+        if (!String(paymentObj.provider ?? "").trim()) {
+          cierrePago["payment.provider"] = "azul";
+        }
+        if (!payStatusActual) {
+          cierrePago["payment.status"] = tarjetaCapturada ? "captured" : "pending";
+        }
+        cierrePago["payment.updatedAt"] = FieldValue.serverTimestamp();
+        if (!tarjetaCapturada && uidCliente) {
+          const montoRd = fromCents(precioCents);
+          cierrePago.cobroClientePendiente = true;
+          cierrePago.cobroClienteEstado = "pendiente";
+          cierrePago.cobroClienteMontoRd = montoRd;
+        }
+      } else {
+        cierrePago["payment.status"] = "bank_transfer_received";
+        cierrePago["payment.provider"] = "transfer";
+        cierrePago["payment.updatedAt"] = FieldValue.serverTimestamp();
+      }
+
+      tx.update(viajeRef, cierrePago);
+
+      if (esTarjeta && !tarjetaCapturada && uidCliente) {
+        const montoRd = fromCents(precioCents);
+        tx.set(
+          db().collection("usuarios").doc(uidCliente),
+          {
+            tieneCobroViajePendiente: true,
+            deudaViajesClienteRd: FieldValue.increment(montoRd),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+      }
 
       const bData = (billeSnapPre.data() ?? {}) as AnyMap;
       const billePatch: Record<string, unknown> = {
@@ -1247,7 +1296,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
           metodo: metodoAsiento,
           estado: esEfectivo ? "comision_pendiente" : "por_liquidar",
           fecha: new Date().toISOString(),
-          provider: esEfectivo ? "cash" : "transfer",
+          provider: esEfectivo ? "cash" : (esTarjeta ? "azul" : "transfer"),
           createdAt: FieldValue.serverTimestamp(),
         });
       }
@@ -1360,7 +1409,6 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const bolaPatch = patchBolaPuebloTrasViajeEspejoFinalizado(
       viajeId,
       d,
-      esEfectivo,
       facturaSaldoPrepagoComisionRd,
       bolaComisionAplicada,
     );
@@ -1657,6 +1705,7 @@ export const approvePayment = onCall(async (request) => {
     }
 
     let viajesLiquidados: string[] = [];
+    let viajesDocs: DocumentSnapshot[] = [];
     if (fechaInicioSemana && fechaFinSemana) {
       const viajesSnap = await tx.get(
         db()
@@ -1668,11 +1717,27 @@ export const approvePayment = onCall(async (request) => {
           .orderBy("finalizadoEn", "desc")
           .limit(200),
       );
+      viajesDocs = viajesSnap.docs;
       viajesLiquidados = excluirEfectivoDePagoSemanal
-        ? viajesSnap.docs
+        ? viajesDocs
             .filter((doc) => esElegibleLiquidacionSemanal((doc.data() ?? {}) as AnyMap))
             .map((doc) => doc.id)
-        : viajesSnap.docs.map((doc) => doc.id);
+        : viajesDocs.map((doc) => doc.id);
+    }
+
+    const now = FieldValue.serverTimestamp();
+    for (const doc of viajesDocs) {
+      if (!viajesLiquidados.includes(doc.id)) continue;
+      const vd = (doc.data() ?? {}) as AnyMap;
+      if (vd.liquidado === true) continue;
+      tx.update(doc.ref, {
+        liquidado: true,
+        liquidacionSemanalId: `legacy_pago_taxista:${pagoId}`,
+        liquidadoEn: now,
+        liquidadoPorUid: uid,
+        updatedAt: now,
+        actualizadoEn: now,
+      });
     }
 
     tx.update(pagoRef, {
@@ -1819,6 +1884,40 @@ function choferTurismoEstadoOperativo(estadoRaw: unknown): boolean {
   return e === "aprobado" || e === "activo";
 }
 
+/** Pool claim: solo bloquea si el viaje referido está operativamente en curso (no corp informativo ni terminal). */
+function viajeOperativoBloqueanteParaClaimPool(
+  v: AnyMap,
+  choferUid: string,
+): boolean {
+  const tx = String(v.uidTaxista ?? v.taxistaId ?? "").trim();
+  if (!tx || tx !== choferUid) return false;
+  if (v.activo !== true || v.completado === true) return false;
+  if (esCorporativoModoInformativo(v)) return false;
+  const estado = String(v.estado ?? "").toLowerCase();
+  if (
+    estado === "pendiente" ||
+    estado === "pendiente_pago" ||
+    estado === "completado" ||
+    estado === "cancelado" ||
+    estado === "finalizado" ||
+    estado === "rechazado"
+  ) {
+    return false;
+  }
+  return (
+    estado === "aceptado" ||
+    estado === "en_camino_pickup" ||
+    estado === "encaminopickup" ||
+    estado === "a_bordo" ||
+    estado === "abordo" ||
+    estado === "en_origen_esperando_codigo" ||
+    estado === "esperando_codigo_encargado" ||
+    estado === "pendiente_codigo" ||
+    estado === "en_curso" ||
+    estado === "encurso"
+  );
+}
+
 export const aceptarViajeSeguro = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const uidActor = request.auth.uid;
@@ -1922,8 +2021,27 @@ export const aceptarViajeSeguro = onCall(async (request) => {
     })) {
       throw new HttpsError("failed-precondition", PREPAGO_INSUFICIENTE_COMISION_VIAJE);
     }
-    const viajeActivoId = String(uData.viajeActivoId ?? "");
-    if (viajeActivoId) throw new HttpsError("failed-precondition", "taxista-ocupado");
+    const viajeActivoId = String(uData.viajeActivoId ?? "").trim();
+    if (viajeActivoId && viajeActivoId !== viajeId) {
+      const bloqueanteSnap = await tx.get(
+        db().collection("viajes").doc(viajeActivoId),
+      );
+      if (bloqueanteSnap.exists) {
+        const bv = (bloqueanteSnap.data() ?? {}) as AnyMap;
+        if (viajeOperativoBloqueanteParaClaimPool(bv, uidActor)) {
+          throw new HttpsError("failed-precondition", "taxista-ocupado");
+        }
+      }
+      tx.set(
+        userRef,
+        {
+          viajeActivoId: "",
+          updatedAt: FieldValue.serverTimestamp(),
+          actualizadoEn: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
 
     const poolModo = poolModoConductorFromUser(uData);
     const viajeTipo = String(d.tipoServicio ?? "normal");
@@ -2713,6 +2831,113 @@ export const onViajeCanceladoPorCliente = onDocumentWritten("viajes/{viajeId}", 
 
 /** Alias HTTPS: misma implementación que `finalizarViajeSeguro` (callable `completarViajePorTaxista` en cliente). */
 export const completarViajePorTaxista = finalizarViajeSeguro;
+
+/**
+ * Taxista: registra que el pasajero no pudo pagar (sin efectivo ni tarjeta).
+ * No bloquea al conductor; marca deuda al cliente en RAI.
+ */
+export const registrarImpagoPasajeroViaje = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const viajeId =
+    typeof request.data?.viajeId === "string" ? request.data.viajeId.trim() : "";
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const role = await getRole(uidActor);
+  if (role !== "taxista" && role !== "admin") {
+    throw new HttpsError("permission-denied", "Solo el conductor asignado");
+  }
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  const motivoRaw = String(request.data?.motivo ?? "").trim();
+
+  await db().runTransaction(async (tx) => {
+    const vSnap = await tx.get(viajeRef);
+    if (!vSnap.exists) throw new HttpsError("not-found", "Viaje no encontrado");
+    const d = (vSnap.data() ?? {}) as AnyMap;
+
+    const uidTaxista = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
+    const uidCliente = String(d.uidCliente ?? d.clienteId ?? "").trim();
+    if (!uidTaxista || !uidCliente) {
+      throw new HttpsError("failed-precondition", "Viaje sin participantes");
+    }
+    if (role === "taxista" && uidTaxista !== uidActor) {
+      throw new HttpsError("permission-denied", "No autorizado para este viaje");
+    }
+
+    const estado = normalizeEstadoViajeDoc(d.estado);
+    const completado = d.completado === true || estado === "completado";
+    if (estado === "cancelado") {
+      throw new HttpsError("failed-precondition", "El viaje está cancelado");
+    }
+    if (!completado && estado !== "a_bordo" && estado !== "en_curso") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Solo podés registrar impago con el cliente a bordo, en ruta o al finalizar.",
+      );
+    }
+
+    const metodo = String(d.metodoPago ?? "").toLowerCase().trim();
+    const esEfectivo = metodo.includes("efectivo");
+    const esTarjeta =
+      !esEfectivo &&
+      !metodo.includes("transfer") &&
+      (metodo.includes("tarjeta") || metodo.includes("card"));
+    const ep = String(d.estadoPago ?? "").trim().toLowerCase();
+    const payStatus = String(((d.payment ?? {}) as AnyMap).status ?? "")
+      .trim()
+      .toLowerCase();
+    const tarjetaPagada = ep === "verificado" || payStatus === "captured";
+    const cobroEstado = String(d.cobroClienteEstado ?? "").trim().toLowerCase();
+
+    if (cobroEstado === "impago_registrado") {
+      return;
+    }
+    if (esTarjeta && tarjetaPagada) {
+      throw new HttpsError("failed-precondition", "La tarjeta ya fue cobrada por AZUL");
+    }
+    if (esEfectivo && payStatus === "cash_collected" && ep === "pagado") {
+      throw new HttpsError(
+        "failed-precondition",
+        "El viaje figura como efectivo cobrado. Si hubo un error, contactá soporte RAI.",
+      );
+    }
+
+    const precioCents =
+      typeof d.precio_cents === "number" && d.precio_cents > 0
+        ? Math.trunc(d.precio_cents)
+        : toCents(d.precioFinal ?? d.precio ?? d.total ?? 0);
+    const montoRd = fromCents(precioCents);
+    const yaTeníaDeuda = d.cobroClientePendiente === true;
+
+    tx.update(viajeRef, {
+      cobroClientePendiente: true,
+      cobroClienteEstado: "impago_registrado",
+      cobroClienteMontoRd: montoRd,
+      cobroClienteRegistradoPor: uidActor,
+      cobroClienteRegistradoEn: FieldValue.serverTimestamp(),
+      cobroClienteMotivo:
+        motivoRaw ||
+        (esTarjeta
+          ? "Pasajero sin fondos en tarjeta al finalizar"
+          : "Pasajero no entregó efectivo"),
+      updatedAt: FieldValue.serverTimestamp(),
+      actualizadoEn: FieldValue.serverTimestamp(),
+    });
+
+    const userPatch: AnyMap = {
+      tieneCobroViajePendiente: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (!yaTeníaDeuda) {
+      userPatch.deudaViajesClienteRd = FieldValue.increment(montoRd);
+    }
+    tx.set(db().collection("usuarios").doc(uidCliente), userPatch, { merge: true });
+  });
+
+  logger.info("[registrarImpagoPasajeroViaje] ok", { viajeId, uidActor });
+  return { ok: true, viajeId };
+});
 
 /** Red de seguridad: corrige desalineaciones `tienePagoPendiente` / deuda pool (p. ej. CF caída). */
 export const scheduledReconcileBloqueoPrepagoTaxistas = onSchedule(

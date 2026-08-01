@@ -205,6 +205,8 @@ String taxistaMensajeClaimFallido(
     case 'no-puede-recibir-viajes':
       return 'Tu cuenta no está habilitada para recibir viajes. '
           'Si ya tienes documentos aprobados, contacta administración.';
+    case 'callable-no-disponible':
+      return 'No se pudo aceptar (servidor). Actualiza la app o intenta en unos segundos.';
     default:
       if (res.startsWith('Este viaje pidió') ||
           res.startsWith('Este viaje requiere')) {
@@ -217,5 +219,55 @@ String taxistaMensajeClaimFallido(
         return PagosTaxistaRepo.mensajeRecargaTomarViajes;
       }
       return 'No se pudo aceptar el viaje. Intenta de nuevo.';
+  }
+}
+
+/// Mensaje al fallar [ViajesRepo.reservarComoSiguiente] / `reservarSiguienteViaje`.
+String taxistaMensajeReservarSiguienteFallido(
+  String code, {
+  String poolModoConductor = TaxistaPoolModoConductor.vehiculo,
+}) {
+  switch (code) {
+    case 'no-existe':
+    case 'viaje-no-disponible':
+      return 'Ese viaje ya no está disponible para encolar.';
+    case 'reservado-otro':
+      return 'Otro taxista reservó ese viaje un instante antes.';
+    case 'ya-tiene-siguiente':
+      return 'Ya tienes un siguiente viaje en cola. Finaliza o libera el actual primero.';
+    case 'sin-viaje-activo':
+      return 'Primero debes tener un viaje activo para encolar el siguiente.';
+    case 'acceptAfter-futuro':
+      return 'Ese viaje aún no se libera para reservar.';
+    case 'publish-futuro':
+      return 'Ese viaje aún no está publicado en el pool.';
+    case 'demasiado-lejos':
+      return 'La recogida queda demasiado lejos de donde terminas el viaje actual.';
+    case 'corporativo-fijo':
+      return 'Ese viaje es corporativo fijo y no se encola desde el pool.';
+    case 'bloqueado-pago-semanal':
+    case 'bloqueado-comision-efectivo':
+      return PagosTaxistaRepo.mensajeRecargaTomarViajes;
+    case 'prepago-insuficiente-comision-viaje':
+      return PagosTaxistaRepo.mensajePrepagoInsuficienteComisionViajeGenerico;
+    case 'bloqueado-admin':
+      return 'Tu cuenta está bloqueada por administración. Contacta soporte.';
+    case 'registro-incompleto':
+      return 'Completa tu registro de taxista antes de encolar viajes.';
+    case 'contrato-no-firmado':
+      return 'Debes firmar el contrato de taxista en tu cuenta.';
+    case 'documentos-no-aprobados':
+      return 'Tus documentos aún no están aprobados por administración.';
+    case 'tipo-servicio-no-coincide':
+      return poolModoConductor == TaxistaPoolModoConductor.motor
+          ? 'Este viaje es de carro/taxi. Tu perfil es de motores.'
+          : 'Este viaje es de motores. Tu perfil es vehículo.';
+    case 'callable-no-disponible':
+      return 'No se pudo encolar (servidor). Actualiza la app o intenta en unos segundos.';
+    default:
+      if (code.startsWith('functions_')) {
+        return 'No se pudo encolar el siguiente viaje. Intenta de nuevo.';
+      }
+      return 'No se pudo reservar el siguiente viaje. Intenta de nuevo.';
   }
 }

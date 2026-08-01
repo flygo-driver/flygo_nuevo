@@ -1,6 +1,6 @@
 name: flygo_nuevo  # ← NO lo cambies
 description: RAI Driver — app de movilidad para clientes y taxistas.
-version: 1.0.9+28
+version: 1.0.9+31
 publish_to: "none"
 
 environment:
@@ -44,6 +44,7 @@ dependencies:
   image_picker_platform_interface: ^2.11.0
   cupertino_icons: ^1.0.6
   google_fonts: ^6.2.1
+  flutter_svg: ^2.0.17
   phosphor_flutter: ^2.1.0
   flutter_local_notifications: ^17.1.2
   permission_handler: ^11.3.1
@@ -93,6 +94,11 @@ flutter:
     - assets/icon/logo_flygo.png         # Legacy welcome_page (no login principal)
     - assets/map/vehiculo_taxista.png    # Marcador GPS taxista (vista conductor)
     - assets/map/vehiculo_taxi_cliente.png # Marcador taxi (vista cliente)
+    - assets/pagos/visa.svg
+    - assets/pagos/mastercard.svg
+    - assets/pagos/amex.svg
+    - assets/pagos/discover.svg
+    - assets/pagos/marcas-pasarela-azul-oficial.png
 
 # ---------- ICONO DE LA APP (R sola) ----------
 flutter_launcher_icons:

@@ -12,6 +12,17 @@ class RecargaBancariaConfig {
   static const String numeroCuenta = '787726249';
   static const String rnc = '1320-11767';
 
+  /// Dirección permanente del comercio (requisito AZUL / recibo).
+  static const String direccionLinea1 = 'Calle 23 Este No. 39, Ensanche Luperón';
+  static const String direccionLinea2 = 'Santo Domingo, Distrito Nacional';
+  static const String pais = 'República Dominicana';
+
+  static String get direccionCompleta =>
+      '$direccionLinea1\n$direccionLinea2\n$pais';
+
+  static String get direccionUnaLinea =>
+      '$direccionLinea1, $direccionLinea2, $pais';
+
   static const String notaRecarga =
       'Depósito a Open ASK Service SRL (RAI). Cuenta corriente Banco Popular. '
       'En concepto indique su nombre de conductor o la referencia que aparece en Mis pagos.';

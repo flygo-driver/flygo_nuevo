@@ -27,9 +27,11 @@ import 'package:flygo_nuevo/utilidades/constante.dart'
 
 // 🔔 Servicios
 import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/servicios/push_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/azul_deep_link.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
@@ -330,6 +332,7 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
           defaultTargetPlatform != TargetPlatform.windows &&
           defaultTargetPlatform != TargetPlatform.macOS) {
         unawaited(PoolDeepLink.install());
+        unawaited(AzulDeepLink.install());
       }
       await NotificationService.I.ensureInited();
       FcmService.registerForegroundHandlers();
@@ -370,6 +373,7 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
 
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
+        await PoolTimbreSessionGuard.sincronizarRol(user.uid);
         PushService.ensureInitedAndSaved();
       }
 
@@ -432,10 +436,16 @@ void _configureAndroidPhotoPicker() {
   }
 }
 
-/// Barra de estado y **barra de navegación del sistema** (inicio / atrás / recientes)
-/// siempre visibles en toda la app (no modo inmersivo), estilo RAI.
+/// Barra de estado y navegación del sistema en modo edge-to-edge (Android 15+ / Play).
 void _configureGlobalSystemUi() {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+    ),
+  );
 }
 
 void main() {

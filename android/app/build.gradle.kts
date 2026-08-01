@@ -34,7 +34,8 @@ android {
         // applicationId por flavor (cliente = listing actual com.flygo.rd2; conductor = com.flygo.rd2.conductor)
         minSdk = 24
 
-        targetSdk = flutter.targetSdkVersion
+        // Play (ago 2026): API objetivo 36 (Android 16). No depender de flutter.targetSdkVersion (35).
+        targetSdk = 36
 
         // Una sola fuente: pubspec.yaml → version: "nombre+código" (p. ej. 1.0.4+5)
         versionCode = flutter.versionCode

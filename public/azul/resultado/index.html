@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Resultado del pago — RAI DRIVER</title>
+  <meta name="robots" content="noindex" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --ok: #7ee787;
+      --warn: #f0883e;
+      --err: #ff7b72;
+      --link: #58a6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    main {
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.2rem;
+      margin: 0 0 12px;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 0.95rem;
+    }
+    .icon {
+      font-size: 2.5rem;
+      margin-bottom: 12px;
+    }
+    .actions {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 18px;
+      border-radius: 10px;
+      background: #238636;
+      color: #fff;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .btn.secondary {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="icon" id="icon" aria-hidden="true">💳</div>
+    <h1 id="titulo">Procesando…</h1>
+    <p id="mensaje">Abriendo RAI Driver…</p>
+    <div class="actions">
+      <a class="btn" id="openApp" href="#">Volver a la app</a>
+      <a class="btn secondary" href="/legal/pagos-tarjeta">Información de pagos</a>
+    </div>
+  </main>
+  <script>
+    (function () {
+      var PLAY_CLIENTE = 'https://play.google.com/store/apps/details?id=com.flygo.rd2';
+      var PLAY_CONDUCTOR = 'https://play.google.com/store/apps/details?id=com.flygo.rd2.conductor';
+      var params = new URLSearchParams(window.location.search);
+      var estado = (params.get('estado') || '').toLowerCase();
+      var viajeId = params.get('viajeId') || '';
+      var recargaId = params.get('recargaId') || '';
+      var rol = (params.get('rol') || '').toLowerCase();
+      var qs = window.location.search || '';
+      var isAndroid = /Android/i.test(navigator.userAgent);
+      var esTaxista = rol === 'taxista' || (!!recargaId && !viajeId);
+
+      var titulo = document.getElementById('titulo');
+      var mensaje = document.getElementById('mensaje');
+      var icon = document.getElementById('icon');
+      var openBtn = document.getElementById('openApp');
+
+      var copyCliente = {
+        aprobado: {
+          icon: '✅',
+          titulo: 'Pago aprobado',
+          mensaje: 'Tu pago con tarjeta fue procesado. Volvé a RAI Driver para ver el viaje o la factura.'
+        },
+        declinado: {
+          icon: '❌',
+          titulo: 'Pago declinado',
+          mensaje: 'El banco no aprobó el pago. Podés intentar de nuevo desde la app con otra tarjeta.'
+        },
+        cancelado: {
+          icon: '↩️',
+          titulo: 'Pago cancelado',
+          mensaje: 'Cancelaste el pago. Podés intentar de nuevo cuando quieras desde la app.'
+        },
+        error: {
+          icon: '⚠️',
+          titulo: 'No se pudo confirmar',
+          mensaje: 'Hubo un problema al procesar la respuesta. Revisá el estado del pago en la app.'
+        }
+      };
+      var copyTaxista = {
+        aprobado: {
+          icon: '✅',
+          titulo: 'Recarga aprobada',
+          mensaje: 'Tu recarga con tarjeta fue procesada. Volvé a RAI Conductor → Mis pagos / pool.'
+        },
+        declinado: {
+          icon: '❌',
+          titulo: 'Recarga declinada',
+          mensaje: 'El banco no aprobó la recarga. Intentá de nuevo desde Mis pagos (taxista).'
+        },
+        cancelado: {
+          icon: '↩️',
+          titulo: 'Recarga cancelada',
+          mensaje: 'Cancelaste la recarga. Podés intentar de nuevo desde Mis pagos (taxista).'
+        },
+        error: {
+          icon: '⚠️',
+          titulo: 'No se pudo confirmar',
+          mensaje: 'Revisá el saldo en Mis pagos (RAI Conductor).'
+        }
+      };
+
+      var info = (esTaxista ? copyTaxista : copyCliente)[estado] ||
+        (esTaxista ? copyTaxista.error : copyCliente.error);
+      icon.textContent = info.icon;
+      titulo.textContent = info.titulo;
+      titulo.style.color =
+        estado === 'aprobado' ? 'var(--ok)' :
+        estado === 'cancelado' ? 'var(--warn)' :
+        estado === 'declinado' ? 'var(--err)' : 'var(--warn)';
+      mensaje.textContent = info.mensaje;
+      if (esTaxista && recargaId) {
+        mensaje.textContent += ' (Recarga: ' + recargaId + ')';
+      } else if (viajeId) {
+        mensaje.textContent += ' (Viaje: ' + viajeId + ')';
+      }
+      document.title = info.titulo + ' — RAI DRIVER';
+      openBtn.textContent = esTaxista ? 'Volver a RAI Conductor' : 'Volver a RAI Driver';
+
+      var appScheme = 'raidriver://azul/resultado' + qs;
+      var intentCliente =
+        'intent://azul/resultado' + qs +
+        '#Intent;scheme=raidriver;package=com.flygo.rd2;S.browser_fallback_url=' +
+        encodeURIComponent(PLAY_CLIENTE) + ';end';
+      var intentConductor =
+        'intent://azul/resultado' + qs +
+        '#Intent;scheme=raidriver;package=com.flygo.rd2.conductor;S.browser_fallback_url=' +
+        encodeURIComponent(PLAY_CONDUCTOR) + ';end';
+
+      function openApp() {
+        if (isAndroid) {
+          if (esTaxista) {
+            // Primero app conductor; fallback a Play unificada (mismo QS + rol=taxista).
+            window.location.href = intentConductor;
+            setTimeout(function () {
+              window.location.href = intentCliente;
+            }, 900);
+            return;
+          }
+          window.location.href = intentCliente;
+          return;
+        }
+        window.location.href = appScheme;
+      }
+
+      openBtn.href = isAndroid
+        ? (esTaxista ? intentConductor : intentCliente)
+        : appScheme;
+      openBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        openApp();
+      });
+
+      setTimeout(openApp, 500);
+    })();
+  </script>
+</body>
+</html>

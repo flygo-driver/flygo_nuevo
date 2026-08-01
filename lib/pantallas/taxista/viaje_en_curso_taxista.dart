@@ -45,6 +45,7 @@ import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/corporativo_espera_codigo_constants.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/release_build_flags.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
@@ -60,12 +61,14 @@ import 'package:flygo_nuevo/widgets/cola_siguiente_viaje_banner.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/corporativo_viaje_gps_tracker.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/widgets/corporativo_abordaje_chofer_panel.dart';
 import 'package:flygo_nuevo/widgets/corporativo_pasajeros_chofer_card.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_map_alert.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
+import 'package:flygo_nuevo/widgets/viaje_flujo_profesional_taxista_header.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
 
 String _safeFechaViaje(DateTime? dt) {
@@ -224,6 +227,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       ValueNotifier<(double, double)?>(null);
   final ValueNotifier<ColaCercaniaReferencia?> _colaReferenciaOrden =
       ValueNotifier<ColaCercaniaReferencia?>(null);
+  final ValueNotifier<double?> _distanciaDestinoNotifier =
+      ValueNotifier<double?>(null);
 
   // 🚀 Variables para detección de cercanía del cliente
   bool _clienteCerca = false;
@@ -240,6 +245,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   static const double _kViajeSheetInitial = 0.48;
   static const double _kViajeSheetPin = 0.74;
   String? _viajeSheetAseguradoParaId;
+  String? _ultimoSnackEncadenadoViajeId;
   static const double DISTANCIA_CERCANIA_KM = 0.1;
 
   // Cache del viaje actual
@@ -1410,10 +1416,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 ? _coordsLegMultiActual(v)
                 : _coordsDestinoParaFinalizar(v);
         if (dest != null) {
+          final String destLabel = (v.destino.isNotEmpty
+                  ? v.destino
+                  : (v.extras?['destinoLabel'] ?? ''))
+              .toString()
+              .trim();
           next = ColaCercaniaReferencia(
             lat: dest.lat,
             lon: dest.lon,
             porDestinoViajeActivo: true,
+            destinoEtiqueta: destLabel,
           );
         }
       }
@@ -1550,6 +1562,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       if (_distanciaMetrosAlDestino != null) {
         setState(() => _distanciaMetrosAlDestino = null);
       }
+      if (_distanciaDestinoNotifier.value != null) {
+        _distanciaDestinoNotifier.value = null;
+      }
       return;
     }
     final dest = _esMultiparada(v) && !_multiparadaRutaCompleta(v)
@@ -1558,6 +1573,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (dest == null) {
       if (_distanciaMetrosAlDestino != null) {
         setState(() => _distanciaMetrosAlDestino = null);
+      }
+      if (_distanciaDestinoNotifier.value != null) {
+        _distanciaDestinoNotifier.value = null;
       }
       return;
     }
@@ -1575,6 +1593,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       if (_distanciaMetrosAlDestino != null) {
         setState(() => _distanciaMetrosAlDestino = null);
       }
+      if (_distanciaDestinoNotifier.value != null) {
+        _distanciaDestinoNotifier.value = null;
+      }
       return;
     }
     final d = Geolocator.distanceBetween(
@@ -1586,6 +1607,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     final prev = _distanciaMetrosAlDestino;
     if (prev == null || (d - prev).abs() > 3) {
       setState(() => _distanciaMetrosAlDestino = d);
+      _distanciaDestinoNotifier.value = d;
     }
   }
 
@@ -1712,6 +1734,36 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Sí, finalizar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool?> _dialogoTarjetaPendienteAntesFinalizar(BuildContext context) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.black,
+        title: const Text(
+          'Tarjeta sin cobrar',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'AZUL no confirmó el cobro con tarjeta. Pedile al cliente que toque '
+          '«Pagar en efectivo» en su app o que pague con otra tarjeta. '
+          'Si lo dejás salir sin cobro verificado ni cambio a efectivo, '
+          'vos NO cobrás este viaje.',
+          style: TextStyle(color: Colors.white70, height: 1.35),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Esperar pago', style: TextStyle(color: Colors.white70)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Finalizar igual'),
           ),
         ],
       ),
@@ -1925,6 +1977,21 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             'updatedAt': FieldValue.serverTimestamp(),
             'actualizadoEn': FieldValue.serverTimestamp(),
           });
+          final String? uidTax = FirebaseAuth.instance.currentUser?.uid;
+          if (uidTax != null) {
+            unawaited(
+              UbicacionTaxista.publicarPingDesdeViajeActivo(
+                uid: uidTax,
+                lat: p.latitude,
+                lon: p.longitude,
+                viajeId: viajeId,
+                clienteId: _cachedViaje?.uidCliente,
+                heading: p.heading.isFinite && p.heading >= 0
+                    ? p.heading
+                    : null,
+              ),
+            );
+          }
           logDbg('📍 Ubicación enviada: ${p.latitude}, ${p.longitude}');
           _taxistaPosCola.value = (p.latitude, p.longitude);
           _sincronizarReferenciaOrdenCola(_cachedViaje);
@@ -2950,6 +3017,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             children: [
               _viajeSheetHandle(),
               _buildViajeSheetResumenMinimo(viaje, estadoBase),
+              if (!esCorpMapa && !mostrarPinCorp) ...<Widget>[
+                const SizedBox(height: 10),
+                ViajeFlujoProfesionalTaxistaHeader(
+                  viajeId: viaje.id,
+                  estadoBase: estadoBase,
+                  metodoPagoFallback: viaje.metodoPago,
+                  codigoVerificado: viaje.codigoVerificado,
+                  montoFallback: viaje.precio,
+                  codigoEsperado: viaje.codigoVerificacion,
+                ),
+              ],
               const SizedBox(height: 10),
               if (!esCorpMapa) ...[
                 _buildUbicacionEnSheetViaje(),
@@ -3018,7 +3096,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
               ],
               if (!mostrarPinCorp) ...[
                 _viajeSheetDivider(),
-                if (uid != null) const _ColaSiguienteViajeBannerSeguro(),
+                ViajesCercanosTaxistaSheetButton(
+                  controller: _viajesCercanosCtl,
+                  escuchaActiva: _viajesCercanosEscucha,
+                  referenciaOrdenCola: _colaReferenciaOrden,
+                ),
+                const SizedBox(height: 10),
+                if (uid != null)
+                  ColaSiguienteViajeBannerTaxista(
+                    uidTaxista: uid,
+                    referenciaOrden: _colaReferenciaOrden,
+                  ),
                 if (uid != null) const SizedBox(height: 12),
                 _buildDetallesViajePanel(viaje, estadoBase),
                 const SizedBox(height: 12),
@@ -3056,7 +3144,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           fontWeight: FontWeight.w700,
           fontSize: 14,
         ),
-        maxLines: 2,
+        maxLines: 3,
         overflow: TextOverflow.ellipsis,
       ),
     );
@@ -3691,6 +3779,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _viajesCercanosCtl.dispose();
     _taxistaPosCola.dispose();
     _colaReferenciaOrden.dispose();
+    _distanciaDestinoNotifier.dispose();
     super.dispose();
   }
 
@@ -5616,10 +5705,13 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         children: [
           if (!corp)
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: Text(
                     '🧭 ${v.origen} → ${v.destino}',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 18,
                       color: Colors.white,
@@ -5627,7 +5719,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                     ),
                   ),
                 ),
-                _servicioBadge(v),
+                const SizedBox(width: 8),
+                Flexible(child: _servicioBadge(v)),
               ],
             ),
           if (!corp) const SizedBox(height: 8),
@@ -5995,6 +6088,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ViajesCercanosTaxistaAppBarAction(
             controller: _viajesCercanosCtl,
             escuchaActiva: _viajesCercanosEscucha,
+            referenciaOrdenCola: _colaReferenciaOrden,
           ),
         ],
       ),
@@ -6064,12 +6158,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                         ),
                         Expanded(
                           flex: RaiViajeEnCursoUi.panelFlex,
-                          child: Padding(
+                          child: SingleChildScrollView(
                             padding: const EdgeInsets.all(20),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text('🧭 ${v.origen} → ${v.destino}',
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
                                         fontSize: 18,
                                         color: Colors.white,
@@ -6103,8 +6199,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                             ),
                           ),
                         ),
-                      ],
-                    );
+                    ],
+                  );
                   }
                   _scheduleSyncEsperaCargaViaje(true);
                   return _buildCargandoViajeOError();
@@ -6146,12 +6242,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                       ),
                       Expanded(
                         flex: RaiViajeEnCursoUi.panelFlex,
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
                                 const Icon(
                                   Icons.taxi_alert,
                                   color: Colors.greenAccent,
@@ -6195,7 +6290,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                             ),
                           ),
                         ),
-                      ),
                     ],
                   );
                 }
@@ -6243,6 +6337,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   _navegacionIniciada = false;
                   _navegacionDestinoIniciada = false;
                   _distanciaMetrosAlDestino = null;
+                  _distanciaDestinoNotifier.value = null;
+                  _viajesCercanosCtl.resetSugerenciaEncadenar();
+                  _viajesCercanosCtl.setEncoladoId(null);
+                  _viajesCercanosCtl.resetListeningUi();
+                  _codigoCtrl.clear();
+                  _clienteCerca = false;
                   _multiLegCompletadas = 0;
                   _multiNavViajeId = null;
                   _corpPinUiActivo = false;
@@ -6255,6 +6355,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   _escucharCancelacionRemota(viaje.id);
                   unawaited(_watchBolaCancelEnViaje(viaje.id));
                   unawaited(_syncCorpCodigoLive(viaje.id));
+                  unawaited(_notificarEncadenadoSiCorresponde(viaje.id));
 
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     _asegurarGps(viaje.id).then((_) {
@@ -6445,6 +6546,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             escuchaActiva: _viajesCercanosEscucha,
             referenciaOrdenCola: _colaReferenciaOrden,
           ),
+          ViajesCercanosTaxistaEncadenarSugerencia(
+            controller: _viajesCercanosCtl,
+            escuchaActiva: _viajesCercanosEscucha,
+            referenciaOrdenCola: _colaReferenciaOrden,
+            distanciaAlDestinoMetros: _distanciaDestinoNotifier,
+          ),
         ],
       ),
     );
@@ -6460,6 +6567,35 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         multiparadaRutaCompleta: _multiparadaRutaCompleta(v),
         esCorporativo: CorporativoPasajerosChoferCard.esViajeCorporativo(v),
       );
+
+  Future<void> _notificarEncadenadoSiCorresponde(String viajeId) async {
+    if (!mounted || _ultimoSnackEncadenadoViajeId == viajeId) return;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance.collection('viajes').doc(viajeId).get();
+      if (!snap.exists || !mounted) return;
+      final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+      if (d['promovidoDesdeCola'] != true) return;
+      _ultimoSnackEncadenadoViajeId = viajeId;
+      final String metodo = (d['metodoPago'] ?? '').toString().trim();
+      final String pago = metodo.isNotEmpty
+          ? MetodoPagoViaje.etiquetaDocumento(metodo)
+          : 'forma de pago';
+      _tripFlowSnack(
+        'Siguiente recogida conectada · Revisá $pago y pedí el PIN al abordar.',
+        backgroundColor: const Color(0xFFFFB020),
+      );
+      if (_viajeSheetCtrl.isAttached) {
+        unawaited(
+          _viajeSheetCtrl.animateTo(
+            _kViajeSheetPin,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+          ),
+        );
+      }
+    } catch (_) {}
+  }
 
   void _notificarCambioPasajerosCorpSiCorresponde(Viaje? prev, Viaje next) {
     if (!mounted || prev == null) return;
@@ -6582,22 +6718,31 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           ),
           const SizedBox(height: 12),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Intentos: ${_corpIntentosFallidos.clamp(0, 3)}/3',
-                style: TextStyle(
-                  color: _corpIntentosFallidos >= 2
-                      ? Colors.redAccent
-                      : Colors.white70,
-                  fontWeight: FontWeight.w600,
+              Flexible(
+                child: Text(
+                  'Intentos: ${_corpIntentosFallidos.clamp(0, 3)}/3',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _corpIntentosFallidos >= 2
+                        ? Colors.redAccent
+                        : Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-              Text(
-                'Tiempo: ${_formatoTiempoRestante(_corpTiempoRestanteCodigo)}',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w600,
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Tiempo: ${_formatoTiempoRestante(_corpTiempoRestanteCodigo)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -7399,6 +7544,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 viajeId: v.id,
                 metodoPagoFallback: v.metodoPago,
               ),
+            if (!corpPin)
+              TarjetaPagoEstadoTaxistaBanner(
+                viajeId: v.id,
+                metodoPagoFallback: v.metodoPago,
+              ),
+            if (!corpPin)
+              EfectivoPagoTaxistaBanner(
+                viajeId: v.id,
+                metodoPagoFallback: v.metodoPago,
+                montoFallback: v.precio,
+              ),
+            if (!corpPin)
+              TaxistaRegistrarImpagoButton(
+                viajeId: v.id,
+                metodoPagoFallback: v.metodoPago,
+              ),
             if (_permitePruebaSinRecorrido(v)) ...[
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -7482,22 +7643,31 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         const SizedBox(height: 16),
         if (corpPin) ...[
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Intentos: ${_corpIntentosFallidos.clamp(0, 3)}/3',
-                style: TextStyle(
-                  color: _corpIntentosFallidos >= 2
-                      ? Colors.redAccent
-                      : Colors.white70,
-                  fontWeight: FontWeight.w600,
+              Flexible(
+                child: Text(
+                  'Intentos: ${_corpIntentosFallidos.clamp(0, 3)}/3',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _corpIntentosFallidos >= 2
+                        ? Colors.redAccent
+                        : Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-              Text(
-                'Tiempo: ${_formatoTiempoRestante(_corpTiempoRestanteCodigo)}',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w600,
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Tiempo: ${_formatoTiempoRestante(_corpTiempoRestanteCodigo)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -7746,6 +7916,22 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             viajeId: v.id,
             metodoPagoFallback: v.metodoPago,
           ),
+        if (!CorporativoPasajerosChoferCard.esViajeCorporativo(v))
+          TarjetaPagoEstadoTaxistaBanner(
+            viajeId: v.id,
+            metodoPagoFallback: v.metodoPago,
+          ),
+        if (!CorporativoPasajerosChoferCard.esViajeCorporativo(v))
+          EfectivoPagoTaxistaBanner(
+            viajeId: v.id,
+            metodoPagoFallback: v.metodoPago,
+            montoFallback: v.precio,
+          ),
+        if (!CorporativoPasajerosChoferCard.esViajeCorporativo(v))
+          TaxistaRegistrarImpagoButton(
+            viajeId: v.id,
+            metodoPagoFallback: v.metodoPago,
+          ),
         if (_permitePruebaSinRecorrido(v) && !_navegacionDestinoIniciada) ...[
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -7864,21 +8050,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     required VoidCallback? onPressed,
     Color? backgroundColor,
   }) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: onPressed,
-        icon: icon,
-        label: label,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: backgroundColor ?? Colors.greenAccent,
-          foregroundColor: Colors.black,
-          minimumSize: const Size(double.infinity, 56),
-          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          elevation: 0,
-        ),
+    return RaiViajeEnCursoUi.overflowSafeIconButton(
+      onPressed: onPressed,
+      icon: icon,
+      label: label,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: backgroundColor ?? Colors.greenAccent,
+        foregroundColor: Colors.black,
+        minimumSize: const Size(double.infinity, 56),
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        elevation: 0,
       ),
     );
   }
@@ -7889,7 +8071,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     required VoidCallback? onPressed,
     bool enFila = false,
   }) {
-    final Widget boton = OutlinedButton.icon(
+    final Widget boton = RaiViajeEnCursoUi.overflowSafeOutlinedIconButton(
       onPressed: onPressed,
       icon: icon,
       label: label,
@@ -7898,8 +8080,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         foregroundColor: Colors.white,
         minimumSize: Size(enFila ? 1 : double.infinity, 48),
         textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     );
     if (enFila) return Expanded(child: boton);
@@ -7913,7 +8094,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }) {
     return SizedBox(
       width: double.infinity,
-      child: OutlinedButton.icon(
+      child: RaiViajeEnCursoUi.overflowSafeOutlinedIconButton(
         onPressed: onPressed,
         icon: icon,
         label: label,
@@ -8063,22 +8244,6 @@ class _ConfirmarTransferenciaTaxistaButtonState
         );
       },
     );
-  }
-}
-
-/// Evita que un fallo del banner de cola dispare el ErrorWidget global.
-class _ColaSiguienteViajeBannerSeguro extends StatelessWidget {
-  const _ColaSiguienteViajeBannerSeguro();
-
-  @override
-  Widget build(BuildContext context) {
-    try {
-      final String? uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid == null || uid.isEmpty) return const SizedBox.shrink();
-      return ColaSiguienteViajeBannerTaxista(uidTaxista: uid);
-    } catch (_) {
-      return const SizedBox.shrink();
-    }
   }
 }
 

@@ -1,0 +1,79 @@
+/* Extensiones legales — cumplimiento AZUL E-Commerce */
+.merchant-address {
+  background: rgba(126, 231, 135, 0.08);
+  border: 1px solid rgba(126, 231, 135, 0.35);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  margin: 1rem 0 1.5rem;
+  font-size: 0.95rem;
+}
+.card-brands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 1rem 0 1.5rem;
+}
+.card-brands img {
+  height: 32px;
+  width: auto;
+  max-width: 96px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+/* Franja oficial enviada por AZUL (Visa, Mastercard, Amex, Discover) */
+.card-brands-official {
+  margin: 1rem 0 1.5rem;
+  padding: 10px 14px;
+  background: #000;
+  border-radius: 8px;
+  display: inline-block;
+  max-width: 100%;
+}
+.card-brands-official img {
+  display: block;
+  height: 40px;
+  width: auto;
+  max-width: min(520px, 100%);
+  object-fit: contain;
+}
+.receipt-sample {
+  background: #fff;
+  color: #111;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  margin: 1rem 0 1.5rem;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-width: 420px;
+}
+.receipt-sample h3 {
+  margin: 0 0 0.75rem;
+  font-family: system-ui, sans-serif;
+  font-size: 1rem;
+  text-align: center;
+  border-bottom: 1px dashed #999;
+  padding-bottom: 0.5rem;
+}
+.receipt-sample .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.receipt-sample .total {
+  font-weight: 700;
+  border-top: 1px solid #333;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+.policy-box {
+  background: rgba(88, 166, 255, 0.08);
+  border-left: 3px solid #58a6ff;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  font-size: 0.92rem;
+}

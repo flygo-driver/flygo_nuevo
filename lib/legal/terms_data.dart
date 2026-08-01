@@ -25,6 +25,14 @@ const String kTaxistaContractPdfUrl =
 const String kCorporativoContractPublicUrl =
     '$kLegalPublicBaseUrl/legal/contrato-corporativo';
 
+/// Pagos con tarjeta AZUL (requisito afiliación comercio).
+const String kCardPaymentsPublicUrl =
+    '$kLegalPublicBaseUrl/legal/pagos-tarjeta';
+
+/// Política de seguridad transmisión datos de tarjetas (requisito AZUL).
+const String kCardSecurityPolicyPublicUrl =
+    '$kLegalPublicBaseUrl/legal/seguridad-tarjetas';
+
 const String kTermsLastUpdate = '24/06/2026';
 const String kTermsContactEmail = 'ventasopenask@gmail.com';
 const String kTermsContactPhone = '18094201481';

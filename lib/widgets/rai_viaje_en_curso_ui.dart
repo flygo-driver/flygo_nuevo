@@ -32,4 +32,83 @@ abstract final class RaiViajeEnCursoUi {
           ),
         ],
       );
+
+  /// Texto seguro en filas angostas (evita RenderFlex overflow).
+  static Widget ellipsizedText(
+    String text, {
+    required TextStyle style,
+    int maxLines = 2,
+    TextAlign textAlign = TextAlign.start,
+  }) {
+    return Text(
+      text,
+      style: style,
+      maxLines: maxLines,
+      overflow: TextOverflow.ellipsis,
+      textAlign: textAlign,
+    );
+  }
+
+  /// Botón ancho con icono + etiqueta que no desborda en pantallas pequeñas.
+  static Widget overflowSafeIconButton({
+    required VoidCallback? onPressed,
+    required Widget icon,
+    required Widget label,
+    required ButtonStyle style,
+    double iconGap = 8,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: style,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            icon,
+            SizedBox(width: iconGap),
+            Flexible(
+              child: DefaultTextStyle(
+                style: const TextStyle(),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+                textAlign: TextAlign.center,
+                child: label,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Outlined análogo para filas de acciones del taxista.
+  static Widget overflowSafeOutlinedIconButton({
+    required VoidCallback? onPressed,
+    required Widget icon,
+    required Widget label,
+    required ButtonStyle style,
+    double iconGap = 8,
+  }) {
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: style,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          icon,
+          SizedBox(width: iconGap),
+          Flexible(
+            child: DefaultTextStyle(
+              style: const TextStyle(),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              child: label,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

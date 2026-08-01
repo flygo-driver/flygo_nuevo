@@ -8,10 +8,10 @@ import {
   viajeEsEfectivoParaComisionPrepago,
 } from "../lib/prepago_comision_viaje.js";
 
-test("viajeAplicaComisionPrepago — métodos RAI estándar", () => {
+test("viajeAplicaComisionPrepago — solo efectivo (digital → liquidación semanal)", () => {
   assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Efectivo" }), true);
-  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Transferencia" }), true);
-  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Tarjeta" }), true);
+  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Transferencia" }), false);
+  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Tarjeta" }), false);
   assert.equal(viajeAplicaComisionPrepago({ metodoPago: "" }), true);
 });
 
@@ -27,8 +27,9 @@ test("viajeAplicaComisionPrepago — exclusiones", () => {
   );
 });
 
-test("viajeEsEfectivoParaComisionPrepago delega al modelo unificado", () => {
-  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Transferencia" }), true);
+test("viajeEsEfectivoParaComisionPrepago — solo efectivo", () => {
+  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Transferencia" }), false);
+  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Efectivo" }), true);
 });
 
 test("prepago insuficiente: comisión mayor que saldo", () => {
@@ -80,14 +81,25 @@ test("primer viaje gratis: no exige prepago por comisión", () => {
   );
 });
 
-test("transferencia: aplica prepago igual que efectivo", () => {
+test("transferencia: no exige prepago (liquidación semanal)", () => {
   assert.equal(
     prepagoInsuficienteParaViajeEfectivo({
       billeData: { saldoPrepagoComisionRd: 0, primerViajeComisionGratisConsumido: true },
       viajeData: { metodoPago: "Transferencia", precio: 2000 },
       globalComisionPct: 18,
     }),
-    true,
+    false,
+  );
+});
+
+test("tarjeta: no exige prepago (liquidación semanal)", () => {
+  assert.equal(
+    prepagoInsuficienteParaViajeEfectivo({
+      billeData: { saldoPrepagoComisionRd: 0, primerViajeComisionGratisConsumido: true },
+      viajeData: { metodoPago: "Tarjeta", precio: 2000 },
+      globalComisionPct: 18,
+    }),
+    false,
   );
 });
 

@@ -22,6 +22,7 @@ import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/legal/terms_data.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/widgets/turismo_mensaje_operaciones_panel.dart';
+import 'package:flygo_nuevo/widgets/cliente_volver_rai_dialog.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Contacto para asignación turismo (sin chofer disponible / urgencia ADM).
@@ -1782,13 +1783,23 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: () {
+                      onPressed: () async {
+                        final bool ok = await ClienteVolverRaiDialog.confirmar(
+                          context,
+                          subtitulo:
+                              'Tu viaje turístico sigue activo mientras buscamos conductor. '
+                                  'Podrás retomarlo desde el banner en Inicio.',
+                        );
+                        if (!ok || !context.mounted) return;
                         unawaited(
-                          NavigationService.irAlInicioCliente(context: context),
+                          NavigationService.pausarViajeClienteYVolverARai(
+                            viajeId: widget.viajeId,
+                            context: context,
+                          ),
                         );
                       },
-                      icon: const Icon(Icons.home_rounded, size: 20),
-                      label: const Text('Volver al inicio'),
+                      icon: const Icon(Icons.home_work_rounded, size: 20),
+                      label: const Text('Volver a RAI'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white70,
                         side: const BorderSide(color: Colors.white38),

@@ -21,6 +21,7 @@ import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/post_viaje_rating_throttle.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
 import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
+import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
 import 'package:flygo_nuevo/widgets/subir_comprobante_viaje_button.dart';
 import 'package:flygo_nuevo/widgets/taxista_perfil_post_viaje_card.dart';
 
@@ -486,6 +487,8 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     final String metodoRaw = (d['metodoPago'] ?? v.metodoPago).toString();
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoRaw);
     final bool esTransfer = MetodoPagoViaje.esTransferencia(metodoRaw);
+    final bool esTarjeta = MetodoPagoViaje.esTarjeta(metodoRaw);
+    final bool tarjetaPagada = MetodoPagoViaje.tarjetaPagadoVerificado(d);
     final bool usaRecaudoRai =
         esTransfer && TransferenciaRecaudoUi.viajeUsaRecaudoEnCuentaRai(d);
     final String uidTaxista = v.uidTaxista.isNotEmpty
@@ -506,13 +509,18 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.check_circle_rounded,
-              color: Colors.greenAccent, size: 64),
+          Icon(
+            tarjetaPagada
+                ? Icons.verified_rounded
+                : Icons.check_circle_rounded,
+            color: Colors.greenAccent,
+            size: 64,
+          ),
           const SizedBox(height: 16),
-          const Text(
-            'Recibo del viaje',
+          Text(
+            tarjetaPagada ? 'Pago exitoso' : 'Recibo del viaje',
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 24,
               fontWeight: FontWeight.w800,
@@ -520,16 +528,29 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
           ),
           const SizedBox(height: 8),
           Text(
-            esEfectivo
+            tarjetaPagada
+                ? 'Tu tarjeta fue procesada correctamente. Conserva este resumen.'
+                : esEfectivo
                 ? 'Total a pagar al conductor en efectivo. Conserva este resumen.'
                 : usaRecaudoRai
                     ? 'Total del viaje. Transferí a la cuenta corporativa de RAI con la referencia indicada.'
                     : esTransfer
                         ? 'Total acordado con el conductor. Si transferiste, conserva tu comprobante.'
-                        : 'Gracias por preferir RAI.',
+                        : esTarjeta
+                            ? 'Gracias por preferir RAI.'
+                            : 'Gracias por preferir RAI.',
             textAlign: TextAlign.center,
             style: const TextStyle(
                 color: Colors.white70, height: 1.4, fontSize: 14),
+          ),
+          const SizedBox(height: 18),
+          MetodoPagoVisualCard(
+            metodoPago: metodoRaw,
+            viajeData: d,
+            usaRecaudoRai: usaRecaudoRai,
+            estadoSello: tarjetaPagada ? 'PAGO EXITOSO' : null,
+            estadoColor: tarjetaPagada ? const Color(0xFF69F0AE) : null,
+            fondoOscuro: true,
           ),
           const SizedBox(height: 24),
           if (uidTaxista.isNotEmpty) ...[
@@ -552,11 +573,6 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
               children: [
                 _kv('Referencia', refCorta),
                 _kv('Cierre', _fecha(finTs)),
-                _kv(
-                    'Método',
-                    esEfectivo
-                        ? 'Efectivo'
-                        : (esTransfer ? 'Transferencia' : v.metodoPago)),
                 if (v.origen.isNotEmpty) _kv('Origen', v.origen),
                 if (v.waypoints != null && v.waypoints!.isNotEmpty)
                   ...v.waypoints!.asMap().entries.map(
@@ -836,27 +852,73 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   }
 
   Widget _stepCierre() {
-    final String subtitulo = _calificacionEnviada
-        ? 'Tu calificación fue registrada.'
-        : _omitioCalificacionPorThrottle
-            ? 'Gracias por viajar con RAI.'
-            : 'Gracias por viajar con RAI.';
+    final Map<String, dynamic>? datos =
+        _viajeSnap?.data() ?? _viajeDatosUi;
+    final String metodoRaw =
+        (datos?['metodoPago'] ?? '').toString();
+    final bool tarjetaPagada = datos != null &&
+        MetodoPagoViaje.tarjetaPagadoVerificado(datos);
+    final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoRaw);
+
+    final String titulo;
+    if (_calificacionEnviada) {
+      titulo = '¡Conductor calificado!';
+    } else if (tarjetaPagada) {
+      titulo = '¡Pago exitoso!';
+    } else if (esEfectivo) {
+      titulo = '¡Viaje completado!';
+    } else {
+      titulo = '¡Listo!';
+    }
+
+    final String subtitulo;
+    if (_calificacionEnviada) {
+      subtitulo = 'Tu calificación fue registrada.';
+    } else if (tarjetaPagada) {
+      subtitulo =
+          'Tu viaje quedó registrado y el pago con tarjeta fue confirmado. '
+          'Gracias por viajar con RAI.';
+    } else if (_omitioCalificacionPorThrottle) {
+      subtitulo = 'Gracias por viajar con RAI.';
+    } else if (esEfectivo) {
+      subtitulo =
+          'Recuerda entregar el monto al conductor si aún no lo hiciste. '
+          'Gracias por viajar con RAI.';
+    } else {
+      subtitulo = 'Gracias por viajar con RAI.';
+    }
+
+    final IconData icono;
+    if (_calificacionEnviada) {
+      icono = Icons.star_rounded;
+    } else if (tarjetaPagada) {
+      icono = Icons.verified_rounded;
+    } else {
+      icono = Icons.thumb_up_alt_rounded;
+    }
+
     final double bottomPad = _scrollBottomPad(context);
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(24, 40, 24, bottomPad),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            _calificacionEnviada
-                ? Icons.star_rounded
-                : Icons.thumb_up_alt_rounded,
-            color: Colors.greenAccent,
-            size: 56,
+          Container(
+            width: 88,
+            height: 88,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF1B5E20).withValues(alpha: 0.35),
+              border: Border.all(
+                color: const Color(0xFF69F0AE).withValues(alpha: 0.45),
+                width: 2,
+              ),
+            ),
+            child: Icon(icono, color: Colors.greenAccent, size: 48),
           ),
           const SizedBox(height: 20),
           Text(
-            _calificacionEnviada ? '¡Conductor calificado!' : '¡Listo!',
+            titulo,
             textAlign: TextAlign.center,
             style: const TextStyle(
                 color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),

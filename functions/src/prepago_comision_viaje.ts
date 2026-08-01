@@ -54,7 +54,7 @@ function toCents(v: unknown): number {
   return 0;
 }
 
-/** Viajes RAI estándar (efectivo/transferencia/tarjeta) usan prepago de comisión. */
+/** Solo efectivo: comisión RAI desde prepago. Digital → liquidación semanal. */
 export function viajeAplicaComisionPrepago(viaje: AnyMap): boolean {
   // Paridad con Flutter PagosTaxistaRepo.viajeAplicaComisionPrepago.
   if (viaje.corporativo === true) return false;
@@ -69,13 +69,10 @@ export function viajeAplicaComisionPrepago(viaje: AnyMap): boolean {
 
   const metodo = String(viaje.metodoPago ?? "").toLowerCase().trim();
   if (!metodo) return true;
-  if (metodo.includes("efectivo") || metodo === "cash") return true;
-  if (metodo.includes("transfer")) return true;
-  if (metodo.includes("tarjeta") || metodo.includes("card")) return true;
-  return false;
+  return metodo.includes("efectivo") || metodo === "cash";
 }
 
-/** @deprecated Usar [viajeAplicaComisionPrepago]. Mantenido por compatibilidad de imports. */
+/** Alias: prepago de comisión solo en efectivo. */
 export function viajeEsEfectivoParaComisionPrepago(viaje: AnyMap): boolean {
   return viajeAplicaComisionPrepago(viaje);
 }

@@ -129,6 +129,19 @@ cpR(publicDir, outDir);
 applyRaiWebBranding(outDir);
 patchIndexHtmlFaviconCache(outDir);
 
+/**
+ * public/empresas es un HTML stub de redirect. Si queda en build/web, Firebase
+ * sirve ese archivo (no el rewrite a la SPA) y /empresas no carga Flutter.
+ */
+function removeEmpresasStub(out) {
+  const empresasDir = path.join(out, "empresas");
+  if (!fs.existsSync(empresasDir)) return;
+  fs.rmSync(empresasDir, { recursive: true, force: true });
+  console.log(
+    "[prepare-hosting] Quitado stub public/empresas → rewrite SPA /empresas.",
+  );
+}
+
 /** SPA: Firebase sirve 404.html en rutas sin archivo; copiar index evita página rota. */
 function ensureSpa404Fallback(out) {
   const indexPath = path.join(out, "index.html");
@@ -138,6 +151,7 @@ function ensureSpa404Fallback(out) {
   console.log("[prepare-hosting] 404.html ← index.html (SPA admin/web).");
 }
 
+removeEmpresasStub(outDir);
 ensureSpa404Fallback(outDir);
 
 if (hadFlutterBuild) {

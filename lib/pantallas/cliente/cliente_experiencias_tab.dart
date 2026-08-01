@@ -7,6 +7,7 @@ import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_mis_giras.d
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo, etiquetaBolaAhorroUi;
 import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/cliente_viaje_activo_gate.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
@@ -132,6 +133,12 @@ class ClienteExperienciasTab extends StatelessWidget {
                     }
                   }
                   if (!context.mounted) return;
+                  if (!await ClienteViajeActivoGate.intentarFlujoNuevoViaje(
+                    context,
+                  )) {
+                    return;
+                  }
+                  if (!context.mounted) return;
                   Navigator.of(context, rootNavigator: true)
                       .pushNamed(rutaBolaPueblo);
                 },
@@ -163,10 +170,18 @@ class ClienteExperienciasTab extends StatelessWidget {
               'Quién está en X y va para Y · negociás y vas a buscarlo',
             ),
             trailing: Icon(Icons.chevron_right, color: cs.outline),
-            onTap: () => NavigationService.pushEnTabShell(
-              context,
-              const BolaConductoresEnRutaClientePage(),
-            ),
+            onTap: () async {
+              if (!await ClienteViajeActivoGate.intentarFlujoNuevoViaje(
+                context,
+              )) {
+                return;
+              }
+              if (!context.mounted) return;
+              NavigationService.pushEnTabShell(
+                context,
+                const BolaConductoresEnRutaClientePage(),
+              );
+            },
           ),
         ),
       );

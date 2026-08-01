@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Política de seguridad — Transmisión de datos de tarjetas · RAI DRIVER</title>
+  <meta name="description" content="Política de seguridad para la transmisión de datos de tarjetas de crédito y débito en RAI DRIVER. Procesamiento AZUL E-Commerce." />
+  <link rel="stylesheet" href="/legal/_legal.css" />
+  <link rel="stylesheet" href="/legal/_azul.css" />
+</head>
+<body>
+  <main>
+    <p class="nav">
+      <a href="/legal/pagos-tarjeta">Pagos con tarjeta</a> ·
+      <a href="/legal/privacidad">Privacidad</a> ·
+      <a href="/legal/terminos">Términos</a>
+    </p>
+
+    <h1>Política de seguridad para la transmisión de datos de tarjetas</h1>
+    <p class="meta">Última actualización: 28 de julio de 2026 · Versión 1.0</p>
+
+    <div class="merchant-address">
+      <strong>Responsable:</strong> OPEN ASK SERVICE, S.R.L. (RAI DRIVER)<br />
+      <strong>Dirección permanente:</strong> Calle 23 Este No. 39, Ensanche Luperón, Santo Domingo, Distrito Nacional, <strong>República Dominicana</strong><br />
+      <strong>Procesador de pagos:</strong> AZUL — Servicios Digitales Popular, S.A.
+    </div>
+
+    <h2>1. Alcance</h2>
+    <p>Esta política aplica a todos los pagos con tarjeta de crédito o débito realizados por usuarios de la aplicación móvil y servicios web de <strong>RAI DRIVER</strong>, operados por OPEN ASK SERVICE, S.R.L., a través de la pasarela <strong>AZUL E-Commerce</strong>.</p>
+
+    <h2>2. Principio de no almacenamiento de datos sensibles</h2>
+    <p>OPEN ASK SERVICE, S.R.L. <strong>no solicita, no captura, no transmite ni almacena</strong> en sus servidores o bases de datos los siguientes datos de tarjeta:</p>
+    <ul>
+      <li>Número de tarjeta completo (PAN)</li>
+      <li>Código de verificación (CVV/CVC)</li>
+      <li>Fecha de vencimiento completa</li>
+      <li>PIN o datos de banda magnética</li>
+    </ul>
+    <p>La captura de datos de tarjeta se realiza exclusivamente en la <strong>Página de Pago AZUL</strong>, entorno certificado PCI DSS operado por Servicios Digitales Popular.</p>
+
+    <h2>3. Método de integración</h2>
+    <p>RAI DRIVER utiliza el modelo de <strong>Página de Pago alojada (Hosted Payment Page)</strong> de AZUL:</p>
+    <ol>
+      <li>El usuario inicia el pago desde la aplicación RAI DRIVER.</li>
+      <li>El servidor de RAI (Firebase Cloud Functions) crea una sesión de pago y obtiene la URL segura de AZUL.</li>
+      <li>El usuario es redirigido a la Página de Pago AZUL mediante conexión HTTPS.</li>
+      <li>El usuario ingresa los datos de su tarjeta directamente en el formulario de AZUL.</li>
+      <li>AZUL procesa la transacción, aplica 3D Secure si corresponde, y notifica el resultado a RAI mediante webhook seguro.</li>
+      <li>RAI registra únicamente datos no sensibles: estado del pago, referencia de orden, código de autorización y últimos cuatro dígitos (si AZUL los provee).</li>
+    </ol>
+
+    <h2>4. Cifrado y transmisión segura</h2>
+    <ul>
+      <li><strong>TLS 1.2 o superior:</strong> toda comunicación entre la aplicación, los servidores de RAI (Google Firebase) y la plataforma AZUL se realiza mediante HTTPS cifrado.</li>
+      <li><strong>Certificados digitales:</strong> la Página de Pago AZUL opera con certificado digital válido emitido para el dominio de AZUL.</li>
+      <li><strong>Sin transmisión en texto plano:</strong> en ningún punto del flujo RAI se transmiten datos de tarjeta en texto plano.</li>
+    </ul>
+
+    <h2>5. Autenticación del tarjetahabiente (3D Secure)</h2>
+    <p>RAI DRIVER adopta el servicio de autenticación del tarjetahabiente ofrecido por AZUL, compatible con <strong>Visa Secure</strong> y <strong>MasterCard ID Check</strong>. Cuando el emisor de la tarjeta lo requiera, el usuario será dirigido al portal de su banco para verificar su identidad antes de completar el pago.</p>
+
+    <h2>6. Cumplimiento PCI DSS</h2>
+    <p>Al utilizar la Página de Pago AZUL, OPEN ASK SERVICE, S.R.L. delega el cumplimiento PCI DSS en el ámbito de captura y procesamiento de datos de tarjeta a <strong>AZUL / Servicios Digitales Popular</strong>, quien actúa como proveedor de servicios de pago certificado.</p>
+    <p>Los servidores de RAI almacenan únicamente tokens opacos, referencias de transacción y metadatos de conciliación provistos por AZUL.</p>
+
+    <h2>7. Control de acceso</h2>
+    <ul>
+      <li>Solo el usuario autenticado titular del viaje puede iniciar un pago con tarjeta.</li>
+      <li>Las reglas de seguridad de Firebase Firestore impiden que clientes o terceros modifiquen campos de pago AZUL.</li>
+      <li>Los webhooks de AZUL se validan mediante firma o mecanismo de autenticación acordado con AZUL.</li>
+      <li>El acceso administrativo a datos de pago está restringido a personal autorizado de OPEN ASK SERVICE, S.R.L.</li>
+    </ul>
+
+    <h2>8. Monitoreo y registro</h2>
+    <p>RAI registra eventos de pago (creación de sesión, confirmación, rechazo) con fines de auditoría, conciliación y soporte al cliente. Estos registros <strong>no contienen datos sensibles de tarjeta</strong>.</p>
+
+    <h2>9. Notificación de incidentes</h2>
+    <p>En caso de incidente de seguridad relacionado con pagos con tarjeta, OPEN ASK SERVICE, S.R.L. notificará a AZUL y a las autoridades competentes conforme a la normativa aplicable en República Dominicana.</p>
+
+    <h2>10. Contacto</h2>
+    <p>Consultas sobre esta política: <a href="mailto:ventasopenask@gmail.com">ventasopenask@gmail.com</a> · Tel. +1 (809) 420-1481</p>
+
+    <h2>11. Marcas aceptadas y 3D Secure</h2>
+    <p><strong>Tarjetas:</strong> Visa, Mastercard, American Express, Discover (según habilitación AZUL).</p>
+    <div class="card-brands" aria-label="Marcas de tarjetas aceptadas">
+      <img src="/pagos/logos/visa.svg" alt="Visa" width="96" height="32" />
+      <img src="/pagos/logos/mastercard.svg" alt="Mastercard" width="96" height="32" />
+      <img src="/pagos/logos/amex.svg" alt="American Express" width="96" height="32" />
+      <img src="/pagos/logos/discover.svg" alt="Discover" width="96" height="32" />
+    </div>
+    <p><strong>Autenticación 3D Secure:</strong></p>
+    <div class="card-brands">
+      <img src="/pagos/logos/visa-secure.svg" alt="Visa Secure" width="120" height="32" />
+      <img src="/pagos/logos/mastercard-id-check.svg" alt="Mastercard ID Check" width="140" height="32" />
+    </div>
+
+    <footer>
+      OPEN ASK SERVICE SRL — RAI DRIVER · República Dominicana<br />
+      <a href="/legal/pagos-tarjeta">Pagos con tarjeta</a> ·
+      <a href="/legal/privacidad">Privacidad</a>
+    </footer>
+  </main>
+</body>
+</html>

@@ -17,11 +17,13 @@ import '../../servicios/analytics_rai.dart';
 import '../../servicios/finance_config_service.dart';
 import '../../servicios/liquidacion_semanal_repo.dart';
 import '../../servicios/pagos_taxista_repo.dart';
+import '../../servicios/pagos/azul_payment_service.dart';
 import '../../servicios/rai_local_read_cache.dart';
 import '../../servicios/comision_prepago_config_service.dart';
 import '../../widgets/configuracion_bancaria.dart';
 import '../../widgets/cuenta_open_ask_deposito_panel.dart';
 import '../../widgets/rai_offline_banner.dart';
+import '../../widgets/rai_recarga_tarjeta_panel.dart';
 import '../../widgets/taxista_credito_rai_monedero.dart';
 
 Widget _pasoRecarga(
@@ -1161,12 +1163,42 @@ class _MisPagosState extends State<MisPagos> {
                     child: CuentaOpenAskDepositoPanel(),
                   ),
                   _AvisoPerfilBancarioTransferencia(uid: user!.uid),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Recargar crédito RAI',
+                          style: TextStyle(
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 17,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Dos opciones: transferencia bancaria (bauche, revisión admin) '
+                          'o tarjeta de débito (AZUL, acreditación al aprobar). '
+                          'Solo podés tener una recarga abierta a la vez.',
+                          style: TextStyle(
+                            color: cs.onSurfaceVariant,
+                            fontSize: 12.5,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   KeyedSubtree(
                     key: _recargaSeccionKey,
                     child: _PanelRecargaComisionEfectivo(
                       user: user!,
                       formatter: formatter,
                     ),
+                  ),
+                  RaiRecargaTarjetaPanel(
+                    montoSugeridoRd: PagosTaxistaRepo.minSaldoPrepagoComisionRd,
                   ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -1206,25 +1238,66 @@ class _PanelRecargaComisionEfectivo extends StatefulWidget {
 }
 
 class _PanelRecargaComisionEfectivoState
-    extends State<_PanelRecargaComisionEfectivo> {
+    extends State<_PanelRecargaComisionEfectivo> with WidgetsBindingObserver {
   static const List<double> _montosSugeridos = <double>[200, 500, 700];
   final TextEditingController _montoCtrl = TextEditingController();
   bool _subiendo = false;
   bool _enviando = false;
+  bool _verificandoAzul = false;
   String? _comprobanteUrl;
   double? _montoElegidoRd;
   double? _lastSaldoPrepagoCached;
+  String? _recargaAzulPendienteId;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(ComisionPrepagoConfigService.ensureStarted());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _montoCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _verificarRecargaAzulAlVolver();
+    }
+  }
+
+  Future<void> _verificarRecargaAzulAlVolver([String? recargaId]) async {
+    final id = recargaId ?? _recargaAzulPendienteId;
+    if (id == null || id.isEmpty || _verificandoAzul) return;
+    if (!FinanceConfigService.recargaPrepagoAzulHabilitados) return;
+
+    _verificandoAzul = true;
+    try {
+      final res = await AzulPaymentService.verifyRecargaTaxista(recargaId: id);
+      if (!mounted) return;
+      final ok = res['captured'] == true ||
+          res['estado']?.toString().toLowerCase() == 'pagado';
+      if (ok) {
+        _recargaAzulPendienteId = null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Recarga con tarjeta confirmada. Tu cuenta se desbloqueó automáticamente.',
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (_) {
+      // El stream de recargas/billetera actualizará si AZUL ya capturó.
+    } finally {
+      _verificandoAzul = false;
+    }
   }
 
   Future<void> _elegirOrigenYSubirComprobante() async {
@@ -1480,8 +1553,26 @@ class _PanelRecargaComisionEfectivoState
               widget.user.uid),
           builder: (context, recSnap) {
             final list = recSnap.data ?? [];
-            final enRevision =
-                list.any((r) => r.estado == 'pendiente_verificacion');
+            RecargaComisionTaxista? recargaAbierta;
+            for (final r in list) {
+              if (r.estado == 'pendiente_verificacion' ||
+                  r.estado == 'pendiente_pago_azul') {
+                recargaAbierta = r;
+                break;
+              }
+            }
+            final enRevision = recargaAbierta != null;
+            final enRevisionTarjetaAzul =
+                recargaAbierta?.estado == 'pendiente_pago_azul';
+            if (enRevisionTarjetaAzul && recargaAbierta != null) {
+              final rid = recargaAbierta.id;
+              if (_recargaAzulPendienteId != rid) {
+                _recargaAzulPendienteId = rid;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _verificarRecargaAzulAlVolver(rid);
+                });
+              }
+            }
 
             return Container(
               margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -1580,7 +1671,9 @@ class _PanelRecargaComisionEfectivoState
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Tu recarga está en revisión. No envíes otra hasta tener respuesta.',
+                              enRevisionTarjetaAzul
+                                  ? 'Tenés un pago con tarjeta en curso. Completalo en AZUL o esperá a que expire antes de iniciar otra recarga.'
+                                  : 'Tu recarga por transferencia está en revisión. No envíes otra hasta tener respuesta.',
                               style: TextStyle(
                                   color: cs.onSurfaceVariant, fontSize: 12),
                             ),
@@ -1591,11 +1684,19 @@ class _PanelRecargaComisionEfectivoState
                   ] else ...[
                     const SizedBox(height: 12),
                     Text(
-                      'Cómo recargar (en orden)',
+                      'Opción 1 · Transferencia bancaria',
                       style: TextStyle(
                         color: cs.onSurface,
                         fontWeight: FontWeight.w800,
                         fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Cómo recargar por transferencia (en orden)',
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontSize: 12,
                       ),
                     ),
                     const SizedBox(height: 8),

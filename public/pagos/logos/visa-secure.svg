@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 48" role="img" aria-label="Visa Secure">
+  <rect width="200" height="48" rx="4" fill="#fff" stroke="#ddd"/>
+  <rect x="8" y="10" width="52" height="28" rx="3" fill="#1434CB"/>
+  <text x="34" y="28" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="9" font-weight="700" font-style="italic">VISA</text>
+  <text x="72" y="22" fill="#1434CB" font-family="Arial,sans-serif" font-size="11" font-weight="700">Visa</text>
+  <text x="72" y="36" fill="#1434CB" font-family="Arial,sans-serif" font-size="11" font-weight="700">Secure</text>
+  <path fill="#1434CB" d="M168 16l8 8-8 8v-5h-8v-6h8v-5z"/>
+</svg>

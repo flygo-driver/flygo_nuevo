@@ -18,6 +18,7 @@ import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
 import 'package:flygo_nuevo/widgets/cliente_cuenta_real_wall.dart';
@@ -252,6 +253,7 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'taxista') {
+      PoolTimbreSessionGuard.activarSesionConductor();
       if (OrganizadorGirasPerfilData.esOrganizadorGiras(data)) {
         if (!OrganizadorGirasPerfilData.registroCompleto(data)) {
           return const CompletarRegistroOrganizadorGiras();
@@ -267,6 +269,7 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'cliente') {
+      PoolTimbreSessionGuard.activarSesionPasajero();
       if (kReleaseMode && !ClienteCuentaRealPolicy.tieneCuentaReal(user)) {
         return const ClienteCuentaRealWall();
       }
@@ -304,6 +307,7 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'taxista') {
+      PoolTimbreSessionGuard.activarSesionConductor();
       final uSnap = await FirebaseFirestore.instance
           .collection('usuarios')
           .doc(user.uid)
@@ -324,6 +328,7 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'cliente') {
+      PoolTimbreSessionGuard.activarSesionPasajero();
       if (kReleaseMode && !ClienteCuentaRealPolicy.tieneCuentaReal(user)) {
         return const ClienteCuentaRealWall();
       }

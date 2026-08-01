@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/comprobante_transferencia_service.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_visual.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
@@ -132,6 +133,7 @@ class _FacturaBolaContent extends StatelessWidget {
     final String metodoPago = (data['metodoPago'] ?? 'Efectivo').toString();
     final bool esTransferencia = MetodoPagoViaje.esTransferencia(metodoPago);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoPago);
+    final bool esTarjeta = MetodoPagoViaje.esTarjeta(metodoPago);
 
     final double total = totalRdDesdeDocViaje(data);
     final bool montoPendienteServidor =
@@ -258,9 +260,16 @@ class _FacturaBolaContent extends StatelessWidget {
                     : FormatosMoneda.rd(total),
                 boldValue: true,
               ),
-              _Row(
-                label: 'Medio de pago acordado',
-                value: MetodoPagoViaje.etiquetaDocumento(metodoPago),
+              const SizedBox(height: 12),
+              MetodoPagoVisualCard(
+                metodoPago: metodoPago,
+                viajeData: data,
+                estadoSello: esTarjeta && MetodoPagoViaje.tarjetaPagadoVerificado(data)
+                    ? 'PAGO EXITOSO'
+                    : (transferenciaConfirmada ? 'PAGADO' : null),
+                estadoColor: esTarjeta && MetodoPagoViaje.tarjetaPagadoVerificado(data)
+                    ? const Color(0xFF69F0AE)
+                    : (transferenciaConfirmada ? Colors.green : null),
               ),
               if (esTaxista) ...[
                 const Divider(height: 22),
@@ -274,7 +283,7 @@ class _FacturaBolaContent extends StatelessWidget {
                   value: FormatosMoneda.rd(gananciaNeta),
                   boldValue: true,
                 ),
-                if ((esEfectivo || esTransferencia) &&
+                if ((esEfectivo || esTransferencia || esTarjeta) &&
                     saldoPrepagoFactura != null) ...[
                   const SizedBox(height: 8),
                   _Row(
@@ -290,9 +299,13 @@ class _FacturaBolaContent extends StatelessWidget {
                           '(saldo prepago y/o comisión pendiente de efectivo), conforme a las '
                           'políticas vigentes. Regularizá en Mis pagos para mantener tu cuenta '
                           'operativa sin restricciones.'
-                      : 'Pago por transferencia: el importe neto acordado lo recibís del '
-                          'pasajero. La comisión RAI se descontó de tu prepago (recarga); si no '
-                          'alcanzó, quedó como comisión pendiente. Regularizá en Mis pagos.',
+                      : esTarjeta
+                          ? 'Pago con tarjeta AZUL: el importe neto se liquida según las reglas '
+                              'de la plataforma. La comisión RAI se descontó de tu prepago cuando '
+                              'aplica; regularizá en Mis pagos si tenés saldo pendiente.'
+                          : 'Pago por transferencia: el importe neto acordado lo recibís del '
+                              'pasajero. La comisión RAI se descontó de tu prepago (recarga); si no '
+                              'alcanzó, quedó como comisión pendiente. Regularizá en Mis pagos.',
                   style: tt.bodySmall?.copyWith(
                     color: cs.onSurfaceVariant,
                     height: 1.35,
@@ -339,6 +352,34 @@ class _FacturaBolaContent extends StatelessWidget {
                     esTaxista
                         ? 'Cobrá ${FormatosMoneda.rd(total)} en efectivo al pasajero, conforme al acuerdo.'
                         : 'Entregá ${FormatosMoneda.rd(total)} en efectivo al conductor al concluir el traslado.',
+                    style: tt.bodyMedium?.copyWith(height: 1.35),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (esTarjeta) ...[
+          const SizedBox(height: 12),
+          _SectionCard(
+            title: 'Pago con tarjeta',
+            tone: _SectionTone.highlight,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.credit_card_rounded, color: cs.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    estadoPago == 'verificado'
+                        ? (esTaxista
+                            ? 'El pasajero pagó ${FormatosMoneda.rd(total)} con tarjeta. '
+                                'El cobro quedó registrado en RAI.'
+                            : 'Tu pago de ${FormatosMoneda.rd(total)} con tarjeta fue confirmado.')
+                        : (esTaxista
+                            ? 'El pasajero eligió tarjeta. Si aún no figura como pagado, '
+                                'debe completar el pago AZUL en la app.'
+                            : 'Completá el pago con tarjeta en la app si aún no lo hiciste.'),
                     style: tt.bodyMedium?.copyWith(height: 1.35),
                   ),
                 ),

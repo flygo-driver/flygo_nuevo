@@ -77,13 +77,17 @@ class ClienteConductoresCercaStrip extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            Text(
-              '${docsOrdenados.length} conductor${docsOrdenados.length == 1 ? '' : 'es'} cerca de ti',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: 15,
-                letterSpacing: -0.2,
+            Expanded(
+              child: Text(
+                '${docsOrdenados.length} conductor${docsOrdenados.length == 1 ? '' : 'es'} cerca de ti',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  letterSpacing: -0.2,
+                ),
               ),
             ),
           ],

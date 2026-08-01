@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
 import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_confirmacion.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
@@ -14,6 +15,7 @@ import 'package:flygo_nuevo/pantallas/taxista/corporativo_ruta_detalle_informati
 import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viaje_en_curso_taxista.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_shell_nav_bridge.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
@@ -104,6 +106,19 @@ class NavigationService {
     return (tab: tab, raiz: root);
   }
 
+  /// Vacía la pila del tab activo del [ClienteShell] (programar, turismo, etc.).
+  static void _vaciarPilaTabShellSiAnidada(BuildContext? context) {
+    if (context == null || !context.mounted) return;
+    final NavigatorState tabNav = Navigator.of(context);
+    final NavigatorState rootNav =
+        Navigator.of(context, rootNavigator: true);
+    if (!identical(tabNav, rootNav) && tabNav.mounted) {
+      while (tabNav.canPop()) {
+        tabNav.pop();
+      }
+    }
+  }
+
   static NavigatorState? navigatorRaiz({BuildContext? context}) {
     if (context != null && context.mounted) {
       return Navigator.of(context, rootNavigator: true);
@@ -159,20 +174,28 @@ class NavigationService {
   static Future<void> salirVistaBolaTaxista(
     BuildContext context, {
     String? faseViaje,
+    String? bolaId,
   }) async {
     final NavigatorState root =
         Navigator.of(context, rootNavigator: true);
     ShellTabController.taxistaIrARecibir();
     final bool viajeOperativo =
         faseViaje == 'acordada' || faseViaje == 'en_curso';
-    if (!viajeOperativo) {
+    if (viajeOperativo) {
+      final String bid = (bolaId ?? '').trim();
+      if (bid.isNotEmpty) {
+        ActiveTripService.forzarInicioTaxistaShellBola(bolaId: bid);
+      }
+    } else {
       ShellTabController.taxistaIrAPoolAhora();
     }
     if (!root.canPop()) {
       await _remontarShellTrasBola(rootNav: root, esTaxista: true);
+      ActiveTripService.notificarRebuildShell();
       return;
     }
     root.pop();
+    ActiveTripService.notificarRebuildShell();
   }
 
   /// Cliente: sale del tablero Bola (mapa, conductores en ruta, etc.) sin
@@ -188,16 +211,7 @@ class NavigationService {
     }
 
     root.pop();
-    if (context.mounted) {
-      final NavigatorState tabNav = Navigator.of(context);
-      final NavigatorState rootNav =
-          Navigator.of(context, rootNavigator: true);
-      if (!identical(tabNav, rootNav)) {
-        while (tabNav.mounted && tabNav.canPop()) {
-          tabNav.pop();
-        }
-      }
-    }
+    _vaciarPilaTabShellSiAnidada(context);
   }
 
   /// Salir del modo viaje Bola hacia el home del flavor (post-factura / cancelación).
@@ -644,12 +658,19 @@ class NavigationService {
   /// no vuelve al [ClienteShell].
   /// [forzarLimpiarViajeActivo]: tras post-viaje o cierre turismo; evita que el shell
   /// reabra espera turismo con `viajeActivoId` obsoleto.
+  /// Si es `false`, el viaje sigue activo en servidor (pausa temporal → banner retomar).
   static Future<void> irAlInicioCliente({
     BuildContext? context,
     String? viajeId,
     bool forzarLimpiarViajeActivo = false,
   }) async {
-    ActiveTripService.forzarInicioClienteShell();
+    if (forzarLimpiarViajeActivo) {
+      ActiveTripService.forzarInicioClienteShell();
+    } else {
+      ActiveTripService.forzarInicioClienteShell(
+        duracion: const Duration(hours: 24),
+      );
+    }
 
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null && uid.trim().isNotEmpty) {
@@ -658,7 +679,9 @@ class NavigationService {
         viajeId: viajeId,
         forzarLimpieza: forzarLimpiarViajeActivo,
       );
-      await _limpiarViajeActivoClienteEnServidor(uid.trim());
+      if (forzarLimpiarViajeActivo) {
+        await _limpiarViajeActivoClienteEnServidor(uid.trim());
+      }
     } else {
       ActiveTripService.cancelarMantenimientoOverlayViaje();
     }
@@ -673,6 +696,10 @@ class NavigationService {
         nav = Navigator.of(context, rootNavigator: true);
       }
       if (nav != null && nav.mounted) {
+        // Pantallas dentro del tab (ProgramarViaje, EsperaAsignacionTurismo, etc.)
+        // viven en un navigator anidado: vaciarlo antes del rebuild en raíz.
+        _vaciarPilaTabShellSiAnidada(context);
+
         // Ya en ClienteShell (viaje en curso a pantalla completa): no remontar —
         // evita spinner congelado y doble suscripción al stream.
         if (!nav.canPop()) {
@@ -699,6 +726,56 @@ class NavigationService {
       );
     }
     print('[VIAJE_ACTIVO] irAlInicioCliente sin navigator montado');
+  }
+
+  /// Reabre el shell taxista tras recarga AZUL (deep link o resume).
+  static Future<void> retomarTaxistaTrasRecargaAzul({
+    String? recargaId,
+  }) async {
+    await irAlInicioTaxista();
+    final NavigatorState? nav = navigatorKey.currentState;
+    if (nav == null || !nav.mounted) return;
+    await TaxistaFinanzasNav.abrirMisPagos(
+      nav.context,
+      scrollToRecargaSection: true,
+    );
+  }
+
+  /// Reabre el viaje en curso del cliente tras pagar con AZUL (deep link o resume).
+  static Future<void> retomarViajeClienteTrasPagoAzul({
+    required String viajeId,
+  }) async {
+    ActiveTripService.cancelarForzarInicioClienteShell();
+    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(minutes: 5));
+    ClienteShellNavBridge.popAllTabRoutes();
+    ShellTabController.clienteIrAInicio();
+    await clearAndGoViajeEnCursoCliente();
+    ActiveTripService.notificarRebuildShell();
+    print(
+      '[VIAJE_ACTIVO] retomarViajeClienteTrasPagoAzul viajeId=$viajeId',
+    );
+  }
+
+  /// Pausa el viaje en curso y vuelve al home de RAI sin cancelar ni limpiar
+  /// `viajeActivoId` (el cliente puede retomar desde el banner).
+  static Future<void> pausarViajeClienteYVolverARai({
+    BuildContext? context,
+    String? viajeId,
+  }) async {
+    await irAlInicioCliente(
+      context: context,
+      viajeId: viajeId,
+      forzarLimpiarViajeActivo: false,
+    );
+  }
+
+  /// Reabre el overlay de viaje en curso tras una pausa voluntaria.
+  static void retomarViajeActivoCliente() {
+    ActiveTripService.cancelarForzarInicioClienteShell();
+    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 120));
+    ClienteShellNavBridge.popAllTabRoutes();
+    ShellTabController.clienteIrAInicio();
+    ActiveTripService.notificarRebuildShell();
   }
 
   static Future<void> _limpiarViajeActivoClienteEnServidor(String uid) async {

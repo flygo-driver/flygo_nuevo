@@ -344,24 +344,13 @@ class _DetalleViajeState extends State<DetalleViaje> {
         }
 
         if (res == 'taxista-ocupado') {
+          ActiveTripService.cancelarBloqueoShellTaxista();
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  taxistaMensajeClaimFallido(
-                    res,
-                    poolModoConductor: poolModo,
-                  ),
-                ),
-                backgroundColor: Colors.orangeAccent,
-              ),
+            await TaxistaOperacionNav.guiarTrasTaxistaOcupadoEnClaim(
+              context,
+              uidTaxista: user.uid,
             );
           }
-          await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
-            viajeId: viajeId,
-            uidTaxista: user.uid,
-            preNav: rootNav,
-          );
           return;
         }
 
@@ -395,6 +384,12 @@ class _DetalleViajeState extends State<DetalleViaje> {
         if (!mounted) return;
         await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
           viajeId: viajeId,
+          uidTaxista: user.uid,
+        );
+      } else if (res == 'taxista-ocupado') {
+        if (!mounted) return;
+        await TaxistaOperacionNav.guiarTrasTaxistaOcupadoEnClaim(
+          context,
           uidTaxista: user.uid,
         );
       } else {

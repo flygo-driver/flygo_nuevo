@@ -60,6 +60,7 @@ class BolaPuebloRepo {
   static const List<String> metodosPagoBola = <String>[
     'efectivo',
     'transferencia',
+    'tarjeta',
   ];
 
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamTablero() {

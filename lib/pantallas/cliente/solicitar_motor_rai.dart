@@ -27,8 +27,8 @@ import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
-import 'package:flygo_nuevo/servicios/pay_config.dart';
 
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
@@ -62,7 +62,6 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
   // Campos
   String destino = '';
-  String metodoPago = 'Efectivo';
   bool idaYVuelta = false;
 
   // Coordenadas
@@ -126,10 +125,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
   void _expandMotorSheetTrasMapaInteract() {
     if (!_sheetCtrl.isAttached) return;
-    final double target = _mostrarResumenMotor ? 0.54 : 0.86;
+    final double target = _mostrarResumenMotor ? 0.52 : 0.62;
     try {
       _sheetCtrl.animateTo(
-        target.clamp(_sheetMinFracMotor, 0.88),
+        target.clamp(_sheetMinFracMotor, 0.72),
         duration: const Duration(milliseconds: 320),
         curve: Curves.easeOutCubic,
       );
@@ -164,6 +163,34 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     } catch (_) {
       if (_mapProgrammaticCameraDepth > 0) _mapProgrammaticCameraDepth--;
     }
+  }
+
+  static const double _mapMaxZoomMotor = 15.25;
+
+  EdgeInsets _motorMapPadding(BuildContext context) {
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double h = mq.size.height;
+    final double sheetFrac = _sheetCtrl.isAttached
+        ? _sheetCtrl.size.clamp(_sheetMinFracMotor, 0.72)
+        : (_mostrarResumenMotor ? 0.50 : 0.32);
+    return EdgeInsets.only(
+      top: mq.padding.top + 64,
+      bottom: h * sheetFrac + 12,
+      left: 36,
+      right: 36,
+    );
+  }
+
+  Future<void> _fitMotorBounds(LatLngBounds bounds, {double pad = 112}) async {
+    await _motorMapAnimate((c) async {
+      await c.animateCamera(CameraUpdate.newLatLngBounds(bounds, pad));
+      try {
+        final double z = await c.getZoomLevel();
+        if (z > _mapMaxZoomMotor) {
+          await c.animateCamera(CameraUpdate.zoomTo(_mapMaxZoomMotor));
+        }
+      } catch (_) {}
+    });
   }
 
   // Nudge
@@ -273,7 +300,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   Future<void> _expandSheet() async {
     try {
       await _sheetCtrl.animateTo(
-        0.86,
+        0.62,
         duration: const Duration(milliseconds: 380),
         curve: Curves.easeOutCubic,
       );
@@ -283,7 +310,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
   Future<void> _expandToMax() async {
     try {
       await _sheetCtrl.animateTo(
-        0.88,
+        0.72,
         duration: const Duration(milliseconds: 260),
         curve: Curves.easeOut,
       );
@@ -301,7 +328,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
       if (!mounted) return;
       try {
         _sheetCtrl.animateTo(
-          0.54,
+          0.50,
           duration: const Duration(milliseconds: 360),
           curve: Curves.easeOutCubic,
         );
@@ -645,19 +672,11 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
       if (_map != null) {
         if (pts.length >= 2) {
-          await _motorMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(_boundsFromList(pts), 60),
-            ),
-          );
+          await _fitMotorBounds(_boundsFromList(pts));
         } else {
-          await _motorMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(
-                _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
-                80,
-              ),
-            ),
+          await _fitMotorBounds(
+            _boundsFrom(LatLng(oLat, oLon), LatLng(dLat, dLon)),
+            pad: 120,
           );
         }
       }
@@ -887,22 +906,14 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
 
       if (_map != null && runId == _cotizacionSeq) {
         if (routeLatLng.length >= 2) {
-          unawaited(_motorMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(_boundsFromList(routeLatLng), 60),
-            ),
-          ));
+          unawaited(_fitMotorBounds(_boundsFromList(routeLatLng)));
         } else {
-          unawaited(_motorMapAnimate(
-            (c) => c.animateCamera(
-              CameraUpdate.newLatLngBounds(
-                _boundsFrom(
-                  LatLng(origenLat, origenLon),
-                  LatLng(dLat, dLon),
-                ),
-                80,
-              ),
+          unawaited(_fitMotorBounds(
+            _boundsFrom(
+              LatLng(origenLat, origenLon),
+              LatLng(dLat, dLon),
             ),
+            pad: 120,
           ));
         }
       }
@@ -936,6 +947,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
       _snack(RaiOfflineCotizacionService.mensajeNoConfirmar);
       return;
     }
+    PoolTimbreSessionGuard.activarSesionPasajero();
 
     if (!ubicacionObtenida ||
         latCliente == null ||
@@ -982,7 +994,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         lonDestino: lonDestino!,
         fechaHora: nowUtc,
         precio: precioCalculado,
-        metodoPago: metodoPago,
+        metodoPago: 'Efectivo',
         tipoVehiculo: kVehiculoMotor,
         idaYVuelta: idaYVuelta,
         distanciaKm: distanciaKm > 0 ? distanciaKm : null,
@@ -1022,10 +1034,6 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
     const Color c = Colors.orange;
     final onCard = scheme.onSurface;
     final subtle = scheme.onSurface.withValues(alpha: 0.62);
-    final chipBg =
-        isDark ? const Color(0xFF1E1E1E) : scheme.surfaceContainerHighest;
-    final chipBorder =
-        isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.28);
     final dividerColor =
         isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.22);
 
@@ -1184,38 +1192,6 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                   ),
                 ),
                 RaiCotizacionOfflineHint(visible: _precioEsEstimadoOffline),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.payments_outlined, size: 18, color: subtle),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Pago:',
-                        style: TextStyle(color: subtle, fontSize: 13),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: chipBg,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: chipBorder),
-                        ),
-                        child: Text(
-                          metodoPago,
-                          style: TextStyle(
-                            color: onCard,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 const SizedBox(height: 18),
                 SizedBox(
                   width: double.infinity,
@@ -1257,7 +1233,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: chipBorder),
+                  border: Border.all(color: dividerColor),
                 ),
                 child: Row(
                   children: [
@@ -1278,7 +1254,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Destino, regreso y forma de pago',
+                            'Destino y regreso',
                             style: TextStyle(
                               color: subtle,
                               fontSize: 12,
@@ -1301,67 +1277,6 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
         ],
       ),
     );
-  }
-
-  Future<void> _elegirMetodoPago() async {
-    if (_cargando) return;
-
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final subtle = scheme.onSurface.withValues(alpha: 0.65);
-    final handle = scheme.onSurface.withValues(alpha: 0.28);
-
-    final elegido = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: scheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        Widget item(String label) => ListTile(
-              title: Text(
-                label,
-                style: TextStyle(color: scheme.onSurface),
-              ),
-              trailing: label == metodoPago
-                  ? Icon(Icons.check, color: scheme.primary)
-                  : null,
-              onTap: () => Navigator.pop(ctx, label),
-            );
-
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              const SizedBox(height: 8),
-              Container(
-                height: 4,
-                width: 48,
-                decoration: BoxDecoration(
-                  color: handle,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Método de pago',
-                style: TextStyle(
-                  color: subtle,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              ...PayConfig.metodosReservaVisibles.map(item),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (!mounted) return;
-    if (elegido != null && elegido.trim().isNotEmpty) {
-      setState(() => metodoPago = elegido);
-    }
   }
 
   @override
@@ -1397,6 +1312,7 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
             child: AbsorbPointer(
               absorbing: _cargandoUbicacion,
               child: GoogleMap(
+                padding: _motorMapPadding(context),
                 initialCameraPosition: const CameraPosition(
                   target: LatLng(18.4861, -69.9312),
                   zoom: 12,
@@ -1482,10 +1398,10 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
           DraggableScrollableSheet(
             controller: _sheetCtrl,
             minChildSize: 0.26,
-            maxChildSize: 0.88,
-            initialChildSize: 0.36,
+            maxChildSize: 0.72,
+            initialChildSize: 0.32,
             snap: true,
-            snapSizes: const [0.34, 0.86, 0.88],
+            snapSizes: const [0.26, 0.52, 0.72],
             builder: (context, controller) {
               return Container(
                 decoration: BoxDecoration(
@@ -1722,8 +1638,6 @@ class _SolicitarMotorRaiState extends State<SolicitarMotorRai>
                                       idaYVuelta: idaYVuelta,
                                       onIdaYVuelta: (v) =>
                                           setState(() => idaYVuelta = v),
-                                      metodoPago: metodoPago,
-                                      onElegirPago: _elegirMetodoPago,
                                     ),
                                     const SizedBox(height: 14),
                                     SizedBox(
@@ -1951,14 +1865,10 @@ class _MotoSearchShell extends StatelessWidget {
 class _MotoOptionsCard extends StatelessWidget {
   final bool idaYVuelta;
   final ValueChanged<bool> onIdaYVuelta;
-  final String metodoPago;
-  final VoidCallback onElegirPago;
 
   const _MotoOptionsCard({
     required this.idaYVuelta,
     required this.onIdaYVuelta,
-    required this.metodoPago,
-    required this.onElegirPago,
   });
 
   @override
@@ -1993,38 +1903,6 @@ class _MotoOptionsCard extends StatelessWidget {
             onChanged: onIdaYVuelta,
             activeThumbColor: const Color(0xFFFF5A00),
             activeTrackColor: const Color(0xFFFF5A00).withValues(alpha: 0.35),
-          ),
-          Divider(height: 1, thickness: 1, color: border),
-          ListTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            leading: Icon(
-              Icons.payments_outlined,
-              size: 22,
-              color: scheme.onSurface.withValues(alpha: 0.45),
-            ),
-            title: Text(
-              metodoPago,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: scheme.onSurface,
-              ),
-            ),
-            subtitle: Text(
-              'Forma de pago',
-              style: TextStyle(
-                fontSize: 11,
-                color: scheme.onSurface.withValues(alpha: 0.45),
-              ),
-            ),
-            trailing: Icon(
-              Icons.chevron_right_rounded,
-              color: scheme.onSurface.withValues(alpha: 0.32),
-            ),
-            onTap: onElegirPago,
           ),
         ],
       ),

@@ -13,12 +13,15 @@ import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/servicios/bola_nav_coordination_guard.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
+import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show etiquetaBolaAhorroUi;
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/widgets/rai_pago_tarjeta_panel.dart';
+import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
 
 /// Modo viaje Bola: navegación y pasos a pantalla completa (cliente o taxista asignado).
 class BolaPuebloViajeActivoPage extends StatelessWidget {
@@ -399,6 +402,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                         context,
                         esTaxista: esTaxistaRol,
                         faseViaje: estado,
+                        bolaId: bolaId,
                       ),
                     ),
                   ),
@@ -643,8 +647,12 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
-                                            'Elegí efectivo o transferencia desde el inicio; '
-                                            'ambos lo ven igual. Podés cambiarlo hasta que el viaje termine.',
+                                            FinanceConfigService
+                                                    .pagosConTarjetaAzulHabilitados
+                                                ? 'Elegí efectivo, transferencia o tarjeta desde el inicio; '
+                                                    'ambos lo ven igual. Podés cambiarlo hasta que el viaje termine.'
+                                                : 'Elegí efectivo o transferencia desde el inicio; '
+                                                    'ambos lo ven igual. Podés cambiarlo hasta que el viaje termine.',
                                             style: TextStyle(
                                               color: fgMuted,
                                               fontSize: 12.5,
@@ -731,6 +739,38 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                   }
                                                 },
                                               ),
+                                              if (FinanceConfigService
+                                                  .pagosConTarjetaAzulHabilitados)
+                                                ChoiceChip(
+                                                  label:
+                                                      const Text('Tarjeta'),
+                                                  selected:
+                                                      MetodoPagoViaje.esTarjeta(
+                                                          metodoPago),
+                                                  onSelected: (_) async {
+                                                    try {
+                                                      await BolaPuebloRepo
+                                                          .actualizarMetodoPagoBola(
+                                                        bolaId: bolaId,
+                                                        uidActor: user.uid,
+                                                        metodoPago: 'tarjeta',
+                                                      );
+                                                    } catch (e) {
+                                                      if (!context.mounted) {
+                                                        return;
+                                                      }
+                                                      ScaffoldMessenger.of(
+                                                              context)
+                                                          .showSnackBar(
+                                                        BolaPuebloTheme.snack(
+                                                          context,
+                                                          '$e',
+                                                          error: true,
+                                                        ),
+                                                      );
+                                                    }
+                                                  },
+                                                ),
                                             ],
                                           ),
                                           const SizedBox(height: 12),
@@ -752,11 +792,14 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                   CrossAxisAlignment.start,
                                               children: [
                                                 Text(
-                                                  MetodoPagoViaje
-                                                          .esTransferencia(
-                                                              metodoPago)
-                                                      ? 'Transferencia al conductor'
-                                                      : 'Pago en efectivo',
+                                                  MetodoPagoViaje.esTarjeta(
+                                                          metodoPago)
+                                                      ? 'Pago con tarjeta (AZUL)'
+                                                      : MetodoPagoViaje
+                                                              .esTransferencia(
+                                                                  metodoPago)
+                                                          ? 'Transferencia al conductor'
+                                                          : 'Pago en efectivo',
                                                   style: TextStyle(
                                                     color: fg,
                                                     fontSize: 13,
@@ -766,17 +809,22 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                 ),
                                                 const SizedBox(height: 6),
                                                 Text(
-                                                  MetodoPagoViaje
-                                                          .esTransferencia(
-                                                              metodoPago)
-                                                      ? 'Al cerrar el viaje, enviás el dinero '
-                                                          'del acuerdo a la cuenta que el conductor tiene '
-                                                          'registrada en RAI (abajo). La comisión RAI se '
-                                                          'descuenta del lado del conductor según las reglas de la app.'
-                                                      : 'Al llegar al destino, pagás en efectivo '
-                                                          'al conductor el monto acordado '
-                                                          '(RD\$${(montoAcordadoRd > 0 ? montoAcordadoRd : monto).toStringAsFixed(2)}). '
-                                                          'La comisión RAI la gestiona el conductor con su saldo/prepago.',
+                                                  MetodoPagoViaje.esTarjeta(
+                                                          metodoPago)
+                                                      ? 'Cuando subas al vehículo y verifiques el código, '
+                                                          'podés pagar con tarjeta desde la app (AZUL). '
+                                                          'También podés cambiar a efectivo antes de pagar.'
+                                                      : MetodoPagoViaje
+                                                              .esTransferencia(
+                                                                  metodoPago)
+                                                          ? 'Al cerrar el viaje, enviás el dinero '
+                                                              'del acuerdo a la cuenta que el conductor tiene '
+                                                              'registrada en RAI (abajo). La comisión RAI se '
+                                                              'descuenta del lado del conductor según las reglas de la app.'
+                                                          : 'Al llegar al destino, pagás en efectivo '
+                                                              'al conductor el monto acordado '
+                                                              '(RD\$${(montoAcordadoRd > 0 ? montoAcordadoRd : monto).toStringAsFixed(2)}). '
+                                                              'La comisión RAI la gestiona el conductor con su saldo/prepago.',
                                                   style: TextStyle(
                                                     color: fgMuted,
                                                     fontSize: 12,
@@ -964,6 +1012,96 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                 );
                                               },
                                             ),
+                                          if (MetodoPagoViaje.esTarjeta(metodoPago) &&
+                                              viajeEspejoId.isNotEmpty &&
+                                              FinanceConfigService
+                                                  .pagosConTarjetaAzulHabilitados)
+                                            StreamBuilder<
+                                                DocumentSnapshot<
+                                                    Map<String, dynamic>>>(
+                                              stream: FirebaseFirestore.instance
+                                                  .collection('viajes')
+                                                  .doc(viajeEspejoId)
+                                                  .snapshots(),
+                                              builder: (ctx, viajeSnap) {
+                                                final vd = viajeSnap.data?.data() ??
+                                                    const <String, dynamic>{};
+                                                final double montoTarjeta =
+                                                    montoAcordadoRd > 0
+                                                        ? montoAcordadoRd
+                                                        : monto;
+                                                if (soyTaxistaAsignado) {
+                                                  return Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 10),
+                                                    child:
+                                                        TarjetaPagoEstadoTaxistaBanner(
+                                                      viajeId: viajeEspejoId,
+                                                      metodoPagoFallback:
+                                                          metodoPago,
+                                                      ocultarSiCorporativo:
+                                                          false,
+                                                    ),
+                                                  );
+                                                }
+                                                if (!soyClienteAsignado) {
+                                                  return const SizedBox.shrink();
+                                                }
+                                                final bool mostrarPanel =
+                                                    codigoVerificado ||
+                                                        estado == 'en_curso' ||
+                                                        pickupConfirmadoTaxista;
+                                                if (!mostrarPanel) {
+                                                  return Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 10),
+                                                    child: Text(
+                                                      'Pago con tarjeta: cuando subas al vehículo '
+                                                      'y verifiques el código, aparecerá el botón de pago AZUL.',
+                                                      style: TextStyle(
+                                                        color: fgMuted,
+                                                        fontSize: 12,
+                                                        height: 1.35,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  );
+                                                }
+                                                if (MetodoPagoViaje
+                                                    .tarjetaPagadoVerificado(
+                                                        vd)) {
+                                                  return Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 10),
+                                                    child: Text(
+                                                      'Pago con tarjeta confirmado.',
+                                                      style: TextStyle(
+                                                        color: Colors
+                                                            .green.shade700,
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w800,
+                                                      ),
+                                                    ),
+                                                  );
+                                                }
+                                                return Padding(
+                                                  padding: const EdgeInsets.only(
+                                                      top: 10),
+                                                  child: RaiPagoTarjetaPanel(
+                                                    viajeId: viajeEspejoId,
+                                                    viajeData: vd,
+                                                    montoRd: montoTarjeta,
+                                                    fondoOscuro: true,
+                                                    modoViajeEnCurso: true,
+                                                  ),
+                                                );
+                                              },
+                                            ),
                                           if (metodoPagoAt != null) ...[
                                             const SizedBox(height: 8),
                                             Text(
@@ -1052,6 +1190,7 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                     esTaxista: esTaxistaRol,
                                     compact: true,
                                     faseViaje: estado,
+                                    bolaId: bolaId,
                                   ),
                                   const SizedBox(height: 12),
                                   Theme(

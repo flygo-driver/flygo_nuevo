@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/servicios/push_open_router.dart';
 
 class PushService {
@@ -53,11 +54,7 @@ class PushService {
     if (!_messagingSupported) return;
     if (!kIsWeb) {
       await _requestPermissionsMobile();
-      await _fm.setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: true,
-        sound: isTaxistaCapableFlavor,
-      );
+      await refreshForegroundPresentationOptions();
     }
 
     final u = _auth.currentUser;
@@ -74,6 +71,17 @@ class PushService {
         await _saveToken(cu.uid, t);
       }
     });
+  }
+
+  /// Sin sonido FCM en primer plano si la sesión activa es pasajero.
+  static Future<void> refreshForegroundPresentationOptions() async {
+    if (!_messagingSupported || kIsWeb) return;
+    await _fm.setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: isTaxistaCapableFlavor &&
+          !PoolTimbreSessionGuard.debeSuprimirPoolTimbre,
+    );
   }
 
   /// Quita el token actual del usuario (logout).

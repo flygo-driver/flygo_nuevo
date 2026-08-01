@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/navegacion/taxista_operacion_nav.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/toggle_disponibilidad.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
@@ -42,6 +43,8 @@ class TaxistaTrabajoHub extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
+    await ViajesRepo.limpiarViajeActivoSiNoOperativo(uid);
+
     String viajeId = '';
     Map<String, dynamic>? viajeData = datosViaje;
     try {
@@ -61,9 +64,33 @@ class TaxistaTrabajoHub extends StatelessWidget {
 
     if (!context.mounted) return;
 
+    if (viajeData != null &&
+        CorporativoTaxistaService.esViajeCorporativoAsignado(viajeData, uid)) {
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+      ActiveTripService.cancelarBloqueoShellTaxista();
+      ActiveTripService.notificarRebuildShell();
+      if (TaxistaOperacionNav.viajeOperativoBloqueanteCorp(viajeData, uid)) {
+        await Navigator.of(context, rootNavigator: true).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => const MisRutasCorporativasPage(),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No tienes un viaje en curso. Las rutas corporativas están en '
+              '«Rutas corporativas».',
+            ),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      return;
+    }
+
     if (viajeId.isEmpty ||
         viajeData == null ||
-        CorporativoTaxistaService.esViajeCorporativoAsignado(viajeData, uid) ||
         !ViajesRepo.viajeVisibleEnCursoTaxista(viajeData, uid)) {
       ActiveTripService.cancelarMantenimientoOverlayViaje();
       ActiveTripService.cancelarBloqueoShellTaxista();
@@ -144,8 +171,29 @@ class TaxistaTrabajoHub extends StatelessWidget {
                           user.uid,
                         );
 
-                    // Corporativo no usa «Viaje en curso» — solo «Rutas corporativas».
-                    if (esCorp || vData == null) {
+                    // Corporativo no usa «Viaje en curso» del pool.
+                    if (esCorp) {
+                      final bool corpActiva =
+                          TaxistaOperacionNav.viajeOperativoBloqueanteCorp(
+                        vData,
+                        user.uid,
+                      );
+                      return RaiDriverHubCard(
+                        icon: Icons.business_rounded,
+                        title: corpActiva
+                            ? 'Ruta corporativa activa'
+                            : 'Viaje en curso',
+                        subtitle: corpActiva
+                            ? 'Continuá en «Rutas corporativas»'
+                            : 'No tienes un viaje activo',
+                        accent: RaiDriverColors.neon,
+                        onTap: () => openViajeActivoTaxista(
+                          context,
+                          datosViaje: vData,
+                        ),
+                      );
+                    }
+                    if (vData == null) {
                       return RaiDriverHubCard(
                         icon: Icons.navigation_rounded,
                         title: 'Viaje en curso',

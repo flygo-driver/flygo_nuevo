@@ -8,7 +8,9 @@ import 'package:flygo_nuevo/pantallas/taxista/completar_registro_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/completar_vehiculo_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/contrato_taxista_firma.dart';
 import 'package:flygo_nuevo/pantallas/taxista/documentos_taxista.dart';
+import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
@@ -322,5 +324,92 @@ abstract final class TaxistaOperacionNav {
         backgroundColor: Colors.redAccent,
       ),
     );
+  }
+
+  /// Tras `taxista-ocupado`: limpia huérfanos, abre el viaje real o rutas corp.
+  static Future<void> guiarTrasTaxistaOcupadoEnClaim(
+    BuildContext context, {
+    required String uidTaxista,
+  }) async {
+    await ViajesRepo.limpiarViajeActivoSiNoOperativo(uidTaxista);
+    ActiveTripService.cancelarBloqueoShellTaxista();
+    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    ActiveTripService.notificarRebuildShell();
+
+    if (!context.mounted) return;
+
+    String viajeActivoId = '';
+    Map<String, dynamic>? viajeData;
+    try {
+      final uSnap = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(uidTaxista)
+          .get();
+      viajeActivoId =
+          (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (viajeActivoId.isNotEmpty) {
+        final vSnap = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(viajeActivoId)
+            .get();
+        viajeData = vSnap.data();
+      }
+    } catch (_) {}
+
+    if (!context.mounted) return;
+
+    if (viajeData != null &&
+        CorporativoTaxistaService.esViajeCorporativoAsignado(
+          viajeData,
+          uidTaxista,
+        ) &&
+        viajeOperativoBloqueanteCorp(viajeData, uidTaxista)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Tenés una ruta corporativa activa. Terminála en «Rutas corporativas» '
+            'antes de aceptar viajes del pool.',
+          ),
+          backgroundColor: Colors.orangeAccent,
+          duration: Duration(seconds: 5),
+        ),
+      );
+      await Navigator.of(context, rootNavigator: true).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const MisRutasCorporativasPage(),
+        ),
+      );
+      return;
+    }
+
+    if (viajeActivoId.isNotEmpty &&
+        viajeData != null &&
+        ViajesRepo.viajeVisibleEnCursoTaxista(viajeData, uidTaxista)) {
+      await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
+        viajeId: viajeActivoId,
+        uidTaxista: uidTaxista,
+      );
+      return;
+    }
+
+    await ViajesRepo.limpiarViajeActivoSiNoOperativo(uidTaxista);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'El viaje anterior ya no bloquea. Tocá «Aceptar» de nuevo.',
+        ),
+        backgroundColor: Colors.lightBlueAccent,
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
+  static bool viajeOperativoBloqueanteCorp(
+    Map<String, dynamic> data,
+    String uidTaxista,
+  ) {
+    if (CorporativoTaxistaService.esModoInformativo(data)) return false;
+    return ViajesRepo.viajeOperativoBloqueanteParaTaxista(data, uidTaxista);
   }
 }

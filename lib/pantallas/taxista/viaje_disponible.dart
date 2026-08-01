@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/utils/formato_distancia_cercania.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
@@ -21,6 +22,7 @@ import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/disponibilidad_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
@@ -55,6 +57,9 @@ class _Item {
   final double? distanciaKmPickup;
   _Item(this.v, this.fecha, this.acceptAfter, this.esAhora,
       this.distanciaKmPickup);
+
+  double? get distanciaMetrosPickup =>
+      distanciaKmPickup != null ? distanciaKmPickup! * 1000 : null;
 }
 
 class _OfertaPoolPendiente {
@@ -315,6 +320,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   }
 
   bool _esViajeActivoReal(Map<String, dynamic> data, String uid) {
+    if (CorporativoTaxistaService.esViajeCorporativoAsignado(data, uid)) {
+      return false;
+    }
     final String uidTaxista =
         (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString();
     if (uidTaxista != uid) return false;
@@ -609,6 +617,11 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     final List<_OfertaPoolPendiente> fresh = nuevas
         .where((item) => !_vistosParaTimbre.contains(item.id))
+        .where((item) {
+          final Map<String, dynamic>? data = item.data;
+          if (data == null) return true;
+          return !ViajePoolTaxistaGate.esViajeDelCliente(data, myUid);
+        })
         .toList();
     if (fresh.isEmpty) return;
 
@@ -675,6 +688,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       if (!_pasaFiltroAhoraLocal(data)) continue;
       if (_esViajeEspejoBolaEnVentana(data, myUid)) continue;
       if (!_timbreMeInteresaViaje(data, myUid)) continue;
+      if (ViajePoolTaxistaGate.esViajeDelCliente(data, myUid)) continue;
       if (!_esAhoraDesdeData(data)) continue;
       final id = _timbreClaveViaje(d.id, data, myUid);
       if (_vistosParaTimbre.contains(id)) continue;
@@ -700,6 +714,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       if (!_pasaFiltroProgLocal(data)) continue;
       if (_esViajeEspejoBolaEnVentana(data, myUid)) continue;
       if (!_timbreMeInteresaViaje(data, myUid)) continue;
+      if (ViajePoolTaxistaGate.esViajeDelCliente(data, myUid)) continue;
       if (_esAhoraDesdeData(data)) continue;
       final id = _timbreClaveViaje(d.id, data, myUid);
       if (_vistosParaTimbre.contains(id)) continue;
@@ -1263,20 +1278,14 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
       if (res == 'taxista-ocupado') {
         await NotificationService.I.stopTimbre();
+        navegoAViajeEnCurso = false;
+        ActiveTripService.cancelarBloqueoShellTaxista();
         if (mounted) {
-          messenger.showSnackBar(
-            const SnackBar(
-              content: Text('Tienes un viaje activo. Redirigiendo...'),
-              backgroundColor: Colors.orangeAccent,
-            ),
+          await TaxistaOperacionNav.guiarTrasTaxistaOcupadoEnClaim(
+            context,
+            uidTaxista: taxista.uid,
           );
         }
-        navegoAViajeEnCurso = true;
-        await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(
-          viajeId: v.id,
-          uidTaxista: taxista.uid,
-          preNav: rootNav,
-        );
         return;
       }
 
@@ -2330,20 +2339,30 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                 _getLabelForTipoServicio(v.tipoServicio);
 
             final bool destacarCercano = esTabAhora &&
-                index == 0 &&
                 distanciaKmPickup != null &&
-                distanciaKmPickup <= 40.0;
+                FormatoDistanciaCercania.esCerca(
+                    distanciaKmPickup! * 1000) &&
+                (index == 0 ||
+                    FormatoDistanciaCercania.esMuyCerca(
+                        distanciaKmPickup! * 1000));
+            final bool muyCerca = esTabAhora &&
+                distanciaKmPickup != null &&
+                index == 0 &&
+                FormatoDistanciaCercania.esMuyCerca(
+                    distanciaKmPickup! * 1000);
             final Color bordeCard = v.waypoints != null && v.waypoints!.isNotEmpty
                 ? Colors.red.withValues(alpha: 0.7)
-                : destacarCercano
-                    ? pal.accent.withValues(alpha: 0.95)
-                    : v.tipoServicio == 'motor'
-                        ? Colors.orange.withValues(alpha: 0.5)
-                        : pal.cardBorder;
+                : muyCerca
+                    ? Colors.greenAccent.withValues(alpha: 0.95)
+                    : destacarCercano
+                        ? pal.accent.withValues(alpha: 0.95)
+                        : v.tipoServicio == 'motor'
+                            ? Colors.orange.withValues(alpha: 0.5)
+                            : pal.cardBorder;
             final double anchoBordeCard =
                 v.waypoints != null && v.waypoints!.isNotEmpty
                     ? 3
-                    : (destacarCercano ? 3 : 2);
+                    : (muyCerca || destacarCercano ? 3 : 2);
 
             return Card(
               color: pal.cardBg,
@@ -2390,7 +2409,29 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                     spacing: 6,
                                     runSpacing: 6,
                                     children: [
-                                      if (destacarCercano)
+                                      if (muyCerca)
+                                        Chip(
+                                          visualDensity: VisualDensity.compact,
+                                          padding: EdgeInsets.zero,
+                                          labelPadding:
+                                              const EdgeInsets.symmetric(
+                                                  horizontal: 8),
+                                          backgroundColor: Colors.greenAccent
+                                              .withValues(alpha: 0.18),
+                                          side: BorderSide(
+                                            color: Colors.greenAccent
+                                                .withValues(alpha: 0.85),
+                                          ),
+                                          label: Text(
+                                            '⚡ ${FormatoDistanciaCercania.cercaDeTi(distanciaKmPickup! * 1000)}',
+                                            style: const TextStyle(
+                                              color: Colors.greenAccent,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        )
+                                      else if (destacarCercano && index == 0)
                                         Chip(
                                           visualDensity: VisualDensity.compact,
                                           padding: EdgeInsets.zero,
@@ -2403,7 +2444,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                                               color: pal.accent.withValues(
                                                   alpha: isDark ? 1 : 0.65)),
                                           label: Text(
-                                            '📍 Más cercano',
+                                            '📍 Más cercano · ${FormatoDistanciaCercania.metrosKm(distanciaKmPickup! * 1000)}',
                                             style: TextStyle(
                                               color: isDark
                                                   ? Colors.greenAccent
@@ -2511,8 +2552,19 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                           context,
                           Icons.near_me,
                           distanciaKmPickup != null
-                              ? 'A ${distanciaKmPickup.toStringAsFixed(1)} km'
+                              ? FormatoDistanciaCercania.cercaDeTi(
+                                  distanciaKmPickup! * 1000,
+                                )
                               : 'Cercanía: sin ubicación de recogida',
+                          color: distanciaKmPickup != null &&
+                                  FormatoDistanciaCercania.esMuyCerca(
+                                      distanciaKmPickup! * 1000)
+                              ? Colors.greenAccent
+                              : distanciaKmPickup != null &&
+                                      FormatoDistanciaCercania.esCerca(
+                                          distanciaKmPickup! * 1000)
+                                  ? pal.accent
+                                  : null,
                         ),
                         _chipInfo(
                           context,

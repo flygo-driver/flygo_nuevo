@@ -13,8 +13,12 @@ import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
+import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
 import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
 import 'package:flygo_nuevo/widgets/rai_pago_tarjeta_panel.dart';
+import 'package:flygo_nuevo/widgets/rai_recibo_tarjeta_panel.dart';
+import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
+import 'package:flygo_nuevo/utils/recibo_tarjeta_azul.dart';
 
 /// Pantalla de factura visual del viaje.
 ///
@@ -111,7 +115,27 @@ class FacturaViaje extends StatelessWidget {
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
           tooltip: 'Cerrar',
-          onPressed: () {
+          onPressed: () async {
+            try {
+              final snap = await FirebaseFirestore.instance
+                  .collection('viajes')
+                  .doc(viajeId)
+                  .get();
+              final data = snap.data() ?? const <String, dynamic>{};
+              if (!context.mounted) return;
+              if (facturaTarjetaPendienteCliente(data: data, role: role)) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Completá el pago con tarjeta antes de cerrar el comprobante.',
+                    ),
+                  ),
+                );
+                return;
+              }
+            } catch (_) {}
+            if (!context.mounted) return;
             final NavigatorState rootNav =
                 Navigator.of(context, rootNavigator: true);
             if (rootNav.canPop()) {
@@ -178,6 +202,11 @@ bool facturaViajeListaParaContinuarFlujo({
 
   if (role == 'taxista') return true;
 
+  if (MetodoPagoViaje.cobroClienteBloqueaApp(data) &&
+      !MetodoPagoViaje.impagoRegistrado(data)) {
+    return false;
+  }
+
   if (MetodoPagoViaje.esEfectivo(metodo)) return true;
 
   if (MetodoPagoViaje.esTarjeta(metodo)) {
@@ -202,6 +231,24 @@ bool facturaViajeListaParaContinuarFlujo({
   }
 
   return true;
+}
+
+bool facturaTarjetaPendienteCliente({
+  required Map<String, dynamic> data,
+  required String role,
+}) {
+  if (role != 'cliente') return false;
+  return MetodoPagoViaje.cobroClienteBloqueaApp(data);
+}
+
+bool facturaClientePuedeCerrar({
+  required Map<String, dynamic> data,
+  required String role,
+}) {
+  if (role != 'cliente') return true;
+  if (!MetodoPagoViaje.cobroClienteBloqueaApp(data)) return true;
+  // Tras impago registrado por el conductor: puede salir, pero queda deuda.
+  return MetodoPagoViaje.impagoRegistrado(data);
 }
 
 class _FacturaContent extends StatefulWidget {
@@ -239,6 +286,27 @@ class _FacturaContentState extends State<_FacturaContent> {
         oldWidget.autoCerrarAlContinuar != widget.autoCerrarAlContinuar) {
       _revisarAutoCierre();
     }
+  }
+
+  Future<void> _intentarCerrarFactura({String? snack}) async {
+    if (!facturaClientePuedeCerrar(
+      data: widget.data,
+      role: widget.role,
+    )) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Debés pagar con tarjeta, cambiar a efectivo o esperar a que el conductor registre el caso. '
+            'No podés cerrar sin regularizar el cobro.',
+          ),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+    _cerrarFactura(snack: snack);
   }
 
   void _cerrarFactura({String? snack}) {
@@ -530,11 +598,29 @@ class _FacturaContentState extends State<_FacturaContent> {
         ? mq.viewPadding.bottom
         : mq.padding.bottom;
     final double bottomScrollPad = sysBottom + 16;
+    final bool tarjetaPendienteCliente = facturaTarjetaPendienteCliente(
+      data: data,
+      role: role,
+    );
+    final bool impagoCliente =
+        role == 'cliente' && MetodoPagoViaje.impagoRegistrado(data);
+    final bool bloqueaCierreCliente =
+        role == 'cliente' && !facturaClientePuedeCerrar(data: data, role: role);
     final String etiquetaBotonCierre = widget.autoCerrarAlContinuar
         ? 'Continuar'
-        : 'Entendido, cerrar comprobante';
+        : impagoCliente
+            ? 'Entendido, tengo deuda pendiente'
+            : tarjetaPendienteCliente
+                ? 'Pagá para continuar'
+                : 'Entendido, cerrar comprobante';
 
-    return Column(
+    return PopScope(
+      canPop: !bloqueaCierreCliente,
+      onPopInvokedWithResult: (bool didPop, Object? result) async {
+        if (didPop) return;
+        await _intentarCerrarFactura();
+      },
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
@@ -730,6 +816,15 @@ class _FacturaContentState extends State<_FacturaContent> {
         _SectionCard(
           title: 'Importe y forma de pago',
           children: [
+            MetodoPagoVisualCard(
+              metodoPago: metodoPago,
+              viajeData: data,
+              corporativo: esCorporativo,
+              usaRecaudoRai: usaRecaudoRai,
+              estadoSello: estadoUI.label,
+              estadoColor: estadoUI.color,
+            ),
+            const SizedBox(height: 14),
             if (etiquetaServicio.isNotEmpty)
               _Row(
                 icon: Icons.local_taxi_rounded,
@@ -771,18 +866,6 @@ class _FacturaContentState extends State<_FacturaContent> {
                 label: 'Tarifa ruta (empresa)',
                 value: FormatosMoneda.rd(total),
               ),
-            _Row(
-              icon: esCorporativo
-                  ? Icons.business_center_outlined
-                  : (esTransferencia
-                      ? Icons.account_balance_rounded
-                      : Icons.attach_money_rounded),
-              iconColor: cs.secondary,
-              label: 'Medio de pago acordado',
-              value: esCorporativo
-                  ? 'Corporativo (empresa)'
-                  : MetodoPagoViaje.etiquetaDocumento(metodoPago),
-            ),
           ],
         ),
         if (mostrarLiquidacionTx) ...[
@@ -867,6 +950,47 @@ class _FacturaContentState extends State<_FacturaContent> {
         ],
         if (esTarjeta) ...[
           const SizedBox(height: 12),
+          if (tarjetaPendienteCliente && !impagoCliente)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.orangeAccent.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: const Text(
+                  'Pago pendiente: pagá con tarjeta o cambiá a efectivo. '
+                  'No podés pedir otro viaje hasta regularizar este cobro.',
+                  style: TextStyle(fontSize: 13, height: 1.35),
+                ),
+              ),
+            ),
+          if (impagoCliente)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.redAccent.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: Text(
+                  'Deuda registrada con RAI por '
+                  '${FormatosMoneda.rd(MetodoPagoViaje.cobroClienteMontoRd(data))}. '
+                  'No podrás pedir viajes hasta pagar. Contactá soporte en la app si necesitás ayuda.',
+                  style: const TextStyle(fontSize: 13, height: 1.35),
+                ),
+              ),
+            ),
           _SectionCard(
             title: 'Pago con tarjeta',
             children: [
@@ -875,12 +999,26 @@ class _FacturaContentState extends State<_FacturaContent> {
                 viajeData: data,
                 montoRd: total,
                 role: role,
+                modoViajeEnCurso: tarjetaPendienteCliente,
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          RaiReciboTarjetaPanel(
+            recibo: ReciboTarjetaAzul.fromViaje(
+              viajeId: viajeId,
+              data: data,
+              montoRd: total,
+            ),
+            fondoOscuro: isDark,
           ),
         ],
         if (esTaxista) ...[
           const SizedBox(height: 12),
+          TaxistaRegistrarImpagoButton(
+            viajeId: viajeId,
+            metodoPagoFallback: metodoPago,
+          ),
           _FacturaPanelComisionRecargaBloqueo(
             uidTaxista: uidTaxista,
             esEfectivo: esEfectivo,
@@ -914,19 +1052,38 @@ class _FacturaContentState extends State<_FacturaContent> {
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-            child: FilledButton.icon(
-              onPressed: _facturaCerrada ? null : () => _cerrarFactura(),
-              icon: const Icon(Icons.check_circle_outline_rounded),
-              label: Text(etiquetaBotonCierre),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-                backgroundColor: isDark ? RaiDriverColors.neon : cs.primary,
-                foregroundColor: isDark ? Colors.black : cs.onPrimary,
-              ),
-            ),
+            child: bloqueaCierreCliente && !impagoCliente
+                ? OutlinedButton.icon(
+                    onPressed:
+                        _facturaCerrada ? null : () => _intentarCerrarFactura(),
+                    icon: const Icon(Icons.lock_outline_rounded),
+                    label: Text(etiquetaBotonCierre),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(52),
+                      foregroundColor:
+                          isDark ? Colors.white70 : cs.onSurfaceVariant,
+                      side: BorderSide(
+                        color: isDark
+                            ? Colors.white24
+                            : cs.outline.withValues(alpha: 0.5),
+                      ),
+                    ),
+                  )
+                : FilledButton.icon(
+                    onPressed:
+                        _facturaCerrada ? null : () => _intentarCerrarFactura(),
+                    icon: const Icon(Icons.check_circle_outline_rounded),
+                    label: Text(etiquetaBotonCierre),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(52),
+                      backgroundColor: isDark ? RaiDriverColors.neon : cs.primary,
+                      foregroundColor: isDark ? Colors.black : cs.onPrimary,
+                    ),
+                  ),
           ),
         ),
       ],
+      ),
     );
   }
 
@@ -952,6 +1109,13 @@ class _FacturaContentState extends State<_FacturaContent> {
           label: 'TARJETA PAGADA',
           color: Colors.green,
           icon: Icons.verified_rounded,
+        );
+      }
+      if (paymentStatus == 'failed') {
+        return const _EstadoPagoUI(
+          label: 'TARJETA RECHAZADA',
+          color: Colors.red,
+          icon: Icons.error_outline_rounded,
         );
       }
       if (paymentStatus == 'pending') {

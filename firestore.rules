@@ -706,12 +706,45 @@ service cloud.firestore {
 
       allow update: if (isAdmin() && viajeNoTocaCamposFinancierosProtegidos()) ||
         (
+          // Taxista libera reserva «siguiente viaje» sin claim completo.
+          esRolChoferEnSesion() &&
+          resource.data.reservadoPor == request.auth.uid &&
+          (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
+          (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data)) &&
+          (
+            resource.data.estado in [
+              "pendiente",
+              "pendiente_pago",
+              "pendiente_admin",
+              "pendienteAdmin",
+              "buscando",
+              "disponible"
+            ]
+          ) &&
+          viajeNoTocaCamposFinancierosProtegidos() &&
+          changedOnly([
+            "reservadoPor", "reservadoHasta", "updatedAt", "actualizadoEn"
+          ]) &&
+          request.resource.data.reservadoPor == ""
+        ) ||
+        (
           // CLAIM pool (motor / vehículo): mismo rol que lectura del pool (taxista | driver).
           esRolChoferEnSesion() &&
           taxistaSinDeuda(request.auth.uid) &&
           taxistaAptoParaClaimPool(request.auth.uid) &&
           (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
           (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data)) &&
+          (
+            resource.data.estado in [
+              "pendiente",
+              "pendiente_pago",
+              "pendiente_admin",
+              "pendienteAdmin",
+              "buscando",
+              "disponible"
+            ]
+          ) &&
+          viajeNoTocaCamposFinancierosProtegidos() &&
           request.resource.data.uidTaxista == request.auth.uid &&
           request.resource.data.taxistaId == request.auth.uid &&
           request.resource.data.aceptado == true &&
@@ -798,6 +831,7 @@ service cloud.firestore {
             ) &&
             request.resource.data.uidTaxista == request.auth.uid &&
             request.resource.data.taxistaId == request.auth.uid &&
+            viajeNoTocaCamposFinancierosProtegidos() &&
             changedOnly([
               "uidTaxista", "taxistaId", "nombreTaxista",
               "telefono", "placa", "tipoVehiculo", "tipoVehiculoOriginal",
