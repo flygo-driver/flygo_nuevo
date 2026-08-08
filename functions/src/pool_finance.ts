@@ -20,6 +20,7 @@ import {
   mergeGiraAbusoBloqueadoSiAplica,
 } from "./gira_abuso_util.js";
 import { generarReferenciaRecaudoPool } from "./pool_referencia.js";
+import { notifyPoolSeatEvent } from "./pool_seat_sale_notify.js";
 import {
   UMBRAL_COMISION_LEGACY_RD,
   bloqueoOperativoPorComisionEfectivo,
@@ -88,9 +89,11 @@ async function getRole(uid: string): Promise<string> {
     db().collection("usuarios").doc(uid).get(),
     db().collection("roles").doc(uid).get(),
   ]);
-  const fromUser = normalizeRoleRaw(roleFromUserDoc(userSnap.data() as AnyMap | undefined));
+  const uData = userSnap.data() as AnyMap | undefined;
+  const fromUser = normalizeRoleRaw(roleFromUserDoc(uData));
   const fromRoles = normalizeRoleRaw(String((rolSnap.data() as AnyMap | undefined)?.rol ?? ""));
   if (fromUser === "admin" || fromRoles === "admin") return "admin";
+  if (uData?.isAdmin === true || uData?.admin === true) return "admin";
   if (fromUser === "taxista" || fromRoles === "taxista") return "taxista";
   return fromUser || fromRoles || "";
 }
@@ -150,6 +153,7 @@ function marcarReservasCanceladasPorGiraTx(
   tx: Transaction,
   reservaDocs: QueryDocumentSnapshot[],
   motivo: string,
+  canceladoPor: "chofer" | "admin" = "chofer",
 ): number {
   let n = 0;
   const motivoTxt = motivo.trim() || "cancelacion";
@@ -162,7 +166,7 @@ function marcarReservasCanceladasPorGiraTx(
     if (estadoRes !== "reservado" && estadoRes !== "pagado") continue;
     tx.update(doc.ref, {
       estado: "cancelado_gira",
-      canceladoPor: "chofer",
+      canceladoPor,
       canceladoEn: FieldValue.serverTimestamp(),
       motivoCancelacion: motivoTxt,
       updatedAt: FieldValue.serverTimestamp(),
@@ -1452,6 +1456,26 @@ export const verifyPoolReservaRecaudo = onCall(async (request) => {
   });
 
   await markIdempotencyDone(idem.ref, result);
+
+  if ((result as AnyMap).alreadyProcessed !== true) {
+    const resSnap = await db()
+      .collection("viajes_pool")
+      .doc(poolId)
+      .collection("reservas")
+      .doc(reservaId)
+      .get();
+    const resData = (resSnap.data() ?? {}) as AnyMap;
+    await notifyPoolSeatEvent({
+      event: "verificado",
+      poolId,
+      reservaId,
+      seats: Math.trunc(numOr0(resData.seats)),
+      clienteNombre: String(resData.clienteNombre ?? ""),
+      metodoPago: String(resData.metodoPago ?? ""),
+      referenciaRecaudo: String(resData.referenciaRecaudo ?? ""),
+    });
+  }
+
   return result;
 });
 
@@ -1508,6 +1532,25 @@ export const confirmPoolReservationPayment = onCall(async (request) => {
   });
 
   await markIdempotencyDone(idem.ref, result);
+
+  if ((result as AnyMap).alreadyProcessed !== true) {
+    const resSnap = await db()
+      .collection("viajes_pool")
+      .doc(poolId)
+      .collection("reservas")
+      .doc(reservaId)
+      .get();
+    const resData = (resSnap.data() ?? {}) as AnyMap;
+    await notifyPoolSeatEvent({
+      event: "pagado",
+      poolId,
+      reservaId,
+      seats: Math.trunc(numOr0(resData.seats)),
+      clienteNombre: String(resData.clienteNombre ?? ""),
+      metodoPago: String(resData.metodoPago ?? ""),
+    });
+  }
+
   return result;
 });
 
@@ -2135,7 +2178,13 @@ export const cancelPoolTrip = onCall(async (request) => {
     const reserved = Math.max(0, numOr0(pool.comisionGiraEstimadaRd));
     const etapa = String(pool.prepagoComisionEtapa ?? "").trim().toLowerCase();
     const reservasSnap = await tx.get(poolRef.collection("reservas"));
-    const reservasCanceladas = marcarReservasCanceladasPorGiraTx(tx, reservasSnap.docs, motivo);
+    const canceladoPor = role === "admin" ? "admin" : "chofer";
+    const reservasCanceladas = marcarReservasCanceladasPorGiraTx(
+      tx,
+      reservasSnap.docs,
+      motivo,
+      canceladoPor,
+    );
 
     if (reserved > 1e-9 && etapa === "reservada_creacion" && ownerTaxistaId) {
       const billeRef = db().collection("billeteras_taxista").doc(ownerTaxistaId);
@@ -2161,6 +2210,40 @@ export const cancelPoolTrip = onCall(async (request) => {
         reserved,
       });
       if (reservWallet + 1e-9 < reserved) {
+        if (role === "admin") {
+          logger.warn("[GIRA_PREPAGO] admin cancel con saldo reservado inconsistente", {
+            poolId,
+            reservWallet,
+            reserved,
+          });
+          if (ownerTaxistaId) {
+            const uref = db().collection("usuarios").doc(ownerTaxistaId);
+            const us = await tx.get(uref);
+            const ud = (us.data() ?? {}) as AnyMap;
+            const canceladas = Math.max(0, Math.trunc(numOr0(ud.girasCanceladasAntesDeIniciar))) + 1;
+            const creadas = Math.max(0, Math.trunc(numOr0(ud.girasCreadasUltimoMes)));
+            const userCancelPatch: AnyMap = {
+              girasCanceladasAntesDeIniciar: canceladas,
+              updatedAt: FieldValue.serverTimestamp(),
+            };
+            mergeGiraAbusoBloqueadoSiAplica(userCancelPatch, creadas, canceladas, abuseCfg);
+            tx.set(uref, userCancelPatch, { merge: true });
+          }
+          tx.update(poolRef, {
+            ...patchPoolCanceladoGira(motivo),
+            estado: "cancelado_por_admin",
+            prepagoComisionEtapa: "inconsistente_admin_sin_devolver",
+            motivoCancelacion: motivo || "cancelacion_admin_saldo_inconsistente",
+          });
+          return {
+            ok: true,
+            poolId,
+            alreadyCanceled: false,
+            comisionDevuelta: 0,
+            walletInconsistente: true,
+            reservasCanceladas,
+          };
+        }
         logger.error("[GIRA_PREPAGO] cancel saldo reservado insuficiente", { poolId, reservWallet, reserved });
         throw new HttpsError("failed-precondition", "Saldo reservado inconsistente; contactá soporte.");
       }
@@ -2187,6 +2270,7 @@ export const cancelPoolTrip = onCall(async (request) => {
 
       tx.update(poolRef, {
         ...patchPoolCanceladoGira(motivo),
+        ...(role === "admin" ? { estado: "cancelado_por_admin" } : {}),
         prepagoComisionEtapa: "devuelta_cancelacion",
         comisionGiraEstimadaRd: 0,
       });
@@ -2227,7 +2311,10 @@ export const cancelPoolTrip = onCall(async (request) => {
       tx.set(uref, userCancelPatch, { merge: true });
     }
 
-    tx.update(poolRef, patchPoolCanceladoGira(motivo));
+    tx.update(poolRef, {
+      ...patchPoolCanceladoGira(motivo),
+      ...(role === "admin" ? { estado: "cancelado_por_admin" } : {}),
+    });
     logger.info("[GIRA_PREPAGO] cancelPoolTrip sin reserva prepago", { poolId, reservasCanceladas });
     return { ok: true, poolId, alreadyCanceled: false, comisionDevuelta: 0, reservasCanceladas };
   });
@@ -2578,10 +2665,24 @@ export const reservePoolSeats = onCall(async (request) => {
       recaudoCentral,
       referenciaRecaudo,
       montoEsperadoRecaudoRd,
+      seats,
+      clienteNombre,
+      metodoPago,
     };
   });
 
   await markIdempotencyDone(idem.ref, result);
+
+  await notifyPoolSeatEvent({
+    event: "reserva",
+    poolId: result.poolId,
+    reservaId: result.reservaId,
+    seats: result.seats,
+    clienteNombre: String(result.clienteNombre ?? ""),
+    metodoPago: String(result.metodoPago ?? ""),
+    referenciaRecaudo: String(result.referenciaRecaudo ?? ""),
+  });
+
   return result;
 });
 

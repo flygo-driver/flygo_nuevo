@@ -2,10 +2,11 @@
 # Uso:
 #   .\scripts\deploy-functions-lotes.ps1
 #   .\scripts\deploy-functions-lotes.ps1 -Grupo finanzas
+#   .\scripts\deploy-functions-lotes.ps1 -Grupo release-110
 #   .\scripts\deploy-functions-lotes.ps1 -Grupo corporativo-fallidas -TamanoLote 1 -PausaSegundos 90
 
 param(
-    [ValidateSet('corporativo-fallidas', 'finanzas')]
+    [ValidateSet('corporativo-fallidas', 'finanzas', 'release-110', 'corporativo-billing')]
     [string]$Grupo = 'corporativo-fallidas',
     [int]$TamanoLote = 2,
     [int]$PausaSegundos = 75
@@ -36,12 +37,34 @@ $finanzas = @(
     'obtenerLiquidacionSemanalTaxista'
 )
 
-$lista = if ($Grupo -eq 'finanzas') { $finanzas } else { $corporativoFallidas }
+$release110 = @(
+    'crearViajePendienteCliente',
+    'actualizarMetodoPagoViaje',
+    'reservarSiguienteViaje',
+    'aceptarViajeSeguro',
+    'approveRecargaComision',
+    'rejectRecargaComision',
+    'promoverSiguienteViaje'
+)
 
-Write-Host "=== Deploy functions en lotes ===" -ForegroundColor Cyan
+$corporativoBilling = @(
+    'scheduledCorporativoCortePeriodos',
+    'marcarLiquidacionCorporativoPagada',
+    'adminValidarPagoCorporativo',
+    'scheduledCorporativoRutasFijas'
+)
+
+switch ($Grupo) {
+    'finanzas' { $lista = $finanzas }
+    'release-110' { $lista = $release110 }
+    'corporativo-billing' { $lista = $corporativoBilling }
+    default { $lista = $corporativoFallidas }
+}
+
+Write-Host '=== Deploy functions en lotes ===' -ForegroundColor Cyan
 Write-Host "Grupo: $Grupo | Funciones: $($lista.Count) | Lote: $TamanoLote | Pausa: ${PausaSegundos}s"
 Write-Host "Directorio: $repoRoot"
-Write-Host ""
+Write-Host ''
 
 $fallidas = [System.Collections.Generic.List[string]]::new()
 $ok = 0
@@ -57,10 +80,10 @@ for ($i = 0; $i -lt $lista.Count; $i += $TamanoLote) {
 
     firebase deploy --only $only
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  FALLÓ" -ForegroundColor Red
+        Write-Host '  FALLO' -ForegroundColor Red
         foreach ($f in $lote) { $fallidas.Add($f) }
     } else {
-        Write-Host "  OK" -ForegroundColor Green
+        Write-Host '  OK' -ForegroundColor Green
         $ok += $lote.Count
     }
 
@@ -70,12 +93,12 @@ for ($i = 0; $i -lt $lista.Count; $i += $TamanoLote) {
     }
 }
 
-Write-Host ""
-Write-Host "=== Resumen ===" -ForegroundColor Cyan
+Write-Host ''
+Write-Host '=== Resumen ===' -ForegroundColor Cyan
 Write-Host "OK: $ok / $($lista.Count)"
 if ($fallidas.Count -gt 0) {
     Write-Host "Fallidas: $($fallidas -join ', ')" -ForegroundColor Red
     exit 1
 }
-Write-Host "Grupo '$Grupo' desplegado." -ForegroundColor Green
+Write-Host "Grupo $Grupo desplegado." -ForegroundColor Green
 exit 0

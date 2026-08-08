@@ -390,6 +390,22 @@ class PoolRepo {
     return occ > 0 || pag > 0;
   }
 
+  /// Prepago de comisión aún reservado al publicar (legacy); ADM puede liberar.
+  static bool poolPrepagoReservadoActivo(Map<String, dynamic> d) {
+    final etapa =
+        (d['prepagoComisionEtapa'] ?? '').toString().trim().toLowerCase();
+    final reserved = ((d['comisionGiraEstimadaRd'] ?? 0) as num).toDouble();
+    return etapa == 'reservada_creacion' && reserved > 0.01;
+  }
+
+  /// Admin puede liberar prepago atascado si la gira no salió ni cerró.
+  static bool poolAdmiteLiberacionPrepagoAdmin(Map<String, dynamic> d) {
+    final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
+    if (estado == 'en_ruta' || estado == 'finalizado') return false;
+    if (estado == 'cancelado' || estado == 'cancelado_por_admin') return false;
+    return poolPrepagoReservadoActivo(d);
+  }
+
   /// Antes de `en_ruta`: chofer/admin pueden cancelar la gira (devuelve prepago reservado vía CF).
   static bool giraPuedeCancelarseAntesDeIniciar(Map<String, dynamic> d) {
     final estado = (d['estado'] ?? '').toString().trim().toLowerCase();
@@ -1018,7 +1034,7 @@ class PoolRepo {
     String? idempotencyKey,
   }) async {
     final u = FirebaseAuth.instance.currentUser;
-    if (u == null) throw 'Debes iniciar sesión como taxista';
+    if (u == null) throw 'Debes iniciar sesión';
 
     final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
         ? idempotencyKey.trim()

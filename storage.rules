@@ -13,6 +13,15 @@ service firebase.storage {
         || request.resource.contentType == 'application/octet-stream';
     }
 
+    function isAdminStorage() {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/usuarios/$(request.auth.uid)) &&
+        (
+          firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin' ||
+          firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data.isAdmin == true
+        );
+    }
+
     /* ========= AVATARES =========
        Ruta: perfiles/{uid}/avatar_*.jpg
        Lectura: cualquiera autenticado
@@ -115,7 +124,7 @@ service firebase.storage {
        Ruta: organizadores_giras/{uid}/cedula_*.jpg
     */
     match /organizadores_giras/{uid}/{fileName} {
-      allow read: if isOwner(uid);
+      allow read: if isOwner(uid) || isAdminStorage();
       allow write: if isOwner(uid)
                    && request.resource != null
                    && request.resource.size > 0
@@ -126,15 +135,6 @@ service firebase.storage {
     /* ========= Logo empresa corporativa (encargado web /empresas) =========
        Ruta: empresas_corporativas/{empresaId}/logo/logo_{ts}.jpg
     */
-    function isAdminStorage() {
-      return signedIn() &&
-        firestore.exists(/databases/(default)/documents/usuarios/$(request.auth.uid)) &&
-        (
-          firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin' ||
-          firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data.isAdmin == true
-        );
-    }
-
     function esEncargadoCorporativoStorage(empresaId) {
       return signedIn() &&
         firestore.exists(/databases/(default)/documents/empresas_corporativas/$(empresaId)) &&

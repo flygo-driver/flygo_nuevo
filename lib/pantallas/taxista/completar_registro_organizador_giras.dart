@@ -13,6 +13,8 @@ import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/utils/bancos_rd.dart';
 import 'package:flygo_nuevo/utils/firebase_auth_resolve.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
+import 'package:flygo_nuevo/utils/pool_publicar_errores.dart';
+import 'package:flygo_nuevo/widgets/pool_gira_publicar_ui.dart';
 import 'package:flygo_nuevo/widgets/taxista_onboarding_acciones_footer.dart';
 
 /// Registro corto: organiza giras, contrata guagua y chofer (sin documentos de vehículo).
@@ -176,10 +178,10 @@ class _CompletarRegistroOrganizadorGirasState
           'Actualiza la app o contacta soporte si persiste.',
         );
       } else {
-        _snack('No se pudo subir la foto: ${e.message ?? e.code}');
+        _snack(PoolPublicarErrores.traducirSubida(e));
       }
     } catch (e) {
-      _snack('No se pudo subir la foto: $e');
+      _snack(PoolPublicarErrores.traducirSubida(e));
     } finally {
       if (mounted) setState(() => _subiendoFoto = false);
     }
@@ -263,6 +265,11 @@ class _CompletarRegistroOrganizadorGirasState
                 TaxistaOnboardingAccionesFooter.scrollBottomPadding(context),
               ),
               children: [
+                const OrganizadorGirasBrandHeader(
+                  subtitulo:
+                      'Completa tu perfil para publicar excursiones y vender cupos.',
+                ),
+                const SizedBox(height: 16),
                 Text(
                   'Publicas excursiones y contratas guagua con chofer. '
                   'No necesitas licencia ni datos del vehículo: solo tu identidad '

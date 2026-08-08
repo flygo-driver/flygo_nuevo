@@ -299,15 +299,16 @@ class _PoolGiraContenidoFormSectionState
             TextButton.icon(
               onPressed: _addPuntoRecogidaRow,
               icon: const Icon(Icons.add_location_alt_outlined, size: 18),
-              label: const Text('Agregar parada'),
+              label: const Text('Agregar punto de recogida'),
             ),
           ],
         ),
         Padding(
           padding: const EdgeInsets.only(bottom: 2),
           child: Text(
-            'Paradas y hora por donde pasas a buscar clientes antes de salir '
-            'al destino. Ej: 4:30 AM Lucerna · 6:00 AM Megacentro · 8:00 AM Sambil.',
+            'Horarios y lugares donde recoges pasajeros antes de salir '
+            '(distinto de las paradas del tour en el paso Ruta). '
+            'Ej: 4:30 AM Lucerna · 6:00 AM Megacentro.',
             style: TextStyle(
               color: widget.labelColor,
               fontSize: 12,

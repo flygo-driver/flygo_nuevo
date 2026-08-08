@@ -17,6 +17,7 @@ import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_recaudo_central_taxista_panel.dart';
+import 'package:flygo_nuevo/widgets/pool_ventas_rai_resumen.dart';
 import 'package:flygo_nuevo/design_system/rai_design_system.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
@@ -644,7 +645,6 @@ $hashtags
 
               final cap = ((d['capacidad'] ?? 0) as num).toInt();
               final occ = ((d['asientosReservados'] ?? 0) as num).toInt();
-              final pag = ((d['asientosPagados'] ?? 0) as num).toInt();
               final fee = ((d['feePct'] ?? 0.0) as num).toDouble();
               final precio = (d['precioPorAsiento'] as num).toDouble();
               final ingresoAseg = ((d['montoPagado'] ?? 0.0) as num).toDouble();
@@ -790,31 +790,10 @@ $hashtags
                       ),
                     ],
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: LinearProgressIndicator(
-                              value: cap == 0 ? 0 : (occ / cap).clamp(0, 1),
-                              backgroundColor: isDark
-                                  ? Colors.white12
-                                  : const Color(0xFFE4E7EC),
-                              color: accent,
-                              minHeight: 8,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '$occ/$cap',
-                          style: TextStyle(color: textSecondary),
-                        ),
-                      ],
-                    ),
+                    PoolVentasRaiResumen(poolData: d, compact: true),
                     const SizedBox(height: 6),
                     Text(
-                      'Pagados: $pag  •  Ingreso asegurado: RD\$ ${ingresoAseg.toStringAsFixed(0)}',
+                      'Ingreso asegurado (pagados): RD\$ ${ingresoAseg.toStringAsFixed(0)}',
                       style: TextStyle(color: textSecondary),
                     ),
                     if (PoolRecaudoCentral.esPoolCentral(d)) ...[

@@ -19,8 +19,11 @@ function roleFromUserDoc(data: AnyMap | undefined): string {
 
 async function getRole(uid: string): Promise<string> {
   const snap = await db().collection("usuarios").doc(uid).get();
-  let rolUsuario = roleFromUserDoc(snap.data() as AnyMap | undefined).trim().toLowerCase();
+  const uData = snap.data() as AnyMap | undefined;
+  let rolUsuario = roleFromUserDoc(uData).trim().toLowerCase();
   if (rolUsuario === "administrador") rolUsuario = "admin";
+  if (rolUsuario === "admin") return "admin";
+  if (uData?.isAdmin === true || uData?.admin === true) return "admin";
   if (rolUsuario) return rolUsuario;
 
   const rolSnap = await db().collection("roles").doc(uid).get();

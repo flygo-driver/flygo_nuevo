@@ -12,7 +12,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
-import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
@@ -27,9 +26,12 @@ import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
+import 'package:flygo_nuevo/utils/pool_publicar_errores.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
+import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/widgets/pool_gira_contenido_form.dart';
+import 'package:flygo_nuevo/widgets/pool_gira_publicar_ui.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 
 extension _PoolsTaxistaCrearPaletteX on BuildContext {
@@ -166,6 +168,8 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   bool _loading = false;
   bool _recaudoCentral = false;
   bool _agenciaDesdePerfil = false;
+  int _pasoFormulario = 0;
+  static const int _totalPasosGira = 4;
 
   @override
   void initState() {
@@ -283,6 +287,151 @@ class _PoolsTaxistaCrearState extends State<PoolsTaxistaCrear> {
   void _snack(String m) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  String _nombrePaso(int paso) {
+    switch (paso) {
+      case 0:
+        return 'Viaje';
+      case 1:
+        return 'Ruta';
+      case 2:
+        return 'Fotos';
+      case 3:
+        return 'Cobro';
+      default:
+        return 'Formulario';
+    }
+  }
+
+  Future<bool> _validarPasoActual() async {
+    switch (_pasoFormulario) {
+      case 0:
+        if (_tipo.trim().isEmpty) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Indica el tipo de gira (tour, excursión, consular…).',
+            paso: _nombrePaso(0),
+          );
+          return false;
+        }
+        if (_agenciaNombre.trim().isEmpty) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Escribe el nombre de tu agencia u operador.',
+            paso: _nombrePaso(0),
+          );
+          return false;
+        }
+        return true;
+      case 1:
+        if (_origenTown.trim().isEmpty) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Selecciona el pueblo de origen.',
+            paso: _nombrePaso(1),
+          );
+          return false;
+        }
+        if (_puntoSalida.trim().isEmpty) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Selecciona el punto de salida en el buscador.',
+            paso: _nombrePaso(1),
+          );
+          return false;
+        }
+        if (_destino.trim().isEmpty) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Selecciona el destino en el buscador.',
+            paso: _nombrePaso(1),
+          );
+          return false;
+        }
+        if (_fecha == null) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Selecciona fecha y hora de salida.',
+            paso: _nombrePaso(1),
+          );
+          return false;
+        }
+        if (_sentido == 'ida_y_vuelta' && _fechaVuelta == null) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Selecciona la fecha de regreso estimado.',
+            paso: _nombrePaso(1),
+          );
+          return false;
+        }
+        return true;
+      case 2:
+        _syncChoferContactoDesdeControllers();
+        if (!telefonoContactoValidoRd(_choferTelefono) &&
+            !telefonoContactoValidoRd(_choferWhatsApp)) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Agrega teléfono o WhatsApp del chofer para contacto.',
+            paso: _nombrePaso(2),
+          );
+          return false;
+        }
+        if (_bannerUrls.isEmpty && _bannerVideoUrl.trim().isEmpty) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje:
+                'Sube al menos una foto o video banner para tu gira.',
+            paso: _nombrePaso(2),
+          );
+          return false;
+        }
+        return true;
+      case 3:
+        if (_capacidad == null || _capacidad! < 1) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Indica la capacidad total de la gira.',
+            paso: _nombrePaso(3),
+          );
+          return false;
+        }
+        if (_precio == null || _precio! <= 0) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: 'Indica el precio por asiento.',
+            paso: _nombrePaso(3),
+          );
+          return false;
+        }
+        final bancoCompleto = _bancoNombre.trim().isNotEmpty &&
+            _bancoCuenta.trim().isNotEmpty &&
+            _bancoTipoCuenta.trim().isNotEmpty &&
+            _bancoTitular.trim().isNotEmpty;
+        if (!bancoCompleto) {
+          await PoolPublicarErrores.mostrarFaltaDato(
+            context,
+            mensaje: _recaudoCentral
+                ? 'Completa la cuenta donde RAI te transferirá el neto.'
+                : 'Completa los datos bancarios del organizador.',
+            paso: _nombrePaso(3),
+          );
+          return false;
+        }
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  Future<void> _avanzarPaso() async {
+    final ok = await _validarPasoActual();
+    if (!ok || !mounted) return;
+    setState(() {
+      if (_pasoFormulario < _totalPasosGira - 1) {
+        _pasoFormulario += 1;
+      }
+    });
   }
 
   bool _esTipoGrupal(String tipo) {
@@ -510,20 +659,43 @@ $hashtags
       await _crearViajeGrupal();
       return;
     }
+
+    RaiConnectivityService.instance.ensureStarted();
+    if (RaiConnectivityService.instance.isOffline) {
+      await PoolPublicarErrores.mostrarSinInternet(context);
+      return;
+    }
+
     if (_origenTown.trim().isEmpty) {
-      _snack('Selecciona el pueblo de origen.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Selecciona el pueblo de origen.',
+        paso: _nombrePaso(1),
+      );
       return;
     }
     if (_tipo.trim().isEmpty) {
-      _snack('Indica el tipo de gira (tour, excursión, consular…).');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Indica el tipo de gira (tour, excursión, consular…).',
+        paso: _nombrePaso(0),
+      );
       return;
     }
     if (_puntoSalida.trim().isEmpty) {
-      _snack('Selecciona un punto de salida válido en el buscador.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Selecciona un punto de salida válido en el buscador.',
+        paso: _nombrePaso(1),
+      );
       return;
     }
     if (_destino.trim().isEmpty) {
-      _snack('Selecciona un destino válido en el buscador.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Selecciona un destino válido en el buscador.',
+        paso: _nombrePaso(1),
+      );
       return;
     }
     if ((_tipoCanonico(_tipo) == 'tour' ||
@@ -536,7 +708,11 @@ $hashtags
     _syncChoferContactoDesdeControllers();
     if (!telefonoContactoValidoRd(_choferTelefono) &&
         !telefonoContactoValidoRd(_choferWhatsApp)) {
-      _snack('Agrega al menos teléfono o WhatsApp del chofer.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Agrega al menos teléfono o WhatsApp del chofer.',
+        paso: _nombrePaso(2),
+      );
       return;
     }
     final bancoCompleto = _bancoNombre.trim().isNotEmpty &&
@@ -544,21 +720,30 @@ $hashtags
         _bancoTipoCuenta.trim().isNotEmpty &&
         _bancoTitular.trim().isNotEmpty;
     if (!bancoCompleto) {
-      _snack(_recaudoCentral
-          ? 'Completa la cuenta donde RAI (Open ASK Service) te transferirá el neto. '
-              'El cliente no paga a esa cuenta.'
-          : 'Completa la cuenta del organizador para depósitos del cliente y comisión RAI.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: _recaudoCentral
+            ? 'Completa la cuenta donde RAI te transferirá el neto. El cliente no paga a esa cuenta.'
+            : 'Completa la cuenta del organizador para depósitos y comisión RAI.',
+        paso: _nombrePaso(3),
+      );
       return;
     }
 
     if (_bannerUrls.isEmpty && _bannerVideoUrl.trim().isEmpty) {
-      _snack(
-        'Sube al menos una imagen o video banner para publicar la salida.',
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Sube al menos una imagen o video banner para publicar la salida.',
+        paso: _nombrePaso(2),
       );
       return;
     }
     if (_agenciaNombre.trim().isEmpty) {
-      _snack('Indica el nombre de la agencia o operador en el anuncio.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Indica el nombre de la agencia o operador en el anuncio.',
+        paso: _nombrePaso(0),
+      );
       return;
     }
 
@@ -567,23 +752,43 @@ $hashtags
     _form.currentState!.save();
 
     if (_fecha == null) {
-      _snack('Selecciona fecha y hora de salida.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Selecciona fecha y hora de salida.',
+        paso: _nombrePaso(1),
+      );
       return;
     }
     if (_capacidad == null || _capacidad! < 1) {
-      _snack('Indica la capacidad total de la gira.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Indica la capacidad total de la gira.',
+        paso: _nombrePaso(3),
+      );
       return;
     }
     if (_minConf == null || _minConf! < 0) {
-      _snack('Indica el mínimo de pasajeros para confirmar.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Indica el mínimo de pasajeros para confirmar.',
+        paso: _nombrePaso(3),
+      );
       return;
     }
     if (_cuposComisionRai == null || _cuposComisionRai! < 1) {
-      _snack('Indica cuántos cupos venderá RAI.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Indica cuántos cupos venderá RAI.',
+        paso: _nombrePaso(3),
+      );
       return;
     }
     if (_precio == null || _precio! <= 0) {
-      _snack('Indica el precio por asiento.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Indica el precio por asiento.',
+        paso: _nombrePaso(3),
+      );
       return;
     }
 
@@ -591,21 +796,37 @@ $hashtags
     final DateTime ahora = DateTime.now();
     final DateTime salidaMin = ahora.add(const Duration(minutes: 5));
     if (_fecha!.isBefore(salidaMin)) {
-      _snack('La salida debe ser al menos en 5 minutos.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'La salida debe ser al menos en 5 minutos.',
+        paso: _nombrePaso(1),
+      );
       return;
     }
     if (_sentido == 'ida_y_vuelta') {
       if (_fechaVuelta == null) {
-        _snack('Selecciona la fecha de vuelta.');
+        await PoolPublicarErrores.mostrarFaltaDato(
+          context,
+          mensaje: 'Selecciona la fecha de vuelta.',
+          paso: _nombrePaso(1),
+        );
         return;
       }
       if (_fechaVuelta!.isBefore(_fecha!)) {
-        _snack('La vuelta no puede ser antes de la salida.');
+        await PoolPublicarErrores.mostrarFaltaDato(
+          context,
+          mensaje: 'La vuelta no puede ser antes de la salida.',
+          paso: _nombrePaso(1),
+        );
         return;
       }
     }
     if (_cuposComisionRai! < 1 || _cuposComisionRai! > _capacidad!) {
-      _snack('Cupos RAI para comisión: entre 1 y $_capacidad.');
+      await PoolPublicarErrores.mostrarFaltaDato(
+        context,
+        mensaje: 'Cupos RAI para comisión: entre 1 y $_capacidad.',
+        paso: _nombrePaso(3),
+      );
       return;
     }
 
@@ -815,53 +1036,25 @@ $hashtags
       if (uid != null) {
         unawaited(GirasAbusoAdminService.marcarBloqueado(uid));
       }
-      _snack('❌ ${b.mensajeUsuario}');
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('No puedes publicar otra salida'),
-          content: Text(b.mensajeUsuario),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Entendido'),
-            ),
-            FilledButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const Soporte()),
-                );
-              },
-              child: const Text('Contactar soporte'),
-            ),
-          ],
-        ),
+      await PoolPublicarErrores.mostrarDialogo(
+        context,
+        titulo: 'No puedes publicar otra salida',
+        mensaje: b.mensajeUsuario,
+        icono: Icons.block_rounded,
+        color: Colors.red.shade700,
       );
     } on FirebaseFunctionsException catch (e) {
       if (kDebugMode) {
         debugPrint('[PoolsTaxistaCrear] crearPoolGira error: $e');
       }
       if (!mounted) return;
-      final msg = (e.message ?? '').trim();
-      _snack('❌ ${msg.isNotEmpty ? msg : 'Error al publicar la salida (${e.code}).'}');
+      await PoolPublicarErrores.mostrarErrorPublicar(context, e);
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[PoolsTaxistaCrear] crearPool error: $e');
       }
       if (!mounted) return;
-      if (e is FirebaseException && e.code == 'permission-denied') {
-        final msg = (e.message ?? '').trim();
-        _snack(
-          '❌ ${msg.isNotEmpty ? msg : 'No se pudo publicar la salida (permisos). Verifica tu sesión de conductor.'}',
-        );
-        return;
-      }
-      final String msg = e is String
-          ? e
-          : e.toString().replaceFirst('Exception: ', '');
-      _snack('❌ $msg');
+      await PoolPublicarErrores.mostrarErrorPublicar(context, e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -889,194 +1082,263 @@ $hashtags
       body: SafeArea(
         child: Form(
           key: _form,
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            children: [
-            _heroBanner(),
-            const SizedBox(height: 12),
-            _infoPanel(
-              icon: Icons.account_balance_outlined,
-              title: 'Quién paga el cliente',
-              body: PoolsProductoCopy.formQuienPagaCliente(
-                recaudoCentral: _recaudoCentral,
-              ),
-            ),
-            const SizedBox(height: 8),
-            _infoPanel(
-              icon: Icons.checklist_rtl_outlined,
-              title: 'Campos obligatorios antes de publicar',
-              body:
-                  'Tipo de gira · Pueblo origen · Punto de salida · Destino · '
-                  'Agencia · Banner (foto o video) · Teléfono o WhatsApp del chofer · '
-                  'Capacidad · Mínimo para confirmar · Cupos RAI · Precio por asiento · '
-                  'Fecha/hora de salida'
-                  '${_sentido == 'ida_y_vuelta' ? ' · Fecha/hora de vuelta' : ''} · '
-                  'Datos bancarios del organizador.\n\n'
-                  'El precio que indiques es el monto final por persona (ida y vuelta incluida si aplica).',
-            ),
-            const SizedBox(height: 8),
-            _infoPanel(
-              icon: Icons.directions_bus_filled_outlined,
-              title: 'Tu rol al publicar',
-              body: PoolsProductoCopy.formTuRolOrganizador,
-            ),
-            const SizedBox(height: 12),
-            _sectionTitle('Datos del viaje', Icons.luggage_outlined),
-            _card(
-              child: Wrap(
-                runSpacing: 12,
-                children: [
-                  _row(
-                    left: _tipoField(),
-                    right: _dropdown<String>(
-                      label: 'Sentido',
-                      value: _sentido,
-                      items: const ['ida', 'vuelta', 'ida_y_vuelta'],
-                      onChanged: (v) => setState(() => _sentido = v ?? 'ida'),
+          child: Column(
+            children: <Widget>[
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 12 + bottomInset),
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  children: <Widget>[
+                    const OrganizadorGirasBrandHeader(compact: true),
+                    const SizedBox(height: 10),
+                    _heroBanner(),
+                    PoolGiraCrearPasoBar(
+                      pasoActual: _pasoFormulario,
+                      onPaso: (i) => setState(() => _pasoFormulario = i),
                     ),
-                  ),
-                  _row(
-                    left: _puebloOrigenDropdown(),
-                    right: _textFieldCtrl(
-                      controller: _agenciaCtrl,
-                      label: 'Agencia / operador',
-                      hint: 'Tours RD, Mi Agencia…',
-                      helperText: _agenciaDesdePerfil
-                          ? 'Cargado desde tu perfil — puedes editarlo'
-                          : null,
-                      onChanged: (v) {
-                        _agenciaNombre = v.trim();
-                        if (_agenciaDesdePerfil) {
-                          setState(() => _agenciaDesdePerfil = false);
-                        }
-                      },
-                    ),
-                  ),
-                  _textFieldCtrl(
-                    controller: _servicioBadgeCtrl,
-                    label: 'Etiqueta corta del viaje (opcional)',
-                    hint:
-                        'Ej: VIP, Excursión Saona, Viaje grupal Santiago, Promo…',
-                    onChanged: (v) => _servicioBadge = v.trim(),
-                  ),
-                  _textFieldCtrl(
-                    controller: _descripcionCtrl,
-                    label: 'Detalles y recomendaciones del viaje',
-                    hint:
-                        'Ej: actividades, comidas, entradas, transporte, que debe llevar el cliente, recomendaciones...',
-                    maxLines: 4,
-                    onChanged: (v) => _descripcionViaje = v.trim(),
-                  ),
-                  _incluyeField(),
-                  const SizedBox(height: 12),
-                  _sectionTitle('Detalle profesional de la gira', Icons.article_outlined),
-                  PoolGiraContenidoFormSection(
-                    initial: _contenidoExtra,
-                    ocultarDireccionExacta: true,
-                    labelColor: context._poolsCrearPalette.labelMuted,
-                    fieldFill: context._poolsCrearPalette.fieldFill,
-                    inputText: context._poolsCrearPalette.inputText,
-                    accent: context._poolsCrearPalette.accent,
-                    onChanged: (v) => _contenidoExtra = v,
-                  ),
-                  const SizedBox(height: 8),
-                  CampoLugarAutocomplete(
-                    label: 'Punto de salida',
-                    hint: 'Busca punto de encuentro/salida',
-                    initialText: _puntoSalida.isEmpty ? null : _puntoSalida,
-                    country: 'DO',
-                    asistenteDireccionHabilitado: true,
-                    onTextChanged: (v) {
-                      _puntoSalida = v.trim();
-                    },
-                    onPlaceSelected: (det) {
-                      _puntoSalida = det.displayLabel.trim();
-                      _puntoSalidaLat = det.lat;
-                      _puntoSalidaLon = det.lon;
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  CampoLugarAutocomplete(
-                    label: 'Destino',
-                    hint: 'Busca destino de la gira',
-                    initialText: _destino.isEmpty ? null : _destino,
-                    country: 'DO',
-                    asistenteDireccionHabilitado: true,
-                    onTextChanged: (v) => _destino = v.trim(),
-                    onPlaceSelected: (det) {
-                      _destino = det.displayLabel.trim();
-                      _destinoPlaceId = det.placeId;
-                      _destinoLat = det.lat;
-                      _destinoLon = det.lon;
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  if (_tipoCanonico(_tipo) == 'tour' ||
-                      _tipoCanonico(_tipo) == 'excursion') ...[
-                    _paradasEditor(),
-                    const SizedBox(height: 8),
+                    if (_pasoFormulario == 0) ..._pasoViajeWidgets(context),
+                    if (_pasoFormulario == 1) ..._pasoRutaWidgets(context),
+                    if (_pasoFormulario == 2) ..._pasoFotosWidgets(context),
+                    if (_pasoFormulario == 3) ..._pasoCobroWidgets(context),
                   ],
-                  _agenciaLogoPicker(),
-                  const SizedBox(height: 8),
-                  _bannerPicker(),
-                  const SizedBox(height: 8),
-                  _row(
-                    left: _textFieldCtrl(
-                      controller: _telCtrl,
-                      label: 'Telefono chofer',
-                      hint: '8091234567',
-                      onChanged: (v) {
-                        final nuevo = v.trim();
-                        final anterior = _choferTelefono;
-                        _choferTelefono = nuevo;
-                        if (_choferWhatsApp.isEmpty ||
-                            _choferWhatsApp == anterior) {
-                          _choferWhatsApp = nuevo;
-                          if (_waCtrl.text.trim() != nuevo) {
-                            _waCtrl.text = nuevo;
-                          }
-                        }
-                      },
-                    ),
-                    right: _textFieldCtrl(
-                      controller: _waCtrl,
-                      label: 'WhatsApp chofer',
-                      hint: '8091234567',
-                      onChanged: (v) => _choferWhatsApp = v.trim(),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      ElevatedButton.icon(
-                        onPressed: () => _abrirLlamadaChofer(),
-                        icon: const Icon(Icons.call),
-                        label: const Text('Tel chofer'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                      ElevatedButton.icon(
-                        onPressed: () => _abrirWhatsAppChofer(),
-                        icon: const Icon(Icons.chat),
-                        label: const Text('WhatsApp'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
+              ),
+              PoolGiraCrearBottomNav(
+                pasoActual: _pasoFormulario,
+                totalPasos: _totalPasosGira,
+                publicando: _loading,
+                onAnterior: _pasoFormulario > 0
+                    ? () => setState(() => _pasoFormulario -= 1)
+                    : null,
+                onSiguiente: _avanzarPaso,
+                onPublicar: _loading ? null : _crear,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _pasoViajeWidgets(BuildContext context) {
+    return <Widget>[
+      const SizedBox(height: 8),
+      _guiaRapidaExpansion(),
+      const SizedBox(height: 12),
+      _sectionTitle('Qué publicas', Icons.luggage_outlined),
+      _card(
+        child: Wrap(
+          runSpacing: 12,
+          children: <Widget>[
+            _row(
+              left: _tipoField(),
+              right: _dropdown<String>(
+                label: 'Sentido',
+                value: _sentido,
+                items: const <String>['ida', 'vuelta', 'ida_y_vuelta'],
+                onChanged: (v) => setState(() => _sentido = v ?? 'ida'),
               ),
             ),
-            const SizedBox(height: 12),
-            _sectionTitle(
-                'Capacidad y finanzas', Icons.account_balance_wallet_outlined),
+            _row(
+              left: _puebloOrigenDropdown(),
+              right: _textFieldCtrl(
+                controller: _agenciaCtrl,
+                label: 'Agencia / operador',
+                hint: 'Tours RD, Mi Agencia…',
+                helperText: _agenciaDesdePerfil
+                    ? 'Cargado desde tu perfil — puedes editarlo'
+                    : null,
+                onChanged: (v) {
+                  _agenciaNombre = v.trim();
+                  if (_agenciaDesdePerfil) {
+                    setState(() => _agenciaDesdePerfil = false);
+                  }
+                },
+              ),
+            ),
+            _textFieldCtrl(
+              controller: _servicioBadgeCtrl,
+              label: 'Etiqueta corta (opcional)',
+              hint: 'Ej: VIP, Excursión Saona, Promo…',
+              onChanged: (v) => _servicioBadge = v.trim(),
+            ),
+            _textFieldCtrl(
+              controller: _descripcionCtrl,
+              label: 'Descripción para el pasajero',
+              hint:
+                  'Qué incluye el viaje, comidas, entradas, qué llevar…',
+              maxLines: 4,
+              onChanged: (v) => _descripcionViaje = v.trim(),
+            ),
+            _incluyeField(),
+            const SizedBox(height: 8),
+            _sectionTitle('Detalle profesional', Icons.article_outlined),
+            PoolGiraContenidoFormSection(
+              initial: _contenidoExtra,
+              ocultarDireccionExacta: true,
+              labelColor: context._poolsCrearPalette.labelMuted,
+              fieldFill: context._poolsCrearPalette.fieldFill,
+              inputText: context._poolsCrearPalette.inputText,
+              accent: context._poolsCrearPalette.accent,
+              onChanged: (v) => _contenidoExtra = v,
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _pasoRutaWidgets(BuildContext context) {
+    final p = context._poolsCrearPalette;
+    return <Widget>[
+      const SizedBox(height: 8),
+      _infoPanel(
+        icon: Icons.route_outlined,
+        title: 'Ruta clara',
+        body:
+            'Punto de salida = donde se encuentran los pasajeros.\n'
+            'Paradas = lugares que visitan en el camino (solo tour/excursión).\n'
+            'En “Detalle profesional” podés agregar horarios de recogida extra.',
+      ),
+      const SizedBox(height: 12),
+      _sectionTitle('Ruta y horarios', Icons.route_outlined),
+      _card(
+        child: Wrap(
+          runSpacing: 12,
+          children: <Widget>[
+            CampoLugarAutocomplete(
+              label: 'Punto de salida *',
+              hint: 'Parque Central, hotel, terminal…',
+              initialText: _puntoSalida.isEmpty ? null : _puntoSalida,
+              country: 'DO',
+              asistenteDireccionHabilitado: true,
+              onTextChanged: (v) => _puntoSalida = v.trim(),
+              onPlaceSelected: (det) {
+                _puntoSalida = det.displayLabel.trim();
+                _puntoSalidaLat = det.lat;
+                _puntoSalidaLon = det.lon;
+              },
+            ),
+            CampoLugarAutocomplete(
+              label: 'Destino *',
+              hint: 'Busca destino de la gira',
+              initialText: _destino.isEmpty ? null : _destino,
+              country: 'DO',
+              asistenteDireccionHabilitado: true,
+              onTextChanged: (v) => _destino = v.trim(),
+              onPlaceSelected: (det) {
+                _destino = det.displayLabel.trim();
+                _destinoPlaceId = det.placeId;
+                _destinoLat = det.lat;
+                _destinoLon = det.lon;
+              },
+            ),
+            if (_tipoCanonico(_tipo) == 'tour' ||
+                _tipoCanonico(_tipo) == 'excursion') ...<Widget>[
+              _paradasEditor(),
+            ],
+            const SizedBox(height: 6),
+            Text(
+              'Fechas y horarios',
+              style: TextStyle(
+                color: p.inputText,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            _fechaPicker(
+              label: 'Salida *',
+              text: _fecha == null
+                  ? 'Seleccionar fecha y hora'
+                  : _formatFechaHora(_fecha!),
+              onTap: () => _pickFecha(esVuelta: false),
+            ),
+            if (_sentido == 'ida_y_vuelta') ...<Widget>[
+              const SizedBox(height: 8),
+              _fechaPicker(
+                label: 'Regreso estimado *',
+                text: _fechaVuelta == null
+                    ? 'Seleccionar…'
+                    : _formatFechaHora(_fechaVuelta!),
+                onTap: () => _pickFecha(esVuelta: true),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _pasoFotosWidgets(BuildContext context) {
+    return <Widget>[
+      const SizedBox(height: 8),
+      _sectionTitle('Fotos y contacto', Icons.photo_library_outlined),
+      _card(
+        child: Wrap(
+          runSpacing: 12,
+          children: <Widget>[
+            _agenciaLogoPicker(),
+            _bannerPicker(),
+            _row(
+              left: _textFieldCtrl(
+                controller: _telCtrl,
+                label: 'Teléfono chofer *',
+                hint: '8091234567',
+                onChanged: (v) {
+                  final nuevo = v.trim();
+                  final anterior = _choferTelefono;
+                  _choferTelefono = nuevo;
+                  if (_choferWhatsApp.isEmpty ||
+                      _choferWhatsApp == anterior) {
+                    _choferWhatsApp = nuevo;
+                    if (_waCtrl.text.trim() != nuevo) {
+                      _waCtrl.text = nuevo;
+                    }
+                  }
+                },
+              ),
+              right: _textFieldCtrl(
+                controller: _waCtrl,
+                label: 'WhatsApp chofer',
+                hint: '8091234567',
+                onChanged: (v) => _choferWhatsApp = v.trim(),
+              ),
+            ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                ElevatedButton.icon(
+                  onPressed: () => _abrirLlamadaChofer(),
+                  icon: const Icon(Icons.call),
+                  label: const Text('Probar teléfono'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => _abrirWhatsAppChofer(),
+                  icon: const Icon(Icons.chat),
+                  label: const Text('Probar WhatsApp'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _pasoCobroWidgets(BuildContext context) {
+    return <Widget>[
+      const SizedBox(height: 8),
+      _sectionTitle('Cupos y cobro', Icons.account_balance_wallet_outlined),
             _card(
               child: Theme(
                 data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
@@ -1317,32 +1579,6 @@ $hashtags
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Fechas y horarios',
-                    style: TextStyle(
-                      color: context._poolsCrearPalette.inputText,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  _fechaPicker(
-                    label: 'Salida',
-                    text: _fecha == null
-                        ? 'Seleccionar fecha y hora'
-                        : _formatFechaHora(_fecha!),
-                    onTap: () => _pickFecha(esVuelta: false),
-                  ),
-                  if (_sentido == 'ida_y_vuelta') ...[
-                    const SizedBox(height: 8),
-                    _fechaPicker(
-                      label: 'Regreso estimado',
-                      text: _fechaVuelta == null
-                          ? 'Seleccionar…'
-                          : _formatFechaHora(_fechaVuelta!),
-                      onTap: () => _pickFecha(esVuelta: true),
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  Text(
                     _recaudoCentral
                         ? PoolsProductoCopy.bancoRecibirNetoTitulo
                         : PoolsProductoCopy.bancoLegacyDepositoTitulo,
@@ -1398,34 +1634,7 @@ $hashtags
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _loading ? null : _crear,
-                icon: const Icon(Icons.save),
-                label: Text(_loading ? 'Creando…' : 'Crear viaje'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFFC857),
-                  foregroundColor: const Color(0xFF1C1F2A),
-                  minimumSize: const Size.fromHeight(52),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  textStyle: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 16,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    ),
-    );
+    ];
   }
 
   Widget _buildScaffoldViajeGrupal(BuildContext context) {
@@ -1747,6 +1956,48 @@ $hashtags
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _guiaRapidaExpansion() {
+    final p = context._poolsCrearPalette;
+    return _card(
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 4),
+          initiallyExpanded: true,
+          title: Text(
+            'Guía rápida',
+            style: TextStyle(
+              color: p.inputText,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+            ),
+          ),
+          subtitle: Text(
+            '4 pasos: viaje → ruta → fotos → cobro',
+            style: TextStyle(color: p.subtitleMuted, fontSize: 12),
+          ),
+          leading: Icon(Icons.lightbulb_outline, color: p.accent, size: 22),
+          children: <Widget>[
+            Text(
+              '• Viaje: tipo, agencia y qué incluye.\n'
+              '• Ruta: punto de salida, destino y fechas.\n'
+              '• Fotos: banner y contacto del chofer.\n'
+              '• Cobro: cupos, precio y cuenta bancaria.\n\n'
+              '${PoolsProductoCopy.formQuienPagaCliente(recaudoCentral: _recaudoCentral)}\n\n'
+              '${PoolsProductoCopy.formTuRolOrganizador}',
+              style: TextStyle(
+                color: p.subtitleMuted,
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2617,14 +2868,19 @@ $hashtags
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Paradas del tour/excursión 🚌',
+          'Paradas en el camino (opcional)',
           style: TextStyle(color: pal.accentSoft, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Lugares que visitan durante el tour. El punto de salida va arriba.',
+          style: TextStyle(color: pal.subtitleMuted, fontSize: 12, height: 1.35),
         ),
         const SizedBox(height: 8),
         CampoLugarAutocomplete(
           key: ValueKey('parada_input_$_paradaInputVersion'),
-          label: 'Agregar parada',
-          hint: 'Busca una parada (ej: Boca Chica, Juan Dolio...)',
+          label: 'Buscar parada',
+          hint: 'Ej: Boca Chica, Juan Dolio, catarata…',
           country: 'DO',
           asistenteDireccionHabilitado: true,
           initialText: _paradaDraft.isEmpty ? null : _paradaDraft,
@@ -2696,7 +2952,14 @@ $hashtags
       setState(() => _agenciaLogoUrl = url);
       _snack('✅ Logo cargado');
     } catch (e) {
-      _snack('❌ Error subiendo logo: $e');
+      if (!mounted) return;
+      await PoolPublicarErrores.mostrarDialogo(
+        context,
+        titulo: 'No se pudo subir',
+        mensaje: PoolPublicarErrores.traducirSubida(e),
+        icono: Icons.cloud_off_rounded,
+        color: const Color(0xFFDC6803),
+      );
     } finally {
       if (mounted) setState(() => _subiendoLogo = false);
     }
@@ -2736,7 +2999,14 @@ $hashtags
       setState(() => _bannerUrls.add(url));
       _snack('✅ Foto ${_bannerUrls.length}/${PoolGiraBannerUrls.maxCount} cargada');
     } catch (e) {
-      _snack('❌ Error subiendo banner: $e');
+      if (!mounted) return;
+      await PoolPublicarErrores.mostrarDialogo(
+        context,
+        titulo: 'No se pudo subir',
+        mensaje: PoolPublicarErrores.traducirSubida(e),
+        icono: Icons.cloud_off_rounded,
+        color: const Color(0xFFDC6803),
+      );
     } finally {
       if (mounted) setState(() => _subiendoBanner = false);
     }
@@ -2791,7 +3061,14 @@ $hashtags
       setState(() => _bannerVideoUrl = url);
       _snack('✅ Video promocional cargado');
     } catch (e) {
-      _snack('❌ Error subiendo video: $e');
+      if (!mounted) return;
+      await PoolPublicarErrores.mostrarDialogo(
+        context,
+        titulo: 'No se pudo subir',
+        mensaje: PoolPublicarErrores.traducirSubida(e),
+        icono: Icons.cloud_off_rounded,
+        color: const Color(0xFFDC6803),
+      );
     } finally {
       if (mounted) setState(() => _subiendoBannerVideo = false);
     }

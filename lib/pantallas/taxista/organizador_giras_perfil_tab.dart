@@ -6,6 +6,7 @@ import 'package:flygo_nuevo/servicios/logout.dart';
 import 'package:flygo_nuevo/shell/organizador_giras_shell.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/cuenta_legal_tiles.dart';
+import 'package:flygo_nuevo/widgets/organizador_giras_ventas_resumen.dart';
 
 /// Perfil del organizador de giras (sin documentos de chofer).
 class OrganizadorGirasPerfilTab extends StatelessWidget {
@@ -155,6 +156,8 @@ class OrganizadorGirasPerfilTab extends StatelessWidget {
                     ],
                   ),
                 ),
+                const SizedBox(height: 16),
+                const OrganizadorGirasVentasResumen(),
                 const SizedBox(height: 16),
                 _sectionTitle(context, 'Mi cuenta'),
                 _infoCard(
