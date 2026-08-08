@@ -194,7 +194,7 @@
           El pago por transferencia va a <strong>Open ASK Service SRL (RAI)</strong>, no a la cuenta personal del operador.
         </div>
         <div class="cuenta-box">
-          Open ASK Service SRL · Banco Popular · Cuenta Corriente · 787726249
+          Open ASK Service SRL · Banco Popular · Cuenta Corriente · 816104582
         </div>
         <p id="status" class="muted"></p>
         <a id="openApp" class="btn primary" href="#">Abrir en RAI Pasajero</a>
@@ -272,7 +272,12 @@
 
       function renderPreview(p) {
         var agencia = p.agenciaNombre || 'Gira';
-        var title = agencia + ' · cupos RAI';
+        var badge = (p.servicioBadge || '').trim();
+        var title = badge || (agencia + ' · cupos RAI');
+        var tipo = (p.tipo || '').toLowerCase();
+        if (tipo === 'grupal' || tipo.indexOf('grupal') >= 0) {
+          title = badge || agencia || 'Viaje grupal RAI';
+        }
         var route = (p.origenTown || '—') + ' → ' + (p.destino || '—');
         var precio = Number(p.precioPorAsiento) || 0;
         var left = Number(p.cuposDisponibles);

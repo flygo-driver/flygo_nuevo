@@ -1685,6 +1685,11 @@ class _CuentaCorporativoTabState extends State<_CuentaCorporativoTab> {
               etiquetaCiclo: CorporativoCicloFacturacion.descripcion(
                 empresa.facturacionCicloDias,
               ),
+              validoHasta: periodo?.fin,
+              activo: periodo?.codigoActivo ?? false,
+              estadoEtiqueta: (periodo?.codigoActivo ?? false)
+                  ? 'Activo'
+                  : 'Expirado — pagá para renovar',
             ),
             if (periodo?.fin != null) ...[
               const SizedBox(height: 16),

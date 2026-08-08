@@ -13,9 +13,14 @@ import {
   nuevoPeriodoTrasPago,
   obtenerDiasPausaEmpresa,
   repararPeriodoSinRotarCodigo,
+  evaluarVigenciaCodigoCorporativo,
 } from "./corporativo_periodo.js";
 import { liquidacionCentsCorporativoDesdeViaje } from "./corporativo_tarifa_config.js";
 import { esCorporativoModoInformativo } from "./multiparada.js";
+import {
+  enviarPushUid,
+  registrarHistorialNotificacionCorp,
+} from "./corporativo_notificaciones.js";
 
 type AnyMap = Record<string, unknown>;
 
@@ -187,6 +192,116 @@ function metaLiquidacionEmpresa(ed: AnyMap, cicloDias: number): AnyMap {
     facturacionCicloDias: cicloDias,
     formaPagoRai: forma || null,
   };
+}
+
+/** ¿Quedan liquidaciones archivadas sin cobrar? */
+async function hayLiquidacionesPendientesCobro(empresaId: string): Promise<boolean> {
+  const snap = await getFirestore()
+    .collection("empresas_corporativas")
+    .doc(empresaId)
+    .collection("liquidaciones")
+    .where("estado", "==", "pendiente_cobro")
+    .limit(1)
+    .get();
+  return !snap.empty;
+}
+
+/**
+ * Tras pagar la última liquidación pendiente: nuevo período + código nuevo.
+ * El período archivado conserva viajes y montos en `liquidaciones`.
+ */
+async function intentarRenovarCodigoTrasSaldarDeuda(
+  empresaId: string,
+): Promise<{ renovado: boolean; codigoAcceso?: string }> {
+  if (await hayLiquidacionesPendientesCobro(empresaId)) {
+    return { renovado: false };
+  }
+
+  const empresaRef = getFirestore()
+    .collection("empresas_corporativas")
+    .doc(empresaId);
+  const eSnap = await empresaRef.get();
+  if (!eSnap.exists) return { renovado: false };
+
+  const ed = (eSnap.data() ?? {}) as AnyMap;
+  const periodo = (ed.periodoActual ?? {}) as AnyMap;
+  const now = new Date();
+  const vig = evaluarVigenciaCodigoCorporativo(periodo, now);
+  if (vig.vigente) return { renovado: false };
+
+  const cicloDias = Math.max(1, Math.trunc(num(ed.facturacionCicloDias) || 15));
+  const diasPausa = await obtenerDiasPausaEmpresa(empresaId);
+  const nuevo = nuevoPeriodoTrasPago(ed, cicloDias, now, diasPausa);
+  const codigoAcceso = str(nuevo.codigoAcceso);
+
+  await empresaRef.set(
+    {
+      periodoActual: {
+        ...nuevo,
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      actualizadoEn: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  logger.info("corporativo codigo renovado tras saldar deuda", {
+    empresaId,
+    codigoAcceso,
+  });
+  return { renovado: true, codigoAcceso };
+}
+
+/** Aviso único a encargados cuando el corte archiva liquidación pendiente. */
+async function notificarEncargadosCortePeriodoConDeuda(args: {
+  empresaId: string;
+  empresaRef: FirebaseFirestore.DocumentReference;
+  empresaData: AnyMap;
+  montoRd: number;
+  viajesCount: number;
+  periodoFin: Date;
+}): Promise<void> {
+  const encargados = Array.isArray(args.empresaData.encargadoUids)
+    ? (args.empresaData.encargadoUids as unknown[]).map(str).filter(Boolean)
+    : [];
+  if (encargados.length === 0) return;
+
+  const key = `ultimaNotifPeriodoCerrado_${args.periodoFin.toISOString().slice(0, 10)}`;
+  if (str(args.empresaData[key]) === "1") return;
+
+  const nombreEmpresa = str(args.empresaData.nombre) || "Su empresa";
+  const montoTxt = Math.round(args.montoRd).toLocaleString("es-DO");
+  const titulo = "Período corporativo cerrado";
+  const viajesTxt =
+    args.viajesCount === 1 ? "1 viaje" : `${args.viajesCount} viajes`;
+  const cuerpo =
+    args.montoRd > 0
+      ? `${nombreEmpresa}: liquidación de RD$${montoTxt} (${viajesTxt}). ` +
+        "Pagá en Cuenta para renovar el código. Tus rutas siguen guardadas."
+      : `${nombreEmpresa}: período cerrado (${viajesTxt}). ` +
+        "Pagá en Cuenta para renovar el código y seguir enviando rutas.";
+
+  for (const uid of encargados) {
+    const ok = await enviarPushUid(uid, titulo, cuerpo, {
+      type: "corporativo_periodo_cerrado",
+      empresaId: args.empresaId,
+      rol: "encargado",
+    });
+    await registrarHistorialNotificacionCorp({
+      empresaId: args.empresaId,
+      uidDestino: uid,
+      canal: "fcm",
+      tipo: "corporativo_periodo_cerrado",
+      titulo,
+      cuerpo,
+      enviado: ok,
+    });
+  }
+
+  await args.empresaRef.set(
+    { [key]: "1", actualizadoEn: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
 }
 
 /** Suma un viaje corporativo al período actual (idempotente por viajeId). */
@@ -854,7 +969,16 @@ export const marcarLiquidacionCorporativoPagada = onCall(async (request) => {
     logger.warn("archivarHistorialOperativoTrasPago liq", { empresaId, e });
   }
 
-  return { ok: true, empresaId, liquidacionId };
+  const renov = await intentarRenovarCodigoTrasSaldarDeuda(empresaId);
+
+  return {
+    ok: true,
+    empresaId,
+    liquidacionId,
+    ...(renov.renovado && renov.codigoAcceso
+      ? { codigoAcceso: renov.codigoAcceso, periodoRenovado: true }
+      : {}),
+  };
 });
 
 const METODOS_PAGO_CORP = new Set([
@@ -1140,6 +1264,12 @@ export const adminValidarPagoCorporativo = onCall(async (request) => {
     } catch (e) {
       logger.warn("archivarHistorialOperativoTrasPago pago", { empresaId, e });
     }
+    if (!codigoAccesoNuevo && liquidacionId) {
+      const renov = await intentarRenovarCodigoTrasSaldarDeuda(empresaId);
+      if (renov.renovado && renov.codigoAcceso) {
+        codigoAccesoNuevo = renov.codigoAcceso;
+      }
+    }
   }
 
   return {
@@ -1227,6 +1357,11 @@ export const scheduledCorporativoCortePeriodos = onSchedule(
         const fin = parseTs(raw.fin);
         if (!fin || fin.getTime() > now.getTime()) continue;
 
+        const montoAntesCorte = round2(num(raw.montoTotalRd));
+        const viajesAntesCorte = Math.trunc(num(raw.viajesCount));
+        const huboDeudaArchivar =
+          montoAntesCorte > 0 || viajesAntesCorte > 0;
+
         try {
           await db.runTransaction(async (tx) => {
             const fresh = await tx.get(doc.ref);
@@ -1264,6 +1399,23 @@ export const scheduledCorporativoCortePeriodos = onSchedule(
             empresaId: doc.id,
             cicloDias,
           });
+          if (huboDeudaArchivar) {
+            try {
+              await notificarEncargadosCortePeriodoConDeuda({
+                empresaId: doc.id,
+                empresaRef: doc.ref,
+                empresaData: ed,
+                montoRd: montoAntesCorte,
+                viajesCount: viajesAntesCorte,
+                periodoFin: fin,
+              });
+            } catch (e) {
+              logger.warn("scheduledCorporativoCortePeriodos push encargado", {
+                empresaId: doc.id,
+                e,
+              });
+            }
+          }
         } catch (e) {
           logger.error("scheduledCorporativoCortePeriodos", {
             empresaId: doc.id,

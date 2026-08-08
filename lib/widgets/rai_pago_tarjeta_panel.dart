@@ -6,6 +6,7 @@ import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/pagos/azul_payment_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
 import 'package:flygo_nuevo/widgets/azul_card_brands_row.dart';
 
 /// Panel tarjeta AZUL (Fase 6 cableado). Flag OFF → aviso sin botón de cobro.
@@ -94,6 +95,10 @@ class _RaiPagoTarjetaPanelState extends State<RaiPagoTarjetaPanel>
 
   Future<void> _pagarConAzul() async {
     if (_cargando) return;
+    if (!PagoTarjetaClienteGate.cobroHabilitado) {
+      await PagoTarjetaClienteGate.avisarEnDesarrollo(context);
+      return;
+    }
     setState(() => _cargando = true);
     try {
       final res = await AzulPaymentService.createSession(viajeId: widget.viajeId);
@@ -220,7 +225,7 @@ class _RaiPagoTarjetaPanelState extends State<RaiPagoTarjetaPanel>
     final cs = Theme.of(context).colorScheme;
     final bool dark = widget.fondoOscuro ||
         Theme.of(context).brightness == Brightness.dark;
-    final habilitado = FinanceConfigService.pagosConTarjetaAzulHabilitados;
+    final habilitado = PagoTarjetaClienteGate.cobroHabilitado;
     final Color accent = widget.modoViajeEnCurso
         ? RaiDsColors.neon
         : (dark ? RaiDsColors.neonSoft : cs.primary);
@@ -398,8 +403,7 @@ class _RaiPagoTarjetaPanelState extends State<RaiPagoTarjetaPanel>
                       icon: Icons.info_outline_rounded,
                       color: Colors.orangeAccent,
                       dark: dark,
-                      text:
-                          'Cableado listo. Activa pagos con tarjeta cuando el banco apruebe.',
+                      text: PagoTarjetaClienteGate.mensaje,
                     )
                   else
                     _StatusBanner(

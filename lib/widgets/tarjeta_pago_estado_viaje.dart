@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/negocio_aliado_viaje_doc.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
 
@@ -132,8 +133,21 @@ class EfectivoPagoTaxistaBanner extends StatelessWidget {
         final double monto = (data['precio'] is num)
             ? (data['precio'] as num).toDouble()
             : montoFallback;
+        final bool promoGratisQr =
+            NegocioAliadoViajeDoc.esViajeGratisPromo(data);
         final bool desdeTarjeta =
             MetodoPagoViaje.cambioDesdeTarjetaAEfectivo(data);
+
+        if (promoGratisQr) {
+          return MetodoPagoEstadoBanner(
+            metodoPago: metodo,
+            titulo: 'NO COBRAR · 6.º viaje GRATIS (promo QR)',
+            detalle: 'Cliente referido por negocio aliado. '
+                'El pasajero no paga este viaje (RD\$0). '
+                'RAI registra la comisión al taxista sobre el precio nominal.',
+            estado: MetodoPagoBannerEstado.exito,
+          );
+        }
 
         return MetodoPagoEstadoBanner(
           metodoPago: metodo,

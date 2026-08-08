@@ -5,13 +5,21 @@
 class PlataformaEconomia {
   PlataformaEconomia._();
 
-  static double _comisionViajePct = 20;
+  static double _comisionViajePct = 10;
+  static double _comisionTransferenciaPct = 15;
+  static double _comisionTarjetaPct = 15;
 
   /// Giras por cupos: % fijo del prepago (no sigue el % global del admin).
   static const double comisionGiraPorcentajeFijo = 10.0;
 
-  /// Porcentaje global (0–100) usado en cotización y comisión en viajes / recargas.
+  /// Efectivo / prepago (`config/comision.porcentaje`, default 10).
   static double get comisionViajePorcentaje => _comisionViajePct;
+
+  /// Transferencia (`config/comision.porcentajeTransferencia`, default 15).
+  static double get comisionTransferenciaPorcentaje => _comisionTransferenciaPct;
+
+  /// Tarjeta (`config/comision.porcentajeTarjeta`, default 15).
+  static double get comisionTarjetaPorcentaje => _comisionTarjetaPct;
 
   /// Comisión RAI sobre **Giras por cupos** (`viajes_pool`): siempre [comisionGiraPorcentajeFijo].
   static double get comisionGiraPorcentaje => comisionGiraPorcentajeFijo;
@@ -25,6 +33,45 @@ class PlataformaEconomia {
     if (!p.isFinite) return;
     if (p < 0 || p > 100) return;
     _comisionViajePct = p;
+  }
+
+  static void syncComisionTransferenciaPorcentajeFromRemote(double p) {
+    if (!p.isFinite) return;
+    if (p < 0 || p > 100) return;
+    _comisionTransferenciaPct = p;
+  }
+
+  static void syncComisionTarjetaPorcentajeFromRemote(double p) {
+    if (!p.isFinite) return;
+    if (p < 0 || p > 100) return;
+    _comisionTarjetaPct = p;
+  }
+
+  /// Sincroniza los tres % desde `config/comision`.
+  static void syncComisionesMetodoFromRemote({
+    required double efectivo,
+    required double transferencia,
+    required double tarjeta,
+  }) {
+    syncComisionViajePorcentajeFromRemote(efectivo);
+    syncComisionTransferenciaPorcentajeFromRemote(transferencia);
+    syncComisionTarjetaPorcentajeFromRemote(tarjeta);
+  }
+
+  /// % comisión según método normalizado (`efectivo`, `transferencia`, `tarjeta`).
+  static double comisionPorMetodoNormalizado(String metodo) {
+    final m = metodo.trim().toLowerCase();
+    if (m == 'tarjeta' || m.contains('card')) return _comisionTarjetaPct;
+    if (m == 'transferencia' || m.contains('transfer')) {
+      return _comisionTransferenciaPct;
+    }
+    return _comisionViajePct;
+  }
+
+  static String etiquetaPorcentajeComisionMetodo(String metodo) {
+    final p = comisionPorMetodoNormalizado(metodo);
+    if (p == p.roundToDouble()) return '${p.round()}%';
+    return '${p.toStringAsFixed(1)}%';
   }
 
   /// Sin efecto: giras usan [comisionGiraPorcentajeFijo]. Mantenido por compat de llamadas.

@@ -172,7 +172,7 @@ class NotificationService {
 
   /// Silencia timbre de pool en el dispositivo del pasajero (p. ej. al confirmar viaje).
   void suprimirTimbrePoolCliente({
-    Duration duracion = const Duration(seconds: 45),
+    Duration duracion = const Duration(minutes: 30),
   }) {
     final int hasta =
         DateTime.now().add(duracion).millisecondsSinceEpoch;
@@ -194,7 +194,10 @@ class NotificationService {
 
   /// Timbre inmediato (app abierta) con el mismo WAV que el canal Android.
   Future<void> _playTimbreAsset({bool pool = false}) async {
-    if (pool && !_timbrePoolPermitido) return;
+    if (pool) {
+      if (!_timbrePoolPermitido) return;
+      if (_debeSuprimirTimbreComoCliente()) return;
+    }
     try {
       _timbrePlayer ??= AudioPlayer();
       await _timbrePlayer!.stop();

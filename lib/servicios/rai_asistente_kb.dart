@@ -326,4 +326,29 @@ class RaiAsistenteKb {
         return RaiAsistenteAction.none;
     }
   }
+
+  static String actionToString(RaiAsistenteAction action) {
+    switch (action) {
+      case RaiAsistenteAction.openMotor:
+        return 'open_motor';
+      case RaiAsistenteAction.openTaxi:
+        return 'open_taxi';
+      case RaiAsistenteAction.openTurismo:
+        return 'open_turismo';
+      case RaiAsistenteAction.openSoporte:
+        return 'open_soporte';
+      case RaiAsistenteAction.openMisViajes:
+        return 'open_mis_viajes';
+      case RaiAsistenteAction.openPerfil:
+        return 'open_perfil';
+      case RaiAsistenteAction.none:
+        return 'none';
+    }
+  }
+
+  static bool esSolicitudViaje(RaiAsistenteAction action) {
+    return action == RaiAsistenteAction.openTaxi ||
+        action == RaiAsistenteAction.openMotor ||
+        action == RaiAsistenteAction.openTurismo;
+  }
 }

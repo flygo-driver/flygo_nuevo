@@ -2,7 +2,7 @@
 
 **Proyecto Firebase:** `flygo-rd`  
 **Comercio:** OPEN ASK SERVICE, S.R.L. (RNC 1-32-01176-7)  
-**Cuenta liquidación:** Banco Popular 787726249  
+**Cuenta liquidación:** Banco Popular 816104582  
 **Versión del plan:** 1.0 — julio 2026  
 
 ---
@@ -289,7 +289,7 @@ Sin tocar código ni Play:
 | Comercio | OPEN ASK SERVICE, S.R.L. |
 | RNC | 1-32-01176-7 |
 | Dirección | Calle 23 Este No. 39, Ensanche Luperón, Santo Domingo, DN |
-| Cuenta | Banco Popular 787726249 |
+| Cuenta | Banco Popular 816104582 |
 | Contacto | ventasopenask@gmail.com · (809) 420-1481 |
 | Paquete Android cliente | `com.flygo.rd2` |
 

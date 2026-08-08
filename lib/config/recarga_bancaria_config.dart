@@ -9,7 +9,7 @@ class RecargaBancariaConfig {
   static const String nombreLegal = titular;
   static const String banco = 'Banco Popular';
   static const String tipoCuenta = 'Cuenta Corriente';
-  static const String numeroCuenta = '787726249';
+  static const String numeroCuenta = '816104582';
   static const String rnc = '1320-11767';
 
   /// Dirección permanente del comercio (requisito AZUL / recibo).

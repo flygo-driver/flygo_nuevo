@@ -307,6 +307,7 @@ class PagosTaxistaRepo {
     required String viajeId,
     required double comisionRd,
     required String fuenteLedger,
+    Map<String, dynamic>? viajeData,
   }) async {
     final billeRef = _db.collection('billeteras_taxista').doc(taxistaId);
     final billeSnap = await tx.get(billeRef);
@@ -318,7 +319,9 @@ class PagosTaxistaRepo {
     final Map<String, dynamic> bPatch = {
       'updatedAt': FieldValue.serverTimestamp(),
     };
-    if (!flag && pend < 1e-6) {
+    final exigeComision15 =
+        viajeData != null && viajeEsNegocioAliadoReferido(viajeData);
+    if (!exigeComision15 && !flag && pend < 1e-6) {
       bPatch['primerViajeComisionGratisConsumido'] = true;
       await TaxistaPrepagoLedger.appendComisionViajeEfectivo(
         tx: tx,
@@ -379,7 +382,7 @@ class PagosTaxistaRepo {
     Map<String, dynamic> viajeData, {
     double? pctComision,
   }) {
-    final double total = totalRdDesdeDocViaje(viajeData);
+    final double total = totalNominalRdParaComision(viajeData);
     if (total <= 0) return 0;
     final double pct = pctComision ??
         pctComisionDesdeViaje(
@@ -400,7 +403,10 @@ class PagosTaxistaRepo {
     }
     if (!viajeAplicaComisionPrepago(viajeData)) return null;
     final double pend = comisionPendienteDesdeBilletera(billeData);
-    if (!primerViajeComisionGratisConsumido(billeData) && pend <= 1e-6) {
+    final exigeComision15 = viajeEsNegocioAliadoReferido(viajeData);
+    if (!exigeComision15 &&
+        !primerViajeComisionGratisConsumido(billeData) &&
+        pend <= 1e-6) {
       return null;
     }
     final double comision = comisionEstimadaRdDesdeViaje(

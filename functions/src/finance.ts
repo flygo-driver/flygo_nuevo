@@ -3,6 +3,7 @@ import {
   ledgerComisionViajeEfectivoCf,
   comisionViajeEfectivoLedgerRef,
   comisionBolaPuebloLedgerRef,
+  negocioAliadoViajeGratisLedgerRef,
   debitarComisionBolaPuebloEnTx,
 } from "./taxista_prepago_ledger.js";
 import type { DocumentSnapshot, Transaction } from "firebase-admin/firestore";
@@ -12,8 +13,17 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions";
 
+import {
+  aplicarCierreNegocioAliadoEnTx,
+  acreditarPrepagoViajeGratisNegocioAliadoEnTx,
+  precioNominalCentsDesdeViaje,
+  promoNegocioAliadoVigente,
+  resolverComisionPctNegocioAliado,
+  viajeEsNegocioAliadoReferido,
+  negocioAliadoEximePrimerEfectivoGratis,
+} from "./negocio_aliado_viaje.js";
 import { logAdminAudit } from "./audit.js";
-import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached } from "./comision_viaje_pct.js";
+import { comisionCentsDesdePrecioCents, getComisionViajePorcentajeCached, getComisionPorMetodoCached } from "./comision_viaje_pct.js";
 import { getComisionCorporativoPorcentajeCached, liquidacionCentsCorporativoDesdeViaje } from "./corporativo_tarifa_config.js";
 import {
   aplicarIncentivoComisionEnFinalizar,
@@ -1068,6 +1078,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const metodoAsiento = esEfectivo ? "efectivo" : (esTransferencia ? "transferencia" : "tarjeta");
     const pagoRegistrado = d.pagoRegistrado === true;
     const aplicaPrepagoComision = viajeAplicaComisionPrepago(d);
+    const esPromoGratisQr = d.negocioAliadoPromoGratis === true;
 
     const precioCents = (precioCentsDb !== null && precioCentsDb > 0)
       ? precioCentsDb
@@ -1076,12 +1087,23 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const billeRef = db().collection("billeteras_taxista").doc(uidTaxista);
     const asientoRef = db().collection("pagos").doc(`viaje_${viajeId}_asiento`);
     const userTaxRef = db().collection("usuarios").doc(uidTaxista);
+    const clienteRef = uidCliente ? db().collection("usuarios").doc(uidCliente) : null;
     const statsRef = statsDocRef(uidTaxista);
 
     // Firestore: todas las lecturas de la transacción antes de cualquier escritura.
     const uSnap = await tx.get(userTaxRef);
     const billeSnapPre = await tx.get(billeRef);
     const statsSnap = await tx.get(statsRef);
+    let clienteSnapPre: DocumentSnapshot | null = null;
+    if (clienteRef && viajeEsNegocioAliadoReferido(d)) {
+      clienteSnapPre = await tx.get(clienteRef);
+    }
+    let negocioGratisLedgerSnapPre: DocumentSnapshot | null = null;
+    if (aplicaPrepagoComision && esPromoGratisQr && viajeEsNegocioAliadoReferido(d)) {
+      negocioGratisLedgerSnapPre = await tx.get(
+        negocioAliadoViajeGratisLedgerRef(uidTaxista, viajeId),
+      );
+    }
     let asientoSnapPre: DocumentSnapshot | null = null;
     let ledgerMovSnapPre: DocumentSnapshot | null = null;
     if (!pagoRegistrado) {
@@ -1101,13 +1123,21 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       );
     }
 
+    const aplicaCreditoPrepagoGratis =
+      esPromoGratisQr &&
+      aplicaPrepagoComision &&
+      clienteSnapPre?.exists === true &&
+      promoNegocioAliadoVigente((clienteSnapPre.data() ?? {}) as AnyMap);
+
     let comisionPctAplicada =
-      esCorporativoEmpresa ? comisionCorporativoPct : comisionViajePct;
+      esCorporativoEmpresa ? comisionCorporativoPct : await getComisionPorMetodoCached(metodoAsiento);
+    const negocioPct = resolverComisionPctNegocioAliado(d, comisionPctAplicada);
+    comisionPctAplicada = negocioPct.pct;
     let incentivoViajePatch: AnyMap = {};
-    if (!esCorporativoEmpresa && !pagoRegistrado) {
+    if (!esCorporativoEmpresa && !pagoRegistrado && negocioPct.usarIncentivos) {
       const inc = aplicarIncentivoComisionEnFinalizar({
         cfg: incentivosCfg,
-        globalPct: comisionViajePct,
+        globalPct: comisionPctAplicada,
         statsData: (statsSnap.data() ?? {}) as AnyMap,
         now: new Date(),
       });
@@ -1116,15 +1146,22 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       tx.set(statsRef, inc.statsPatch, { merge: true });
     }
 
+    const precioNominalCents = viajeEsNegocioAliadoReferido(d)
+      ? precioNominalCentsDesdeViaje(d)
+      : precioCents;
+    const comisionBaseCents = viajeEsNegocioAliadoReferido(d) ? precioNominalCents : precioCents;
+
     // Tras `pagoRegistrado`, conservar partidas ya cerradas (idempotencia).
     let comisionCents =
       pagoRegistrado && comisionCentsDb !== null && comisionCentsDb >= 0
         ? comisionCentsDb
-        : comisionCentsDesdePrecioCents(precioCents, comisionPctAplicada);
+        : comisionCentsDesdePrecioCents(comisionBaseCents, comisionPctAplicada);
     let gananciaCents =
       pagoRegistrado && gananciaCentsDb !== null && gananciaCentsDb >= 0
         ? gananciaCentsDb
-        : Math.max(0, precioCents - comisionCents);
+        : viajeEsNegocioAliadoReferido(d)
+          ? Math.max(0, precioNominalCents - comisionCents)
+          : Math.max(0, precioCents - comisionCents);
 
     if (!pagoRegistrado && esCorporativoEmpresa) {
       const corpLiq = liquidacionCentsCorporativoDesdeViaje(
@@ -1233,10 +1270,15 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       };
       if (aplicaPrepagoComision) {
         const pend = comisionPendienteRdFromBilletera(bData);
-        const flag = bData.primerViajeComisionGratisConsumido === true;
         const saldoIni = saldoPrepagoRdFromBilletera(bData);
+        if (aplicaCreditoPrepagoGratis) {
+          // 6.º viaje gratis QR vigente: RAI acredita prepago; no debitar comisión aquí.
+          facturaSaldoPrepagoComisionRd = Number.parseFloat(saldoIni.toFixed(2));
+        } else {
+        const flag = bData.primerViajeComisionGratisConsumido === true;
         const comisionRd = fromCents(comisionCents);
-        if (!flag && pend < 1e-6) {
+        const eximePrimerGratis = negocioAliadoEximePrimerEfectivoGratis(d);
+        if (!eximePrimerGratis && !flag && pend < 1e-6) {
           billePatch.primerViajeComisionGratisConsumido = true;
           facturaSaldoPrepagoComisionRd = Number.parseFloat(saldoIni.toFixed(2));
           await ledgerComisionViajeEfectivoCf(tx, {
@@ -1278,6 +1320,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
             primerEfectivoSinDescuento: false,
             existingMovSnap: ledgerMovSnapPre ?? undefined,
           });
+        }
         }
       }
       tx.set(billeRef, billePatch, { merge: true });
@@ -1352,6 +1395,43 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       bolaComisionAplicada = false;
     }
 
+    const negocioAliadoPatch =
+      clienteSnapPre && uidCliente
+        ? aplicarCierreNegocioAliadoEnTx({
+            tx,
+            viajeData: d,
+            uidCliente,
+            clienteSnap: clienteSnapPre,
+            precioNominalCents,
+          })
+        : {};
+
+    let prepagoGratisPatch: AnyMap = {};
+    if (aplicaCreditoPrepagoGratis) {
+      const billeDataCred = {
+        ...((billeSnapPre.data() ?? {}) as AnyMap),
+        ...(facturaSaldoPrepagoComisionRd != null
+          ? { saldoPrepagoComisionRd: facturaSaldoPrepagoComisionRd }
+          : {}),
+      };
+      const cred = await acreditarPrepagoViajeGratisNegocioAliadoEnTx({
+        tx,
+        uidTaxista,
+        viajeId,
+        viajeData: d,
+        clienteSnap: clienteSnapPre,
+        gananciaCents,
+        precioCents,
+        billeData: billeDataCred,
+        fuente: "finalizar_viaje_seguro_cf",
+        existingLedgerSnap: negocioGratisLedgerSnapPre ?? undefined,
+      });
+      if (cred.applied || cred.alreadyCredited) {
+        facturaSaldoPrepagoComisionRd = cred.saldoPrepagoDespues;
+      }
+      prepagoGratisPatch = cred.patchViaje;
+    }
+
     tx.update(viajeRef, {
       estado: "completado",
       completado: true,
@@ -1361,6 +1441,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       ganancia_cents: gananciaCents,
       comisionPorcentaje: comisionPctAplicada,
       ...incentivoViajePatch,
+      ...negocioAliadoPatch,
+      ...prepagoGratisPatch,
       precio: fromCents(precioCents),
       comision: fromCents(comisionCents),
       gananciaTaxista: fromCents(gananciaCents),

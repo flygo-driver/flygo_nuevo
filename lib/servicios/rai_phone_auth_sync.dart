@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/negocio_referido_service.dart';
 
 /// Sincroniza Firestore tras login por SMS (cliente o taxista).
 abstract final class RaiPhoneAuthSync {
@@ -77,6 +78,10 @@ abstract final class RaiPhoneAuthSync {
           'updatedAt': nowTs,
           'actualizadoEn': nowTs,
         }, SetOptions(merge: true));
+        await NegocioReferidoService.aplicarAlUsuarioSiCorresponde(
+          uid: uid,
+          rol: 'cliente',
+        );
       } else {
         await ref.set({
           'uid': uid,
@@ -122,5 +127,11 @@ abstract final class RaiPhoneAuthSync {
       }
     }
     await ref.set(patch, SetOptions(merge: true));
+    if (rolEntrada == 'cliente') {
+      await NegocioReferidoService.aplicarAlUsuarioSiCorresponde(
+        uid: uid,
+        rol: 'cliente',
+      );
+    }
   }
 }

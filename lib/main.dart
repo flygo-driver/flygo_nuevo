@@ -28,6 +28,7 @@ import 'package:flygo_nuevo/utilidades/constante.dart'
 // 🔔 Servicios
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
 import 'package:flygo_nuevo/servicios/push_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
@@ -43,6 +44,8 @@ import 'package:flygo_nuevo/servicios/google_auth.dart';
 import 'package:flygo_nuevo/servicios/web_auth_bootstrap.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
+import 'package:flygo_nuevo/servicios/negocio_referido_bootstrap.dart';
+import 'package:flygo_nuevo/servicios/negocio_referido_service.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/utils/release_build_flags.dart';
 // 🔐 Auth / Gates
@@ -315,6 +318,12 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
       await FirebaseBootstrap.ensureInitialized();
       if (kIsWeb) {
         await WebAuthBootstrap.ensureGoogleRedirectHandled();
+        await NegocioReferidoService.capturarDesdeUrlActualWeb();
+      }
+      if (!kIsWeb &&
+          defaultTargetPlatform != TargetPlatform.windows &&
+          defaultTargetPlatform != TargetPlatform.macOS) {
+        unawaited(NegocioReferidoBootstrap.install());
       }
       // En Windows evitamos FCM (MissingPluginException en métodos de firebase_messaging).
       if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
@@ -373,6 +382,7 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
 
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
+        await RaiModoSesionService.initParaUsuario(user.uid);
         await PoolTimbreSessionGuard.sincronizarRol(user.uid);
         PushService.ensureInitedAndSaved();
       }

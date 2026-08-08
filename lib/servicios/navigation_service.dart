@@ -21,6 +21,7 @@ import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/shell/taxista_shell.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
 class NavigationService {
@@ -769,8 +770,72 @@ class NavigationService {
     );
   }
 
-  /// Reabre el overlay de viaje en curso tras una pausa voluntaria.
+  /// Reabre el viaje tras pausa voluntaria: reserva futura → confirmación;
+  /// operativo / en pool → overlay de viaje en curso.
   static void retomarViajeActivoCliente() {
+    unawaited(_retomarViajeActivoClienteImpl());
+  }
+
+  static DateTime? _fechaHoraDesdeDocViaje(dynamic raw) {
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is DateTime) return raw;
+    if (raw is String) return DateTime.tryParse(raw);
+    return null;
+  }
+
+  static Future<void> _retomarViajeActivoClienteImpl() async {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.trim().isEmpty) {
+      _retomarViajeActivoClienteOverlay();
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> userSnap =
+          await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
+      final String viajeId =
+          (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (viajeId.isEmpty) {
+        _retomarViajeActivoClienteOverlay();
+        return;
+      }
+
+      final DocumentSnapshot<Map<String, dynamic>> viajeSnap =
+          await FirebaseFirestore.instance.collection('viajes').doc(viajeId).get();
+      if (!viajeSnap.exists) {
+        _retomarViajeActivoClienteOverlay();
+        return;
+      }
+
+      final Map<String, dynamic> d = viajeSnap.data() ?? <String, dynamic>{};
+      if (ViajePoolTaxistaGate.esReservaProgramadaLejana(d)) {
+        ShellTabController.clienteIrAInicio();
+        ClienteShellNavBridge.popAllTabRoutes();
+        final DateTime? pickup = _fechaHoraDesdeDocViaje(d['fechaHora']);
+        final Widget page = ViajeProgramadoConfirmacion(
+          viajeId: viajeId,
+          fechaHoraPickup: pickup,
+        );
+        if (ClienteShellNavBridge.canPushOnInicioTab) {
+          await ClienteShellNavBridge.pushOnInicioTab<void>(page);
+        } else {
+          final NavigatorState? nav = navigatorKey.currentState;
+          if (nav != null && nav.mounted) {
+            await nav.push<void>(
+              MaterialPageRoute<void>(builder: (_) => page),
+            );
+          }
+        }
+        return;
+      }
+    } catch (_) {
+      // Fallback: mismo comportamiento que antes del fix.
+    }
+
+    _retomarViajeActivoClienteOverlay();
+  }
+
+  static void _retomarViajeActivoClienteOverlay() {
     ActiveTripService.cancelarForzarInicioClienteShell();
     ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 120));
     ClienteShellNavBridge.popAllTabRoutes();

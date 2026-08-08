@@ -19,6 +19,7 @@ import '../../widgets/admin_drawer.dart';
 import '../../widgets/admin_app_bar.dart';
 import 'package:flygo_nuevo/widgets/admin_guia_uso.dart';
 import 'admin_ui_theme.dart';
+import 'admin_liquidaciones_semanales_panel.dart';
 import 'admin_pool_recaudo_central_panel.dart';
 import 'admin_pagos_azul_panel.dart';
 
@@ -204,6 +205,24 @@ class _VerificarPagosState extends State<VerificarPagos> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
+              if (liq.cuentaDestinoSnapshot.estaCompleta) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Pagar a: ${liq.cuentaDestinoSnapshot.banco} · '
+                  '${liq.cuentaDestinoSnapshot.numeroCuenta}',
+                  style: TextStyle(color: AdminUi.secondary(ctx), fontSize: 12),
+                ),
+                Text(
+                  liq.cuentaDestinoSnapshot.titular,
+                  style: TextStyle(color: AdminUi.muted(ctx), fontSize: 11),
+                ),
+              ] else ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'Sin cuenta bancaria completa en el snapshot.',
+                  style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                ),
+              ],
               const SizedBox(height: 12),
               TextField(
                 controller: refCtrl,
@@ -1112,8 +1131,10 @@ class _VerificarPagosState extends State<VerificarPagos> {
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
-                'Desbloqueo prepago: aprobá aquí el comprobante de Mis pagos. '
-                'No confundir con «Comisiones semanales» (cuota del servicio).',
+                'Desbloqueo prepago (efectivo): aprobá aquí el comprobante de Mis pagos. '
+                'La comisión RAI de viajes en efectivo solo se cobra por recarga — '
+                'sin escape a liquidación semanal. No confundir con «Comisiones semanales» '
+                '(neto transferencia/tarjeta al taxista).',
                 style: TextStyle(
                   color: AdminUi.onCard(context),
                   fontSize: 13,
@@ -1444,173 +1465,15 @@ class _VerificarPagosState extends State<VerificarPagos> {
   }
 
   Widget _buildLiquidacionesSemanalesAdmin() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Material(
-            color: Colors.blue.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(10),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                'Liquidaciones semanales (PR2): neto al conductor por transferencia/tarjeta '
-                'verificada. Efectivo NO entra aquí (comisión del prepago). '
-                'Aprobar marca viajes liquidado=true. No acredita prepago.',
-                style: TextStyle(
-                  color: AdminUi.onCard(context),
-                  fontSize: 13,
-                  height: 1.35,
-                ),
-              ),
-            ),
-          ),
-        ),
-        Expanded(
-          child: StreamBuilder<List<LiquidacionSemanal>>(
-            stream: LiquidacionSemanalRepo.streamPendientesAdmin(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return Center(
-                  child: CircularProgressIndicator(
-                    color: AdminUi.progressAccent(context),
-                  ),
-                );
-              }
-              if (snapshot.hasError) {
-                return Center(
-                  child: Text(
-                    'Error: ${snapshot.error}',
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                );
-              }
-              final list = snapshot.data ?? const <LiquidacionSemanal>[];
-              if (list.isEmpty) {
-                return Center(
-                  child: Text(
-                    'No hay liquidaciones semanales pendientes',
-                    style: TextStyle(color: AdminUi.secondary(context)),
-                  ),
-                );
-              }
-              final filtradas = list.where((l) {
-                final q = _buscar.trim().toLowerCase();
-                if (q.isNotEmpty) {
-                  final match = l.nombreTaxista.toLowerCase().contains(q) ||
-                      l.uidTaxista.toLowerCase().contains(q) ||
-                      l.periodo.toLowerCase().contains(q);
-                  if (!match) return false;
-                }
-                if (_rangoDias > 0) {
-                  final limite =
-                      DateTime.now().subtract(Duration(days: _rangoDias));
-                  if (l.periodoFin.isBefore(limite)) return false;
-                }
-                if (_filtroEstado == 'borrador') {
-                  return l.estado == 'borrador';
-                }
-                if (_filtroEstado == 'pendiente') {
-                  return l.estado == 'pendiente_pago';
-                }
-                return true;
-              }).toList();
-              if (filtradas.isEmpty) {
-                return Center(
-                  child: Text(
-                    'No hay liquidaciones con el filtro seleccionado',
-                    style: TextStyle(color: AdminUi.secondary(context)),
-                  ),
-                );
-              }
-              return ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: filtradas.length,
-                itemBuilder: (context, index) {
-                  final liq = filtradas[index];
-                  final esBorrador = liq.estado == 'borrador';
-                  final colorEstado = esBorrador ? Colors.amber : Colors.blue;
-                  return Card(
-                    color: AdminUi.card(context),
-                    margin: const EdgeInsets.only(bottom: 12),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            liq.nombreTaxista,
-                            style: TextStyle(
-                              color: AdminUi.onCard(context),
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text('Periodo ${liq.periodo} · ${liq.viajesCount} viajes',
-                              style: TextStyle(color: AdminUi.muted(context))),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Neto: ${formatter.format(liq.totalNetoRd)} · '
-                            'Transf. ${formatter.format(liq.totalesPorMetodo.transferencia.totalNetoRd)} · '
-                            'Tarj. ${formatter.format(liq.totalesPorMetodo.tarjeta.totalNetoRd)}',
-                            style: TextStyle(color: AdminUi.secondary(context)),
-                          ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: colorEstado.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: colorEstado),
-                            ),
-                            child: Text(
-                              esBorrador ? 'BORRADOR' : 'PENDIENTE PAGO',
-                              style: TextStyle(
-                                color: colorEstado,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: ElevatedButton.icon(
-                                  onPressed: _accionEnCurso || esBorrador
-                                      ? null
-                                      : () => _aprobarLiquidacionSemanal(liq),
-                                  icon: const Icon(Icons.check, size: 18),
-                                  label: const Text('Aprobar pago'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: _accionEnCurso
-                                      ? null
-                                      : () => _cancelarLiquidacionSemanal(liq),
-                                  icon: const Icon(Icons.close, size: 18),
-                                  label: const Text('Cancelar'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
-        ),
-      ],
+    return AdminLiquidacionesSemanalesPanel(
+      formatter: formatter,
+      dateFormat: dateFormat,
+      accionEnCurso: _accionEnCurso,
+      buscar: _buscar,
+      rangoDias: _rangoDias,
+      onEjecutarAccion: _ejecutarAccionAdmin,
+      onAprobar: _aprobarLiquidacionSemanal,
+      onCancelar: _cancelarLiquidacionSemanal,
     );
   }
 

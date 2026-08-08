@@ -31,6 +31,9 @@ import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
+import 'package:flygo_nuevo/servicios/negocios_aliados_repo.dart';
+import 'package:flygo_nuevo/servicios/negocio_aliado_config.dart';
+import 'package:flygo_nuevo/servicios/negocio_aliado_promo_service.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 
 /// Diagnóstico solo en debug: en release no expone UIDs ni estado interno por logcat.
@@ -404,18 +407,48 @@ class ViajesRepo {
         _coordsInvalidas(latDestino, lonDestino)) {
       throw ArgumentError('Coordenadas inválidas');
     }
-    if (!precio.isFinite || precio <= 0) {
+    if (!precio.isFinite || precio < 0) {
       throw ArgumentError('Precio inválido');
     }
 
-    final int precioCents = (precio * 100).round();
+    final clienteSnap = await _db.collection('usuarios').doc(uidCliente).get();
+    final usuarioData = Map<String, dynamic>.from(clienteSnap.data() ?? {});
+    final codigoRef =
+        (usuarioData['negocioReferidoCodigo'] ?? '').toString().trim();
+    if (codigoRef.isNotEmpty &&
+        (usuarioData['negocioReferidoCiudad'] ?? '').toString().trim().isEmpty) {
+      final neg = await NegociosAliadosRepo.obtenerPorCodigo(codigoRef);
+      if (neg != null && neg.ciudad.trim().isNotEmpty) {
+        usuarioData['negocioReferidoCiudad'] = neg.ciudad.trim();
+      }
+    }
+    final promoAplicada = NegocioAliadoPromoService.aplicarAlCrearViaje(
+      usuario: usuarioData,
+      precioNominalRd: precio,
+      origen: origen,
+      destino: destino,
+    );
+    var precioEfectivo = precio;
+    if (promoAplicada != null) {
+      precioEfectivo = promoAplicada.precioCliente;
+    }
+    if (!precioEfectivo.isFinite || precioEfectivo < 0) {
+      throw ArgumentError('Precio inválido');
+    }
+    if (precioEfectivo == 0 && promoAplicada == null) {
+      throw ArgumentError('Precio inválido');
+    }
+
+    final int precioCents = (precioEfectivo * 100).round();
     await ComisionViajePctService.refresh();
-    final double pctComision = (comisionPorcentajeViaje != null &&
-            comisionPorcentajeViaje.isFinite &&
-            comisionPorcentajeViaje > 0 &&
-            comisionPorcentajeViaje <= 100)
-        ? comisionPorcentajeViaje
-        : PlataformaEconomia.comisionViajePorcentaje;
+    final double pctComision = promoAplicada != null
+        ? NegocioAliadoConfig.pctComisionTaxistaReferido
+        : ((comisionPorcentajeViaje != null &&
+                comisionPorcentajeViaje.isFinite &&
+                comisionPorcentajeViaje > 0 &&
+                comisionPorcentajeViaje <= 100)
+            ? comisionPorcentajeViaje
+            : PlataformaEconomia.comisionViajePorcentaje);
 
     final DateTime now = DateTime.now();
     final bool esAhora = forzarEsAhora ??
@@ -558,6 +591,9 @@ class ViajesRepo {
       }
     }
     if (extras != null && extras.isNotEmpty) data['extras'] = extras;
+    if (promoAplicada != null) {
+      data.addAll(promoAplicada.campos);
+    }
 
     final String? bolaTrim = bolaPuebloId?.trim();
     if (bolaTrim != null && bolaTrim.isNotEmpty) {

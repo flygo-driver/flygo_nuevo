@@ -9,6 +9,7 @@ import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
 /// Misma experiencia que el ítem «Pagos» del drawer del cliente.
@@ -28,8 +29,8 @@ class _ClienteMetodosPagoSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme dcs = Theme.of(context).colorScheme;
-    final bool tarjetaOn =
-        FinanceConfigService.pagosConTarjetaAzulHabilitados;
+    final bool tarjetaOn = PagoTarjetaClienteGate.mostrarOpcionTarjeta;
+    final bool tarjetaCobroActivo = PagoTarjetaClienteGate.cobroHabilitado;
 
     return SafeArea(
       child: Padding(
@@ -135,15 +136,22 @@ class _ClienteMetodosPagoSheet extends StatelessWidget {
                 _MetodoPagoCuentaTile(
                   icon: Icons.credit_card_rounded,
                   title: 'Tarjeta',
-                  subtitle: tarjetaOn
+                  subtitle: tarjetaCobroActivo
                       ? 'Pago seguro con AZUL en el viaje'
-                      : 'No disponible por ahora',
+                      : 'En desarrollo — usa efectivo o transferencia',
                   accent: const Color(0xFFB388FF),
                   accentDeep: const Color(0xFF4A148C),
-                  badge: tarjetaOn ? 'AZUL' : null,
+                  badge: tarjetaCobroActivo ? 'AZUL' : null,
                   enabled: tarjetaOn,
                   onTap: tarjetaOn
-                      ? () {
+                      ? () async {
+                          if (!tarjetaCobroActivo) {
+                            await PagoTarjetaClienteGate.avisarEnDesarrollo(
+                              context,
+                            );
+                            return;
+                          }
+                          if (!context.mounted) return;
                           Navigator.pop(context);
                           _mostrarInfoTarjeta(context);
                         }
@@ -151,9 +159,9 @@ class _ClienteMetodosPagoSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  tarjetaOn
+                  tarjetaCobroActivo
                       ? 'El método lo eliges durante el viaje en curso, cuando el conductor ya está asignado.'
-                      : 'La tarjeta se habilita cuando RAI active pagos AZUL en tu cuenta.',
+                      : 'El pago con tarjeta estará disponible pronto. Usá efectivo o transferencia.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: dcs.onSurfaceVariant.withValues(alpha: 0.9),

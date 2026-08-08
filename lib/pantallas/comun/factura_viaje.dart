@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
 import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
 import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
@@ -464,18 +465,8 @@ class _FacturaContentState extends State<_FacturaContent> {
     return b;
   }
 
-  List<Map<String, dynamic>> _waypointsDesdeData() {
-    final dynamic raw = data['waypoints'];
-    if (raw is! List) return const <Map<String, dynamic>>[];
-    final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
-    for (final dynamic w in raw) {
-      if (w is! Map) continue;
-      final String label = (w['label'] ?? '').toString().trim();
-      if (label.isEmpty) continue;
-      out.add(Map<String, dynamic>.from(w));
-    }
-    return out;
-  }
+  List<Map<String, dynamic>> _waypointsDesdeData() =>
+      MultiparadaRutaHelper.waypointsDesdeDoc(data);
 
   double _peajeDesdeData() {
     final dynamic extras = data['extras'];
@@ -486,8 +477,7 @@ class _FacturaContentState extends State<_FacturaContent> {
     return _toDouble(data['peaje'] ?? data['peaje_total'] ?? 0);
   }
 
-  bool get _esViajeMulti =>
-      (data['categoria'] ?? '').toString().trim().toLowerCase() == 'multi';
+  bool get _esViajeMulti => MultiparadaRutaHelper.esViajeMultiparada(data);
 
   ({double comision, double ganancia}) _liquidacionTaxistaDesdeDoc(
       double total) {

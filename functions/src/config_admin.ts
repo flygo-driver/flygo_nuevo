@@ -323,8 +323,10 @@ export const updatePromocionesMxKConfig = onCall(async (request) => {
 });
 
 /**
- * Porcentaje global de comisión en viajes en efectivo (`config/comision`, campo `porcentaje`).
- * Solo admin; invalida caché en Cloud Functions.
+ * Comisiones por método (`config/comision`):
+ * - `porcentaje` → efectivo (prepago)
+ * - `porcentajeTransferencia` → transferencia (default 15)
+ * - `porcentajeTarjeta` → tarjeta (default 15)
  */
 export const setComisionPorcentaje = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
@@ -335,21 +337,35 @@ export const setComisionPorcentaje = onCall(async (request) => {
   if (motivo.length < 6) throw new HttpsError("invalid-argument", "Motivo requerido (min 6 caracteres)");
 
   const porcentaje = Number(request.data?.porcentaje);
+  const porcentajeTransferencia = Number(request.data?.porcentajeTransferencia);
+  const porcentajeTarjeta = Number(request.data?.porcentajeTarjeta);
+
   if (!Number.isFinite(porcentaje) || porcentaje < 0 || porcentaje > 100) {
-    throw new HttpsError("invalid-argument", "porcentaje invalido (0–100)");
+    throw new HttpsError("invalid-argument", "porcentaje (efectivo) invalido (0–100)");
   }
+  if (
+    !Number.isFinite(porcentajeTransferencia) ||
+    porcentajeTransferencia < 0 ||
+    porcentajeTransferencia > 100
+  ) {
+    throw new HttpsError("invalid-argument", "porcentajeTransferencia invalido (0–100)");
+  }
+  if (!Number.isFinite(porcentajeTarjeta) || porcentajeTarjeta < 0 || porcentajeTarjeta > 100) {
+    throw new HttpsError("invalid-argument", "porcentajeTarjeta invalido (0–100)");
+  }
+
+  const patch: AnyMap = {
+    porcentaje,
+    porcentajeTransferencia,
+    porcentajeTarjeta,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
 
   const ref = db().collection("config").doc("comision");
   const beforeSnap = await ref.get();
   const before = safeJson(beforeSnap.data() ?? {});
 
-  await ref.set(
-    {
-      porcentaje,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
+  await ref.set(patch, { merge: true });
 
   // Legacy giras: % fijo 10 (independiente del % global de viajes).
   await db()
@@ -381,10 +397,19 @@ export const setComisionPorcentaje = onCall(async (request) => {
     actorUid: uid,
     resourceType: "config",
     resourceId: "config/comision",
-    metadata: { porcentaje },
+    metadata: {
+      porcentaje,
+      porcentajeTransferencia,
+      porcentajeTarjeta,
+    },
   });
 
-  return { ok: true, porcentaje };
+  return {
+    ok: true,
+    porcentaje,
+    porcentajeTransferencia,
+    porcentajeTarjeta,
+  };
 });
 
 function parseEscalonesInput(raw: unknown): EscalonIncentivo[] {

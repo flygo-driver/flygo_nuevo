@@ -19,6 +19,7 @@ import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
 import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/admin_gate.dart';
 import 'package:flygo_nuevo/widgets/cliente_cuenta_real_wall.dart';
@@ -253,6 +254,15 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'taxista') {
+      if (RaiModoSesionService.taxistaDebeUsarShellPasajero(rol)) {
+        PoolTimbreSessionGuard.activarSesionPasajero();
+        if (!TaxistaRegistroPerfilData.taxistaRegistroPerfilCompleto(data)) {
+          return const CompletarRegistroTaxista();
+        }
+        return const VerifyEmailGate(
+          childWhenVerified: ClienteShellWithDeepLink(),
+        );
+      }
       PoolTimbreSessionGuard.activarSesionConductor();
       if (OrganizadorGirasPerfilData.esOrganizadorGiras(data)) {
         if (!OrganizadorGirasPerfilData.registroCompleto(data)) {
@@ -294,6 +304,8 @@ class RaiIdentityRouter {
     final rol = await RaiIdentityResolve.resolveRolSafe(user);
     debugPrint('[RAI_IDENTITY] auth_check uid=${user.uid} rol=$rol');
 
+    await RaiModoSesionService.initParaUsuario(user.uid);
+
     if (!AppFlavorRolGuard.rolCompatibleConFlavor(rol) &&
         !AppFlavorRolGuard.esAdmin(rol)) {
       return AppFlavorRolMismatchWall(
@@ -307,6 +319,20 @@ class RaiIdentityRouter {
     }
 
     if (rol == 'taxista') {
+      if (RaiModoSesionService.taxistaDebeUsarShellPasajero(rol)) {
+        PoolTimbreSessionGuard.activarSesionPasajero();
+        final uSnapPasajero = await FirebaseFirestore.instance
+            .collection('usuarios')
+            .doc(user.uid)
+            .get();
+        final dataPasajero = uSnapPasajero.data() ?? <String, dynamic>{};
+        if (!TaxistaRegistroPerfilData.taxistaRegistroPerfilCompleto(dataPasajero)) {
+          return const CompletarRegistroTaxista();
+        }
+        return const VerifyEmailGate(
+          childWhenVerified: ClienteShellWithDeepLink(),
+        );
+      }
       PoolTimbreSessionGuard.activarSesionConductor();
       final uSnap = await FirebaseFirestore.instance
           .collection('usuarios')
@@ -358,11 +384,14 @@ class RaiUsuarioIdentityGate extends StatefulWidget {
 
 class _RaiUsuarioIdentityGateState extends State<RaiUsuarioIdentityGate> {
   late Future<bool> _legalFuture;
+  late Future<void> _modoSesionFuture;
 
   @override
   void initState() {
     super.initState();
     _legalFuture = LegalAcceptanceService.hasAccepted(widget.user.uid);
+    _modoSesionFuture =
+        RaiModoSesionService.initParaUsuario(widget.user.uid);
   }
 
   @override
@@ -370,6 +399,8 @@ class _RaiUsuarioIdentityGateState extends State<RaiUsuarioIdentityGate> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.user.uid != widget.user.uid) {
       _legalFuture = LegalAcceptanceService.hasAccepted(widget.user.uid);
+      _modoSesionFuture =
+          RaiModoSesionService.initParaUsuario(widget.user.uid);
     }
   }
 
@@ -378,28 +409,42 @@ class _RaiUsuarioIdentityGateState extends State<RaiUsuarioIdentityGate> {
     final rol = RaiIdentityResolve.rolDesdeUsuarioData(widget.data);
     debugPrint('[RAI_IDENTITY] gate uid=${widget.user.uid} rol=$rol');
 
-    return FutureBuilder<bool>(
-      future: _legalFuture,
-      builder: (context, legalSnap) {
-        if (legalSnap.connectionState == ConnectionState.waiting) {
+    return FutureBuilder<void>(
+      future: _modoSesionFuture,
+      builder: (context, modoSnap) {
+        if (modoSnap.connectionState != ConnectionState.done) {
           return RaiIdentitySplash.scaffold();
         }
 
-        if (legalSnap.data != true) {
-          return TermsPolicyScreen(
-            requireAcceptance: true,
-            onAccepted: () {
-              Navigator.of(context)
-                  .pushNamedAndRemoveUntil('/auth_check', (r) => false);
-            },
-          );
-        }
+        return ValueListenableBuilder<int>(
+          valueListenable: RaiModoSesionService.tick,
+          builder: (context, _, __) {
+            return FutureBuilder<bool>(
+              future: _legalFuture,
+              builder: (context, legalSnap) {
+                if (legalSnap.connectionState == ConnectionState.waiting) {
+                  return RaiIdentitySplash.scaffold();
+                }
 
-        return RaiIdentityRouter._buildAfterLegal(
-          context,
-          widget.user,
-          widget.data,
-          rol,
+                if (legalSnap.data != true) {
+                  return TermsPolicyScreen(
+                    requireAcceptance: true,
+                    onAccepted: () {
+                      Navigator.of(context)
+                          .pushNamedAndRemoveUntil('/auth_check', (r) => false);
+                    },
+                  );
+                }
+
+                return RaiIdentityRouter._buildAfterLegal(
+                  context,
+                  widget.user,
+                  widget.data,
+                  rol,
+                );
+              },
+            );
+          },
         );
       },
     );

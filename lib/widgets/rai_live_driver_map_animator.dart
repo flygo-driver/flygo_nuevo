@@ -5,6 +5,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
+import 'package:flygo_nuevo/servicios/drivers_location_nearby_config.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_map_vehicle_icons.dart';
 
 /// Conductor en mapa en vivo (desde `drivers_location` o viaje).
@@ -124,21 +126,29 @@ class RaiLiveDriverMapAnimator {
   }
 }
 
-/// Parsea documentos `drivers_location` con filtro de frescura.
+/// Parsea documentos `drivers_location` con filtro de frescura y disponibilidad.
 List<RaiLiveDriverPoint> raiLiveDriversDesdeDocs(
   Iterable<DocumentSnapshot<Map<String, dynamic>>> docs, {
-  Duration maxAge = const Duration(minutes: 4),
+  Duration maxAge = DriversLocationNearbyConfig.maxAgeConductoresDisponibles,
   LatLng? centroKm,
   double? radioKm,
+  String? uidCliente,
+  /// Si se indica (p. ej. `motor`), solo conductores del mismo pool que el viaje.
+  String? tipoServicioViaje,
 }) {
-  final DateTime limite = DateTime.now().subtract(maxAge);
+  final DateTime ahora = DateTime.now();
+  final DateTime limiteDisponibles = ahora.subtract(maxAge);
+  final DateTime limiteAsignado = ahora.subtract(
+    DriversLocationNearbyConfig.maxAgeConductorAsignado,
+  );
   final List<RaiLiveDriverPoint> out = <RaiLiveDriverPoint>[];
   for (final DocumentSnapshot<Map<String, dynamic>> d in docs) {
     final Map<String, dynamic>? data = d.data();
     if (data == null) continue;
-    final bool tracking = data['tracking'] == true;
-    final bool online = data['online'] == true;
-    if (!tracking && !online) continue;
+    if (!_conductorVisibleEnMapaCliente(data, uidCliente)) continue;
+    if (!_conductorCoincideTipoViaje(data, uidCliente, tipoServicioViaje)) {
+      continue;
+    }
 
     final dynamic rawLoc = data['location'];
     if (rawLoc is! GeoPoint) continue;
@@ -146,9 +156,12 @@ List<RaiLiveDriverPoint> raiLiveDriversDesdeDocs(
     final double lon = rawLoc.longitude;
     if (!lat.isFinite || !lon.isFinite) continue;
 
+    final bool asignadoAlCliente = _conductorAsignadoAlCliente(data, uidCliente);
     final dynamic rawUp = data['updatedAt'];
     DateTime? updated;
     if (rawUp is Timestamp) updated = rawUp.toDate();
+    final DateTime limite =
+        asignadoAlCliente ? limiteAsignado : limiteDisponibles;
     if (updated != null && updated.isBefore(limite)) continue;
 
     if (centroKm != null && radioKm != null) {
@@ -177,4 +190,56 @@ List<RaiLiveDriverPoint> raiLiveDriversDesdeDocs(
     );
   }
   return out;
+}
+
+bool _conductorAsignadoAlCliente(
+  Map<String, dynamic> data,
+  String? uidCliente,
+) {
+  if (uidCliente == null || uidCliente.isEmpty) return false;
+  final String cid = (data['clienteId'] ?? '').toString().trim();
+  return cid.isNotEmpty && cid == uidCliente;
+}
+
+bool _conductorVisibleEnMapaCliente(
+  Map<String, dynamic> data,
+  String? uidCliente,
+) {
+  if (data['tracking'] != true) return false;
+
+  if (_conductorAsignadoAlCliente(data, uidCliente)) return true;
+
+  final String viajeId = (data['viajeId'] ?? '').toString().trim();
+  if (viajeId.isNotEmpty) return false;
+
+  return data['disponible'] == true && data['online'] == true;
+}
+
+/// Misma regla que el pool taxista: motor ↔ motor; taxi ↔ no motor.
+bool _conductorCoincideTipoViaje(
+  Map<String, dynamic> data,
+  String? uidCliente,
+  String? tipoServicioViaje,
+) {
+  if (tipoServicioViaje == null || tipoServicioViaje.trim().isEmpty) {
+    return true;
+  }
+  if (_conductorAsignadoAlCliente(data, uidCliente)) return true;
+
+  final String poolModoViaje =
+      tipoServicioViaje.trim().toLowerCase() == TaxistaPoolModoConductor.motor
+          ? TaxistaPoolModoConductor.motor
+          : TaxistaPoolModoConductor.vehiculo;
+  return ViajePoolTaxistaGate.viajeCoincideModoConductor(
+    <String, dynamic>{'tipoServicio': _tipoServicioConductorEnMapa(data)},
+    poolModoViaje,
+  );
+}
+
+String _tipoServicioConductorEnMapa(Map<String, dynamic> data) {
+  final String raw = (data['tipoServicio'] ?? '').toString().trim().toLowerCase();
+  if (raw == TaxistaPoolModoConductor.motor) {
+    return TaxistaPoolModoConductor.motor;
+  }
+  return 'normal';
 }

@@ -1,6 +1,6 @@
 name: flygo_nuevo  # ← NO lo cambies
 description: RAI Driver — app de movilidad para clientes y taxistas.
-version: 1.0.9+31
+version: 1.0.10+32
 publish_to: "none"
 
 environment:
@@ -68,6 +68,8 @@ dependencies:
   speech_to_text: ^7.0.0
   pinput: ^6.0.2
   sms_autofill: ^2.5.0
+  pdf: ^3.11.3
+  printing: ^5.14.2
 
 dev_dependencies:
   flutter_test:

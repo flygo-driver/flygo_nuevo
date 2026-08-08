@@ -29,6 +29,8 @@ import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/location_permission_service.dart';
+import 'package:flygo_nuevo/servicios/negocio_aliado_promo_service.dart';
+import 'package:flygo_nuevo/servicios/negocio_aliado_config.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
@@ -46,6 +48,7 @@ import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
 import 'package:flygo_nuevo/widgets/rai_cotizacion_offline_hint.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
@@ -340,6 +343,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
   int? _contadorViajesCache;
   DateTime? _contadorTimestamp;
   Map<String, dynamic>? _promoSnapshotCotizacion;
+  NegocioAliadoPromoEval? _negocioPromoEval;
 
   // 🎨 Color del servicio (solo UI)
   Color get _colorServicio {
@@ -970,6 +974,35 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     }
   }
 
+  Future<double> _aplicarPromoNegocioAliado(double precioNominal) async {
+    _negocioPromoEval = null;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || precioNominal <= 0) return precioNominal;
+    try {
+      final snap = await fs.FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user.uid)
+          .get();
+      final eval = NegocioAliadoPromoService.evaluar(
+        usuario: snap.data(),
+        precioNominalRd: precioNominal,
+        origen: _lineaOrigenResumen(),
+        destino: _lineaDestinoResumen(),
+      );
+      if (eval != null) {
+        _negocioPromoEval = eval;
+        return eval.precioClienteRd;
+      }
+    } catch (e) {
+      debugPrint('Promo negocio aliado: $e');
+    }
+    return precioNominal;
+  }
+
+  bool _precioCotizadoValidoParaValor(double precio) =>
+      precio > 0 ||
+      (_negocioPromoEval?.esViajeGratis == true && precio >= 0);
+
   // ====== CALCULAR PRECIO CON TARIFA POR TIPO DE SERVICIO ======
   Future<double> _calcularPrecioPorTipo(double distancia, bool idaVuelta,
       {double peaje = 0.0}) async {
@@ -1025,7 +1058,7 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
       final result = await cotizar();
       _cotizacionDesglose = result.desglose;
-      return result.precio;
+      return await _aplicarPromoNegocioAliado(result.precio);
     } catch (e) {
       if (mounted) _snack('Error calculando precio: $e');
       return 0.0;
@@ -1073,11 +1106,18 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
     final double precioDouble =
         await _calcularPrecioPorTipo(distRes.km, idaYVuelta, peaje: _peaje);
-    if (precioDouble <= 0) return false;
+    if (!_precioCotizadoValidoParaValor(precioDouble)) return false;
 
     final int precioCents = (precioDouble * 100).round();
+    final int nominalCents = _negocioPromoEval?.precioNominalCents ?? precioCents;
+    final double pctComision = _negocioPromoEval != null
+        ? NegocioAliadoConfig.pctComisionTaxistaReferido
+        : PlataformaEconomia.comisionViajePorcentaje;
     final int comisionCents =
-        PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
+        PlataformaEconomia.comisionViajeCentsDesdePrecioCentsConPct(
+      nominalCents,
+      pctComision,
+    );
 
     distanciaKm = distRes.km;
     precioCalculado = precioCents / 100.0;
@@ -1553,9 +1593,12 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return true;
     try {
+      if (await RaiModoSesionService.cuentaPuedePedirViaje(u.uid)) {
+        return false;
+      }
       final rol = (await RolesService.getRol(u.uid))?.toLowerCase();
       if (rol == Roles.taxista || rol == Roles.admin) {
-        _snack('Esta cuenta es de $rol.');
+        _snack('Esta cuenta es de $rol. Activa modo pasajero en Cuenta.');
         return true;
       }
     } catch (_) {}
@@ -1726,15 +1769,23 @@ class _ProgramarViajeState extends State<ProgramarViaje>
 
         final double precioDouble =
             await _calcularPrecioPorTipo(dist, idaYVuelta, peaje: _peaje);
-        if (precioDouble <= 0) {
+        if (!_precioCotizadoValidoParaValor(precioDouble)) {
           if (mounted) {
             _snack('No se pudo calcular el precio para este destino.');
           }
           return;
         }
         final int precioCents = (precioDouble * 100).round();
+        final int nominalCents =
+            _negocioPromoEval?.precioNominalCents ?? precioCents;
+        final double pctComision = _negocioPromoEval != null
+            ? NegocioAliadoConfig.pctComisionTaxistaReferido
+            : PlataformaEconomia.comisionViajePorcentaje;
         final int comisionCents =
-            PlataformaEconomia.comisionViajeCentsDesdePrecioCents(precioCents);
+            PlataformaEconomia.comisionViajeCentsDesdePrecioCentsConPct(
+          nominalCents,
+          pctComision,
+        );
 
         if (!mounted || runId != _cotizacionSeq) return;
 

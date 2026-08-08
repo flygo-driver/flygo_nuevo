@@ -50,12 +50,18 @@ import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/drivers_location_nearby_repo.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_espera_taxista_panel.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_conductor_asignado_panel.dart';
+import 'package:flygo_nuevo/widgets/cliente_viaje_espera_cronometro.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_live_conductores.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
+import 'package:flygo_nuevo/utils/rai_live_marker_animator.dart';
 import 'package:flygo_nuevo/widgets/rai_live_driver_map_animator.dart';
 import 'package:flygo_nuevo/widgets/rai_map_vehicle_icons.dart';
 import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
+import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
+import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/viaje_comunicacion_repo.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
@@ -254,6 +260,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   double? _ultimoSeguimientoTaxLon;
   LatLng? _prevTaxistaMarkerPos;
   double _bearingTaxista = 0;
+  static const String _kTaxistaAnimId = 'taxista';
+  late final RaiLiveMarkerAnimator _taxistaAnim;
+  late final RaiLiveDriverMapAnimator _poolDriverAnim;
 
   /// Cámara movida por código (no colapsar/expandir tarjeta como si fuera gesto del usuario).
   int _programmaticCameraDepth = 0;
@@ -266,6 +275,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   static const double _kViajeSheetMin = 0.22;
   /// Panel inicial con conductor asignado / en ruta.
   static const double _kViajeSheetInitial = 0.52;
+  /// Fase pickup (taxista viene al cliente): sheet bajo para ver más mapa.
+  static const double _kViajeSheetPickupCompact = 0.38;
   /// Esperando que un taxista acepte: más alto para que el mensaje y acciones se lean bien.
   static const double _kViajeSheetEsperaConductor = 0.56;
   double _sheetExpandedTarget = _kViajeSheetInitial;
@@ -333,6 +344,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   @override
   void initState() {
     super.initState();
+    PoolTimbreSessionGuard.activarSesionPasajero();
+    NotificationService.I.suprimirTimbrePoolCliente();
     WidgetsBinding.instance.addObserver(this);
     _radarCtrl = AnimationController(
       vsync: this,
@@ -342,6 +355,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       vsync: this,
       duration: const Duration(milliseconds: 2200),
     )..repeat();
+    _taxistaAnim = RaiLiveMarkerAnimator(
+      vsync: this,
+      onTick: () {
+        if (mounted) setState(() {});
+      },
+    );
+    _poolDriverAnim = RaiLiveDriverMapAnimator(vsync: this)
+      ..onFrame = () {
+        if (mounted) setState(() {});
+      };
     unawaited(RaiMapVehicleIcons.ensureLoaded().then((_) {
       if (mounted) setState(() {});
     }));
@@ -506,9 +529,41 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _pickupEtaDebounce?.cancel();
     _mapGestureEndDebounce?.cancel();
     _viajeSheetCtrl.dispose();
+    _taxistaAnim.dispose();
+    _poolDriverAnim.dispose();
     _stopTurismoReasignacionTimer();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _syncTaxistaAnimador(Viaje v) {
+    if (v.uidTaxista.isEmpty || !_isValidCoord(v.latTaxista, v.lonTaxista)) {
+      _taxistaAnim.clear();
+      return;
+    }
+    final LatLng target = _latLng(v.latTaxista, v.lonTaxista);
+    final double? nuevoBearing = RaiMapVehicleIcons.bearingEntre(
+      _prevTaxistaMarkerPos,
+      target,
+    );
+    if (nuevoBearing != null) _bearingTaxista = nuevoBearing;
+    _prevTaxistaMarkerPos = target;
+    _taxistaAnim.syncTargets(
+      <String, LatLng>{_kTaxistaAnimId: target},
+      headings: <String, double?>{_kTaxistaAnimId: _bearingTaxista},
+    );
+  }
+
+  LatLng _posTaxistaAnimada(Viaje v) {
+    if (!_isValidCoord(v.latTaxista, v.lonTaxista)) {
+      return const LatLng(0, 0);
+    }
+    final LatLng raw = _latLng(v.latTaxista, v.lonTaxista);
+    return _taxistaAnim.position(_kTaxistaAnimId, raw);
+  }
+
+  double _bearingTaxistaAnimado() {
+    return _taxistaAnim.bearing(_kTaxistaAnimId, fallback: _bearingTaxista);
   }
 
   @override
@@ -682,13 +737,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _ultimoSeguimientoTaxLat = v.latTaxista;
     _ultimoSeguimientoTaxLon = v.lonTaxista;
 
-    final LatLng taxiPos = LatLng(v.latTaxista, v.lonTaxista);
-    final double? nuevoBearing = RaiMapVehicleIcons.bearingEntre(
-      _prevTaxistaMarkerPos,
-      taxiPos,
-    );
-    if (nuevoBearing != null) _bearingTaxista = nuevoBearing;
-    _prevTaxistaMarkerPos = taxiPos;
+    _syncTaxistaAnimador(v);
+    final LatLng taxiPos = _posTaxistaAnimada(v);
 
     final GoogleMapController? c = _map;
     if (c == null) return;
@@ -699,7 +749,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         CameraPosition(
           target: taxiPos,
           zoom: RaiMapPresentation.followZoomDriver,
-          bearing: _bearingTaxista,
+          bearing: _bearingTaxistaAnimado(),
           tilt: estadoBase == EstadosViaje.enCurso ? 0 : 28,
         ),
       ),
@@ -761,8 +811,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   Widget _buildClienteZonaAccionesSticky(
     Viaje v,
     String estadoBase,
-    bool cancelarHabilitado,
-  ) {
+    bool cancelarHabilitado, {
+    bool compacto = false,
+  }) {
     final bool multiparada =
         _clienteNavegacionMultiparadaActiva(v, estadoBase);
     final bool mostrarNavDestino = estadoBase == EstadosViaje.enCurso &&
@@ -825,7 +876,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               ),
             ),
           ),
-        if (tieneTaxista) ...[
+        if (tieneTaxista && !compacto) ...[
           if (mostrarNavDestino) const SizedBox(height: 10),
           Row(
             children: [
@@ -987,6 +1038,71 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
   }
 
+  Future<void> _llamarConductorCliente(Viaje v) async {
+    final String telCond = v.telefonoTaxista.isNotEmpty
+        ? v.telefonoTaxista
+        : v.telefono.trim();
+    final String tc = telefonoNormalizarDigitos(telCond);
+    if (tc.isEmpty) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Número del conductor no disponible aún. Usa el chat.',
+          ),
+        ),
+      );
+      return;
+    }
+    unawaited(ViajeComunicacionRepo.notificarIntentoComunicacion(
+      viajeId: v.id,
+      tipo: 'llamada',
+    ));
+    await telefonoLaunchUri(telefonoUriLlamada(tc));
+  }
+
+  Future<void> _whatsAppConductorCliente(Viaje v) async {
+    final String telCond = v.telefonoTaxista.isNotEmpty
+        ? v.telefonoTaxista
+        : v.telefono.trim();
+    final String tc = telefonoNormalizarDigitos(telCond);
+    if (tc.isEmpty) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Número del conductor no disponible aún. Usa el chat.',
+          ),
+        ),
+      );
+      return;
+    }
+    unawaited(ViajeComunicacionRepo.notificarIntentoComunicacion(
+      viajeId: v.id,
+      tipo: 'whatsapp',
+    ));
+    const String waMsg = 'Hola, soy tu cliente de RAI.';
+    if (await telefonoLaunchUri(telefonoUriWhatsAppApp(tc, waMsg))) {
+      return;
+    }
+    await telefonoLaunchUri(telefonoUriWhatsAppWeb(tc, waMsg));
+  }
+
+  void _abrirChatConductorCliente(Viaje v) {
+    final String nombreCond =
+        v.nombreTaxista.isNotEmpty ? v.nombreTaxista : 'Conductor';
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          otroUid: v.uidTaxista,
+          otroNombre: nombreCond,
+          viajeId: v.id,
+        ),
+      ),
+    );
+  }
+
   void _maybeColapsarSheetPickupNav(Viaje v, String estadoBase) {
     if (_sheetCollapsedPickupForViajeId == v.id) return;
     final bool esperandoPool = !v.esTurismo &&
@@ -1001,7 +1117,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (!esperandoPool && !turismoSinConductor && !fasePickup) return;
     _sheetExpandedTarget = (esperandoPool || turismoSinConductor)
         ? _kViajeSheetEsperaConductor
-        : _kViajeSheetInitial;
+        : _kViajeSheetPickupCompact;
     _sheetCollapsedPickupForViajeId = v.id;
     _expandirSheetTrasMapaInteract();
     if (fasePickup && !_seguirTaxistaCamara) {
@@ -1088,14 +1204,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   // 🚀 NUEVO: Iniciar escucha de conductores disponibles
-  void _startListeningDrivers(double pickupLat, double pickupLon) {
+  void _startListeningDrivers(
+    double pickupLat,
+    double pickupLon, {
+    String? tipoServicioViaje,
+  }) {
     if (_nearbyDriversSession != null) return;
 
     _nearbyDriversSession = DriversLocationNearbyRepo.createSession(
       initialCenter: LatLng(pickupLat, pickupLon),
+      uidCliente: FirebaseAuth.instance.currentUser?.uid,
+      tipoServicioViaje: tipoServicioViaje,
       radiusKm: _kRadioKmConductoresCerca,
       maxResultados: 50,
       onUpdate: (DriversLocationNearbyUpdate update) {
+        _poolDriverAnim.syncTargets(update.conductores);
         final String sig = update.conductores
             .map(
               (RaiLiveDriverPoint d) =>
@@ -1122,6 +1245,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _fotosDebounce = null;
     _nearbyDriversSession?.dispose();
     _nearbyDriversSession = null;
+    _poolDriverAnim.syncTargets(const <RaiLiveDriverPoint>[]);
     _lastDriversPoolSig = '';
     void clear() {
       if (!mounted) return;
@@ -1512,9 +1636,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   bool _esViajeMultiparada(Viaje v) {
-    final String cat =
-        (v.extras?['categoria'] ?? '').toString().trim().toLowerCase();
-    if (cat == 'multi') return true;
+    if (v.multiparadaLegsTotal > 1) return true;
     return (v.waypoints?.isNotEmpty ?? false);
   }
 
@@ -2855,7 +2977,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     Map<String, dynamic> data, {
     required bool codigoVerificado,
   }) {
-    if (!FinanceConfigService.pagosConTarjetaAzulHabilitados) return false;
     if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
     if (_uidTaxistaDelViaje(v).isEmpty) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
@@ -2871,7 +2992,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     String estadoBase,
     Map<String, dynamic> data,
   ) {
-    if (!FinanceConfigService.pagosConTarjetaAzulHabilitados) return false;
     if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
     if (_uidTaxistaDelViaje(v).isEmpty) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
@@ -5000,13 +5120,37 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         _isValidCoord(v.latCliente, v.lonCliente)) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) {
-                          _startListeningDrivers(v.latCliente, v.lonCliente);
+                          _startListeningDrivers(
+                            v.latCliente,
+                            v.lonCliente,
+                            tipoServicioViaje: v.tipoServicio,
+                          );
                         }
                       });
                     } else if (!esperandoTaxista &&
                         _nearbyDriversSession != null) {
                       _stopListeningDrivers(deferSetState: true);
                     }
+
+                    final bool faseRecogidaTaxista =
+                        RaiMapVehicleIcons.faseRecogidaDesdeEstado(estadoBase);
+                    if (v.uidTaxista.isNotEmpty &&
+                        _isValidCoord(v.latTaxista, v.lonTaxista)) {
+                      _syncTaxistaAnimador(v);
+                    }
+                    final LatLng? posTaxistaMapa =
+                        v.uidTaxista.isNotEmpty &&
+                                _isValidCoord(v.latTaxista, v.lonTaxista)
+                            ? _posTaxistaAnimada(v)
+                            : null;
+                    final BitmapDescriptor? iconoTaxistaAsignado =
+                        v.uidTaxista.isNotEmpty &&
+                                _isValidCoord(v.latTaxista, v.lonTaxista)
+                            ? RaiMapVehicleIcons.iconoVistaCliente(
+                                esMiConductor: true,
+                                faseRecogida: faseRecogidaTaxista,
+                              )
+                            : null;
 
                     final Set<Marker> markers = <Marker>{
                       if (_isValidCoord(v.latDestino, v.lonDestino))
@@ -5054,29 +5198,26 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           );
                         },
                       ),
-                      if (v.uidTaxista.isNotEmpty &&
-                          _isValidCoord(v.latTaxista, v.lonTaxista))
+                      if (posTaxistaMapa != null)
                         Marker(
                           markerId: const MarkerId('taxista'),
-                          position: _latLng(v.latTaxista, v.lonTaxista),
-                          infoWindow: const InfoWindow(title: 'Tu conductor'),
-                          icon: RaiMapVehicleIcons.taxiClienteAsignado ??
-                              RaiMapVehicleIcons.taxiCliente ??
+                          position: posTaxistaMapa,
+                          infoWindow: InfoWindow(
+                            title: faseRecogidaTaxista
+                                ? 'Tu conductor viene hacia ti'
+                                : 'Tu conductor',
+                          ),
+                          icon: iconoTaxistaAsignado ??
                               BitmapDescriptor.defaultMarkerWithHue(
                                 _taxistaHueByEstado(estadoBase),
                               ),
-                          rotation: (RaiMapVehicleIcons.taxiClienteAsignado !=
-                                      null ||
-                                  RaiMapVehicleIcons.taxiCliente != null)
+                          rotation: iconoTaxistaAsignado != null
                               ? RaiMapVehicleIcons.rotationTaxiCliente(
-                                  _bearingTaxista,
+                                  _bearingTaxistaAnimado(),
                                 )
                               : 0,
-                          flat: RaiMapVehicleIcons.taxiClienteAsignado != null ||
-                              RaiMapVehicleIcons.taxiCliente != null,
-                          anchor: (RaiMapVehicleIcons.taxiClienteAsignado !=
-                                      null ||
-                                  RaiMapVehicleIcons.taxiCliente != null)
+                          flat: iconoTaxistaAsignado != null,
+                          anchor: iconoTaxistaAsignado != null
                               ? const Offset(0.5, 0.5)
                               : const Offset(0.5, 1.0),
                           zIndexInt: 8,
@@ -5126,42 +5267,34 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                               : null;
                           final bool enViaje =
                               (docData?['viajeId'] ?? '').toString().trim().isNotEmpty;
-                          final LatLng pos =
+                          final LatLng pos = _poolDriverAnim
+                                  .displayPositions[doc.id] ??
                               LatLng(location.latitude, location.longitude);
+                          final double poolHeading = _poolDriverAnim.bearingFor(
+                            doc.id,
+                            fallback: heading ?? 0,
+                          );
                           markers.add(
                             Marker(
                               markerId: MarkerId('pool_${doc.id}'),
                               position: pos,
-                              icon: enViaje
-                                  ? (RaiMapVehicleIcons.taxiClienteAsignado ??
-                                      BitmapDescriptor.defaultMarkerWithHue(
-                                        BitmapDescriptor.hueRed,
-                                      ))
-                                  : (RaiMapVehicleIcons.taxiCliente ??
-                                      BitmapDescriptor.defaultMarkerWithHue(
-                                        BitmapDescriptor.hueGreen,
-                                      )),
-                              rotation: (enViaje
-                                          ? RaiMapVehicleIcons.taxiClienteAsignado
-                                          : RaiMapVehicleIcons.taxiCliente) !=
-                                      null
+                              icon: RaiMapVehicleIcons.taxiCliente ??
+                                  BitmapDescriptor.defaultMarkerWithHue(
+                                    BitmapDescriptor.hueGreen,
+                                  ),
+                              rotation: RaiMapVehicleIcons.taxiCliente != null
                                   ? RaiMapVehicleIcons.rotationTaxiCliente(
-                                      heading ?? 0,
+                                      poolHeading,
                                     )
                                   : 0,
-                              flat: enViaje
-                                  ? RaiMapVehicleIcons.taxiClienteAsignado != null
-                                  : RaiMapVehicleIcons.taxiCliente != null,
-                              anchor: (enViaje
-                                          ? RaiMapVehicleIcons.taxiClienteAsignado
-                                          : RaiMapVehicleIcons.taxiCliente) !=
-                                      null
+                              flat: RaiMapVehicleIcons.taxiCliente != null,
+                              anchor: RaiMapVehicleIcons.taxiCliente != null
                                   ? const Offset(0.5, 0.5)
                                   : const Offset(0.5, 1.0),
                               infoWindow: InfoWindow(
-                                title: enViaje ? 'En viaje' : 'Disponible',
+                                title: enViaje ? 'Ocupado' : 'Disponible',
                               ),
-                              zIndexInt: 2,
+                              zIndexInt: enViaje ? 1 : 2,
                             ),
                           );
                         }
@@ -5174,15 +5307,22 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         (estadoBase == EstadosViaje.aceptado ||
                             estadoBase == EstadosViaje.enCaminoPickup ||
                             estadoBase == EstadosViaje.enCurso);
-                    if (pulsoTaxistaEnMapa) {
-                      final LatLng txPos = _latLng(v.latTaxista, v.lonTaxista);
+                    if (pulsoTaxistaEnMapa && posTaxistaMapa != null) {
+                      final LatLng txPos = posTaxistaMapa;
+                      final bool pulsoRecogida = faseRecogidaTaxista;
+                      final Color pulsoFill = pulsoRecogida
+                          ? const Color(0x44E53935)
+                          : const Color(0x44FFB020);
+                      final Color pulsoStroke = pulsoRecogida
+                          ? const Color(0xFFE53935)
+                          : const Color(0xFFFFB020);
                       circles.add(
                         Circle(
                           circleId: const CircleId('taxista_pulse_inner'),
                           center: txPos,
                           radius: 120,
-                          fillColor: const Color(0x44E53935),
-                          strokeColor: const Color(0xFFE53935),
+                          fillColor: pulsoFill,
+                          strokeColor: pulsoStroke,
                           strokeWidth: 2,
                         ),
                       );
@@ -5191,8 +5331,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           circleId: const CircleId('taxista_pulse_outer'),
                           center: txPos,
                           radius: 220,
-                          fillColor: const Color(0x22E53935),
-                          strokeColor: const Color(0x99E53935),
+                          fillColor: pulsoRecogida
+                              ? const Color(0x22E53935)
+                              : const Color(0x22FFB020),
+                          strokeColor: pulsoRecogida
+                              ? const Color(0x99E53935)
+                              : const Color(0x99FFB020),
                           strokeWidth: 1,
                         ),
                       );
@@ -5267,9 +5411,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         (estadoBase == EstadosViaje.pendiente ||
                             estadoBase == EstadosViaje.pendientePago ||
                             v.esTurismo);
+                    final bool panelConductorAsignado = v.uidTaxista.isNotEmpty &&
+                        !v.esTurismo &&
+                        !EstadosViaje.esTerminal(estadoBase);
+                    final bool fasePickupConductor = panelConductorAsignado &&
+                        (estadoBase == EstadosViaje.aceptado ||
+                            estadoBase == EstadosViaje.enCaminoPickup);
+                    final DateTime inicioEsperaBusqueda =
+                        ViajeEsperaTiempoResolver.inicioBusqueda(data);
+                    final DateTime inicioCaminoConductor =
+                        ViajeEsperaTiempoResolver.inicioConductor(data);
                     final double sheetInitial = esperandoConductor
                         ? _kViajeSheetEsperaConductor
-                        : _kViajeSheetInitial;
+                        : (fasePickupConductor
+                            ? _kViajeSheetPickupCompact
+                            : _kViajeSheetInitial);
                     final List<double> sheetSnapSizes = esperandoConductor
                         ? <double>[
                             _kViajeSheetMin,
@@ -5277,13 +5433,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             0.68,
                             0.88,
                           ]
-                        : <double>[
-                            _kViajeSheetMin,
-                            0.40,
-                            _kViajeSheetInitial,
-                            0.62,
-                            0.88,
-                          ];
+                        : fasePickupConductor
+                            ? <double>[
+                                _kViajeSheetMin,
+                                _kViajeSheetPickupCompact,
+                                0.52,
+                                0.75,
+                              ]
+                            : <double>[
+                                _kViajeSheetMin,
+                                0.40,
+                                _kViajeSheetInitial,
+                                0.62,
+                                0.88,
+                              ];
 
                     // ===== DETECCIÓN DE CERCANÍA (solo fase pickup; en `en_curso` el cliente en
                     // Firestore puede quedar congelado si la app pasajero no está en primer plano
@@ -5379,11 +5542,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                           v.latDestino, v.lonDestino)
                                       ? _latLng(v.latDestino, v.lonDestino)
                                       : null,
-                                  ubicacionTaxista: v.uidTaxista.isNotEmpty &&
-                                          _isValidCoord(
-                                              v.latTaxista, v.lonTaxista)
-                                      ? _latLng(v.latTaxista, v.lonTaxista)
-                                      : null,
+                                  ubicacionTaxista: posTaxistaMapa,
                                   // Pins vienen en overlay (origen/destino/paradas/pool).
                                   mostrarOrigen: false,
                                   mostrarDestino: false,
@@ -5478,6 +5637,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             polylines: Set<Polyline>.of(_polylines.values),
                             compassEnabled: true,
                             mapToolbarEnabled: false,
+                            trafficEnabled: true,
                           )),
                         ),
                         // ===== BOTÓN FLOTANTE "VER TAXISTA" (siempre visible) =====
@@ -5568,6 +5728,19 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                             ),
                                           ],
                                         ),
+                                        if (fasePickupConductor)
+                                          Padding(
+                                            padding:
+                                                const EdgeInsets.only(top: 10),
+                                            child: ClienteViajeEsperaCronometro(
+                                              inicio: inicioCaminoConductor,
+                                              modo:
+                                                  ClienteViajeEsperaCronometroModo
+                                                      .conductorEnCamino,
+                                              compacto: true,
+                                              mostrarEnVivo: false,
+                                            ),
+                                          ),
                                         if (!_pickupEtaMinimizado &&
                                             (estadoBase ==
                                                     EstadosViaje.enCurso ||
@@ -5804,6 +5977,23 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             ),
                           ),
                         if (esperandoTaxista) _radarSearchingOverlay(),
+                        if (esperandoTaxista)
+                          Positioned(
+                            top: 0,
+                            left: 10,
+                            right: 10,
+                            child: SafeArea(
+                              bottom: false,
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: ClienteViajeEsperaCronometro(
+                                  inicio: inicioEsperaBusqueda,
+                                  modo: ClienteViajeEsperaCronometroModo
+                                      .busquedaConductor,
+                                ),
+                              ),
+                            ),
+                          ),
                         if (pulsoTaxistaEnMapa)
                           Positioned(
                             left: 12,
@@ -5903,6 +6093,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     v,
                                     estadoBase,
                                     cancelarHabilitado,
+                                    compacto: panelConductorAsignado,
                                   ),
                                   _viajeSheetDivider(),
 
@@ -5939,81 +6130,42 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     ),
 
                                   if (esperandoTaxista)
-                                    Container(
-                                      margin: const EdgeInsets.only(bottom: 14),
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        gradient: const LinearGradient(
-                                          colors: [
-                                            Color(0xFF0F2818),
-                                            Color(0xFF0A1A12)
-                                          ],
-                                          begin: Alignment.topLeft,
-                                          end: Alignment.bottomRight,
-                                        ),
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(
-                                          color: Colors.greenAccent
-                                              .withValues(alpha: 0.45),
-                                        ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.greenAccent
-                                                .withValues(alpha: 0.12),
-                                            blurRadius: 18,
-                                            offset: const Offset(0, 8),
-                                          ),
-                                        ],
+                                    ClienteEsperaTaxistaPanel(
+                                      viaje: v,
+                                      esMotor: v.esMotor,
+                                      conductoresCerca: driversSortedMapa.length,
+                                      docsOrdenados: driversSortedMapa,
+                                      fotoPorUid: _driverFotoPorUid,
+                                      inicioEspera: inicioEsperaBusqueda,
+                                    ),
+
+                                  if (panelConductorAsignado)
+                                    ClienteViajeConductorAsignadoPanel(
+                                      viaje: v,
+                                      estadoBase: estadoBase,
+                                      etaLinea:
+                                          _lineaEtaPickupCliente(v, estadoBase),
+                                      etaTituloHttp: _pickupEtaTitulo,
+                                      conductorCard: _buildDriverCard(
+                                        v,
+                                        soloDatosConductor: true,
                                       ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              const Icon(Icons.radar,
-                                                  color: Colors.greenAccent,
-                                                  size: 22),
-                                              const SizedBox(width: 10),
-                                              Expanded(
-                                                child: Text(
-                                                  v.esMotor
-                                                      ? 'Buscando motorista cercano'
-                                                      : 'Buscando conductor cercano',
-                                                  style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 16,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            driversSortedMapa.isNotEmpty
-                                                ? (v.esMotor
-                                                    ? 'Hay ${driversSortedMapa.length} motorista${driversSortedMapa.length == 1 ? '' : 's'} cerca de ti.'
-                                                    : 'Hay ${driversSortedMapa.length} conductor${driversSortedMapa.length == 1 ? '' : 'es'} cerca de ti.')
-                                                : (v.esMotor
-                                                    ? 'Notificando a motoristas en la zona…'
-                                                    : 'Notificando a conductores en la zona…'),
-                                            style: const TextStyle(
-                                                color: Colors.white60,
-                                                fontSize: 13),
-                                          ),
-                                          if (driversSortedMapa.isNotEmpty) ...[
-                                            const SizedBox(height: 14),
-                                            ClienteConductoresCercaStrip(
-                                              docsOrdenados: driversSortedMapa,
-                                              fotoPorUid: _driverFotoPorUid,
-                                            ),
-                                          ],
-                                        ],
-                                      ),
+                                      onLlamar: () => _llamarConductorCliente(v),
+                                      onWhatsApp: () =>
+                                          _whatsAppConductorCliente(v),
+                                      onChat: () => _abrirChatConductorCliente(v),
+                                      onVerEnMapa: () => _centrarEnTaxista(v),
+                                      onCentrarMapa: _isValidCoord(
+                                              v.latTaxista, v.lonTaxista)
+                                          ? () => _centrarClienteYTaxista(v)
+                                          : null,
+                                      inicioCamino: fasePickupConductor
+                                          ? inicioCaminoConductor
+                                          : null,
                                     ),
 
                                   if (v.uidTaxista.isNotEmpty &&
+                                      !panelConductorAsignado &&
                                       _isValidCoord(v.latTaxista, v.lonTaxista))
                                     Container(
                                       margin: const EdgeInsets.only(bottom: 16),
@@ -6208,9 +6360,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   ],
 
                                   // Conductor primero: placa, llamada, WhatsApp y mapa visibles antes del detalle del viaje.
-                                  if (v.uidTaxista.isNotEmpty) ...[
+                                  if (v.uidTaxista.isNotEmpty &&
+                                      !panelConductorAsignado) ...[
                                     _buildDriverCard(v, soloDatosConductor: true),
                                     const SizedBox(height: 16),
+                                    _buildCodigoVerificacionClienteSection(
+                                      codigoVerificacion: codigoVerificacion,
+                                      codigoVerificado: codigoVerificado,
+                                      estadoBase: estadoBase,
+                                      mostrarCodigo: mostrarCodigoCliente,
+                                      esMotor: v.esMotor,
+                                    ),
+                                  ],
+                                  if (panelConductorAsignado) ...[
+                                    const SizedBox(height: 12),
                                     _buildCodigoVerificacionClienteSection(
                                       codigoVerificacion: codigoVerificacion,
                                       codigoVerificado: codigoVerificado,
@@ -6283,8 +6446,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     const SizedBox(height: 16),
                                   ],
 
-                                  // Tarjeta de información del viaje
-                                  _buildTripInfoCard(v, estadoBase),
+                                  // Tarjeta de información del viaje (omitida si panel compacto ya resume origen/destino)
+                                  if (!panelConductorAsignado)
+                                    _buildTripInfoCard(v, estadoBase),
 
                                   if (_simCasa) ...[
                                     const SizedBox(height: 12),

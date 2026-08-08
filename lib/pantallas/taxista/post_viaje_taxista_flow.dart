@@ -4,16 +4,15 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/data/viaje_data.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/taxista/reportar_cliente_viaje.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_cola_post_completar.dart';
-import 'package:flygo_nuevo/utils/formatos_moneda.dart';
-import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/servicios/calificacion_pendiente_service.dart';
+import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
 import 'package:flygo_nuevo/utils/post_viaje_rating_throttle.dart';
-import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
+import 'package:flygo_nuevo/widgets/post_viaje_recibo_resumen.dart';
 
 class PostViajeTaxistaFlow extends StatefulWidget {
   const PostViajeTaxistaFlow({
@@ -40,9 +39,7 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
   bool _cargandoRating = false;
   bool _salioDeCalificacion = false;
   bool _omitioCalificacionPorThrottle = false;
-  bool _regresoColaProgramado = false;
   static const int _maxComentario = 280;
-  static const Duration _delayRegresoCola = Duration(milliseconds: 900);
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeSub;
   DocumentSnapshot<Map<String, dynamic>>? _viajeSnap;
@@ -55,6 +52,8 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     if (sem != null && sem.isNotEmpty) {
       _viajeDatosUi = Map<String, dynamic>.from(sem);
     }
+    RaiConnectivityService.instance.ensureStarted();
+    unawaited(CalificacionPendienteService.flushPendientes());
     _viajeSub = FirebaseFirestore.instance
         .collection('viajes')
         .doc(widget.viajeId)
@@ -82,21 +81,12 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     return _viajeDatosUi;
   }
 
-  String _money(num? n) => FormatosMoneda.rd((n ?? 0).toDouble());
-
   double _scrollBottomPad(BuildContext context) {
     final MediaQueryData mq = MediaQuery.of(context);
     final double sys = mq.viewPadding.bottom > mq.padding.bottom
         ? mq.viewPadding.bottom
         : mq.padding.bottom;
     return sys + 48;
-  }
-
-  double _totalRd(Map<String, dynamic> d, Viaje v) {
-    if (d['precioFinal'] is num) {
-      return (d['precioFinal'] as num).toDouble();
-    }
-    return v.precio;
   }
 
   Future<void> _finalizarFlujo() async {
@@ -112,15 +102,6 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
       uidTaxista: widget.uidTaxista,
       regresarAlPoolNormal: widget.regresarAlPoolNormal,
     );
-  }
-
-  void _programarRegresoCola() {
-    if (_regresoColaProgramado) return;
-    _regresoColaProgramado = true;
-    Future<void>.delayed(_delayRegresoCola, () {
-      if (!mounted) return;
-      unawaited(_finalizarFlujo());
-    });
   }
 
   Future<void> _continuarDesdeResumen(Viaje v, Map<String, dynamic> d) async {
@@ -140,7 +121,6 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
         _salioDeCalificacion = true;
         _step = 2;
       });
-      _programarRegresoCola();
       return;
     }
     setState(() => _step = 1);
@@ -166,9 +146,30 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
         _salioDeCalificacion = true;
         _step = 2;
       });
-      _programarRegresoCola();
     } catch (e) {
       if (!mounted) return;
+      if (CalificacionPendienteService.esErrorDeRed(e)) {
+        await CalificacionPendienteService.encolar(
+          rol: 'taxista',
+          viajeId: widget.viajeId,
+          uid: widget.uidTaxista,
+          calificacion: _calificacion,
+          comentario: _comentario.text.trim(),
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Sin conexión estable. Guardamos tu calificación y la enviaremos al reconectar.',
+            ),
+          ),
+        );
+        setState(() {
+          _salioDeCalificacion = true;
+          _step = 2;
+        });
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error al calificar: $e')),
       );
@@ -177,171 +178,17 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
     }
   }
 
-  Widget _kv(String k, String v) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            flex: 2,
-            child: Text(k,
-                style: const TextStyle(color: Colors.white54, fontSize: 13)),
-          ),
-          Expanded(
-            flex: 3,
-            child: Text(
-              v.isEmpty ? '—' : v,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  double _gananciaNetaRd(Map<String, dynamic> d, Viaje v) {
-    final gc = d['ganancia_cents'];
-    if (gc is num && gc > 0) return gc.toDouble() / 100.0;
-    final g = d['gananciaTaxista'];
-    if (g is num && g > 0) return g.toDouble();
-    return PlataformaEconomia.gananciaTaxistaRdDesdeTotal(_totalRd(d, v));
-  }
-
   Widget _stepResumen(Viaje v, Map<String, dynamic> d) {
-    final double total = _totalRd(d, v);
-    final double neto = _gananciaNetaRd(d, v);
-    final bool esCorp = CorporativoTaxistaService.esViajeCorporativoDoc(d);
-    final bool esEfectivo = MetodoPagoViaje.esEfectivo(v.metodoPago);
-    final bool esTransfer = MetodoPagoViaje.esTransferencia(v.metodoPago);
-    final bool tarjetaPagada = MetodoPagoViaje.tarjetaPagadoVerificado(d);
-
     final double bottomPad = _scrollBottomPad(context);
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(24, 8, 24, bottomPad),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'Recibo del viaje',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${v.origen} → ${v.destino}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white70, height: 1.35),
-          ),
-          const SizedBox(height: 18),
-          MetodoPagoVisualCard(
-            metodoPago: v.metodoPago,
-            viajeData: d,
-            corporativo: esCorp,
-            estadoSello: tarjetaPagada
-                ? 'COBRO CONFIRMADO'
-                : (esEfectivo
-                    ? 'COBRAR EN EFECTIVO'
-                    : (esTransfer ? 'TRANSFERENCIA' : null)),
-            estadoColor: tarjetaPagada
-                ? const Color(0xFF69F0AE)
-                : (esEfectivo
-                    ? const Color(0xFF69F0AE)
-                    : (esTransfer ? const Color(0xFF64B5F6) : null)),
-            fondoOscuro: true,
-          ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: const Color(0xFF141414),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if ((d['nombreCliente'] ?? d['clienteNombre'] ?? '')
-                    .toString()
-                    .trim()
-                    .isNotEmpty)
-                  _kv(
-                    'Pasajero',
-                    (d['nombreCliente'] ?? d['clienteNombre'] ?? '')
-                        .toString()
-                        .trim(),
-                  ),
-                const Divider(height: 28, color: Colors.white24),
-                const Text(
-                  'Monto del servicio',
-                  style: TextStyle(color: Colors.white54, fontSize: 13),
-                ),
-                const SizedBox(height: 6),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    _money(esCorp ? neto : total),
-                    style: const TextStyle(
-                      color: Colors.greenAccent,
-                      fontSize: 42,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -0.5,
-                      height: 1.05,
-                    ),
-                  ),
-                ),
-                if (esCorp) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Tarifa ruta ${_money(total)} · tu neto acumulado',
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 13,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Ruta corporativa: este neto se suma en Ganancias → Corporativo. '
-                    'RAI te transfiere al liquidar el período con la empresa. '
-                    'No cobrás al pasajero en la calle.',
-                    style: TextStyle(
-                      color: Colors.white60,
-                      fontSize: 13,
-                      height: 1.35,
-                    ),
-                  ),
-                ] else if (esEfectivo) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    'Cobraste ${_money(total)} en efectivo al pasajero.',
-                    style: const TextStyle(
-                      color: Colors.white60,
-                      fontSize: 13,
-                      height: 1.35,
-                    ),
-                  ),
-                ] else if (esTransfer) ...[
-                  const SizedBox(height: 12),
-                  const Text(
-                    'En transferencia, el pasajero paga el total acordado a tu cuenta.',
-                    style: TextStyle(
-                      color: Colors.white60,
-                      fontSize: 13,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
-              ],
-            ),
+          PostViajeReciboResumen(
+            role: 'taxista',
+            viaje: v,
+            data: d,
           ),
           const SizedBox(height: 28),
           FilledButton(
@@ -489,7 +336,6 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
                   _salioDeCalificacion = true;
                   _step = 2;
                 });
-                _programarRegresoCola();
               },
               child: const Text('Ahora no',
                   style: TextStyle(color: Colors.white38)),
@@ -502,15 +348,12 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
   Widget _stepCierre() {
     final bool corp = widget.regresarAlPoolNormal;
     final String subtitulo = corp
-        ? 'Ruta cerrada. Volviendo a Mis rutas corporativas…'
+        ? 'Ruta cerrada. Cuando quieras, volvé a Mis rutas corporativas.'
         : _salioDeCalificacion
-            ? 'Tu calificación fue registrada. Volviendo al inicio…'
+            ? 'Tu calificación fue registrada. Podés volver a recibir viajes.'
             : _omitioCalificacionPorThrottle
-                ? 'Listo para seguir recibiendo viajes. Volviendo al inicio…'
-                : 'Volviendo al inicio…';
-    if (!_regresoColaProgramado) {
-      _programarRegresoCola();
-    }
+                ? 'Listo para seguir recibiendo viajes.'
+                : 'Viaje cerrado correctamente.';
     final double bottomPad = _scrollBottomPad(context);
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(24, 40, 24, bottomPad),
@@ -540,8 +383,6 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
             ),
           ),
           const SizedBox(height: 28),
-          const CircularProgressIndicator(color: Colors.greenAccent),
-          const SizedBox(height: 24),
           FilledButton.icon(
             onPressed: () => unawaited(_finalizarFlujo()),
             icon: Icon(corp ? Icons.route_rounded : Icons.local_taxi_rounded),

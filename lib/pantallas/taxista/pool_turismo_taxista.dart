@@ -17,6 +17,7 @@ import 'package:flygo_nuevo/servicios/distancia_service.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/taxista_pool_timbre_dedupe.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/navegacion/taxista_operacion_nav.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
@@ -653,6 +654,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     await NotificationService.I.playPoolOfferSoundInApp();
     for (final item in pendientes) {
       _vistosParaTimbre.add(item.id);
+      TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${item.id}');
       if (_viajeTienePrecioReal(item.data)) {
         await NotificationService.I.notifyNuevoViaje(
           viajeId: item.id,
@@ -676,6 +678,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     await NotificationService.I.playPoolOfferSoundInApp();
     for (final item in pendientes) {
       _vistosParaTimbre.add(item.id);
+      TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${item.id}');
       if (_viajeTienePrecioReal(item.data)) {
         await NotificationService.I.notifyNuevoViaje(
           viajeId: item.id,
@@ -721,6 +724,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
     for (final item in pendientes) {
       _vistosParaTimbre.add(item.id);
+      TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${item.id}');
       if (_viajeTienePrecioReal(item.data)) {
         await NotificationService.I.notifyNuevoViaje(
           viajeId: item.id,
@@ -738,7 +742,6 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     List<_OfertaTurismoPendiente> nuevas,
   ) async {
     if (!_entradaInicialProcesada || !_appEnForeground) return;
-    if (_tabPool.index != tabIndex) return;
     if (nuevas.isEmpty) return;
     if (myUid.isNotEmpty && !await RolesService.getDisponibilidad(myUid)) {
       return;
@@ -753,6 +756,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
     for (final item in fresh) {
       _vistosParaTimbre.add(item.id);
+      TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${item.id}');
       await NotificationService.I.vibratePoolOfferInApp();
       if (_viajeTienePrecioReal(item.data)) {
         await NotificationService.I.notifyNuevoViaje(
@@ -783,6 +787,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       if (!_pasaFiltroAhoraLocalPool(data)) continue;
       if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
       if (_vistosParaTimbre.contains(d.id)) continue;
+      final String clave = 'turismo_${d.id}';
+      if (TaxistaPoolTimbreDedupe.instance.yaVisto(clave)) continue;
       out.add(
         _OfertaTurismoPendiente(
           id: d.id,
@@ -805,6 +811,8 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       if (!_pasaFiltroProgLocalPool(data)) continue;
       if (!_timbreMeInteresaTurismoPool(data, myUid)) continue;
       if (_vistosParaTimbre.contains(d.id)) continue;
+      final String clave = 'turismo_${d.id}';
+      if (TaxistaPoolTimbreDedupe.instance.yaVisto(clave)) continue;
       out.add(
         _OfertaTurismoPendiente(
           id: d.id,
@@ -923,6 +931,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     if (viajeId.isEmpty) return;
     final changed = _ocultosPoolLocal.add(viajeId);
     _vistosParaTimbre.add(viajeId);
+    TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_$viajeId');
     if (changed && mounted) setState(() {});
   }
 

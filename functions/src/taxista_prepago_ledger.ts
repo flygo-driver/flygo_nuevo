@@ -259,6 +259,54 @@ export async function debitarComisionBolaPuebloEnTx(
   };
 }
 
+/** Ref ledger crédito prepago por 6.º viaje gratis negocio aliado (idempotente por viajeId). */
+export function negocioAliadoViajeGratisLedgerRef(
+  uidTaxista: string,
+  viajeId: string,
+): DocumentReference {
+  const uid = uidTaxista.trim();
+  const vid = viajeId.trim();
+  return movColl(uid).doc(safeId(`negocio_aliado_gratis_${vid}`));
+}
+
+export async function ledgerNegocioAliadoViajeGratisCreditoCf(
+  tx: Transaction,
+  params: {
+    uidTaxista: string;
+    viajeId: string;
+    fuente: string;
+    creditoRd: number;
+    gananciaRd: number;
+    precioCobradoRd: number;
+    saldoPrepagoAntes: number;
+    saldoPrepagoDespues: number;
+    existingMovSnap?: DocumentSnapshot;
+  },
+): Promise<boolean> {
+  const uid = params.uidTaxista.trim();
+  const vid = params.viajeId.trim();
+  if (!uid || !vid) return false;
+
+  const ref = negocioAliadoViajeGratisLedgerRef(uid, vid);
+  const snap = params.existingMovSnap ?? (await tx.get(ref));
+  if (snap.exists) return false;
+
+  tx.set(ref, {
+    schemaVersion: 1,
+    createdAt: FieldValue.serverTimestamp(),
+    tipo: "negocio_aliado_viaje_gratis_credito",
+    fuente: params.fuente,
+    uidTaxista: uid,
+    viajeId: vid,
+    creditoRd: Number(params.creditoRd.toFixed(2)),
+    gananciaRd: Number(params.gananciaRd.toFixed(2)),
+    precioCobradoRd: Number(params.precioCobradoRd.toFixed(2)),
+    saldoPrepagoAntes: Number(params.saldoPrepagoAntes.toFixed(2)),
+    saldoPrepagoDespues: Number(params.saldoPrepagoDespues.toFixed(2)),
+  });
+  return true;
+}
+
 export async function ledgerRecargaPrepagoVerificadaCf(
   tx: Transaction,
   params: {

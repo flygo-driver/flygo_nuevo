@@ -61,11 +61,15 @@ class AdminConfigService {
 
   static Future<void> setComisionPorcentaje({
     required double porcentaje,
+    required double porcentajeTransferencia,
+    required double porcentajeTarjeta,
     required String motivo,
   }) async {
     final c = _fx.httpsCallable('setComisionPorcentaje');
     await c.call(<String, dynamic>{
       'porcentaje': porcentaje,
+      'porcentajeTransferencia': porcentajeTransferencia,
+      'porcentajeTarjeta': porcentajeTarjeta,
       'motivo': motivo,
     });
   }

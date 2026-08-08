@@ -32,6 +32,8 @@ import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart'
 import 'package:flygo_nuevo/shell/cliente_pool_deep_link_bridge.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
+import 'package:flygo_nuevo/widgets/rai_cambio_modo_sesion_borde.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/cliente_shell_nav_bridge.dart';
@@ -210,7 +212,16 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
   @override
   void initState() {
     super.initState();
-    ClienteShellNavBridge.bind(popAllTabRoutes: _popAllTabRoutes);
+    ClienteShellNavBridge.bind(
+      popAllTabRoutes: _popAllTabRoutes,
+      pushOnInicioTab: (Widget page) {
+        final NavigatorState? nav = _navigatorKeys[0].currentState;
+        if (nav == null || !nav.mounted) return Future<Object?>.value(null);
+        return nav.push<Object?>(
+          MaterialPageRoute<Object?>(builder: (_) => page),
+        );
+      },
+    );
     ShellTabController.clienteIndex.value = 0;
     ShellTabController.clienteIndex.addListener(_onShellTabController);
     ClientePoolDeepLinkBridge.bindShell(
@@ -555,6 +566,9 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
       ),
           ),
           const RaiAsistenteFab(),
+          if (RaiModoSesionService.enModoPasajero &&
+              _index == 3)
+            const RaiCambioModoSesionBorde(destinoPasajero: false),
         ],
       ),
     );

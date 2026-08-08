@@ -2,9 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_crear.dart';
+import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/organizador_giras_perfil_tab.dart';
+import 'package:flygo_nuevo/widgets/rai_cambio_modo_sesion_borde.dart';
 
 /// Shell reducido: solo giras por cupos (organizador sin guagua propia).
 class OrganizadorGirasShell extends StatefulWidget {
@@ -27,18 +28,19 @@ class _OrganizadorGirasShellState extends State<OrganizadorGirasShell> {
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      body: IndexedStack(
+      body: Stack(
+        children: [
+          IndexedStack(
         index: _index,
         children: _tabs,
       ),
+          if (_index == 1)
+            const RaiCambioModoSesionBorde(destinoPasajero: true),
+        ],
+      ),
       floatingActionButton: _index == 0
           ? FloatingActionButton.extended(
-              onPressed: () => Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => const PoolsTaxistaCrear(),
-                ),
-              ),
+              onPressed: () => PoolModoPublicacionUi.abrirPublicar(context),
               icon: const Icon(Icons.add),
               label: const Text('Nueva salida'),
             )

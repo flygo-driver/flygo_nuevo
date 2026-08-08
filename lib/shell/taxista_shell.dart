@@ -29,11 +29,14 @@ import 'package:flygo_nuevo/widgets/viaje_overlay_error_shield.dart';
 import 'package:flygo_nuevo/widgets/taxista_registro_gate.dart';
 import 'package:flygo_nuevo/widgets/taxista_documentos_gate.dart';
 import 'package:flygo_nuevo/widgets/taxista_bola_viaje_retomar_banner.dart';
+import 'package:flygo_nuevo/widgets/taxista_turismo_pool_timbre_listener.dart';
 import 'package:flygo_nuevo/widgets/rai_offline_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_taxista_banner.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 import 'package:flygo_nuevo/servicios/pool_deep_link.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
+import 'package:flygo_nuevo/servicios/calificacion_pendiente_service.dart';
+import 'package:flygo_nuevo/widgets/rai_cambio_modo_sesion_borde.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
@@ -53,6 +56,8 @@ class _TaxistaShellState extends State<TaxistaShell> {
   void initState() {
     super.initState();
     PoolTimbreSessionGuard.activarSesionConductor();
+    RaiConnectivityService.instance.ensureStarted();
+    unawaited(CalificacionPendienteService.flushPendientes());
   }
 
   @override
@@ -63,8 +68,10 @@ class _TaxistaShellState extends State<TaxistaShell> {
           child: BolaCancelacionListener(
             child: BolaPostFacturaListener(
               child: TaxistaPostViajeListener(
-                child: _TaxistaShellScaffold(
-                  openDocumentosOnLaunch: widget.openDocumentosOnLaunch,
+                child: TaxistaTurismoPoolTimbreListener(
+                  child: _TaxistaShellScaffold(
+                    openDocumentosOnLaunch: widget.openDocumentosOnLaunch,
+                  ),
                 ),
               ),
             ),
@@ -544,9 +551,12 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
   }
 
   void _onUbicacionTaxistaListo() {
-    if (RaiUbicacionTaxistaService.instance.modo.value ==
-        RaiUbicacionTaxistaModo.listo) {
+    final RaiUbicacionTaxistaModo modo =
+        RaiUbicacionTaxistaService.instance.modo.value;
+    if (modo == RaiUbicacionTaxistaModo.listo) {
       UbicacionTaxista.iniciarActualizacion();
+    } else {
+      unawaited(UbicacionTaxista.ocultarDelMapaCliente());
     }
   }
 
@@ -627,7 +637,9 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
     );
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayBarra,
-      child: Scaffold(
+      child: Stack(
+        children: [
+          Scaffold(
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -709,7 +721,11 @@ class _TaxistaShellScaffoldState extends State<_TaxistaShellScaffold> {
           ),
         ),
       ),
-    ),
+          ),
+          if (_index == ShellTabController.taxistaTabCuenta)
+            const RaiCambioModoSesionBorde(destinoPasajero: true),
+        ],
+      ),
     );
   }
 }

@@ -20,6 +20,7 @@ import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_pago_tarjeta_panel.dart';
 import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
 
@@ -739,8 +740,8 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                   }
                                                 },
                                               ),
-                                              if (FinanceConfigService
-                                                  .pagosConTarjetaAzulHabilitados)
+                                              if (PagoTarjetaClienteGate
+                                                  .mostrarOpcionTarjeta)
                                                 ChoiceChip(
                                                   label:
                                                       const Text('Tarjeta'),
@@ -748,6 +749,13 @@ class BolaPuebloViajeActivoPage extends StatelessWidget {
                                                       MetodoPagoViaje.esTarjeta(
                                                           metodoPago),
                                                   onSelected: (_) async {
+                                                    if (!PagoTarjetaClienteGate
+                                                        .cobroHabilitado) {
+                                                      await PagoTarjetaClienteGate
+                                                          .avisarEnDesarrollo(
+                                                              context);
+                                                      return;
+                                                    }
                                                     try {
                                                       await BolaPuebloRepo
                                                           .actualizarMetodoPagoBola(

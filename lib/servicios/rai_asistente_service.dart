@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/rai_busqueda_direccion_inteligente.dart';
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
@@ -34,7 +37,7 @@ class RaiAsistenteService {
     // Sin red: solo conocimiento local + búsqueda de POIs locales.
     if (RaiConnectivityService.instance.isOffline) {
       final local = RaiAsistenteKb.responder(trimmed, perfil: perfil);
-      return RaiAsistenteRespuesta(
+      final resp = RaiAsistenteRespuesta(
         reply: '${local.reply}\n\n(Sin internet: respuesta local. '
             'Con conexión el asistente es más preciso.)',
         addressQuery: local.addressQuery,
@@ -42,6 +45,8 @@ class RaiAsistenteService {
         suggestedAction: local.suggestedAction,
         source: RaiAsistenteSource.local,
       );
+      unawaited(_guardarMensaje(uid: user.uid, message: trimmed, resp: resp));
+      return resp;
     }
 
     try {
@@ -64,12 +69,16 @@ class RaiAsistenteService {
       final data = result.data;
 
       if (data['useLocalFallback'] == true) {
-        return _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+        final resp = _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+        unawaited(_guardarMensaje(uid: user.uid, message: trimmed, resp: resp));
+        return resp;
       }
 
       final reply = (data['reply'] as String?)?.trim();
       if (reply == null || reply.isEmpty) {
-        return _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+        final resp = _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+        unawaited(_guardarMensaje(uid: user.uid, message: trimmed, resp: resp));
+        return resp;
       }
 
       return RaiAsistenteRespuesta(
@@ -91,9 +100,37 @@ class RaiAsistenteService {
           source: RaiAsistenteSource.local,
         );
       }
-      return _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+      final resp = _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+      unawaited(_guardarMensaje(uid: user.uid, message: trimmed, resp: resp));
+      return resp;
     } catch (_) {
-      return _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+      final resp = _fromLocal(trimmed, perfil: perfil, noteCloud: true);
+      unawaited(_guardarMensaje(uid: user.uid, message: trimmed, resp: resp));
+      return resp;
+    }
+  }
+
+  /// Guarda interacción local/offline (Gemini la guarda la Cloud Function).
+  static Future<void> _guardarMensaje({
+    required String uid,
+    required String message,
+    required RaiAsistenteRespuesta resp,
+  }) async {
+    try {
+      final action = RaiAsistenteKb.actionToString(resp.suggestedAction);
+      await FirebaseFirestore.instance.collection('rai_asistente_mensajes').add({
+        'uid': uid,
+        'message': message.length > 1200 ? message.substring(0, 1200) : message,
+        'reply': resp.reply.length > 2000 ? resp.reply.substring(0, 2000) : resp.reply,
+        'suggestedAction': action,
+        'addressQuery': resp.addressQuery,
+        'source': resp.source.name,
+        'solicitaViaje': RaiAsistenteKb.esSolicitudViaje(resp.suggestedAction),
+        'day': DateTime.now().toIso8601String().substring(0, 10),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // No bloquear al usuario si falla el log.
     }
   }
 

@@ -67,6 +67,7 @@ import 'package:flygo_nuevo/widgets/corporativo_pasajeros_chofer_card.dart';
 import 'package:flygo_nuevo/widgets/navegacion_waze_maps_sheet.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_map_alert.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
+import 'package:flygo_nuevo/widgets/taxista_pickup_cliente_panel.dart';
 import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
 import 'package:flygo_nuevo/widgets/viaje_flujo_profesional_taxista_header.dart';
 import 'package:flygo_nuevo/widgets/viajes_cercanos_taxista.dart';
@@ -243,6 +244,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       DraggableScrollableController();
   static const double _kViajeSheetMin = 0.22;
   static const double _kViajeSheetInitial = 0.48;
+  /// Fase pickup al cliente: sheet bajo para ver más mapa.
+  static const double _kViajeSheetPickupCompact = 0.36;
   static const double _kViajeSheetPin = 0.74;
   String? _viajeSheetAseguradoParaId;
   String? _ultimoSnackEncadenadoViajeId;
@@ -1384,11 +1387,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (_coordsValid(v.latDestino, v.lonDestino)) {
       return (lat: v.latDestino, lon: v.lonDestino);
     }
-    final wps = v.waypoints;
-    if (wps != null && wps.isNotEmpty) {
-      for (var i = wps.length - 1; i >= 0; i--) {
-        final lat = _waypointLat(wps[i]);
-        final lon = _waypointLon(wps[i]);
+    final dynamic rp = v.extras?['rutaPuntos'];
+    if (rp is List) {
+      for (final dynamic item in rp.reversed) {
+        if (item is! Map) continue;
+        final Map<String, dynamic> m = Map<String, dynamic>.from(item);
+        final String rol = (m['rol'] ?? '').toString().toLowerCase();
+        if (rol != 'destino' && rol != 'destino_final') continue;
+        final double? lat = _waypointLat(m);
+        final double? lon = _waypointLon(m);
         if (lat != null && lon != null && _coordsValid(lat, lon)) {
           return (lat: lat, lon: lon);
         }
@@ -2968,20 +2975,35 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     required bool mostrarPinCorp,
     required String? uid,
   }) {
+    final bool compactoPickup =
+        _esPickupClienteSheetCompacto(viaje, estadoBase);
+    final double sheetInitial = compactoPickup
+        ? _kViajeSheetPickupCompact
+        : _kViajeSheetInitial;
+    final List<double> snapSizes = compactoPickup
+        ? <double>[
+            _kViajeSheetMin,
+            _kViajeSheetPickupCompact,
+            0.52,
+            1.0,
+          ]
+        : const <double>[
+            _kViajeSheetMin,
+            _kViajeSheetInitial,
+            _kViajeSheetPin,
+            1.0,
+          ];
+    final String uidCli = _uidClienteDe(viaje);
+
     return DraggableScrollableSheet(
       key: ValueKey<String>('viaje-sheet-${viaje.id}'),
       controller: _viajeSheetCtrl,
       minChildSize: _kViajeSheetMin,
       maxChildSize: 1.0,
-      initialChildSize: _kViajeSheetInitial,
+      initialChildSize: sheetInitial,
       snap: true,
       snapAnimationDuration: const Duration(milliseconds: 220),
-      snapSizes: const <double>[
-        _kViajeSheetMin,
-        _kViajeSheetInitial,
-        _kViajeSheetPin,
-        1.0,
-      ],
+      snapSizes: snapSizes,
       builder: (sheetCtx, scrollController) {
         _viajeSheetScrollCtrl = scrollController;
         final double bottomInset = MediaQuery.viewPaddingOf(sheetCtx).bottom;
@@ -3016,17 +3038,35 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
             children: [
               _viajeSheetHandle(),
-              _buildViajeSheetResumenMinimo(viaje, estadoBase),
-              if (!esCorpMapa && !mostrarPinCorp) ...<Widget>[
-                const SizedBox(height: 10),
-                ViajeFlujoProfesionalTaxistaHeader(
-                  viajeId: viaje.id,
-                  estadoBase: estadoBase,
-                  metodoPagoFallback: viaje.metodoPago,
-                  codigoVerificado: viaje.codigoVerificado,
-                  montoFallback: viaje.precio,
-                  codigoEsperado: viaje.codigoVerificacion,
+              if (compactoPickup) ...<Widget>[
+                TaxistaPickupClientePanel(
+                  viaje: viaje,
+                  navegacionIniciada: _navegacionIniciada,
+                  clienteCerca: _clienteCerca,
+                  onVerCliente: uidCli.isEmpty
+                      ? null
+                      : () => _verInfoCliente(uidCliente: uidCli),
+                  onContactar: uidCli.isEmpty
+                      ? null
+                      : () => _contactarCliente(
+                            uidCliente: uidCli,
+                            viajeId: viaje.id,
+                            viaje: viaje,
+                          ),
                 ),
+              ] else ...<Widget>[
+                _buildViajeSheetResumenMinimo(viaje, estadoBase),
+                if (!esCorpMapa && !mostrarPinCorp) ...<Widget>[
+                  const SizedBox(height: 10),
+                  ViajeFlujoProfesionalTaxistaHeader(
+                    viajeId: viaje.id,
+                    estadoBase: estadoBase,
+                    metodoPagoFallback: viaje.metodoPago,
+                    codigoVerificado: viaje.codigoVerificado,
+                    montoFallback: viaje.precio,
+                    codigoEsperado: viaje.codigoVerificacion,
+                  ),
+                ],
               ],
               const SizedBox(height: 10),
               if (!esCorpMapa) ...[
@@ -3083,6 +3123,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 ],
               ],
               if (!mostrarPinCorp && !esCorpMapa &&
+                  !compactoPickup &&
                   _chatViajeHabilitadoParaTaxista(viaje, estadoBase) &&
                   uid != null) ...[
                 const SizedBox(height: 10),
@@ -3094,7 +3135,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   esCorporativo: false,
                 ),
               ],
-              if (!mostrarPinCorp) ...[
+              if (!mostrarPinCorp && !compactoPickup) ...[
                 _viajeSheetDivider(),
                 ViajesCercanosTaxistaSheetButton(
                   controller: _viajesCercanosCtl,
@@ -3111,6 +3152,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 _buildDetallesViajePanel(viaje, estadoBase),
                 const SizedBox(height: 12),
                 _tarjetaVehiculoVisibleAlCliente(viaje),
+              ],
+              if (!mostrarPinCorp && compactoPickup) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Deslizá hacia arriba para ver más detalles del viaje.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.42),
+                    fontSize: 11.5,
+                  ),
+                ),
               ],
             ],
           ),
@@ -3298,6 +3350,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   bool _corpClienteAbordoConfirmado(Viaje v) =>
       v.extras?['clienteAbordo'] == true;
+
+  /// Viaje normal en fase pickup: panel compacto (sin duplicar pago ni detalles).
+  bool _esPickupClienteSheetCompacto(Viaje v, String estadoBase) {
+    if (CorporativoPasajerosChoferCard.esViajeCorporativo(v)) return false;
+    if (_esViajeCorporativo(v)) return false;
+    return EstadosViaje.esAceptado(estadoBase) ||
+        EstadosViaje.esEnCaminoPickup(estadoBase);
+  }
 
   /// Corporativo: estado de código en Firestore sin abordo real → tratar como pickup.
   bool _corpEnFasePickup(Viaje v, String estadoBase) {
@@ -6625,8 +6685,10 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   Widget _actionBar(Viaje v, String estadoBase) {
     estadoBase = _estadoBaseViaje(v);
     final bool corp = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
-    final String? orientacion =
-        corp ? null : _mensajeOrientacionFlujo(v, estadoBase);
+    final bool compactoPickup = _esPickupClienteSheetCompacto(v, estadoBase);
+    final String? orientacion = corp || compactoPickup
+        ? null
+        : _mensajeOrientacionFlujo(v, estadoBase);
     final List<Widget> buttons = _getActionButtons(v, estadoBase);
     if (orientacion == null && buttons.isEmpty) {
       return const SizedBox.shrink();
@@ -6980,6 +7042,105 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     ];
   }
 
+  List<Widget> _getActionButtonsPickupCompact(Viaje v, String uidCli) {
+    return <Widget>[
+      if (!_navegacionIniciada)
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () => _iniciarNavegacionPickup(v),
+            icon: const Icon(Icons.navigation, size: 24),
+            label: const Text(
+              'Navegar hacia el cliente',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 56),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        )
+      else
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () => _marcarClienteAbordo(v),
+            icon: const Icon(Icons.person_add, size: 24),
+            label: const Text(
+              'Cliente a bordo',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 56),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+      if (_permitePruebaSinRecorrido(v)) ...<Widget>[
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _actionBusy
+                ? null
+                : () async {
+                    unawaited(_persistNavPickupFlag(v.id, true));
+                    if (!_navegacionIniciada) {
+                      setState(() => _navegacionIniciada = true);
+                      _tripFlowSnack(
+                        'Punto marcado. Siguiente: «Cliente a bordo».',
+                        backgroundColor: Colors.teal.shade800,
+                      );
+                    } else {
+                      await _marcarClienteAbordo(v);
+                    }
+                  },
+            icon: const Icon(Icons.check_circle_outline_rounded, size: 22),
+            label: Text(
+              _navegacionIniciada
+                  ? 'Llegué — mostrar código (prueba)'
+                  : 'Llegué al punto (prueba en casa)',
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.tealAccent,
+              side: BorderSide(color: Colors.tealAccent.withValues(alpha: 0.55)),
+              minimumSize: const Size(double.infinity, 48),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ),
+      ],
+      const SizedBox(height: 12),
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: () => _cancelarPorTaxista(v),
+          icon: const Icon(Icons.cancel_outlined, size: 20),
+          label: const Text('Cancelar viaje', style: TextStyle(fontSize: 15)),
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5)),
+            foregroundColor: Colors.redAccent,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
   List<Widget> _getActionButtons(Viaje v, String estadoBase) {
     estadoBase = _estadoBaseViaje(v);
     final uidCli = _uidClienteDe(v);
@@ -7016,6 +7177,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         EstadosViaje.esEnCaminoPickup(estadoBase) ||
         _corpEnFasePickup(v, estadoBase)) {
       final bool corp = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
+      if (!corp && _esPickupClienteSheetCompacto(v, estadoBase)) {
+        return _getActionButtonsPickupCompact(v, uidCli);
+      }
       return [
         if (!corp) ...[
           _estadoProfesionalCard(

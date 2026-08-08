@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print, prefer_const_constructors, prefer_const_literals_to_create_immutables
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -27,6 +28,7 @@ import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_reentrada_guard.dart';
+import 'package:flygo_nuevo/servicios/taxista_pool_timbre_dedupe.dart';
 import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
 import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/bola_pueblo_disponible_tab.dart';
@@ -611,7 +613,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     List<_OfertaPoolPendiente> nuevas,
   ) async {
     if (!_entradaInicialProcesada || !_appEnForeground) return;
-    if (_tabLogico != tabIndex) return;
+    // Bola (tab 0): con COMPARTIDOS oculto, suena aunque el taxista esté en AHORA/PROGRAMADOS.
+    final bool tabActivo = _tabLogico == tabIndex ||
+        (tabIndex == 0 && _sinCompartidos);
+    if (!tabActivo) return;
     if (nuevas.isEmpty) return;
     if (!await _taxistaDisponibleParaTimbre(myUid)) return;
 
@@ -629,6 +634,7 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     for (final item in fresh) {
       _vistosParaTimbre.add(item.id);
+      TaxistaPoolTimbreDedupe.instance.marcarVisto(item.id);
       await NotificationService.I.vibratePoolOfferInApp();
       await _notificarOfertaEnBandejaSiAplica(
         id: item.id,
@@ -739,7 +745,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       final m = d.data();
       if (!_bolaDisparaTimbre(m, myUid)) continue;
       final key = 'bola_${d.id}';
-      if (_vistosParaTimbre.contains(key)) continue;
+      if (_vistosParaTimbre.contains(key) ||
+          TaxistaPoolTimbreDedupe.instance.yaVisto(key)) {
+        continue;
+      }
       final origen = (m['origen'] ?? '').toString();
       final destino = (m['destino'] ?? '').toString();
       out.add(
@@ -1712,6 +1721,64 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
             disponible: disponible,
             disponibilidadCargando: disponibilidadCargando,
           ),
+      ],
+    );
+  }
+
+  bool _poolViewportCompacto(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return mq.orientation == Orientation.landscape || mq.size.height < 520;
+  }
+
+  /// Evita overflow en horizontal: cabecera con scroll y lista de viajes flexible.
+  Widget _buildPoolCuerpoConTabs({
+    required BuildContext context,
+    required Widget encabezado,
+    required Widget contenidoTabs,
+  }) {
+    if (!_poolViewportCompacto(context)) {
+      return Column(
+        children: [
+          encabezado,
+          Expanded(child: contenidoTabs),
+        ],
+      );
+    }
+    final maxHeader = math.min(148.0, MediaQuery.sizeOf(context).height * 0.36);
+    return Column(
+      children: [
+        ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeader),
+          child: SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            child: encabezado,
+          ),
+        ),
+        Expanded(child: contenidoTabs),
+      ],
+    );
+  }
+
+  Widget _buildPoolEncabezadoOperativo({
+    required String uidTaxista,
+    required bool bloqueadoPago,
+    required bool deudaSemanal,
+    required bool disponible,
+    required bool disponibilidadCargando,
+    required bool usarFallbackIndice,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildPoolScrollHeader(
+          uidTaxista: uidTaxista,
+          bloqueadoPago: bloqueadoPago,
+          deudaSemanal: deudaSemanal,
+          disponible: disponible,
+          disponibilidadCargando: disponibilidadCargando,
+        ),
+        _bannerFallback(usarFallbackIndice),
+        _buildColaSiguienteBanner(uidTaxista),
       ],
     );
   }
@@ -2965,61 +3032,49 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
                         Future.microtask(
                             () => _notificarBloqueoPagoSiAplica(u.uid));
                       }
-                      if (bloqueadoPago) {
-                        return Column(
-                          children: [
-                            _buildPoolScrollHeader(
-                              uidTaxista: u.uid,
-                              bloqueadoPago: true,
-                              deudaSemanal: deudaSemanal,
-                              disponible: disponible,
-                              disponibilidadCargando: disponibilidadCargando,
-                            ),
-                            _bannerFallback(
-                              _usarFallbackSinIndiceAhora ||
-                                  _usarFallbackSinIndiceProg,
-                            ),
-                            _buildColaSiguienteBanner(u.uid),
-                            Expanded(
-                              child: _panelBloqueoConOpcionesPago(
-                                deudaSemanal: deudaSemanal,
-                                deudaComision: deudaComision,
-                              ),
-                            ),
-                          ],
-                        );
-                      }
                       final bool usarFallbackIndice =
                           _usarFallbackSinIndiceAhora ||
                               _usarFallbackSinIndiceProg;
-                      return Column(
-                        children: [
-                          _buildPoolScrollHeader(
+                      if (bloqueadoPago) {
+                        return _buildPoolCuerpoConTabs(
+                          context: context,
+                          encabezado: _buildPoolEncabezadoOperativo(
                             uidTaxista: u.uid,
-                            bloqueadoPago: false,
+                            bloqueadoPago: true,
                             deudaSemanal: deudaSemanal,
                             disponible: disponible,
-                            disponibilidadCargando:
-                                disponibilidadCargando,
+                            disponibilidadCargando: disponibilidadCargando,
+                            usarFallbackIndice: usarFallbackIndice,
                           ),
-                          _bannerFallback(usarFallbackIndice),
-                          _buildColaSiguienteBanner(u.uid),
-                          Expanded(
-                            child: TabBarView(
-                              controller: _tabPool,
-                              children: _buildPoolTabViewChildren(
-                                user: u,
-                                disponible: disponible,
-                                disponibilidadCargando: disponibilidadCargando,
-                                streamAhora: streamAhora,
-                                streamProg: streamProg,
-                                poolModo: poolModo,
-                                latTaxista: pos.latitude,
-                                lonTaxista: pos.longitude,
-                              ),
-                            ),
+                          contenidoTabs: _panelBloqueoConOpcionesPago(
+                            deudaSemanal: deudaSemanal,
+                            deudaComision: deudaComision,
                           ),
-                        ],
+                        );
+                      }
+                      return _buildPoolCuerpoConTabs(
+                        context: context,
+                        encabezado: _buildPoolEncabezadoOperativo(
+                          uidTaxista: u.uid,
+                          bloqueadoPago: false,
+                          deudaSemanal: deudaSemanal,
+                          disponible: disponible,
+                          disponibilidadCargando: disponibilidadCargando,
+                          usarFallbackIndice: usarFallbackIndice,
+                        ),
+                        contenidoTabs: TabBarView(
+                          controller: _tabPool,
+                          children: _buildPoolTabViewChildren(
+                            user: u,
+                            disponible: disponible,
+                            disponibilidadCargando: disponibilidadCargando,
+                            streamAhora: streamAhora,
+                            streamProg: streamProg,
+                            poolModo: poolModo,
+                            latTaxista: pos.latitude,
+                            lonTaxista: pos.longitude,
+                          ),
+                        ),
                       );
                         },
                       );

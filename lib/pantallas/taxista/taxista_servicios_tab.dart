@@ -8,7 +8,6 @@ import 'package:flygo_nuevo/pantallas/taxista/corporativo_acceso_gate_page.dart'
 import 'package:flygo_nuevo/pantallas/taxista/turismo_acceso_gate_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pool_turismo_taxista.dart';
-import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_crear.dart';
 import 'package:flygo_nuevo/pantallas/taxista/pools_taxista_lista.dart';
 import 'package:flygo_nuevo/pantallas/taxista/viajes_turismo_asignados.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
@@ -16,6 +15,7 @@ import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/solicitud_corporativo_repo.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart';
+import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
@@ -107,17 +107,25 @@ class TaxistaServiciosTab extends StatelessWidget {
                             ),
                             AppServiceCard(
                               icon: PhosphorIconsFill.plusCircle,
-                              title: PoolsProductoCopy.publicarTitulo,
-                              subtitle: PoolsProductoCopy.tipos,
+                              title: 'Gira, tour o excursión',
+                              subtitle:
+                                  'Formulario completo · todo manual como siempre',
                               accent: RaiDsColors.teal,
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const PoolsTaxistaCrear(),
-                                  ),
-                                );
-                              },
+                              onTap: () => PoolModoPublicacionUi.abrirPublicar(
+                                context,
+                                modoDirecto: PoolModoPublicacion.giraExcursion,
+                              ),
+                            ),
+                            AppServiceCard(
+                              icon: PhosphorIconsFill.usersThree,
+                              title: 'Viaje grupal',
+                              subtitle:
+                                  'Formulario corto · banner, fotos, video, salida y precio',
+                              accent: RaiDsColors.teal,
+                              onTap: () => PoolModoPublicacionUi.abrirPublicar(
+                                context,
+                                modoDirecto: PoolModoPublicacion.viajeGrupal,
+                              ),
                             ),
                           ],
                         ),

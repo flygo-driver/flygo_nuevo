@@ -180,6 +180,7 @@ class PagoData {
           viajeId: viajeId,
           comisionRd: comision.abs(),
           fuenteLedger: 'pago_data_registrar_comision_cash',
+          viajeData: m,
         );
       }
 
@@ -298,6 +299,7 @@ class PagoData {
           viajeId: viajeId,
           comisionRd: comision.abs(),
           fuenteLedger: 'pago_data_registrar_transferencia_cliente',
+          viajeData: m,
         );
       }
 
@@ -413,6 +415,8 @@ class PagoData {
     if (ya.docs.isNotEmpty) return;
 
     await _db.runTransaction((tx) async {
+      final viajeSnap = await tx.get(_db.collection('viajes').doc(v.id));
+      final viajeData = viajeSnap.data() ?? <String, dynamic>{};
       // 1) Asiento en pagos_taxista
       final movRef = _db.collection('pagos_taxista').doc();
       tx.set(movRef, {
@@ -439,6 +443,7 @@ class PagoData {
         viajeId: v.id,
         comisionRd: _round2(comision),
         fuenteLedger: 'pago_data_registrar_movimiento_por_viaje',
+        viajeData: viajeData,
       );
     });
     await PagosTaxistaRepo.sincronizarBloqueoOperativo(taxistaId);

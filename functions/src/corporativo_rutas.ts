@@ -1171,6 +1171,21 @@ async function publicarViajeDesdePlantilla(args: {
   const empresaLogoUrl = str(ed.logoUrl) || str(ed.logo);
   const tarifaContratada = Number(ed.tarifaViajeContratadaRd ?? 0);
   const periodoEmpresa = (ed.periodoActual ?? {}) as AnyMap;
+  const vigCodigoPub = evaluarVigenciaCodigoCorporativo(periodoEmpresa, new Date());
+  if (!vigCodigoPub.vigente) {
+    await marcarErrorPlantilla(
+      args.empresaId,
+      args.plantillaId,
+      "El código de verificación expiró o hay liquidación pendiente. " +
+        "Realice el pago del período anterior para generar un código nuevo y continuar las rutas.",
+    );
+    logger.warn("corporativo publicar bloqueado codigo expirado", {
+      empresaId: args.empresaId,
+      plantillaId: args.plantillaId,
+      estadoCodigo: vigCodigoPub.estadoCodigo,
+    });
+    return null;
+  }
   const cicloDiasEmpresa = Math.max(
     1,
     Math.trunc(Number(ed.facturacionCicloDias) || 15),

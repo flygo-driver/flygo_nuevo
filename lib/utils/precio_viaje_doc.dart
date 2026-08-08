@@ -26,6 +26,20 @@ double totalRdDesdeDocViaje(Map<String, dynamic> data) {
   return 0;
 }
 
+bool viajeEsNegocioAliadoReferido(Map<String, dynamic> data) {
+  return (data['negocioAliadoCodigo'] ?? '').toString().trim().isNotEmpty;
+}
+
+/// Base para comisión taxista en viajes QR negocio (15% sobre tarifa nominal).
+double totalNominalRdParaComision(Map<String, dynamic> data) {
+  if (viajeEsNegocioAliadoReferido(data)) {
+    final dynamic nominal = data['precioNominalCents'];
+    if (nominal is int && nominal > 0) return nominal / 100.0;
+    if (nominal is num && nominal > 0) return nominal.toDouble() / 100.0;
+  }
+  return totalRdDesdeDocViaje(data);
+}
+
 bool viajeDocCompletado(Map<String, dynamic> data) {
   if (data['completado'] == true) return true;
   return (data['estado'] ?? '').toString().trim().toLowerCase() ==

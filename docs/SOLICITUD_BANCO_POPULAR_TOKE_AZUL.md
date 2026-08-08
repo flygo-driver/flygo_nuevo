@@ -16,7 +16,7 @@
 | Código verificación RM | C746A314-F89A-4088-83C9-EC91FCA3603B *(www.camarasantodomingo.do)* |
 | Vigencia certificado RM | Emitido 30/09/2019 — Vence 30/09/2027 |
 | Domicilio | Calle 23 Este No. 39, Ensanche Luperón, Santo Domingo, Distrito Nacional, R.D. |
-| Cuenta bancaria | Banco Popular Dominicano — Cuenta Corriente **No. 787726249** |
+| Cuenta bancaria | Banco Popular Dominicano — Cuenta Corriente **No. 816104582** |
 | Titular de cuenta | OPEN ASK SERVICE, S.R.L. |
 
 **Contacto:** Pablo Rafael Díaz  
@@ -56,11 +56,11 @@ Entendemos que **Toke** es la infraestructura de pagos digitales del Banco Popul
 
 | Etapa | Implementación en RAI | Beneficio |
 |-------|------------------------|-----------|
-| **Inmediata** | Mostrar en la app, al elegir **“Pagar por transferencia”**, los datos de la **cuenta única OPEN ASK SERVICE, S.R.L.** (Banco Popular **787726249**) + **referencia única del viaje** (ej. RAI-V-XXXXXXXX) | El cliente transfiere desde su banco con trazabilidad |
+| **Inmediata** | Mostrar en la app, al elegir **“Pagar por transferencia”**, los datos de la **cuenta única OPEN ASK SERVICE, S.R.L.** (Banco Popular **816104582**) + **referencia única del viaje** (ej. RAI-V-XXXXXXXX) | El cliente transfiere desde su banco con trazabilidad |
 | **Fase Toke** | Afiliar a RAI como **comercio Toke** y exhibir **QR corporativo** (estático o dinámico por monto/referencia) dentro de la app | El cliente escanea y paga sin copiar datos manualmente |
 | **Conciliación** | Cruce automático referencia + monto con movimientos de nuestra cuenta | Menos carga operativa y cierre más rápido del viaje |
 
-**Punto clave:** todo el dinero del cliente por transferencia o QR debe **acreditar siempre en la cuenta corriente No. 787726249 de OPEN ASK SERVICE, S.R.L.**, nunca en cuentas personales de conductores. El neto al conductor se liquida después por RAI mediante procesos internos y pagos salientes programados.
+**Punto clave:** todo el dinero del cliente por transferencia o QR debe **acreditar siempre en la cuenta corriente No. 816104582 de OPEN ASK SERVICE, S.R.L.**, nunca en cuentas personales de conductores. El neto al conductor se liquida después por RAI mediante procesos internos y pagos salientes programados.
 
 ### 3. Lo que necesitamos del banco
 
@@ -74,7 +74,7 @@ Entendemos que **Toke** es la infraestructura de pagos digitales del Banco Popul
 ### 4. Compromiso de RAI
 
 - Cumplimiento de políticas **PLD/FT** y documentación comercial que el banco requiera.
-- Uso exclusivo de la cuenta empresarial **787726249** para recaudo de la plataforma.
+- Uso exclusivo de la cuenta empresarial **816104582** para recaudo de la plataforma.
 - Conciliación interna por referencia única por viaje (ya prevista en nuestro sistema).
 - Comunicación clara al usuario final: pagar a **OPEN ASK SERVICE, S.R.L. — RAI Driver**, nunca a terceros.
 
@@ -141,14 +141,14 @@ Nuestra arquitectura técnica **ya contempla** integración AZUL en servidor (ca
 4. Aprobado → viaje marcado como **pagado verificado**; comisión RAI retenida; neto acumulado para liquidación al conductor.
 5. Rechazado / timeout → viaje no se cierra como pagado; opción de reintentar o cambiar método.
 
-Los fondos deben liquidarse en la **cuenta corriente Banco Popular No. 787726249** a nombre de **OPEN ASK SERVICE, S.R.L.**
+Los fondos deben liquidarse en la **cuenta corriente Banco Popular No. 816104582** a nombre de **OPEN ASK SERVICE, S.R.L.**
 
 ### 4. Información que requerimos de AZUL
 
 1. **Requisitos de afiliación** (documentos, volumen estimado, MCC/categoría comercio — transporte/movilidad).
 2. **Producto recomendado** para app móvil nativa (Flutter): Payment Page vs API directa vs Link de Pagos.
 3. **Credenciales**: Merchant ID, Auth1/Auth2, Private Key, entorno **sandbox** y producción.
-4. **Plazos de liquidación** AZUL → cuenta **787726249** de OPEN ASK SERVICE, S.R.L.
+4. **Plazos de liquidación** AZUL → cuenta **816104582** de OPEN ASK SERVICE, S.R.L.
 5. **Comisiones** por transacción (crédito, débito, internacional si aplica).
 6. **Política de chargebacks** y responsabilidades en servicios de transporte.
 7. Contacto del **ejecutivo comercial** y del **equipo de integración técnica**.
@@ -157,7 +157,7 @@ Los fondos deben liquidarse en la **cuenta corriente Banco Popular No. 787726249
 
 - Certificado de Registro Mercantil **No. 161167SD**
 - RNC **1-32-01176-7**
-- Cuenta corriente empresarial Banco Popular **787726249**
+- Cuenta corriente empresarial Banco Popular **816104582**
 - Demo de aplicación RAI Driver (cliente y conductor) bajo solicitud
 
 ### 6. Solicitud
@@ -166,7 +166,7 @@ Solicitamos reunión con:
 
 - Ejecutivo comercial **AZUL / E-Commerce**
 - Especialista de **integración API**
-- Enlace con nuestro **oficial de cuenta** Banco Popular (cuenta de liquidación **787726249**)
+- Enlace con nuestro **oficial de cuenta** Banco Popular (cuenta de liquidación **816104582**)
 
 Objetivo: firmar afiliación, recibir acceso a **sandbox**, definir cronograma de **certificación** y fecha de **go-live** en producción.
 

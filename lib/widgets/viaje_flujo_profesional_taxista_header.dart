@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
+import 'package:flygo_nuevo/widgets/negocio_aliado_taxista_banner.dart';
 import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
 
 /// Cabecera operativa del viaje: forma de pago + PIN + encadenamiento (taxista).
@@ -60,6 +61,7 @@ class ViajeFlujoProfesionalTaxistaHeader extends StatelessWidget {
               _bannerEncadenado(metodo),
               const SizedBox(height: 10),
             ],
+            NegocioAliadoTaxistaBanner(viajeData: data),
             MetodoPagoVisualCard(
               metodoPago: metodo,
               viajeData: data.isEmpty ? null : data,

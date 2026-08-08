@@ -38,16 +38,68 @@ abstract final class MultiparadaRutaHelper {
     return Geolocator.distanceBetween(lat1, lon1, lat2, lon2) < metros;
   }
 
+  static double? coordLat(Map<String, dynamic> w) {
+    for (final String k in <String>['lat', 'latitude', 'latitud']) {
+      final dynamic x = w[k];
+      if (x is num && x.isFinite) return x.toDouble();
+      final double? d = double.tryParse('$x');
+      if (d != null && d.isFinite) return d;
+    }
+    return null;
+  }
+
+  static double? coordLon(Map<String, dynamic> w) {
+    for (final String k in <String>['lon', 'lng', 'longitude', 'longitud']) {
+      final dynamic x = w[k];
+      if (x is num && x.isFinite) return x.toDouble();
+      final double? d = double.tryParse('$x');
+      if (d != null && d.isFinite) return d;
+    }
+    return null;
+  }
+
+  /// Waypoints intermedios ordenados y con etiquetas/coords normalizadas.
+  static List<Map<String, dynamic>> waypointsDesdeDoc(
+    Map<String, dynamic> data,
+  ) {
+    final dynamic raw = data['waypoints'];
+    if (raw is! List) return <Map<String, dynamic>>[];
+    final List<Map<String, dynamic>> parsed = <Map<String, dynamic>>[];
+    for (final dynamic w in raw) {
+      if (w is Map) parsed.add(Map<String, dynamic>.from(w));
+    }
+    return sanitizarWaypoints(parsed);
+  }
+
+  static bool esViajeMultiparada(Map<String, dynamic> data) {
+    final String cat =
+        (data['categoria'] ?? '').toString().trim().toLowerCase();
+    if (cat == 'multi') return true;
+    if (waypointsDesdeDoc(data).isNotEmpty) return true;
+    final dynamic legs = data['multiparadaLegsTotal'];
+    if (legs is num && legs.toInt() > 1) return true;
+    final dynamic rp = data['extras'] is Map
+        ? (data['extras'] as Map)['rutaPuntos']
+        : null;
+    if (rp is List) {
+      for (final dynamic item in rp) {
+        if (item is Map &&
+            (item['rol'] ?? '').toString().toLowerCase() == 'parada') {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /// Ordena por `orden`, redondea coords y renumera 1…n.
   static List<Map<String, dynamic>> sanitizarWaypoints(
     List<Map<String, dynamic>> raw,
   ) {
     final List<Map<String, dynamic>> parsed = <Map<String, dynamic>>[];
     for (final Map<String, dynamic> w in raw) {
-      final double? lat =
-          (w['lat'] is num) ? (w['lat'] as num).toDouble() : null;
-      final double? lon =
-          (w['lon'] is num) ? (w['lon'] as num).toDouble() : null;
+      final double? lat = coordLat(w);
+      final double? lon = coordLon(w);
       if (lat == null || lon == null || !coordsValidas(lat, lon)) continue;
       final int orden = (w['orden'] is num) ? (w['orden'] as num).toInt() : 0;
       parsed.add(<String, dynamic>{
@@ -58,6 +110,7 @@ abstract final class MultiparadaRutaHelper {
           'Parada ${parsed.length + 1}',
         ),
         if (orden > 0) 'orden': orden,
+        if (w['pasajeroId'] != null) 'pasajeroId': w['pasajeroId'],
       });
     }
     if (parsed.isEmpty) return parsed;

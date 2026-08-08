@@ -28,7 +28,7 @@ class DriversLocationNearbySession {
     required this.onUpdate,
     this.radiusKm = 30,
     this.maxResultados = 60,
-    this.maxAge = const Duration(minutes: 4),
+    this.maxAge = DriversLocationNearbyConfig.maxAgeConductoresDisponibles,
   });
 
   final void Function(DriversLocationNearbyUpdate update) onUpdate;
@@ -49,10 +49,14 @@ class DriversLocationNearbySession {
   String _region = RaiRegionOperativa.otros;
   List<String> _prefixes = const <String>[];
   String? _uidAsignado;
+  String? _uidClienteFiltro;
+  String? _tipoServicioViajeFiltro;
 
   void update({
     required LatLng center,
     String? uidAsignado,
+    String? uidCliente,
+    String? tipoServicioViaje,
     bool forzarReconsulta = false,
   }) {
     final String nuevaRegion =
@@ -84,6 +88,13 @@ class DriversLocationNearbySession {
       _uidAsignado = uidAsignado;
       _rearmarAsignado(uidAsignado);
     }
+
+    if (_uidClienteFiltro != uidCliente ||
+        _tipoServicioViajeFiltro != tipoServicioViaje) {
+      _uidClienteFiltro = uidCliente;
+      _tipoServicioViajeFiltro = tipoServicioViaje;
+      _publicarMerged();
+    }
   }
 
   void dispose() {
@@ -104,10 +115,17 @@ class DriversLocationNearbySession {
     _merged.clear();
   }
 
-  void _iniciar(LatLng center, String? uidAsignado) {
+  void _iniciar(
+    LatLng center,
+    String? uidAsignado, {
+    String? uidCliente,
+    String? tipoServicioViaje,
+  }) {
     _queryCenter = center;
     _region = RaiRegionOperativa.resolver(center.latitude, center.longitude);
     _uidAsignado = uidAsignado;
+    _uidClienteFiltro = uidCliente;
+    _tipoServicioViajeFiltro = tipoServicioViaje;
     _rearmarConsultasCeldas();
     _rearmarFallback();
     _rearmarAsignado(uidAsignado);
@@ -243,6 +261,8 @@ class DriversLocationNearbySession {
       centroKm: center,
       radioKm: radiusKm,
       maxAge: maxAge,
+      uidCliente: _uidClienteFiltro,
+      tipoServicioViaje: _tipoServicioViajeFiltro,
     );
 
     parsed.sort((a, b) {
@@ -287,6 +307,8 @@ abstract final class DriversLocationNearbyRepo {
     required LatLng initialCenter,
     required void Function(DriversLocationNearbyUpdate update) onUpdate,
     String? uidAsignado,
+    String? uidCliente,
+    String? tipoServicioViaje,
     double radiusKm = 30,
     int maxResultados = 60,
   }) {
@@ -295,7 +317,12 @@ abstract final class DriversLocationNearbyRepo {
       radiusKm: radiusKm,
       maxResultados: maxResultados,
     );
-    session._iniciar(initialCenter, uidAsignado);
+    session._iniciar(
+      initialCenter,
+      uidAsignado,
+      uidCliente: uidCliente,
+      tipoServicioViaje: tipoServicioViaje,
+    );
     return session;
   }
 }

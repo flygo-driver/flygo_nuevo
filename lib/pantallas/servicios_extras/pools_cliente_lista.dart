@@ -7,11 +7,11 @@ import 'package:flygo_nuevo/servicios/giras_cupos_cliente_alerts.dart';
 import 'package:flygo_nuevo/servicios/pool_repo.dart';
 import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
+import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
 import 'package:flygo_nuevo/widgets/pool_promo_media.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'pools_cliente_detalle.dart';
 import 'pools_cliente_mis_giras.dart';
 
@@ -113,6 +113,9 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
         return Colors.deepPurpleAccent;
       case 'excursion':
         return Colors.orangeAccent;
+      case 'grupal':
+      case 'grupales':
+        return Colors.tealAccent;
       default:
         return Colors.blueAccent;
     }
@@ -156,6 +159,11 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
     }
     if (f == 'consular') return tipo == 'consular' || tipo == 'consulares';
     if (f == 'excursion') return tipo == 'excursion' || tipo == 'excursiones';
+    if (f == 'grupal') {
+      return tipo == 'grupal' ||
+          tipo == 'grupales' ||
+          tipo == 'viaje grupal';
+    }
     return tipo == f;
   }
 
@@ -199,42 +207,69 @@ class _PoolsClienteListaState extends State<PoolsClienteLista> {
         ? agencia
         : (taxista.isNotEmpty ? taxista : 'RAI Driver');
     final fechaTxt = fmtFechaHoraAmPm(fecha, sep: '•');
-    final paradasTxt =
-        paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ');
+    final tipo = (d['tipo'] ?? '').toString().trim().toLowerCase();
+    final esGrupal =
+        tipo == 'grupal' || tipo == 'grupales' || tipo.contains('grupal');
+    final sentido = (d['sentido'] ?? '').toString().trim().toLowerCase();
+    final regresoRaw = d['fechaVuelta'];
+    DateTime? regreso;
+    if (regresoRaw is Timestamp) regreso = regresoRaw.toDate();
+    if (regresoRaw is DateTime) regreso = regresoRaw;
+    final regresoTxt = regreso != null
+        ? '\nRegreso: ${fmtFechaHoraAmPm(regreso, sep: '•')}'
+        : (sentido == 'ida_y_vuelta' ? '\nIda y vuelta incluida' : '');
+    final viajeTxt = esGrupal
+        ? 'Viaje grupal ida y vuelta'
+        : 'Paradas: ${paradas.isEmpty ? 'Sin paradas publicadas' : paradas.join(' | ')}';
+    final hashtags = esGrupal
+        ? '#RAIDriver #ViajeGrupal #Transporte #Cupos'
+        : '#RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos';
+    final contacto = telefonoLineaContactoPromoGira(
+      (d['choferTelefono'] ?? '').toString(),
+      (d['choferWhatsApp'] ?? '').toString(),
+    );
     final base = '''
 ${badge.toUpperCase()}
 Organiza: $owner
 Ruta: $origen -> $destino
-Salida: $fechaTxt
+Salida: $fechaTxt$regresoTxt
 Precio por asiento: RD\$ ${precioTotalPorSeat.toStringAsFixed(0)}
 Cupos disponibles: $left
-Paradas: $paradasTxt
+$viajeTxt
+${contacto.isNotEmpty ? '\n$contacto' : ''}
 
 Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
-#RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
+$hashtags
 '''
         .trim();
     return '$base${PoolShareLink.shareFooter(poolId)}';
   }
 
-  Future<void> _abrirWhatsAppConTexto(String texto) async {
-    try {
-      final msg = Uri.encodeComponent(texto);
-      final waApp = Uri.parse('whatsapp://send?text=$msg');
-      final waWeb = Uri.parse('https://wa.me/?text=$msg');
-      final ok1 = await launchUrl(waApp, mode: LaunchMode.externalApplication);
-      if (ok1) return;
-      final ok2 = await launchUrl(waWeb, mode: LaunchMode.externalApplication);
-      if (!ok2 && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo abrir WhatsApp.')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('❌ $e')));
-      }
+  Future<void> _contactarOperadorWhatsApp({
+    required Map<String, dynamic> d,
+    required String origen,
+    required String destino,
+  }) async {
+    final contacto = telefonoChoferGiraWhatsApp(
+      (d['choferTelefono'] ?? '').toString(),
+      (d['choferWhatsApp'] ?? '').toString(),
+    );
+    if (!telefonoContactoValidoRd(contacto)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('WhatsApp del operador no disponible.')),
+      );
+      return;
+    }
+    final ok = await telefonoAbrirWhatsApp(
+      contacto,
+      mensaje:
+          'Hola, vi su salida ($origen → $destino) en RAI y quiero información.',
+    );
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir WhatsApp.')),
+      );
     }
   }
 
@@ -384,6 +419,7 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                   children: [
                     for (final t in const [
                       'todos',
+                      'grupal',
                       'consular',
                       'tour',
                       'excursion'
@@ -823,18 +859,18 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                                 ),
                                 TextButton.icon(
                                   onPressed: () {
-                                    final texto = _buildPromoTexto(
+                                    final origen =
+                                        (d['origenTown'] ?? '').toString();
+                                    final destino =
+                                        (d['destino'] ?? '').toString();
+                                    _contactarOperadorWhatsApp(
                                       d: d,
-                                      fecha: fecha,
-                                      left: left,
-                                      precioTotalPorSeat: precioCliente,
-                                      paradas: paradas,
-                                      poolId: id,
+                                      origen: origen,
+                                      destino: destino,
                                     );
-                                    _abrirWhatsAppConTexto(texto);
                                   },
                                   icon: Icon(Icons.chat, color: accent),
-                                  label: Text('WhatsApp',
+                                  label: Text('WhatsApp operador',
                                       style: TextStyle(
                                           color: accent,
                                           fontWeight: FontWeight.w600)),

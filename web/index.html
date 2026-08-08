@@ -15,10 +15,36 @@
   <base href="$FLUTTER_BASE_HREF">
 
   <script>
+    // /descarga es HTML estático — nunca cargar Flutter aquí.
+    (function () {
+      var p = location.pathname || '';
+      if (p.indexOf('/descarga') !== 0) return;
+      if (p !== '/descarga/index.html') {
+        location.replace('/descarga/index.html' + location.search + location.hash);
+        return;
+      }
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (r) { r.unregister(); });
+        });
+      }
+      if (window.caches && caches.keys) {
+        caches.keys().then(function (keys) {
+          keys.forEach(function (k) { caches.delete(k); });
+        });
+      }
+    })();
+  </script>
+  <script>
     // Evita bundle viejo (muro «solo admin») en laptop vía service worker cacheado.
     (function () {
       var p = location.pathname || '';
-      if (p.indexOf('/corporativo') === 0 || p.indexOf('/login') === 0 || p.indexOf('/empresas') === 0) {
+      if (p.indexOf('/descarga') === 0) return;
+      if (
+        p.indexOf('/corporativo') === 0 ||
+        p.indexOf('/login') === 0 ||
+        p.indexOf('/empresas') === 0
+      ) {
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.getRegistrations().then(function (regs) {
             regs.forEach(function (r) { r.unregister(); });
@@ -162,7 +188,23 @@
   
   
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w"></script>
-  <script src="flutter_bootstrap.js" async=""></script>
+  <script>
+    (function () {
+      var p = location.pathname || '';
+      if (p.indexOf('/descarga') === 0) {
+        var sp = document.getElementById('splash');
+        if (sp) sp.remove();
+        if (p !== '/descarga/index.html') {
+          location.replace('/descarga/index.html' + location.search + location.hash);
+        }
+        return;
+      }
+      var fb = document.createElement('script');
+      fb.src = 'flutter_bootstrap.js';
+      fb.async = true;
+      document.body.appendChild(fb);
+    })();
+  </script>
 
 
 </body></html>

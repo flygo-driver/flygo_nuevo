@@ -5,6 +5,11 @@
 
 import type { AnyMap } from "./turismo_asignacion_logic.js";
 import { comisionCentsDesdePrecioCents } from "./comision_viaje_pct.js";
+import {
+  negocioAliadoEximePrimerEfectivoGratis,
+  precioNominalCentsDesdeViaje,
+  viajeEsNegocioAliadoReferido,
+} from "./negocio_aliado_viaje.js";
 
 function comisionPendienteRdFromBilletera(data: AnyMap | undefined): number {
   if (!data) return 0;
@@ -93,7 +98,10 @@ export function pctComisionDesdeViaje(viaje: AnyMap, globalPct: number): number 
 }
 
 export function comisionEstimadaRdDesdeViaje(viaje: AnyMap, globalPct: number): number {
-  const precioCents = precioCentsDesdeViaje(viaje);
+  let precioCents = precioCentsDesdeViaje(viaje);
+  if (viajeEsNegocioAliadoReferido(viaje)) {
+    precioCents = precioNominalCentsDesdeViaje(viaje);
+  }
   if (precioCents <= 0) return 0;
   const pct = pctComisionDesdeViaje(viaje, globalPct);
   return comisionCentsDesdePrecioCents(precioCents, pct) / 100;
@@ -113,7 +121,8 @@ export function prepagoInsuficienteParaViajeEfectivo(args: {
   const bData = args.billeData ?? {};
   const pend = comisionPendienteRdFromBilletera(bData);
   const primerGratis = bData.primerViajeComisionGratisConsumido === true;
-  if (!primerGratis && pend < 1e-6) return false;
+  const eximePrimerGratis = negocioAliadoEximePrimerEfectivoGratis(args.viajeData);
+  if (!eximePrimerGratis && !primerGratis && pend < 1e-6) return false;
 
   const comisionRd = comisionEstimadaRdDesdeViaje(args.viajeData, args.globalComisionPct);
   if (comisionRd <= 1e-6) return false;

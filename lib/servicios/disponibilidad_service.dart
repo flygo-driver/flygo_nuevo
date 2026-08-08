@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 
 class DisponibilidadService {
   static const Duration tiempoMaximo = Duration(hours: 12);
@@ -47,6 +48,7 @@ class DisponibilidadService {
         titulo: 'Disponibilidad desactivada',
         cuerpo: 'Han pasado 12 horas. Activa nuevamente para recibir viajes.',
       );
+      await UbicacionTaxista.ocultarDelMapaCliente(uid: uid);
     }
   }
 
@@ -71,5 +73,6 @@ class DisponibilidadService {
       uid: uid,
       disponible: true,
     );
+    UbicacionTaxista.refrescarEstadoOperativo();
   }
 }

@@ -11,8 +11,10 @@ import 'package:flygo_nuevo/servicios/pool_share_link.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
+import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/pool_gira_cancelar_ui.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
+import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_recaudo_central_taxista_panel.dart';
 import 'package:flygo_nuevo/design_system/rai_design_system.dart';
@@ -20,7 +22,6 @@ import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 import 'pools_gira_editar_contenido.dart';
 import 'pools_taxista_reservas.dart';
-import 'pools_taxista_crear.dart';
 
 class PoolsTaxistaLista extends StatefulWidget {
   const PoolsTaxistaLista({super.key, this.embeddedInOrganizadorShell = false});
@@ -114,19 +115,41 @@ class _PoolsTaxistaListaState extends State<PoolsTaxistaLista>
         : (taxistaNombre.isNotEmpty ? taxistaNombre : 'RAI Driver');
     final titulo =
         badge.isNotEmpty ? badge : PoolsProductoCopy.promoTituloDefault;
+    final tipo = (d['tipo'] ?? '').toString().trim().toLowerCase();
+    final esGrupal =
+        tipo == 'grupal' || tipo == 'grupales' || tipo.contains('grupal');
+    final sentido = (d['sentido'] ?? '').toString().trim().toLowerCase();
+    final regresoRaw = d['fechaVuelta'];
+    DateTime? regreso;
+    if (regresoRaw is Timestamp) regreso = regresoRaw.toDate();
+    if (regresoRaw is DateTime) regreso = regresoRaw;
+    final regresoTxt = regreso != null
+        ? '\nRegreso: ${fmtFechaHoraAmPm(regreso, sep: '•')}'
+        : (sentido == 'ida_y_vuelta' ? '\nIda y vuelta incluida' : '');
+    final viajeTxt = esGrupal
+        ? 'Viaje grupal ida y vuelta'
+        : 'Paradas: $paradasTxt';
+    final hashtags = esGrupal
+        ? '#RAIDriver #ViajeGrupal #Transporte #Cupos'
+        : '#RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos';
+    final contacto = telefonoLineaContactoPromoGira(
+      (d['choferTelefono'] ?? '').toString(),
+      (d['choferWhatsApp'] ?? '').toString(),
+    );
 
     final base = '''
 ${titulo.toUpperCase()}
 Organiza: $quien
 Ruta: $origen -> $destino
-Salida: $fechaTxt
+Salida: $fechaTxt$regresoTxt
 Precio por asiento: RD\$ ${precio.toStringAsFixed(0)}
 Cupos disponibles: $cuposDisponibles
-Paradas: $paradasTxt
+$viajeTxt
+${contacto.isNotEmpty ? '\n$contacto' : ''}
 
 ${PoolsProductoCopy.promoSeccionRai}
 Contactanos por esta via para mas informacion y confirmacion.
-#RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
+$hashtags
 '''
         .trim();
     return '$base${PoolShareLink.shareFooter(poolId)}';
@@ -492,12 +515,7 @@ Contactanos por esta via para mas informacion y confirmacion.
     final Color softFill = isDark ? RaiDsColors.cardElevated : const Color(0xFFEFF1F5);
     const double cardRadius = 20;
 
-    void abrirPublicar() {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const PoolsTaxistaCrear()),
-      );
-    }
+    void abrirPublicar() => PoolModoPublicacionUi.abrirPublicar(context);
 
     return Scaffold(
       backgroundColor: scaffoldBg,

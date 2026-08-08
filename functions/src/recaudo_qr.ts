@@ -13,7 +13,7 @@ export const RAI_CUENTA_RECAUDO_DEFAULT = {
   titular: "Open ASK Service SRL",
   banco: "Banco Popular",
   tipoCuenta: "Cuenta Corriente",
-  numeroCuenta: "787726249",
+  numeroCuenta: "816104582",
   rnc: "1320-11767",
 };
 

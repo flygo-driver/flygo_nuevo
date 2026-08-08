@@ -1,5 +1,7 @@
 import 'package:cloud_functions/cloud_functions.dart';
 
+import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
+
 /// Cliente → Cloud Functions AZUL (Fase 6 cableado).
 class AzulPaymentService {
   AzulPaymentService._();
@@ -10,6 +12,11 @@ class AzulPaymentService {
   static Future<AzulPaymentSessionResult> createSession({
     required String viajeId,
   }) async {
+    if (!PagoTarjetaClienteGate.cobroHabilitado) {
+      return AzulPaymentSessionResult.notConfigured(
+        message: PagoTarjetaClienteGate.mensaje,
+      );
+    }
     try {
       final res = await _fn.httpsCallable('azulCreatePaymentSession').call(
         <String, dynamic>{'viajeId': viajeId},

@@ -1108,12 +1108,27 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       }
       final List<Map<String, dynamic>> waypoints =
           MultiparadaRutaHelper.sanitizarWaypoints(waypointsRaw);
+      if (waypoints.length != paradasGuardar.length) {
+        _snack(
+          'Una o más paradas no tienen ubicación válida. Revisá el mapa e inténtalo de nuevo.',
+        );
+        if (mounted) setState(() => _cargando = false);
+        return;
+      }
 
       final List<({String label, double lat, double lon})> puntosOrdenados =
           <({String label, double lat, double lon})>[
-        (label: origenGuardar.label, lat: origenGuardar.lat, lon: origenGuardar.lon),
-        ...paradasGuardar.map(
-          (_LugarSel p) => (label: p.label, lat: p.lat, lon: p.lon),
+        (
+          label: origenGuardar.label,
+          lat: origenGuardar.lat,
+          lon: origenGuardar.lon,
+        ),
+        ...waypoints.map(
+          (Map<String, dynamic> w) => (
+            label: (w['label'] ?? 'Parada').toString(),
+            lat: (w['lat'] as num).toDouble(),
+            lon: (w['lon'] as num).toDouble(),
+          ),
         ),
         (
           label: destinoGuardar.label,

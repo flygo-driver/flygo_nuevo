@@ -74,6 +74,35 @@ function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function esSolicitudViaje(action: string): boolean {
+  return action === "open_taxi" || action === "open_motor" || action === "open_turismo";
+}
+
+async function logAsistenteMensaje(params: {
+  uid: string;
+  message: string;
+  reply: string;
+  suggestedAction: string;
+  addressQuery: string | null;
+  source: string;
+}): Promise<void> {
+  try {
+    await getFirestore().collection("rai_asistente_mensajes").add({
+      uid: params.uid,
+      message: params.message.slice(0, 1200),
+      reply: params.reply.slice(0, 2000),
+      suggestedAction: params.suggestedAction,
+      addressQuery: params.addressQuery,
+      source: params.source,
+      solicitaViaje: esSolicitudViaje(params.suggestedAction),
+      day: todayKey(),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    logger.warn("[RAI_ASISTENTE] log mensaje", e);
+  }
+}
+
 async function assertDailyQuota(uid: string): Promise<void> {
   const ref = getFirestore().collection("rai_asistente_usage").doc(uid);
   const day = todayKey();
@@ -247,6 +276,14 @@ export const raiAsistenteCliente = onCall(
       if (!parsed) {
         return { source: "cloud_error", useLocalFallback: true };
       }
+      await logAsistenteMensaje({
+        uid: request.auth.uid,
+        message,
+        reply: parsed.reply,
+        suggestedAction: parsed.suggestedAction,
+        addressQuery: parsed.addressQuery,
+        source: "gemini",
+      });
       return {
         source: "gemini",
         useLocalFallback: false,

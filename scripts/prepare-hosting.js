@@ -142,6 +142,22 @@ function removeEmpresasStub(out) {
   );
 }
 
+/** Evita que 404.html (Flutter SPA) se sirva para rutas estáticas de descarga. */
+function ensureDescargaStatic(out) {
+  const descargaIndex = path.join(out, "descarga", "index.html");
+  if (!fs.existsSync(descargaIndex)) return;
+  const stamp = Date.now();
+  let html = fs.readFileSync(descargaIndex, "utf8");
+  if (!html.includes("RAI_DESCARGA_BUILD")) {
+    html = html.replace(
+      "<title>",
+      `<!-- RAI_DESCARGA_BUILD ${stamp} -->\n  <title>`,
+    );
+    fs.writeFileSync(descargaIndex, html);
+  }
+  console.log("[prepare-hosting] descarga/index.html listo para móvil.");
+}
+
 /** SPA: Firebase sirve 404.html en rutas sin archivo; copiar index evita página rota. */
 function ensureSpa404Fallback(out) {
   const indexPath = path.join(out, "index.html");
@@ -152,6 +168,7 @@ function ensureSpa404Fallback(out) {
 }
 
 removeEmpresasStub(outDir);
+ensureDescargaStatic(outDir);
 ensureSpa404Fallback(outDir);
 
 if (hadFlutterBuild) {

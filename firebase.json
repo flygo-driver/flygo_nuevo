@@ -149,6 +149,12 @@
             "value": "application/json"
           }
         ]
+      },
+      {
+        "source": "/descarga/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
       }
     ],
     "rewrites": [
@@ -159,6 +165,14 @@
       {
         "source": "/pool/**",
         "destination": "/pool/index.html"
+      },
+      {
+        "source": "/descarga",
+        "destination": "/descarga/index.html"
+      },
+      {
+        "source": "/descarga/**",
+        "destination": "/descarga/index.html"
       },
       {
         "source": "/legal/privacidad",

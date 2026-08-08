@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flygo_nuevo/servicios/google_auth.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
 
 /// Cierra Google + Firebase Auth y espera a que `currentUser` quede null.
 Future<void> cerrarSesionAuthOnly() async {
@@ -12,6 +13,7 @@ Future<void> cerrarSesionAuthOnly() async {
   } catch (_) {}
 
   await FirebaseAuth.instance.signOut();
+  RaiModoSesionService.limpiarAlCerrarSesion();
 
   try {
     await FirebaseAuth.instance

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../data/pago_data.dart';
 import '../../widgets/rai_app_bar.dart';
-import '../../servicios/pay_config.dart';
+import '../../utils/pago_tarjeta_cliente_gate.dart';
 
 class PagoMetodo extends StatefulWidget {
   /// Modo simple: sin viajeId/clienteId/montoDop -> solo selecciona y devuelve el método.
@@ -42,6 +42,12 @@ class _PagoMetodoState extends State<PagoMetodo> {
     });
 
     try {
+      if (_metodo == 'Tarjeta') {
+        if (!PagoTarjetaClienteGate.cobroHabilitado) {
+          await PagoTarjetaClienteGate.avisarEnDesarrollo(context);
+          return;
+        }
+      }
       // Si es "Tarjeta" y hay datos de viaje, autorizamos (mock) ahora
       if (_metodo == 'Tarjeta' && _esFlujoConViaje) {
         final email = widget.emailClienteInicial ??
@@ -118,7 +124,7 @@ class _PagoMetodoState extends State<PagoMetodo> {
                       style: TextStyle(color: Colors.white70),
                     ),
                   ),
-                  if (PayConfig.tarjetaHabilitada) ...[
+                  if (PagoTarjetaClienteGate.mostrarOpcionTarjeta) ...[
                     const SizedBox(height: 8),
                     RadioListTile<String>(
                       value: 'Tarjeta',
@@ -129,9 +135,11 @@ class _PagoMetodoState extends State<PagoMetodo> {
                         style: TextStyle(color: Colors.white),
                       ),
                       subtitle: Text(
-                        _esFlujoConViaje
-                            ? 'Se autoriza ahora y se captura al completar.'
-                            : 'Se autorizará al confirmar tu viaje.',
+                        PagoTarjetaClienteGate.cobroHabilitado
+                            ? (_esFlujoConViaje
+                                ? 'Se autoriza ahora y se captura al completar.'
+                                : 'Se autorizará al confirmar tu viaje.')
+                            : 'En desarrollo — usa efectivo o transferencia',
                         style: const TextStyle(color: Colors.white70),
                       ),
                     ),

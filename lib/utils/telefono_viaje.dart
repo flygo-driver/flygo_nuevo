@@ -34,6 +34,38 @@ String telefonoChoferGiraLlamada(String telefono, String whatsapp) {
   return whatsapp.trim();
 }
 
+/// Formato visible RD (+1 809-555-1234) desde cualquier entrada válida.
+String telefonoFormatearVisibleRd(String raw) {
+  final d = telefonoNormalizarDigitos(raw);
+  if (d.length != 11 || !d.startsWith('1')) return raw.trim();
+  return '+${d.substring(0, 1)} (${d.substring(1, 4)}) '
+      '${d.substring(4, 7)}-${d.substring(7)}';
+}
+
+/// Normaliza para guardar en Firestore (11 dígitos E.164 RD sin +).
+String telefonoNormalizarParaGuardarGira(String raw) {
+  final t = raw.trim();
+  if (t.isEmpty) return '';
+  final d = telefonoNormalizarDigitos(t);
+  if (telefonoContactoValidoRd(t)) return d;
+  return t;
+}
+
+/// Línea para texto promocional (mismo criterio que botón WhatsApp del cliente).
+String telefonoLineaContactoPromoGira(String telefono, String whatsapp) {
+  final wa = telefonoChoferGiraWhatsApp(telefono, whatsapp);
+  final tel = telefonoChoferGiraLlamada(telefono, whatsapp);
+  final lines = <String>[];
+  if (telefonoContactoValidoRd(wa)) {
+    lines.add('WhatsApp: ${telefonoFormatearVisibleRd(wa)}');
+  }
+  if (telefonoContactoValidoRd(tel) &&
+      telefonoNormalizarDigitos(tel) != telefonoNormalizarDigitos(wa)) {
+    lines.add('Teléfono: ${telefonoFormatearVisibleRd(tel)}');
+  }
+  return lines.join('\n');
+}
+
 /// Primer valor no vacío entre claves habituales en `usuarios` / viajes (evita botones inactivos si el campo no se llama `telefono`).
 String telefonoCrudoDesdeMapa(Map<String, dynamic> m) {
   const List<String> keys = <String>[

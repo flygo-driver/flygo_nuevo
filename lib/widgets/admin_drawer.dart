@@ -31,6 +31,7 @@ import 'package:flygo_nuevo/pantallas/admin/resumen_comisiones_admin.dart';
 
 // ✅ PROMOS MxK
 import 'package:flygo_nuevo/pantallas/admin/admin_promos_mxk.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_negocios_aliados.dart';
 
 // ✅ Documentos / Usuarios / Reportes / Tarifas
 import 'package:flygo_nuevo/pantallas/admin/admin_centro_operaciones.dart';
@@ -327,9 +328,9 @@ class AdminDrawer extends StatelessWidget {
         ),
         ListTile(
           leading: Icon(Icons.home, color: iconNeutral),
-          title: Text('Liquidaciones',
+          title: Text('Retiros billetera',
               style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-          subtitle: Text('Comisiones semanales', style: subtleStyle),
+          subtitle: Text('Solicitudes de retiro del taxista', style: subtleStyle),
           onTap: () => _push(context, const AdminHome()),
         ),
         ListTile(
@@ -342,9 +343,9 @@ class AdminDrawer extends StatelessWidget {
         ),
         ListTile(
           leading: Icon(Icons.percent, color: iconNeutral),
-          title: Text('Comisión viaje (efectivo)',
+          title: Text('Comisiones RAI (efectivo / transf. / tarjeta)',
               style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
-          subtitle: Text('% global Firestore', style: subtleStyle),
+          subtitle: Text('10% · 15% · 15% en Firestore', style: subtleStyle),
           onTap: () =>
               _push(context, const ConfiguracionViajeComisionAdmin()),
         ),
@@ -375,6 +376,17 @@ class AdminDrawer extends StatelessWidget {
           title: Text('Promociones',
               style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
           onTap: () => _push(context, const AdminPromosMxK()),
+        ),
+        ListTile(
+          leading: Icon(Icons.qr_code_2_outlined,
+              color: isLight ? Colors.indigo.shade700 : Colors.indigoAccent),
+          title: Text('Negocios aliados (QR)',
+              style: titleStyle.copyWith(fontWeight: FontWeight.w500)),
+          subtitle: Text(
+            'Código único · letrero PDF · 5+1 gratis',
+            style: subtleStyle,
+          ),
+          onTap: () => _push(context, const AdminNegociosAliados()),
         ),
         ListTile(
           leading: Icon(Icons.bar_chart, color: iconNeutral),

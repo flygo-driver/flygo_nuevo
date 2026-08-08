@@ -90,6 +90,87 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
     return true;
   }
 
+  bool _reservaEstaActiva(String estado) {
+    final e = estado.trim().toLowerCase();
+    return e != 'cancelado' && e != 'cancelado_cliente' && e != 'expirado';
+  }
+
+  ({
+    int reservas,
+    int compradores,
+    int asientos,
+    int asientosPagados,
+  }) _resumenCompradores(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final uids = <String>{};
+    var asientos = 0;
+    var pagados = 0;
+    var reservas = 0;
+    for (final doc in docs) {
+      final r = doc.data();
+      final est = (r['estado'] ?? '').toString();
+      if (!_reservaEstaActiva(est)) continue;
+      reservas++;
+      final uid = (r['uidCliente'] ?? '').toString().trim();
+      if (uid.isNotEmpty) uids.add(uid);
+      final s = ((r['seats'] ?? 0) as num).toInt();
+      asientos += s;
+      if (est.trim().toLowerCase() == 'pagado') pagados += s;
+    }
+    return (
+      reservas: reservas,
+      compradores: uids.length,
+      asientos: asientos,
+      asientosPagados: pagados,
+    );
+  }
+
+  Widget _lineaDatoComprador(
+    BuildContext ctx,
+    String label,
+    String value, {
+    bool copiable = false,
+  }) {
+    final v = value.trim();
+    if (v.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 76,
+            child: Text(
+              label,
+              style: TextStyle(color: AdminUi.muted(ctx), fontSize: 11),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              v,
+              style: TextStyle(color: AdminUi.secondary(ctx), fontSize: 12),
+            ),
+          ),
+          if (copiable)
+            IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              tooltip: 'Copiar',
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: v));
+                if (!ctx.mounted) return;
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text('$label copiado')),
+                );
+              },
+              icon: Icon(Icons.copy, size: 14, color: AdminUi.muted(ctx)),
+            ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _ejecutarAccion(Future<void> Function() fn) async {
     if (_accionEnCurso || !mounted) return;
     setState(() => _accionEnCurso = true);
@@ -432,19 +513,81 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                             tb is Timestamp ? tb.millisecondsSinceEpoch : 0;
                         return db.compareTo(da);
                       });
+                      final resumen = _resumenCompradores(docs);
+                      final ownerNombre =
+                          (pool['taxistaNombre'] ?? pool['ownerNombre'] ?? '')
+                              .toString()
+                              .trim();
                       return ListView.builder(
                         controller: scroll,
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                        itemCount: docs.length,
+                        itemCount: docs.length + 1,
                         itemBuilder: (_, i) {
-                          final doc = docs[i];
+                          if (i == 0) {
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: AdminUi.infoFill(context),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: AdminUi.infoBorder(context),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (ownerNombre.isNotEmpty)
+                                      Text(
+                                        'Organiza: $ownerNombre',
+                                        style: TextStyle(
+                                          color: AdminUi.onCard(context),
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${resumen.compradores} comprador(es) · '
+                                      '${resumen.asientos} asiento(s) reservados · '
+                                      '${resumen.asientosPagados} pagado(s)',
+                                      style: TextStyle(
+                                        color: AdminUi.secondary(context),
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${resumen.reservas} reserva(s) activa(s) de ${docs.length} total',
+                                      style: TextStyle(
+                                        color: AdminUi.muted(context),
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }
+                          final doc = docs[i - 1];
                           final r = doc.data();
                           final reservaId = doc.id;
                           final seats = (r['seats'] ?? 0).toString();
                           final est = (r['estado'] ?? '').toString();
                           final estL = est.toLowerCase();
-                          final uid = (r['clienteNombre'] ?? r['uidCliente'] ?? '')
-                              .toString();
+                          final nombre =
+                              (r['clienteNombre'] ?? '').toString().trim();
+                          final tel =
+                              (r['clienteTelefono'] ?? '').toString().trim();
+                          final wa =
+                              (r['clienteWhatsApp'] ?? '').toString().trim();
+                          final email =
+                              (r['clienteEmail'] ?? '').toString().trim();
+                          final uidCliente =
+                              (r['uidCliente'] ?? '').toString().trim();
+                          final metodo =
+                              (r['metodoPago'] ?? '').toString().trim();
                           final total = ((r['total'] ?? 0) as num).toDouble();
                           final ref = (r['referenciaRecaudo'] ?? '').toString();
                           final estadoPago = (r['estadoPago'] ?? '').toString();
@@ -473,19 +616,35 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    '$est · $seats asiento(s) · RD\$ ${total.toStringAsFixed(0)}',
+                                    nombre.isNotEmpty ? nombre : 'Comprador',
                                     style: TextStyle(
-                                        color: AdminUi.onCard(context),
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 14),
-                                  ),
-                                  if (uid.isNotEmpty)
-                                    Text(
-                                      uid,
-                                      style: TextStyle(
-                                          color: AdminUi.muted(context),
-                                          fontSize: 12),
+                                      color: AdminUi.onCard(context),
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 15,
                                     ),
+                                  ),
+                                  Text(
+                                    '$est · $seats asiento(s) · RD\$ ${total.toStringAsFixed(0)}'
+                                    '${metodo.isNotEmpty ? ' · $metodo' : ''}',
+                                    style: TextStyle(
+                                      color: AdminUi.secondary(context),
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  _lineaDatoComprador(context, 'Teléfono', tel),
+                                  _lineaDatoComprador(
+                                    context,
+                                    'WhatsApp',
+                                    wa.isNotEmpty ? wa : tel,
+                                  ),
+                                  _lineaDatoComprador(context, 'Email', email),
+                                  _lineaDatoComprador(
+                                    context,
+                                    'UID',
+                                    uidCliente,
+                                    copiable: true,
+                                  ),
                                   if (ref.isNotEmpty)
                                     Text(
                                       'Ref: $ref · Pago: ${estadoPago.isEmpty ? "—" : estadoPago}'
@@ -927,7 +1086,7 @@ class _AdminGirasToursCuposState extends State<AdminGirasToursCupos> {
                                             fontSize: 12),
                                       ),
                                       Text(
-                                        'Cupos: $occ/$cap reservados · $pag pagados',
+                                        'Cupos: $occ/$cap reservados · $pag pagados · ver compradores en Reservas',
                                         style: TextStyle(
                                             color: AdminUi.secondary(context),
                                             fontSize: 12),

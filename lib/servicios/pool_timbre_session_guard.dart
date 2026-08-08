@@ -4,6 +4,7 @@ import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/servicios/notification_service.dart';
 import 'package:flygo_nuevo/servicios/push_service.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
 
 /// Sesión activa pasajero vs conductor (app Play unificada `com.flygo.rd2`).
 /// El timbre del pool **solo** suena con sesión conductor explícita (opt-in).
@@ -34,11 +35,16 @@ abstract final class PoolTimbreSessionGuard {
   }
 
   static Future<void> sincronizarRol(String uid) async {
+    await RaiModoSesionService.initParaUsuario(uid);
     final String? rol = await RolesService.getRol(uid);
     if (rol == Roles.cliente) {
       activarSesionPasajero();
     } else if (rol == Roles.taxista) {
-      activarSesionConductor();
+      if (RaiModoSesionService.enModoPasajero) {
+        activarSesionPasajero();
+      } else {
+        activarSesionConductor();
+      }
     }
   }
 }

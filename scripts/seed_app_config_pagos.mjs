@@ -26,7 +26,7 @@ const projectId = process.env.FIREBASE_PROJECT_ID || "flygo-rd";
 const data = {
   banco_nombre: "Banco Popular",
   tipo_cuenta: "Cuenta Corriente",
-  numero_cuenta: "787726249",
+  numero_cuenta: "816104582",
   titular: "Open ASK Service SRL",
   rnc: "1320-11767",
   alias: "",

@@ -16,6 +16,7 @@ import 'package:flygo_nuevo/servicios/pool_gira_abuso.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
+import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 
 class CrearPoolResult {
   const CrearPoolResult({required this.poolId, this.aviso});
@@ -528,9 +529,9 @@ class PoolRepo {
           'destinoLon': destinoLon,
         },
         if (choferTelefono != null && choferTelefono.trim().isNotEmpty)
-          'choferTelefono': choferTelefono.trim(),
+          'choferTelefono': telefonoNormalizarParaGuardarGira(choferTelefono),
         if (choferWhatsApp != null && choferWhatsApp.trim().isNotEmpty)
-          'choferWhatsApp': choferWhatsApp.trim(),
+          'choferWhatsApp': telefonoNormalizarParaGuardarGira(choferWhatsApp),
         if (bancoNombre != null && bancoNombre.trim().isNotEmpty)
           'bancoNombre': bancoNombre.trim(),
         if (bancoCuenta != null && bancoCuenta.trim().isNotEmpty)
@@ -747,6 +748,8 @@ class PoolRepo {
         ]);
       } else if (tipoFiltro == 'consular' || tipoFiltro == 'consulares') {
         q = q.where('tipo', whereIn: ['consular', 'consulares']);
+      } else if (tipoFiltro == 'grupal' || tipoFiltro == 'grupales') {
+        q = q.where('tipo', whereIn: ['grupal', 'grupales', 'viaje grupal']);
       } else {
         q = q.where('tipo', isEqualTo: tipoFiltro);
       }

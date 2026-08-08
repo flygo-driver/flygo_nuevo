@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart'
     show GeoPoint, Timestamp, FieldValue;
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 
@@ -370,20 +371,16 @@ class Viaje {
     // ✅ NUEVO: waypoints (nunca List.from crudo: un item no-Map tumba el viaje en curso)
     List<Map<String, dynamic>>? waypoints;
     if (data['waypoints'] is List) {
-      waypoints = <Map<String, dynamic>>[];
+      final List<Map<String, dynamic>> raw = <Map<String, dynamic>>[];
       for (final dynamic e in data['waypoints'] as List) {
         if (e is Map) {
-          waypoints.add(Map<String, dynamic>.from(e));
+          raw.add(Map<String, dynamic>.from(e));
         }
       }
-    }
-    if (waypoints != null && waypoints.length > 1) {
-      waypoints.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
-        final int oa = (a['orden'] is num) ? (a['orden'] as num).toInt() : 0;
-        final int ob = (b['orden'] is num) ? (b['orden'] as num).toInt() : 0;
-        if (oa != ob) return oa.compareTo(ob);
-        return 0;
-      });
+      if (raw.isNotEmpty) {
+        waypoints = MultiparadaRutaHelper.sanitizarWaypoints(raw);
+        if (waypoints.isEmpty) waypoints = null;
+      }
     }
 
     final int multiLegsTotal = data['multiparadaLegsTotal'] is num

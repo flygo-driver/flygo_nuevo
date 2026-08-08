@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/servicios/app_flavor_rol_guard.dart';
 import 'package:flygo_nuevo/servicios/taxista_registro_perfil_data.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/negocio_referido_service.dart';
 
 class GoogleAuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -442,6 +443,10 @@ class GoogleAuthService {
           'updatedAt': nowTs,
           'actualizadoEn': nowTs,
         }, SetOptions(merge: true));
+        await NegocioReferidoService.aplicarAlUsuarioSiCorresponde(
+          uid: uid,
+          rol: 'cliente',
+        );
       } else if (!esAdmin && rolEfectivo == 'taxista') {
         await refUsuario.set({
           'uid': uid,
@@ -586,6 +591,12 @@ class GoogleAuthService {
       patch['registroClienteCompleto'] = true;
     }
     await refUsuario.set(patch, SetOptions(merge: true));
+    if (!esAdmin && rolEfectivo == 'cliente') {
+      await NegocioReferidoService.aplicarAlUsuarioSiCorresponde(
+        uid: uid,
+        rol: 'cliente',
+      );
+    }
   }
 
   static Future<void> signOut() async {

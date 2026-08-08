@@ -65,6 +65,8 @@ class CorporativoPlantillasListaPage extends StatelessWidget {
     if (!empresa.contratoVigente || !empresa.contratoDigitalFirmado) {
       return false;
     }
+    final periodo = empresa.periodoActual;
+    if (periodo != null && !periodo.codigoActivo) return false;
     if (pl.choferPreferidoUid == null || pl.choferPreferidoUid!.trim().isEmpty) {
       return false;
     }
@@ -78,6 +80,12 @@ class CorporativoPlantillasListaPage extends StatelessWidget {
     }
     if (!empresa.contratoVigente) {
       return 'RAI aún no activó el servicio de esta empresa.';
+    }
+    final periodo = empresa.periodoActual;
+    if (periodo != null && !periodo.codigoActivo) {
+      return 'El período de facturación venció o hay liquidación pendiente. '
+          'Pagá el período anterior en la pestaña Cuenta para obtener un código nuevo. '
+          'Tus rutas siguen guardadas: no tenés que crearlas de nuevo.';
     }
     if (!pl.activa) return 'La ruta está pausada.';
     if (pl.pasajerosActivos.isEmpty) {
@@ -94,6 +102,64 @@ class CorporativoPlantillasListaPage extends StatelessWidget {
       return 'Hoy no opera esta ruta según sus días. Esperá un día programado.';
     }
     return null;
+  }
+
+  Widget _bannerPeriodoVencido(BuildContext context, CorporativoEmpresa emp) {
+    final p = context.corporativoPalette;
+    final ciclo = CorporativoCicloFacturacion.descripcion(emp.facturacionCicloDias);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.orange.shade300),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.event_busy_rounded, color: Colors.orange.shade800, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Período $ciclo vencido',
+                  style: TextStyle(
+                    color: p.onCard,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tus rutas siguen guardadas. Pagá la liquidación del período anterior '
+                  'en Cuenta para renovar el código y volver a enviar viajes. '
+                  'Lo ya trabajado queda en el historial facturado.',
+                  style: TextStyle(color: p.muted, fontSize: 12, height: 1.35),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  CorporativoCodigoVerificacionCard _tarjetaCodigoPeriodo(CorporativoEmpresa emp) {
+    final periodo = emp.periodoActual;
+    final codigo = (periodo?.codigoAcceso ?? '').trim();
+    final activo = periodo?.codigoActivo ?? false;
+    return CorporativoCodigoVerificacionCard(
+      codigo: codigo,
+      etiquetaCiclo: CorporativoCicloFacturacion.descripcion(
+        emp.facturacionCicloDias,
+      ),
+      validoHasta: periodo?.fin,
+      activo: activo,
+      estadoEtiqueta: activo ? 'Activo' : 'Expirado — pagá para renovar',
+    );
   }
 
   Future<void> _lanzar(
@@ -1049,12 +1115,10 @@ class CorporativoPlantillasListaPage extends StatelessWidget {
                   return ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
-                      CorporativoCodigoVerificacionCard(
-                        codigo: codigo,
-                        etiquetaCiclo: CorporativoCicloFacturacion.descripcion(
-                          emp.facturacionCicloDias,
-                        ),
-                      ),
+                      if (emp.periodoActual != null &&
+                          !emp.periodoActual!.codigoActivo)
+                        _bannerPeriodoVencido(context, emp),
+                      _tarjetaCodigoPeriodo(emp),
                       const SizedBox(height: 8),
                       Text(
                         'Al programar una ruta, comparte el código vigente con tus empleados.',
@@ -1093,12 +1157,10 @@ class CorporativoPlantillasListaPage extends StatelessWidget {
                   // Extra abajo: NavigationBar (~64) no debe tapar «Pausa / feriado».
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
                   children: [
-                    CorporativoCodigoVerificacionCard(
-                      codigo: codigo,
-                      etiquetaCiclo: CorporativoCicloFacturacion.descripcion(
-                        emp.facturacionCicloDias,
-                      ),
-                    ),
+                    if (emp.periodoActual != null &&
+                        !emp.periodoActual!.codigoActivo)
+                      _bannerPeriodoVencido(context, emp),
+                    _tarjetaCodigoPeriodo(emp),
                     const SizedBox(height: 6),
                     Text(
                       'Mismo código en todas las rutas hasta que paguen o cierre '

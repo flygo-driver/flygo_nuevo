@@ -4,10 +4,13 @@ import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/pantallas/comun/configuracion_perfil.dart';
 import 'package:flygo_nuevo/pantallas/comun/soporte.dart';
+import 'package:flygo_nuevo/servicios/rai_cambio_modo_sesion.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/cliente_pagos_sheet.dart';
 import 'package:flygo_nuevo/widgets/cuenta_legal_tiles.dart';
+import 'package:flygo_nuevo/widgets/cliente_negocio_aliado_promo_panel.dart';
 import 'package:flygo_nuevo/widgets/cuenta_promo_resumen_panel.dart';
 import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
 import 'package:flygo_nuevo/widgets/rai_asistente_launcher.dart';
@@ -51,13 +54,16 @@ class ClienteCuentaTab extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = cs.primary;
     final accentSoft = accent.withValues(alpha: isDark ? 0.18 : 0.12);
+    final extraInferior = RaiModoSesionService.enModoPasajero
+        ? kRaiCambioModoSesionPaddingLista
+        : 0.0;
 
     return RaiShellTabScaffold(
       title: 'Cuenta',
       backTooltip: 'Inicio',
       onBack: ShellTabController.clienteIrAInicio,
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+        padding: EdgeInsets.fromLTRB(16, 0, 16, 28 + extraInferior),
         children: [
           if (uid == null)
             const Padding(
@@ -117,6 +123,9 @@ class ClienteCuentaTab extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
+                    ClienteNegocioAliadoPromoPanel(
+                      usuarioData: data ?? const <String, dynamic>{},
+                    ),
                     _ClienteCuentaPerfilExpandible(
                       texto: textoPerfil,
                       accent: accent,

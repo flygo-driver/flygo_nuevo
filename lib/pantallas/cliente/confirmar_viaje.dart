@@ -6,6 +6,7 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/servicios/roles_service.dart';
+import 'package:flygo_nuevo/servicios/rai_modo_sesion_service.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
@@ -126,7 +127,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
     }
 
     // Validaciones rápidas de UI
-    if (widget.precioCalculado <= 0) {
+    if (widget.precioCalculado < 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('El precio debe ser mayor que 0.')),
       );
@@ -148,13 +149,15 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
       await RolesService.ensureUserDoc(u.uid, defaultRol: Roles.cliente);
       if (!mounted) return;
 
-      // 2) Verifica ROL explícito: solo clientes pueden confirmar
+      // 2) Verifica ROL explícito: clientes o taxista en modo pasajero.
       final rol = (await RolesService.getRol(u.uid))?.toLowerCase().trim();
       if (!mounted) return;
-      if (rol != Roles.cliente) {
+      final puedePedir = await RaiModoSesionService.cuentaPuedePedirViaje(u.uid);
+      if (!mounted) return;
+      if (!puedePedir) {
         // Mensaje claro y sin confundir
         final msg = (rol == Roles.taxista || rol == Roles.admin)
-            ? 'Esta cuenta es de $rol. Usa una cuenta de cliente para solicitar viajes.'
+            ? 'Esta cuenta es de $rol. Activa modo pasajero en Cuenta o usa otra cuenta.'
             : 'Tu cuenta no es de cliente. Cambia de cuenta para solicitar viajes.';
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(msg)));

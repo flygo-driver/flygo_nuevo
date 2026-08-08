@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flygo_nuevo/servicios/disponibilidad_service.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/ubicacion_taxista.dart';
 
 class Roles {
   static const String cliente = 'cliente';
@@ -151,6 +152,8 @@ class RolesService {
         uid: uid,
         disponible: false,
       );
+      await UbicacionTaxista.ocultarDelMapaCliente(uid: uid);
+      UbicacionTaxista.refrescarEstadoOperativo();
     }
   }
 }

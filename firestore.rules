@@ -231,6 +231,29 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly(allowed);
     }
 
+    /// Negocio aliado QR: código existe y está activo (NegocioReferidoService).
+    function negocioAliadoQrActivo(codigo) {
+      return codigo is string &&
+        codigo.size() > 0 &&
+        codigo.size() <= 32 &&
+        exists(/databases/$(database)/documents/negocios_aliados/$(codigo)) &&
+        get(/databases/$(database)/documents/negocios_aliados/$(codigo)).data.activo == true;
+    }
+
+    function usuarioSinReferidoQrPrevio() {
+      return !("negocioReferidoCodigo" in resource.data) ||
+        resource.data.negocioReferidoCodigo == "" ||
+        resource.data.negocioReferidoCodigo == null;
+    }
+
+    function usuarioEsClienteOOnboarding() {
+      return (
+        !("rol" in resource.data) ||
+        resource.data.rol == "" ||
+        resource.data.rol == "cliente"
+      );
+    }
+
     /// Auto-registro: rol operativo y sin flags de admin/aprobación en el primer write.
     function usuarioSelfCreateSeguro() {
       let d = request.resource.data;
@@ -601,6 +624,31 @@ service cloud.firestore {
           "actualizadoEn", "updatedAt"
         ]) &&
         request.resource.data.contratoCorporativoAceptado == true;
+      // Promo negocio aliado: vincular código QR una sola vez al registrarse como cliente.
+      allow update: if isOwner(uid) &&
+        usuarioSinReferidoQrPrevio() &&
+        usuarioEsClienteOOnboarding() &&
+        changedOnly([
+          "negocioReferidoCodigo",
+          "negocioReferidoNombre",
+          "negocioReferidoCiudad",
+          "negocioReferidoOrigen",
+          "negocioReferidoAt",
+          "negocioPromoMxKM",
+          "negocioPromoMxKK",
+          "negocioPromoVenceAt",
+          "negocioPromoContador",
+          "updatedAt",
+          "actualizadoEn"
+        ]) &&
+        request.resource.data.negocioReferidoOrigen == "qr_descarga" &&
+        request.resource.data.negocioPromoMxKM == 5 &&
+        request.resource.data.negocioPromoMxKK == 1 &&
+        request.resource.data.negocioPromoContador == 0 &&
+        negocioAliadoQrActivo(request.resource.data.negocioReferidoCodigo) &&
+        request.resource.data.negocioPromoVenceAt > request.time &&
+        request.resource.data.negocioPromoVenceAt <
+          request.time + duration.value(91, 'd');
       allow update: if isAdmin();
       allow delete: if isAdmin();
 
@@ -1510,6 +1558,22 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Historial de mensajes del asistente RAI (lectura admin; create propio o CF).
+    match /rai_asistente_mensajes/{docId} {
+      allow read: if isAdmin();
+      allow create: if isAuth()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 1200
+        && request.resource.data.reply is string
+        && request.resource.data.reply.size() <= 2000
+        && request.resource.data.source is string
+        && request.resource.data.day is string
+        && request.resource.data.suggestedAction is string;
+      allow update, delete: if false;
+    }
+
     // Destinos turísticos editables desde ADM (catálogo extendido).
     match /turismo_destinos/{destinoId} {
       allow read: if isAuth();
@@ -1642,6 +1706,18 @@ service cloud.firestore {
     match /corporativo_feriados/{yearId} {
       allow read: if isAuth();
       allow write: if isAdmin();
+    }
+
+    match /negocios_aliados/{codigo} {
+      allow read: if resource.data.activo == true || isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isAuth() &&
+        resource.data.activo == true &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['clientesReferidos', 'updatedAt']) &&
+        request.resource.data.clientesReferidos == resource.data.clientesReferidos + 1
+      );
     }
 
     match /{document=**} {

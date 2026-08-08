@@ -108,11 +108,15 @@ class _PoolsClienteDetalleState extends State<PoolsClienteDetalle>
     required int left,
     required List<String> pickupPoints,
     required String poolId,
+    required String choferTelefono,
+    required String choferWhatsApp,
   }) {
     final fechaTxt = fmtFechaHoraAmPm(fecha, sep: '•');
     final paradasTxt = pickupPoints.isEmpty
         ? 'Sin paradas publicadas'
         : pickupPoints.join(' | ');
+    final contacto =
+        telefonoLineaContactoPromoGira(choferTelefono, choferWhatsApp);
     final base = '''
 GIRA / EXCURSION POR CUPOS
 Organiza: $ownerLabel
@@ -121,6 +125,7 @@ Salida: $fechaTxt
 Precio por asiento: RD\$ ${precioTotalPorSeat.toStringAsFixed(0)}
 Cupos disponibles: $left
 Paradas: $paradasTxt
+${contacto.isNotEmpty ? '\n$contacto' : ''}
 
 Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
 #RAIDriver #Giras #Tours #Excursiones #ViajesPorCupos
@@ -581,6 +586,25 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                     ],
                     if (choferContactoVisible) ...[
                       const SizedBox(height: 8),
+                      if (telefonoContactoValidoRd(choferWaContacto))
+                        Text(
+                          'WhatsApp: ${telefonoFormatearVisibleRd(choferWaContacto)}',
+                          style: const TextStyle(
+                            color: textMuted,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      if (telefonoContactoValidoRd(choferTelContacto) &&
+                          telefonoNormalizarDigitos(choferTelContacto) !=
+                              telefonoNormalizarDigitos(choferWaContacto))
+                        Text(
+                          'Teléfono: ${telefonoFormatearVisibleRd(choferTelContacto)}',
+                          style: const TextStyle(
+                            color: textMuted,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      const SizedBox(height: 6),
                       Wrap(
                         spacing: 8,
                         runSpacing: 6,
@@ -623,6 +647,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                               left: left,
                               pickupPoints: pickupPoints,
                               poolId: widget.poolId,
+                              choferTelefono: choferTelefono,
+                              choferWhatsApp: choferWhatsApp,
                             );
                             Share.share(texto, subject: 'Salida por cupos');
                           },
@@ -644,11 +670,13 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                               left: left,
                               pickupPoints: pickupPoints,
                               poolId: widget.poolId,
+                              choferTelefono: choferTelefono,
+                              choferWhatsApp: choferWhatsApp,
                             );
                             _abrirWhatsAppConTexto(texto);
                           },
                           icon: const Icon(Icons.chat, size: 16),
-                          label: const Text('WhatsApp (enlace)'),
+                          label: const Text('Compartir en WhatsApp'),
                         ),
                         OutlinedButton.icon(
                           onPressed: () async {
@@ -661,6 +689,8 @@ Reserva en RAI Driver: giras, excursiones y viajes en grupo por cupos.
                               left: left,
                               pickupPoints: pickupPoints,
                               poolId: widget.poolId,
+                              choferTelefono: choferTelefono,
+                              choferWhatsApp: choferWhatsApp,
                             );
                             await Clipboard.setData(ClipboardData(text: texto));
                             if (!mounted) return;

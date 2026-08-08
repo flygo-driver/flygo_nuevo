@@ -54,6 +54,9 @@ class MapaTiempoReal extends StatefulWidget {
   /// El padre (p. ej. viaje en curso) muestra su propio aviso con botón «Activar ubicación».
   final bool suprimirBannerUbicacionLocal;
 
+  /// Capa de tráfico en vivo (tapones / congestión) — Google Maps.
+  final bool mostrarTrafico;
+
   const MapaTiempoReal({
     super.key,
     this.origen,
@@ -73,6 +76,7 @@ class MapaTiempoReal extends StatefulWidget {
     this.onUserMapGestureEnd,
     this.estiloCalleAnchaBlanca = false,
     this.suprimirBannerUbicacionLocal = false,
+    this.mostrarTrafico = true,
   });
 
   @override
@@ -755,6 +759,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
       onCameraIdle: _onMapCameraIdle,
       onTap: _onMapTap,
       mapToolbarEnabled: false,
+      trafficEnabled: widget.mostrarTrafico,
     );
   }
 

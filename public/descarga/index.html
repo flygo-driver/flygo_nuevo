@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <script>
+    (function () {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (r) {
+          r.forEach(function (x) { x.unregister(); });
+        });
+      }
+      if (window.caches && caches.keys) {
+        caches.keys().then(function (k) {
+          k.forEach(function (n) { caches.delete(n); });
+        });
+      }
+    })();
+  </script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Descargá RAI Driver — Promo aliado</title>
+  <meta property="og:image" content="https://flygo-rd.web.app/pool/rai-share-card.png" />
+  <link rel="icon" type="image/png" href="/favicon-rai.png" />
+  <style>
+    :root {
+      --green: #0f9d58;
+      --red: #de2910;
+      --bg: #0a1628;
+      --card: #111827;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --border: rgba(15,157,88,.35);
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg:#ecfdf5; --card:#fff; --text:#0f172a; --muted:#475569; }
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+    }
+    .wrap {
+      max-width:420px; margin:0 auto;
+      padding: max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));
+    }
+    .card {
+      border-radius:20px; overflow:hidden;
+      background:var(--card); border:1px solid var(--border);
+      box-shadow:0 12px 32px rgba(0,0,0,.22);
+    }
+    .hero-img {
+      width:100%; display:block; aspect-ratio:16/9; object-fit:cover;
+      background:linear-gradient(135deg,#0f9d58,#00c9a7,#ff7a45);
+    }
+    .body { padding:18px 16px 20px; }
+    .tag {
+      font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+      color:var(--green); background:rgba(15,157,88,.15);
+      border:1px solid var(--border); border-radius:999px;
+      padding:4px 10px; display:inline-block; margin-bottom:10px;
+    }
+    h1 { font-size:1.42rem; line-height:1.15; font-weight:900; margin-bottom:6px; }
+    h1 em { color:var(--red); font-style:normal; }
+    .sub { color:var(--muted); font-size:.88rem; margin-bottom:12px; }
+    .code {
+      display:inline-block; font-size:.8rem; font-weight:800; letter-spacing:.1em;
+      padding:6px 14px; border-radius:999px;
+      border:1px solid var(--border); background:rgba(15,157,88,.12); color:var(--green);
+      margin-bottom:10px;
+    }
+    .negocio { font-size:.9rem; font-weight:700; min-height:1.2em; margin-bottom:14px; }
+    .steps { list-style:none; margin:0 0 16px; }
+    .steps li {
+      display:flex; gap:10px; font-size:.86rem; line-height:1.4;
+      color:var(--muted); margin-bottom:8px;
+    }
+    .steps b { color:var(--text); }
+    .num {
+      flex-shrink:0; width:22px; height:22px; border-radius:50%;
+      background:var(--green); color:#fff; font-size:.72rem; font-weight:800;
+      display:flex; align-items:center; justify-content:center;
+    }
+    .btn {
+      display:flex; align-items:center; justify-content:center; gap:8px;
+      width:100%; padding:16px 14px; margin-top:10px;
+      border-radius:14px; font-size:1rem; font-weight:800;
+      text-align:center; text-decoration:none;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .btn-play {
+      background:var(--green); color:#fff !important;
+      box-shadow:0 8px 20px rgba(15,157,88,.35);
+    }
+    .btn-ghost {
+      background:transparent; color:var(--text);
+      border:1px solid var(--border); font-size:.9rem; font-weight:700;
+    }
+    .status { margin-top:12px; font-size:.78rem; color:var(--muted); text-align:center; line-height:1.4; }
+    .foot { margin-top:16px; text-align:center; font-size:.7rem; color:var(--muted); line-height:1.45; }
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <img class="hero-img" src="/pool/rai-share-card.png" alt="RAI Driver" />
+      <div class="body">
+        <span class="tag">RAI Driver · Promo aliado</span>
+        <h1>5 viajes pagados<br />y el <em>6.º GRATIS</em></h1>
+        <p class="sub">Válido 90 días · Solo con este código QR</p>
+        <div class="code" id="codePill">···</div>
+        <p class="negocio" id="negocioNombre"></p>
+        <ol class="steps">
+          <li><span class="num">1</span><span>Tocá el botón verde → <b>Google Play</b></span></li>
+          <li><span class="num">2</span><span>Instalá y registrate como <b>pasajero</b></span></li>
+          <li><span class="num">3</span><span>El 6.º viaje gratis solo <b>dentro del pueblo del aliado</b></span></li>
+        </ol>
+
+        <!-- Enlace nativo: el sistema abre Play Store directo (sin modal ni intent://play.google.com) -->
+        <a class="btn btn-play" id="btnPlay" href="#">
+          ▶ Instalar en Google Play
+        </a>
+        <a class="btn btn-ghost hidden" id="btnWeb" href="/login">Continuar en la web</a>
+        <p class="status" id="status"></p>
+      </div>
+    </div>
+    <p class="foot">Open ASK Service SRL · RAI Driver RD</p>
+  </div>
+
+  <script>
+    (function () {
+      var PKG = 'com.flygo.rd2';
+      var HOST = 'https://flygo-rd.web.app';
+      var STORAGE = 'rai_negocio_ref_pendiente';
+      var ua = navigator.userAgent || '';
+      var isAndroid = /Android/i.test(ua);
+      var isMobile = isAndroid || /iPhone|iPad|iPod/i.test(ua);
+
+      function normRef(raw) {
+        if (!raw) return '';
+        return String(raw).trim().toUpperCase()
+          .replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+      }
+
+      function getRef() {
+        var p = new URLSearchParams(location.search);
+        var ref = normRef(p.get('ref') || p.get('code') || p.get('id') || '');
+        if (ref) {
+          try { localStorage.setItem(STORAGE, ref); } catch (e) {}
+        } else {
+          try { ref = normRef(localStorage.getItem(STORAGE) || ''); } catch (e) {}
+        }
+        return ref;
+      }
+
+      function marketLink(ref) {
+        var u = 'market://details?id=' + PKG;
+        if (ref) u += '&referrer=' + encodeURIComponent('ref=' + ref);
+        return u;
+      }
+
+      function playLink(ref) {
+        var u = 'https://play.google.com/store/apps/details?id=' + PKG + '&hl=es';
+        if (ref) u += '&referrer=' + encodeURIComponent('ref=' + ref);
+        return u;
+      }
+
+      var ref = getRef();
+      var btnPlay = document.getElementById('btnPlay');
+      var btnWeb = document.getElementById('btnWeb');
+      var status = document.getElementById('status');
+
+      document.getElementById('codePill').textContent = ref || 'SIN CÓDIGO';
+
+      if (ref) {
+        document.title = 'RAI Driver — Promo ' + ref;
+        fetch('https://firestore.googleapis.com/v1/projects/flygo-rd/databases/(default)/documents/negocios_aliados/' + encodeURIComponent(ref))
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (doc) {
+            if (!doc || !doc.fields) return;
+            var ok = doc.fields.activo && doc.fields.activo.booleanValue;
+            var nombre = doc.fields.nombre && doc.fields.nombre.stringValue;
+            var ciudad = doc.fields.ciudad && doc.fields.ciudad.stringValue;
+            if (ok && nombre) {
+              document.getElementById('negocioNombre').textContent =
+                'Aliado: ' + nombre + (ciudad ? ' · ' + ciudad : '');
+            }
+          }).catch(function () {});
+      }
+
+      if (isAndroid) {
+        btnPlay.href = marketLink(ref);
+        status.textContent = 'Tocá el botón verde para abrir Google Play.';
+      } else {
+        btnPlay.href = playLink(ref);
+        btnPlay.target = '_blank';
+        btnPlay.rel = 'noopener noreferrer';
+        if (!isMobile) {
+          btnWeb.classList.remove('hidden');
+          btnWeb.href = HOST + '/login' + (ref ? ('?ref=' + encodeURIComponent(ref)) : '');
+        }
+        status.textContent = 'Disponible en Google Play para Android.';
+      }
+    })();
+  </script>
+</body>
+</html>

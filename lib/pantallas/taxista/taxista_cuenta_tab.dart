@@ -17,6 +17,7 @@ import 'package:flygo_nuevo/pantallas/taxista/mis_pagos.dart';
 import 'package:flygo_nuevo/pantallas/taxista/taxista_promociones.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
+import 'package:flygo_nuevo/servicios/rai_cambio_modo_sesion.dart';
 import 'package:flygo_nuevo/servicios/taxista_promociones_ui.dart';
 import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
@@ -138,7 +139,12 @@ class TaxistaCuentaTab extends StatelessWidget {
       title: 'Cuenta',
       subtitle: 'Perfil, finanzas y ajustes',
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+        padding: const EdgeInsets.fromLTRB(
+          16,
+          0,
+          16,
+          28 + kRaiCambioModoSesionPaddingLista,
+        ),
         children: [
           if (uid == null)
             const Padding(

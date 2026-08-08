@@ -75,6 +75,7 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
   int _conductoresCerca = 0;
   double? _kmConductorMasCercano;
   String? _miTaxistaAsignadoUid;
+  String? _estadoViajeActivo;
 
   bool _ubicacionLista = false;
   bool _usuarioMovioCamara = false;
@@ -136,8 +137,12 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
       _viajeSub?.cancel();
       _viajeSub = null;
       if (viajeId.isEmpty) {
-        if (_miTaxistaAsignadoUid != null && mounted) {
-          setState(() => _miTaxistaAsignadoUid = null);
+        if ((_miTaxistaAsignadoUid != null || _estadoViajeActivo != null) &&
+            mounted) {
+          setState(() {
+            _miTaxistaAsignadoUid = null;
+            _estadoViajeActivo = null;
+          });
         }
         return;
       }
@@ -146,18 +151,24 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
           .doc(viajeId)
           .snapshots()
           .listen((DocumentSnapshot<Map<String, dynamic>> v) {
-        final String tid = (v.data()?['uidTaxista'] ??
-                v.data()?['taxistaId'] ??
+        final Map<String, dynamic>? vd = v.data();
+        final String tid = (vd?['uidTaxista'] ??
+                vd?['taxistaId'] ??
                 '')
             .toString()
             .trim();
+        final String est = (vd?['estado'] ?? '').toString().trim();
         if (!mounted) return;
         final String? next = tid.isEmpty ? null : tid;
-        if (next != _miTaxistaAsignadoUid) {
-          setState(() => _miTaxistaAsignadoUid = next);
+        if (next != _miTaxistaAsignadoUid || est != _estadoViajeActivo) {
+          setState(() {
+            _miTaxistaAsignadoUid = next;
+            _estadoViajeActivo = est.isEmpty ? null : est;
+          });
           _nearbySession?.update(
             center: _center,
             uidAsignado: next,
+            uidCliente: FirebaseAuth.instance.currentUser?.uid,
           );
           if (next != null) _programarAjusteCamara(inmediato: true);
         }
@@ -228,12 +239,14 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
 
   void _recalcularConductores() {
     if (_rawDrivers.isEmpty) return;
+    final String? uidCliente = FirebaseAuth.instance.currentUser?.uid;
     _aplicarConductores(
       DriversLocationNearbyUpdate(
         conductores: raiLiveDriversDesdeDocs(
           _rawDrivers,
           centroKm: _ubicacionLista ? _center : null,
           radioKm: _ubicacionLista ? _kRadioKmConductores : null,
+          uidCliente: uidCliente,
         ),
         docs: _rawDrivers,
         region: RaiRegionOperativa.resolver(_center.latitude, _center.longitude),
@@ -280,9 +293,11 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
 
   void _escucharConductores() {
     _nearbySession?.dispose();
+    final String? uidCliente = FirebaseAuth.instance.currentUser?.uid;
     _nearbySession = DriversLocationNearbyRepo.createSession(
       initialCenter: _center,
       uidAsignado: _miTaxistaAsignadoUid,
+      uidCliente: uidCliente,
       radiusKm: _kRadioKmConductores,
       maxResultados: 60,
       onUpdate: (DriversLocationNearbyUpdate update) {
@@ -469,23 +484,26 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
           _driverAnim.displayPositions[d.uid] ?? d.position;
       final bool esAsignado =
           d.uid == _miTaxistaAsignadoUid || d.esAsignadoA(miUid);
+      final bool faseRecogida = esAsignado &&
+          RaiMapVehicleIcons.faseRecogidaDesdeEstado(_estadoViajeActivo);
       final bool enViaje = d.enViaje;
-      final bool mostrarRojo = esAsignado || enViaje;
       final double bearing = RaiMapVehicleIcons.resolverBearing(
         actual: pos,
         headingGps: d.heading,
         fallback: _driverAnim.bearingFor(d.uid),
       );
 
-      final BitmapDescriptor icon = mostrarRojo
-          ? (RaiMapVehicleIcons.taxiClienteAsignado ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed))
-          : (RaiMapVehicleIcons.taxiCliente ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen));
+      final BitmapDescriptor? iconoVeh =
+          RaiMapVehicleIcons.iconoVistaCliente(
+        esMiConductor: esAsignado,
+        faseRecogida: faseRecogida,
+      );
+      final BitmapDescriptor icon = iconoVeh ??
+          (enViaje
+              ? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange)
+              : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen));
 
-      final bool usaIconoVehiculo = mostrarRojo
-          ? RaiMapVehicleIcons.taxiClienteAsignado != null
-          : RaiMapVehicleIcons.taxiCliente != null;
+      final bool usaIconoVehiculo = iconoVeh != null;
 
       out.add(
         Marker(
@@ -499,12 +517,12 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
               ? RaiMapVehicleIcons.rotationTaxiCliente(bearing)
               : 0,
           flat: usaIconoVehiculo,
-          zIndexInt: mostrarRojo ? 6 : (d.online ? 2 : 1),
+          zIndexInt: faseRecogida ? 6 : (d.online ? 2 : 1),
           infoWindow: InfoWindow(
             title: esAsignado
-                ? 'Tu conductor'
-                : (enViaje ? 'En viaje' : 'Disponible'),
-            snippet: enViaje && !esAsignado ? 'Demanda activa en la zona' : null,
+                ? (faseRecogida ? 'Tu conductor viene' : 'Tu conductor')
+                : (enViaje ? 'Ocupado' : 'Disponible'),
+            snippet: enViaje && !esAsignado ? 'En servicio en la zona' : null,
           ),
         ),
       );
@@ -665,6 +683,7 @@ class _ClienteHomeLiveMapState extends State<ClienteHomeLiveMap>
                 rotateGesturesEnabled: false,
                 tiltGesturesEnabled: false,
                 liteModeEnabled: false,
+                trafficEnabled: true,
                 gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
                   Factory<OneSequenceGestureRecognizer>(
                     () => EagerGestureRecognizer(),

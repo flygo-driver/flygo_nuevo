@@ -19,7 +19,7 @@
 | RNC | 1-32-01176-7 |
 | Registro Mercantil | No. 161167SD — Cámara de Comercio y Producción de Santo Domingo |
 | Domicilio | Calle 23 Este No. 39, Ensanche Luperón, Santo Domingo, Distrito Nacional, República Dominicana |
-| Cuenta bancaria de liquidación | Banco Popular Dominicano — Cuenta Corriente No. **787726249** |
+| Cuenta bancaria de liquidación | Banco Popular Dominicano — Cuenta Corriente No. **816104582** |
 | Titular de cuenta | OPEN ASK SERVICE, S.R.L. |
 | Aplicación móvil | RAI Driver — Android/iOS (Flutter) |
 | Identificador de paquete (Android) | `com.flygo.rd2` |
@@ -53,7 +53,7 @@ El modelo de negocio de RAI Driver se estructura en **dos circuitos financieros 
 | **Parte pagadora** | Conductor / taxista registrado en la plataforma |
 | **Parte beneficiaria** | OPEN ASK SERVICE, S.R.L. (RAI) |
 | **Finalidad** | Adquisición de crédito operativo para cubrir la comisión de plataforma en viajes pagados en efectivo por el pasajero |
-| **Método de pago** | Transferencia bancaria a la cuenta corriente No. 787726249, con verificación administrativa del comprobante |
+| **Método de pago** | Transferencia bancaria a la cuenta corriente No. 816104582, con verificación administrativa del comprobante |
 | **Registro contable** | Campo `saldoPrepagoComisionRd` en documento `billeteras_taxista/{uid}` |
 | **Monto mínimo operativo** | RD$200,00 (configurable en servidor) |
 | **Consecuencia de saldo insuficiente** | Bloqueo automático del conductor para aceptar viajes en efectivo |
@@ -62,7 +62,7 @@ El modelo de negocio de RAI Driver se estructura en **dos circuitos financieros 
 **Flujo operativo:**
 
 1. El conductor accede a la sección «Mis pagos → Recarga comisión» en la aplicación.
-2. Realiza transferencia bancaria a OPEN ASK SERVICE, S.R.L. (cuenta 787726249).
+2. Realiza transferencia bancaria a OPEN ASK SERVICE, S.R.L. (cuenta 816104582).
 3. Adjunta comprobante de pago (bauche) mediante la aplicación.
 4. El administrador de RAI verifica y aprueba la recarga.
 5. El sistema acredita el monto en `saldoPrepagoComisionRd`.
@@ -92,7 +92,7 @@ Este circuito **no interviene en la integración AZUL** y no constituye un cobro
 
 1. El pasajero selecciona método de pago «Transferencia» al confirmar el viaje.
 2. La aplicación exhibe los datos de la cuenta de OPEN ASK SERVICE, S.R.L. y una referencia única de recaudo (`referenciaRecaudo`).
-3. El pasajero transfiere el monto íntegro del viaje a la cuenta 787726249.
+3. El pasajero transfiere el monto íntegro del viaje a la cuenta 816104582.
 4. RAI verifica el pago (manual o conciliación automática).
 5. El viaje queda en estado `estadoPago: verificado`.
 6. El conductor presta el servicio y finaliza el viaje.
@@ -128,7 +128,7 @@ Este circuito **no interviene en la integración AZUL** y no constituye un cobro
 
 - **Merchant of record:** RAI es el único comercio afiliado ante AZUL.
 - **Los conductores no son sub-comercios:** no requieren afiliación individual ante AZUL.
-- **Liquidación AZUL:** los fondos deben acreditarse en la cuenta corriente No. 787726249.
+- **Liquidación AZUL:** los fondos deben acreditarse en la cuenta corriente No. 816104582.
 - **Liquidación al conductor:** realizada por RAI de forma posterior, fuera del alcance de AZUL.
 
 ### 5.2 Características de las transacciones
@@ -175,7 +175,7 @@ Este circuito **no interviene en la integración AZUL** y no constituye un cobro
            │
            ▼
 ┌─────────────────────┐
-│  Liquidación AZUL   │  Cuenta 787726249
+│  Liquidación AZUL   │  Cuenta 816104582
 │  OPEN ASK SERVICE   │  Banco Popular Dominicano
 └─────────────────────┘
 ```
@@ -289,7 +289,7 @@ Registro de solicitudes de recarga del conductor, con comprobante adjunto y fluj
 
 3. **Existe un único comercio afiliado:** OPEN ASK SERVICE, S.R.L. No se requiere afiliación por conductor.
 
-4. **La cuenta de liquidación es única:** Banco Popular Dominicano, Cuenta Corriente No. 787726249.
+4. **La cuenta de liquidación es única:** Banco Popular Dominicano, Cuenta Corriente No. 816104582.
 
 5. **La integración técnica está preparada** en arquitectura y componentes de software. Se requiere afiliación comercial, entrega de credenciales sandbox y proceso de certificación para activación en producción.
 

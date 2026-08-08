@@ -21,6 +21,7 @@ import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/taxista_operacion_gate.dart';
 import '../../navegacion/taxista_operacion_nav.dart';
 import '../../utils/viaje_pool_taxista_gate.dart';
+import '../../utils/multiparada_ruta_helper.dart';
 import '../../servicios/navegacion_externa_launcher.dart';
 import '../../servicios/navigation_service.dart';
 import '../../servicios/active_trip_service.dart';
@@ -604,7 +605,8 @@ class _DetalleViajeState extends State<DetalleViaje> {
                     return null;
                   }
 
-                  final waypoints = d['waypoints'] as List<dynamic>?;
+                  final List<Map<String, dynamic>> waypointsOrdenados =
+                      MultiparadaRutaHelper.waypointsDesdeDoc(d);
                   final bool hayOrigenMapa = latOrigen != 0 &&
                       lonOrigen != 0 &&
                       latOrigen.abs() <= 90 &&
@@ -617,18 +619,14 @@ class _DetalleViajeState extends State<DetalleViaje> {
                   if (hayOrigenMapa) {
                     puntosRuta.add(LatLng(latOrigen, lonOrigen));
                   }
-                  if (waypoints != null) {
-                    for (final dynamic raw in waypoints) {
-                      if (raw is! Map) continue;
-                      final w = Map<String, dynamic>.from(raw);
-                      final double la = _asDouble(w['lat']);
-                      final double lo = _asDouble(w['lon']);
-                      if (la != 0 &&
-                          lo != 0 &&
-                          la.abs() <= 90 &&
-                          lo.abs() <= 180) {
-                        puntosRuta.add(LatLng(la, lo));
-                      }
+                  for (final Map<String, dynamic> w in waypointsOrdenados) {
+                    final double? la = MultiparadaRutaHelper.coordLat(w);
+                    final double? lo = MultiparadaRutaHelper.coordLon(w);
+                    if (la != null &&
+                        lo != null &&
+                        la.abs() <= 90 &&
+                        lo.abs() <= 180) {
+                      puntosRuta.add(LatLng(la, lo));
                     }
                   }
                   if (hayDestinoMapa) {
@@ -735,7 +733,7 @@ class _DetalleViajeState extends State<DetalleViaje> {
                               ),
                             ],
                           ),
-                          if (waypoints != null && waypoints.isNotEmpty) ...[
+                          if (waypointsOrdenados.isNotEmpty) ...[
                             const SizedBox(height: 12),
                             const Divider(color: Colors.white24, height: 1),
                             const SizedBox(height: 8),
@@ -745,10 +743,9 @@ class _DetalleViajeState extends State<DetalleViaje> {
                                   color: Colors.blueAccent,
                                   fontWeight: FontWeight.bold),
                             ),
-                            ...waypoints.asMap().entries.map((entry) {
+                            ...waypointsOrdenados.asMap().entries.map((entry) {
                               final int i = entry.key + 1;
-                              final Map<String, dynamic> w =
-                                  entry.value as Map<String, dynamic>;
+                              final Map<String, dynamic> w = entry.value;
                               final String label =
                                   w['label']?.toString() ?? 'Parada $i';
                               return Padding(

@@ -16,7 +16,9 @@ import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formato_distancia_cercania.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/negocio_aliado_viaje_doc.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/widgets/negocio_aliado_taxista_banner.dart';
 
 /// Punto desde el que se mide distancia al pickup del candidato (GPS taxista o destino del viaje activo).
 class ColaCercaniaReferencia {
@@ -888,6 +890,11 @@ class _ViajesCercanosTaxistaLayerState
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 4),
+                                if (NegocioAliadoViajeDoc.esReferidoQr(data))
+                                  NegocioAliadoTaxistaBanner(
+                                    viajeData: data,
+                                    compacto: true,
+                                  ),
                                 Text(
                                   precio,
                                   style: const TextStyle(

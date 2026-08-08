@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
+import 'package:flygo_nuevo/servicios/calificacion_pendiente_service.dart';
+
 /// Estado de red compartido (debounced). No bloquea la UI: solo informa offline/online.
 class RaiConnectivityService {
   RaiConnectivityService._();
@@ -60,7 +62,12 @@ class RaiConnectivityService {
 
   void _applyResults(List<ConnectivityResult> r) {
     if (r.isEmpty) return;
-    offline.value = _sinRed(r);
+    final bool sinRed = _sinRed(r);
+    final bool estabaOffline = offline.value == true;
+    offline.value = sinRed;
+    if (estabaOffline && !sinRed) {
+      unawaited(CalificacionPendienteService.flushPendientes());
+    }
   }
 
   @visibleForTesting

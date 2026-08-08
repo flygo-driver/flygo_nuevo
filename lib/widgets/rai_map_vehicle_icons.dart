@@ -109,6 +109,25 @@ abstract final class RaiMapVehicleIcons {
     return bearingEntre(anterior, actual) ?? fallback;
   }
 
+  /// Vista cliente: rojo solo en fase recogida (viene hacia ti). En ruta al destino = taxi normal.
+  static BitmapDescriptor? iconoVistaCliente({
+    required bool esMiConductor,
+    required bool faseRecogida,
+  }) {
+    if (esMiConductor && faseRecogida) {
+      return taxiClienteAsignado ?? taxiCliente;
+    }
+    return taxiCliente;
+  }
+
+  static bool faseRecogidaDesdeEstado(String? estadoBase) {
+    if (estadoBase == null || estadoBase.trim().isEmpty) return false;
+    final String e = estadoBase.trim().toLowerCase();
+    return e == 'aceptado' ||
+        e == 'en_camino_pickup' ||
+        e == 'encaminopickup';
+  }
+
   static double _normalize(double deg) {
     var d = deg % 360;
     if (d < 0) d += 360;

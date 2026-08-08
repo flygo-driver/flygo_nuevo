@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/servicios/finance_config_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
 
 /// Selector de método de pago durante el viaje (cliente).
 class ViajeMetodoPagoSelector extends StatefulWidget {
@@ -27,6 +27,10 @@ class _ViajeMetodoPagoSelectorState extends State<ViajeMetodoPagoSelector> {
 
   Future<void> _elegir(String metodo) async {
     if (_actualizando != null) return;
+    if (metodo == 'tarjeta' && !PagoTarjetaClienteGate.cobroHabilitado) {
+      await PagoTarjetaClienteGate.permitirAccionTarjeta(context);
+      return;
+    }
     final String actual =
         MetodoPagoViaje.asientoCategoria(widget.metodoPagoActual);
     if (actual == metodo) return;
@@ -55,8 +59,7 @@ class _ViajeMetodoPagoSelectorState extends State<ViajeMetodoPagoSelector> {
     final Color fgMuted =
         oscuro ? Colors.white70 : fg.withValues(alpha: 0.65);
     final String metodo = widget.metodoPagoActual;
-    final bool tarjetaOn =
-        FinanceConfigService.pagosConTarjetaAzulHabilitados;
+    final bool tarjetaOn = PagoTarjetaClienteGate.mostrarOpcionTarjeta;
 
     final List<_MetodoPagoOpcion> opciones = <_MetodoPagoOpcion>[
       _MetodoPagoOpcion(
@@ -185,7 +188,9 @@ class _ViajeMetodoPagoSelectorState extends State<ViajeMetodoPagoSelector> {
                             const SizedBox(height: 2),
                             Text(
                               tarjetaOn
-                                  ? 'Elegí cómo pagarás este viaje'
+                                  ? (PagoTarjetaClienteGate.bloqueado
+                                      ? 'Efectivo, transferencia o tarjeta (próximamente)'
+                                      : 'Elegí cómo pagarás este viaje')
                                   : 'Efectivo o transferencia',
                               style: TextStyle(
                                 color: fgMuted,

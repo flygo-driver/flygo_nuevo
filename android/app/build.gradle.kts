@@ -126,6 +126,7 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.2")
     // Alineado con image_picker / Photo Picker (recomendación Google Play).
     implementation("androidx.activity:activity:1.9.3")
+    implementation("com.android.installreferrer:installreferrer:2.2")
 }
 
 // Copia APK y AAB al árbol build/ que espera la CLI de Flutter (por variante de flavor).

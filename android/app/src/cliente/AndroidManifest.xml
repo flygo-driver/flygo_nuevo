@@ -67,6 +67,25 @@
                     android:host="flygo-rd.firebaseapp.com"
                     android:pathPrefix="/azul/resultado" />
             </intent-filter>
+            <!-- QR negocio aliado: /descarga?ref=CODIGO -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="flygo-rd.web.app"
+                    android:pathPrefix="/descarga" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="flygo-rd.firebaseapp.com"
+                    android:pathPrefix="/descarga" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

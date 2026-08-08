@@ -19,6 +19,7 @@ import 'package:flygo_nuevo/servicios/cliente_cuenta_real_policy.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/servicios/calificacion_pendiente_service.dart';
 
 /// Sesión local nula o el callable no recibió identidad (p. ej. token caducado).
 class SessionExpiredForTrip implements Exception {
@@ -1322,6 +1323,7 @@ class ViajeData {
     required String uidCliente,
     required num calificacion,
     String? comentario,
+    int reintentosRed = 3,
   }) async {
     final User? user =
         FirebaseAuth.instance.currentUser ?? await resolveFirebaseUser();
@@ -1360,39 +1362,67 @@ class ViajeData {
       return const CalificarViajeResult(alreadyRated: false);
     }
 
-    try {
+    Object? ultimoError;
+    for (int intento = 0; intento < reintentosRed; intento++) {
       try {
-        await user.getIdToken(false);
-      } catch (_) {}
-      return await invocar(user);
-    } on FirebaseFunctionsException catch (e) {
-      if (e.code == 'unauthenticated') {
         try {
-          await user.getIdToken(true);
-          return await invocar(user);
-        } catch (_) {
-          throw const SessionExpiredForTrip();
+          await user.getIdToken(intento > 0);
+        } catch (_) {}
+        final CalificarViajeResult res = await invocar(user);
+        await CalificacionPendienteService.quitar(
+          rol: 'cliente',
+          viajeId: viajeId,
+        );
+        return res;
+      } on FirebaseFunctionsException catch (e) {
+        ultimoError = e;
+        if (e.code == 'unauthenticated') {
+          try {
+            await user.getIdToken(true);
+            final CalificarViajeResult res = await invocar(user);
+            await CalificacionPendienteService.quitar(
+              rol: 'cliente',
+              viajeId: viajeId,
+            );
+            return res;
+          } catch (_) {
+            throw const SessionExpiredForTrip();
+          }
         }
-      }
-      final String msg = (e.message ?? '').trim();
-      switch (e.code) {
-        case 'permission-denied':
-          throw Exception(
-              msg.isNotEmpty ? msg : 'No puedes calificar este viaje.');
-        case 'failed-precondition':
-          throw Exception(
-            msg.isNotEmpty ? msg : 'Solo puedes calificar viajes completados.',
-          );
-        case 'not-found':
-          throw Exception(msg.isNotEmpty ? msg : 'El viaje no existe.');
-        case 'invalid-argument':
-          throw Exception(msg.isNotEmpty ? msg : 'Datos inválidos.');
-        default:
-          throw Exception(
-            msg.isNotEmpty ? msg : 'Error al guardar calificación (${e.code}).',
-          );
+        if (CalificacionPendienteService.esErrorDeRed(e) &&
+            intento < reintentosRed - 1) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * (intento + 1)));
+          continue;
+        }
+        final String msg = (e.message ?? '').trim();
+        switch (e.code) {
+          case 'permission-denied':
+            throw Exception(
+                msg.isNotEmpty ? msg : 'No puedes calificar este viaje.');
+          case 'failed-precondition':
+            throw Exception(
+              msg.isNotEmpty ? msg : 'Solo puedes calificar viajes completados.',
+            );
+          case 'not-found':
+            throw Exception(msg.isNotEmpty ? msg : 'El viaje no existe.');
+          case 'invalid-argument':
+            throw Exception(msg.isNotEmpty ? msg : 'Datos inválidos.');
+          default:
+            throw Exception(
+              msg.isNotEmpty ? msg : 'Error al guardar calificación (${e.code}).',
+            );
+        }
+      } catch (e) {
+        ultimoError = e;
+        if (CalificacionPendienteService.esErrorDeRed(e) &&
+            intento < reintentosRed - 1) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * (intento + 1)));
+          continue;
+        }
+        rethrow;
       }
     }
+    throw ultimoError ?? Exception('No se pudo guardar la calificación.');
   }
 
   /// Taxista califica al cliente (callable [calificarCliente]).
@@ -1401,6 +1431,7 @@ class ViajeData {
     required String uidTaxista,
     required num calificacion,
     String? comentario,
+    int reintentosRed = 3,
   }) async {
     final User? user =
         FirebaseAuth.instance.currentUser ?? await resolveFirebaseUser();
@@ -1410,16 +1441,17 @@ class ViajeData {
     if (user.uid != uidTaxista) {
       throw Exception('Sesión no coincide con el conductor.');
     }
-    try {
-      await user.reload();
-    } catch (_) {}
-    await user.getIdToken(true);
 
-    final HttpsCallable callable = FirebaseFunctions.instanceFor(
-      region: 'us-central1',
-    ).httpsCallable('calificarCliente');
+    Future<void> invocar(User u) async {
+      try {
+        await u.reload();
+      } catch (_) {}
+      await u.getIdToken(true);
 
-    try {
+      final HttpsCallable callable = FirebaseFunctions.instanceFor(
+        region: 'us-central1',
+      ).httpsCallable('calificarCliente');
+
       final HttpsCallableResult<dynamic> res = await callable.call(
         <String, dynamic>{
           'viajeId': viajeId,
@@ -1437,33 +1469,61 @@ class ViajeData {
           );
         }
       }
-    } on FirebaseFunctionsException catch (e) {
-      final String msg = (e.message ?? '').trim();
-      switch (e.code) {
-        case 'unauthenticated':
+    }
+
+    Object? ultimoError;
+    for (int intento = 0; intento < reintentosRed; intento++) {
+      try {
+        await invocar(user);
+        await CalificacionPendienteService.quitar(
+          rol: 'taxista',
+          viajeId: viajeId,
+        );
+        return;
+      } on FirebaseFunctionsException catch (e) {
+        ultimoError = e;
+        if (e.code == 'unauthenticated') {
           throw const SessionExpiredForTrip();
-        case 'permission-denied':
-          throw Exception(
-            msg.isNotEmpty
-                ? msg
-                : 'No puedes calificar al cliente de este viaje.',
-          );
-        case 'failed-precondition':
-          throw Exception(
-            msg.isNotEmpty
-                ? msg
-                : 'Solo puedes calificar viajes completados.',
-          );
-        case 'not-found':
-          throw Exception(msg.isNotEmpty ? msg : 'El viaje no existe.');
-        case 'invalid-argument':
-          throw Exception(msg.isNotEmpty ? msg : 'Datos inválidos.');
-        default:
-          throw Exception(
-            msg.isNotEmpty ? msg : 'Error al guardar calificación (${e.code}).',
-          );
+        }
+        if (CalificacionPendienteService.esErrorDeRed(e) &&
+            intento < reintentosRed - 1) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * (intento + 1)));
+          continue;
+        }
+        final String msg = (e.message ?? '').trim();
+        switch (e.code) {
+          case 'permission-denied':
+            throw Exception(
+              msg.isNotEmpty
+                  ? msg
+                  : 'No puedes calificar al cliente de este viaje.',
+            );
+          case 'failed-precondition':
+            throw Exception(
+              msg.isNotEmpty
+                  ? msg
+                  : 'Solo puedes calificar viajes completados.',
+            );
+          case 'not-found':
+            throw Exception(msg.isNotEmpty ? msg : 'El viaje no existe.');
+          case 'invalid-argument':
+            throw Exception(msg.isNotEmpty ? msg : 'Datos inválidos.');
+          default:
+            throw Exception(
+              msg.isNotEmpty ? msg : 'Error al guardar calificación (${e.code}).',
+            );
+        }
+      } catch (e) {
+        ultimoError = e;
+        if (CalificacionPendienteService.esErrorDeRed(e) &&
+            intento < reintentosRed - 1) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * (intento + 1)));
+          continue;
+        }
+        rethrow;
       }
     }
+    throw ultimoError ?? Exception('No se pudo guardar la calificación.');
   }
 
   static Future<double> obtenerPromedioTaxista(String uidTaxista) async {

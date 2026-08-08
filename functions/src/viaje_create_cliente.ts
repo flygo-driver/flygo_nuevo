@@ -4,6 +4,7 @@
  */
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { aplicarPromoNegocioAliadoEnTrip } from "./negocio_aliado_promo.js";
 
 const db = () => getFirestore();
 
@@ -167,7 +168,7 @@ function sanitizeWaypointsServer(raw: unknown[]): AnyMap[] {
     if (!item || typeof item !== "object") continue;
     const w = item as AnyMap;
     const lat = numCoord(w.lat);
-    const lon = numCoord(w.lon);
+    const lon = numCoord(w.lon) ?? numCoord((w as AnyMap).lng);
     if (!coordsValidas(lat, lon)) continue;
     const orden = typeof w.orden === "number" ? w.orden : 0;
     parsed.push({
@@ -204,7 +205,8 @@ function assertTripCoordsAndPrecio(trip: AnyMap): void {
   }
 
   const precio = numCoord(trip.precio);
-  if (precio == null || precio <= 0) {
+  const esPromoGratisNegocio = trip.negocioAliadoPromoGratis === true;
+  if (precio == null || precio < 0 || (!esPromoGratisNegocio && precio <= 0)) {
     throw new HttpsError("invalid-argument", "Precio inválido.");
   }
 
@@ -348,7 +350,28 @@ export const crearViajePendienteCliente = onCall(async (request) => {
       }
     }
 
-    tx.set(viajeRef, trip);
+    let negocioCiudad = trimOrEmpty(userData.negocioReferidoCiudad);
+    const codigoRef = trimOrEmpty(userData.negocioReferidoCodigo).toUpperCase();
+    let negocioActivo = false;
+    if (codigoRef) {
+      const negSnap = await tx.get(db().collection("negocios_aliados").doc(codigoRef));
+      if (negSnap.exists) {
+        const negData = (negSnap.data() ?? {}) as AnyMap;
+        negocioActivo = negData.activo === true;
+        if (!negocioCiudad) {
+          negocioCiudad = trimOrEmpty(negData.ciudad);
+        }
+      }
+    }
+
+    const tripFinal = aplicarPromoNegocioAliadoEnTrip({
+      trip,
+      clienteData: userData,
+      negocioCiudad: negocioCiudad || undefined,
+      negocioActivo,
+    });
+
+    tx.set(viajeRef, tripFinal);
     const userPatch = patchUsuarioTrasCrearViajeCliente({
       uid,
       nuevoViajeId: viajeId,

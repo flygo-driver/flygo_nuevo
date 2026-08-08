@@ -10,6 +10,7 @@ import 'package:flygo_nuevo/servicios/location_permission_service.dart';
 import 'package:flygo_nuevo/servicios/solicitud_turismo_repo.dart';
 import 'package:flygo_nuevo/utils/rai_geohash.dart';
 import 'package:flygo_nuevo/utils/rai_region_operativa.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
 /// Publicación de ubicación del taxista en `drivers_location` (mapa cliente en vivo).
 class UbicacionTaxista {
@@ -21,6 +22,8 @@ class UbicacionTaxista {
   static double? _ultimaLon;
   static String? _viajeActivoCache;
   static String? _clienteActivoCache;
+  static bool? _disponibleCache;
+  static String? _tipoServicioPoolCache;
   static DateTime _ultimaLecturaViajeActivo =
       DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -49,23 +52,28 @@ class UbicacionTaxista {
     );
 
     _subscription = Geolocator.getPositionStream(locationSettings: settings)
-        .listen((Position pos) async {
-      await _publicarPosicionTaxista(
-        uid: user.uid,
-        pos: pos,
-        soloCuandoDisponible: soloCuandoDisponible,
-      );
-
-      if (_syncUbicacionTurismo && _uidTurismoSync == user.uid) {
-        unawaited(
-          SolicitudTurismoRepo.sincronizarUbicacionChofer(
-            uid: user.uid,
-            lat: pos.latitude,
-            lon: pos.longitude,
-          ),
+        .listen(
+      (Position pos) async {
+        await _publicarPosicionTaxista(
+          uid: user.uid,
+          pos: pos,
+          soloCuandoDisponible: soloCuandoDisponible,
         );
-      }
-    });
+
+        if (_syncUbicacionTurismo && _uidTurismoSync == user.uid) {
+          unawaited(
+            SolicitudTurismoRepo.sincronizarUbicacionChofer(
+              uid: user.uid,
+              lat: pos.latitude,
+              lon: pos.longitude,
+            ),
+          );
+        }
+      },
+      onError: (_) async {
+        await ocultarDelMapaCliente(uid: user.uid);
+      },
+    );
 
     _isActive = true;
   }
@@ -116,6 +124,7 @@ class UbicacionTaxista {
 
     String? viajeActivoId = viajeIdForzado;
     String? clienteId = clienteIdForzado;
+    bool disponible = _disponibleCache ?? false;
 
     if (soloCuandoDisponible &&
         viajeActivoId == null &&
@@ -123,11 +132,16 @@ class UbicacionTaxista {
             const Duration(seconds: 12)) {
       final DocumentSnapshot<Map<String, dynamic>> userDoc =
           await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
-      viajeActivoId = (userDoc.data()?['viajeActivoId'] as String?)?.trim();
+      final Map<String, dynamic>? userData = userDoc.data();
+      viajeActivoId = (userData?['viajeActivoId'] as String?)?.trim();
       if (viajeActivoId != null && viajeActivoId.isEmpty) {
         viajeActivoId = null;
       }
+      disponible = userData?['disponible'] == true;
+      _tipoServicioPoolCache =
+          ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(userData);
       _viajeActivoCache = viajeActivoId;
+      _disponibleCache = disponible;
       _ultimaLecturaViajeActivo = DateTime.now();
 
       if (viajeActivoId != null && clienteId == null) {
@@ -145,9 +159,14 @@ class UbicacionTaxista {
     } else {
       viajeActivoId ??= _viajeActivoCache;
       clienteId ??= _clienteActivoCache;
+      disponible = _disponibleCache ?? false;
     }
 
     final bool tieneViajeActivo = viajeActivoId != null && viajeActivoId.isNotEmpty;
+    if (!tieneViajeActivo && !disponible) {
+      await ocultarDelMapaCliente(uid: uid);
+      return;
+    }
     final double? bearing = _resolverBearing(pos);
 
     final Map<String, dynamic> payload = <String, dynamic>{
@@ -156,8 +175,11 @@ class UbicacionTaxista {
       'region': RaiRegionOperativa.resolver(pos.latitude, pos.longitude),
       'tracking': true,
       'online': !tieneViajeActivo,
+      'disponible': disponible,
       'updatedAt': FieldValue.serverTimestamp(),
       if (bearing != null) 'heading': bearing,
+      if (_tipoServicioPoolCache == TaxistaPoolModoConductor.motor)
+        'tipoServicio': TaxistaPoolModoConductor.motor,
     };
 
     if (tieneViajeActivo) {
@@ -213,20 +235,51 @@ class UbicacionTaxista {
     _isActive = false;
     _viajeActivoCache = null;
     _clienteActivoCache = null;
+    _disponibleCache = null;
+    _tipoServicioPoolCache = null;
 
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      await FirebaseFirestore.instance
-          .collection('drivers_location')
-          .doc(user.uid)
-          .set({
+      await ocultarDelMapaCliente(uid: user.uid);
+    }
+  }
+
+  /// Oculta al taxista del mapa cliente sin detener el GPS (p. ej. no disponible / GPS off).
+  static Future<void> ocultarDelMapaCliente({String? uid}) async {
+    final String? id = uid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (id == null) return;
+
+    final bool enViaje =
+        _viajeActivoCache != null && _viajeActivoCache!.trim().isNotEmpty;
+    if (enViaje) {
+      await FirebaseFirestore.instance.collection('drivers_location').doc(id).set(
+        <String, dynamic>{
+          'online': false,
+          'disponible': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      return;
+    }
+
+    await FirebaseFirestore.instance.collection('drivers_location').doc(id).set(
+      <String, dynamic>{
         'online': false,
         'tracking': false,
+        'disponible': false,
         'viajeId': FieldValue.delete(),
         'clienteId': FieldValue.delete(),
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  /// Fuerza releer `disponible` / viaje activo en el próximo ping GPS.
+  static void refrescarEstadoOperativo() {
+    _ultimaLecturaViajeActivo = DateTime.fromMillisecondsSinceEpoch(0);
+    _tipoServicioPoolCache = null;
   }
 
   static Future<void> marcarNoDisponible() async {
@@ -237,6 +290,7 @@ class UbicacionTaxista {
           .doc(user.uid)
           .set({
         'online': false,
+        'disponible': false,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
@@ -251,6 +305,7 @@ class UbicacionTaxista {
           .set({
         'online': true,
         'tracking': true,
+        'disponible': true,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
